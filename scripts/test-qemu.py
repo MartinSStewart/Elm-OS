@@ -4,6 +4,8 @@ Passes when the triangle follows the mouse and a key press changes its colour.
 
     python3 scripts/test-qemu.py          plain virtio GPU: checks the CPU fallback
     python3 scripts/test-qemu.py --gpu    virtio GPU with virgl: checks the GPU renderer
+    python3 scripts/test-qemu.py --usb    build/elmos-usb.img on UEFI firmware with USB input,
+                                          drawn on the CPU into the firmware's framebuffer
 
 --gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
 QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
@@ -21,11 +23,20 @@ if gpu:
 else:
     devices = ["-device", "virtio-gpu-pci", "-display", "none"]
 
+usb = "--usb" in sys.argv[1:]
+if usb:
+    ovmf = next(f for f in ["/usr/share/ovmf/OVMF.fd", "/usr/share/qemu/OVMF.fd", "/usr/share/edk2/x64/OVMF.fd"]
+                if os.path.exists(f))
+    boot = ["-machine", "q35", "-bios", ovmf,
+            "-drive", f"if=none,id=stick,format=raw,file={ROOT}/build/elmos-usb.img,snapshot=on",
+            "-device", "qemu-xhci", "-device", "usb-storage,drive=stick,bootindex=0",
+            "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none"]
+else:
+    boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
+            "-append", "console=ttyS0", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
+            "-device", "virtio-tablet-pci"]
 qemu = subprocess.Popen(
-    ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
-     "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
-     "-append", "console=ttyS0", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
-     "-device", "virtio-tablet-pci", "-no-reboot",
+    ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
      "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
 
 
@@ -48,14 +59,19 @@ def wait_for(text, timeout=60):
     fail(f"timed out waiting for {text!r}")
 
 
-wait_for("[host] display", timeout=120)
-log = open(serial_path, errors="replace").read()
-on_gpu = "on the GPU" in log
-print("renderer:", "GPU" if on_gpu else "CPU")
-if gpu and not on_gpu:
-    fail("expected the GPU renderer")
-if not gpu and on_gpu:
-    fail("expected the CPU fallback on a GPU without 3D")
+if not usb:
+    wait_for("[host] display", timeout=120)
+    log = open(serial_path, errors="replace").read()
+    on_gpu = "on the GPU" in log
+    print("renderer:", "GPU" if on_gpu else "CPU")
+    if gpu and not on_gpu:
+        fail("expected the GPU renderer")
+    if not gpu and on_gpu:
+        fail("expected the CPU fallback on a GPU without 3D")
+for _ in range(100):  # QEMU makes the socket a moment after it starts
+    if os.path.exists(qmp_path):
+        break
+    time.sleep(0.1)
 qmp = socket.socket(socket.AF_UNIX)
 qmp.connect(qmp_path)
 f = qmp.makefile("rw")
@@ -117,6 +133,20 @@ def near(c, want, tol=40):
 
 
 RED, GREEN = (242, 89, 76), (76, 204, 115)
+if usb:
+    # On the stick, /init's messages go to the screen, not the serial port (a laptop
+    # has none), so wait for Elm's scene instead: the red triangle in the middle.
+    end = time.time() + 180
+    while True:
+        shot = screen()
+        if near(pixel(shot, shot[0] // 2, shot[1] // 2), RED):
+            break
+        if time.time() > end:
+            fail("Elm OS never drew its scene")
+        if qemu.poll() is not None:
+            fail("QEMU exited before Elm OS drew anything")
+        time.sleep(2)
+    print(f"booted from the USB image under UEFI, screen {shot[0]}x{shot[1]}")
 time.sleep(1)
 move(0.25, 0.25)
 shot = screen()
@@ -150,5 +180,14 @@ def save_png(shot, path):
 
 
 save_png(screen(), f"{ROOT}/build/screenshot.png")
-qemu.kill()
+
+# The power button (ACPI) should power the machine off, which ends QEMU.
+cmd("system_powerdown")
+try:
+    qemu.wait(timeout=30)
+except subprocess.TimeoutExpired:
+    fail("the power button did not power off")
+if not usb and "power button" not in open(serial_path, errors="replace").read():
+    fail("QEMU stopped, but not through Elm OS's power-button handler")
+print("power button powers off")
 print("PASS (screenshot in build/screenshot.png)")

@@ -2,6 +2,7 @@
 # links against from Alpine Linux, and unpack it into a directory.
 #
 #   usage: python3 -I tools/fetch-mesa.py OUT_DIR
+#          python3 -I tools/fetch-mesa.py OUT_DIR PACKAGE...   just those packages
 #
 # Alpine is built on musl, like the rest of Elm OS, and its Mesa package carries
 # the drivers for virtio-gpu (virgl), Intel (iris, crocus), AMD (radeonsi), and
@@ -17,6 +18,8 @@ WANT = ["musl", "mesa-egl", "mesa-gles", "mesa-gbm", "mesa-dri-gallium", "libdrm
 DEV = ["mesa-dev", "libdrm-dev"]
 
 out = os.path.abspath(sys.argv[1])
+if sys.argv[2:]:  # e.g. linux-firmware-i915 for the USB stick
+    WANT, DEV = sys.argv[2:], []
 cache = os.path.join(os.path.dirname(out), "apk-cache")
 os.makedirs(cache, exist_ok=True)
 

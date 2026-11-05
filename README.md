@@ -28,10 +28,12 @@ checks the CPU fallback headlessly, and `make test-gpu` checks the GPU path.
 | `host/gpu.c` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS, fed triangles by the host |
 | `tools/fetch-mesa.py` | Downloads Mesa and its libraries (musl builds) from Alpine Linux |
 | `tools/copy-libs.sh` | Copies the renderer's shared libraries and Mesa's drivers into the initramfs |
-| `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig` (about 1.4 MB bzImage) |
+| `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig`, for QEMU and real PCs |
 | `Makefile` | Builds the kernel, `build/init` and `build/initramfs.cpio` |
 | `scripts/run-qemu.sh` | Boots it in a QEMU window |
 | `scripts/test-qemu.py` | Boots it headless, sends mouse and key events through QMP, checks the screen |
+| `scripts/make-usb-image.sh` | Builds the USB stick image (GPT, one EFI system partition) without root |
+| `scripts/write-usb.sh` | Writes the image to a USB stick, after checking it is one and asking |
 | `tools/elm-package-mirror.py` | Stand-in package server for sandboxes that cannot reach package.elm-lang.org |
 
 ## Build and run
@@ -56,9 +58,69 @@ make run-cpu      # QEMU window without 3D, so Elm OS draws on the CPU
 make test         # headless boot test of the CPU fallback, saves build/screenshot.png
 make test-gpu     # the same test drawn on the GPU (needs a host GPU for QEMU's egl-headless)
 make GPU=0        # leave Mesa out: CPU rendering only, 9 MB initramfs instead of 230 MB
+make usb          # a USB stick image for real PCs, see below
 ```
 
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree.
+
+## Boot it on a real PC from a USB stick
+
+`make usb` builds `build/elmos-usb.img`, a UEFI-bootable image of about 110 MB. The kernel
+is its own EFI program (`EFI/BOOT/BOOTX64.EFI`) with the initramfs built in, so there is no
+bootloader. Elm OS runs entirely from RAM. The kernel has no NVMe, SATA or USB storage
+drivers, so it cannot read or write the computer's disk (or the stick, once it has booted).
+
+It has drivers for Intel graphics (i915, with Intel's firmware from Alpine Linux), the
+firmware's own framebuffer as a fallback, ACPI, USB keyboards and mice, the built-in PS/2
+keyboard, and touchpads on I2C (the usual setup on Intel laptops since about 2015) or PS/2.
+It was written for an Intel Tiger Lake laptop (Core i5-1135G7, Iris Xe). The CPU must be
+Haswell or newer (see Known limits).
+
+### 1. Build the image
+
+```sh
+make usb          # the first time also builds a second kernel, so it takes a few minutes
+make test-usb     # optional: boots the image in QEMU on UEFI firmware (needs `ovmf`) and checks it
+make run-usb      # optional: the same in a window
+```
+
+`make usb` needs `sfdisk`, `mkfs.vfat` and `mtools` (`sudo apt install fdisk dosfstools mtools`)
+and downloads Intel's GPU firmware (10 MB) the first time.
+
+### 2. Write it to a USB stick
+
+**This erases the whole stick.** Any stick of 128 MB or more works.
+
+1. Plug in the stick.
+2. Run `make usb-write`. It lists the USB disks it can see, for example
+   `sdb  14.6G SanDisk_Ultra  usb  1`. If you aren't sure which one is the stick, unplug it,
+   run `make usb-write` again, and see which line disappears.
+3. Run `make usb-write DEV=/dev/sdb`, with your stick's name. The script refuses anything
+   that isn't a whole USB disk, and anything holding the running system. It shows the
+   stick's size, model and partitions, and only continues if you type the name (`sdb`) back.
+   It then unmounts the stick and writes it with `sudo dd`, so it asks for your password.
+
+### 3. Boot the laptop from it
+
+1. **Secure Boot must be off**, because the kernel isn't signed. Enter the firmware setup
+   (press F2, Del, F1 or F10 while it starts, depending on the maker), find Secure Boot,
+   usually under Security or Boot, and disable it. A Linux install with Secure Boot off
+   still boots normally. If the laptop has Windows with BitLocker, have its recovery key
+   ready first, because changing Secure Boot can make BitLocker ask for it.
+2. Plug in the stick, power the laptop on, and press the one-time boot menu key straight away:
+   F12 on Dell, Lenovo and Acer, F9 on HP, Esc or F8 on ASUS, F7 on MSI. Pick the USB stick
+   (an entry that starts with `UEFI`). This doesn't change the laptop's normal boot order.
+3. You'll see a few kernel messages, then the triangle. Move the pointer with the touchpad
+   or a USB mouse, tap or click to grow the triangle, and press any key to change its colour.
+4. Press the power button to power off. Unplug the stick and the laptop boots its own system again.
+
+If the screen stays black or shows an error, a photo of the screen helps. You can bake
+other kernel options into the stick with `USB_CMDLINE`, for example more messages and no GPU:
+
+```sh
+make usb USB_CMDLINE="console=tty0 loglevel=7 ELMOS_RENDERER=cpu"
+make usb USB_CMDLINE="console=tty0 loglevel=7 i915.modeset=0"   # firmware framebuffer only
+```
 
 ## How it fits together
 
@@ -93,10 +155,11 @@ render -> [x1,y1,x2,y2,x3,y3,r,g,b,a, ...]       10 numbers per triangle, colour
 - Mesa and LLVM make the initramfs about 230 MB (LLVM alone is 178 MB). It unpacks in a
   couple of seconds, but QEMU needs `-m 2G`. Building Mesa ourselves with only the drivers
   we need would shrink it a lot.
-- Real hardware: Mesa already includes the Intel (iris, crocus) and AMD (radeonsi) drivers,
-  but the kernel config has only the virtio GPU. Booting a real PC also needs the i915 or
-  amdgpu kernel driver, their firmware in the initramfs (AMD can't show anything without
-  it), ACPI, and USB keyboard and mouse support.
+- Real hardware has only been tried in QEMU so far (UEFI firmware, USB keyboard and tablet).
+  Only Intel graphics has a GPU driver; other GPUs fall back to the firmware's framebuffer
+  and the CPU renderer. AMD would need amdgpu and its firmware. Touchpads have no
+  two-finger scrolling or right click yet. Laptops whose keyboard or touchpad sits behind
+  an embedded controller driver the kernel config lacks will need more drivers.
 - Set `ELMOS_RENDERER=cpu` on the kernel command line to skip the GPU, or `ELMOS_RENDERER=gpu`
   to use Mesa's software driver (llvmpipe) rather than the host's own rasteriser.
 - JSON per frame is fine for a handful of triangles, but a real GUI will need a binary path.

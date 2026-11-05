@@ -3,6 +3,7 @@
 #
 #   scripts/check-deps.sh build    what `make` needs
 #   scripts/check-deps.sh run      what `make run` and `make test` need on top
+#   scripts/check-deps.sh usb      what `make usb` needs on top
 #
 # The package names are for Debian and Ubuntu.
 mode="${1:-build}"
@@ -64,8 +65,14 @@ case "$mode" in
       pkgs="$pkgs qemu-system-modules-opengl"
     fi
     ;;
+  usb)
+    need sfdisk fdisk
+    need mkfs.vfat dosfstools
+    need mcopy mtools
+    need mmd mtools
+    ;;
   *)
-    echo "usage: $0 [build|run]" >&2
+    echo "usage: $0 [build|run|usb]" >&2
     exit 2
     ;;
 esac

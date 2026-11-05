@@ -7,7 +7,9 @@
  *   - starts the GPU renderer (/usr/bin/elmos-gpu, see gpu.c) and, if there is
  *     no usable GPU, opens the first DRM card itself and draws on the CPU into
  *     a dumb buffer instead,
- *   - reads every /dev/input/event* device and sends events to the `input` port,
+ *   - reads every /dev/input/event* device (rescanning for new ones every second)
+ *     and sends events to the `input` port; a touchpad works like a mouse, and
+ *     the power button powers the machine off,
  *   - sends the latest scene that Elm sent on `render` to whichever renderer
  *     is in use.
  *
@@ -44,6 +46,7 @@
 #include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <drm/drm.h>
@@ -95,10 +98,26 @@ typedef struct {
     size_t size;
 } Display;
 
+static int open_display_on(Display* d, const char* path);
+
+/* The first card with a connected screen. On a PC that is usually card0, but the
+ * firmware's framebuffer (simpledrm) and the real GPU driver can both be there. */
 static int open_display(Display* d) {
+    for (int i = 0; i < 8; i++) {
+        char path[32];
+        snprintf(path, sizeof path, "/dev/dri/card%d", i);
+        if (access(path, F_OK) != 0) continue;
+        if (open_display_on(d, path) == 0) return 0;
+        if (d->fd >= 0) close(d->fd);
+    }
+    logf_("no DRM card with a connected display");
+    return -1;
+}
+
+static int open_display_on(Display* d, const char* path) {
     memset(d, 0, sizeof *d);
-    d->fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-    if (d->fd < 0) { logf_("open /dev/dri/card0: %s", strerror(errno)); return -1; }
+    d->fd = open(path, O_RDWR | O_CLOEXEC);
+    if (d->fd < 0) { logf_("open %s: %s", path, strerror(errno)); return -1; }
 
     struct drm_mode_card_res res = {0};
     if (ioctl(d->fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) return -1;
@@ -134,7 +153,7 @@ static int open_display(Display* d) {
         }
         break;
     }
-    if (!d->conn_id) { logf_("no connected display"); return -1; }
+    if (!d->conn_id) return -1;
     d->w = d->mode.hdisplay;
     d->h = d->mode.vdisplay;
 
@@ -158,7 +177,7 @@ static int open_display(Display* d) {
         .crtc_id = d->crtc_id, .fb_id = d->fb_id, .set_connectors_ptr = (uintptr_t)&d->conn_id,
         .count_connectors = 1, .mode = d->mode, .mode_valid = 1};
     if (ioctl(d->fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0) { logf_("setcrtc: %s", strerror(errno)); return -1; }
-    logf_("display %ux%u", d->w, d->h);
+    logf_("display %ux%u on the CPU (%s)", d->w, d->h, path);
     return 0;
 }
 
@@ -330,37 +349,65 @@ static void draw_scene(Display* d, const char* json) {
 
 /* ---------------------------------------------------------------- input */
 
+/* Every /dev/input/event* device. Devices come and go (USB keyboards show up a
+ * moment after boot, or get plugged in later), so the list is rescanned now and then.
+ *
+ * Mice move the pointer by relative motion, tablets (QEMU's) by absolute position.
+ * A touchpad reports absolute finger positions too, but it should feel like a
+ * mouse: the pointer moves by how far the finger moves, and a quick tap clicks. */
+
 #define MAX_INPUTS 32
 
 typedef struct {
-    int fd;
-    int has_abs;
+    int fd; /* -1: free slot */
+    char name[16]; /* eventN */
+    int has_abs, touchpad;
     struct input_absinfo ax, ay;
+    /* touchpad state */
+    int touching, have_last, last_x, last_y, tap_moved, tap_clicked;
+    double touch_start, frac_x, frac_y;
 } InputDev;
 
-static int open_inputs(InputDev* devs) {
-    int n = 0;
-    DIR* dir = opendir("/dev/input");
-    if (!dir) { logf_("no /dev/input"); return 0; }
-    struct dirent* e;
-    while ((e = readdir(dir)) && n < MAX_INPUTS) {
-        if (strncmp(e->d_name, "event", 5) != 0) continue;
-        char path[300];
-        snprintf(path, sizeof path, "/dev/input/%s", e->d_name);
-        int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0) continue;
-        InputDev* dev = &devs[n++];
-        memset(dev, 0, sizeof *dev);
-        dev->fd = fd;
-        if (ioctl(fd, EVIOCGABS(ABS_X), &dev->ax) == 0 && ioctl(fd, EVIOCGABS(ABS_Y), &dev->ay) == 0 &&
-            dev->ax.maximum > dev->ax.minimum)
-            dev->has_abs = 1;
-        char name[128] = "?";
-        ioctl(fd, EVIOCGNAME(sizeof name), name);
-        logf_("input %s: %s%s", path, name, dev->has_abs ? " (absolute)" : "");
+static InputDev devs[MAX_INPUTS];
+
+static int test_bit(const unsigned long* bits, int bit) {
+    return (bits[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1;
+}
+
+static void open_input(const char* name) {
+    InputDev* dev = NULL;
+    for (int i = 0; i < MAX_INPUTS; i++) {
+        if (devs[i].fd >= 0 && strcmp(devs[i].name, name) == 0) return; /* already open */
+        if (devs[i].fd < 0 && !dev) dev = &devs[i];
     }
+    if (!dev) return;
+    char path[300];
+    snprintf(path, sizeof path, "/dev/input/%s", name);
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+    memset(dev, 0, sizeof *dev);
+    dev->fd = fd;
+    snprintf(dev->name, sizeof dev->name, "%s", name);
+    if (ioctl(fd, EVIOCGABS(ABS_X), &dev->ax) == 0 && ioctl(fd, EVIOCGABS(ABS_Y), &dev->ay) == 0 &&
+        dev->ax.maximum > dev->ax.minimum && dev->ay.maximum > dev->ay.minimum)
+        dev->has_abs = 1;
+    unsigned long props[INPUT_PROP_CNT / (8 * sizeof(long)) + 1] = {0};
+    unsigned long keys[KEY_CNT / (8 * sizeof(long)) + 1] = {0};
+    ioctl(fd, EVIOCGPROP(sizeof props), props);
+    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys);
+    dev->touchpad = dev->has_abs && (test_bit(props, INPUT_PROP_POINTER) || test_bit(keys, BTN_TOOL_FINGER));
+    char devname[128] = "?";
+    ioctl(fd, EVIOCGNAME(sizeof devname), devname);
+    logf_("input %s: %s%s", path, devname, dev->touchpad ? " (touchpad)" : dev->has_abs ? " (absolute)" : "");
+}
+
+static void scan_inputs(void) {
+    DIR* dir = opendir("/dev/input");
+    if (!dir) return;
+    struct dirent* e;
+    while ((e = readdir(dir)))
+        if (strncmp(e->d_name, "event", 5) == 0) open_input(e->d_name);
     closedir(dir);
-    return n;
 }
 
 static void send_input(const char* fmt, ...) {
@@ -372,12 +419,57 @@ static void send_input(const char* fmt, ...) {
     eco_port_send("input", buf);
 }
 
+static void send_button(int b, int down) {
+    send_input("{\"t\":\"button\",\"b\":%d,\"down\":%s}", b, down ? "true" : "false");
+}
+
 static int mouse_x, mouse_y;
+
+static double event_time(const struct input_event* ev) {
+    return ev->input_event_sec + ev->input_event_usec / 1e6;
+}
+
+/* Touchpad finger motion: move the pointer by the finger's movement. A full
+ * swipe across the pad moves the pointer about one and a half screen widths. */
+static void touchpad_axis(Display* d, InputDev* dev, int code, int value, int* moved) {
+    if (!dev->touching) return;
+    int is_x = code == ABS_X, bit = is_x ? 1 : 2;
+    int* last = is_x ? &dev->last_x : &dev->last_y;
+    if (!(dev->have_last & bit)) { /* the finger just landed: only remember where */
+        *last = value;
+        dev->have_last |= bit;
+        return;
+    }
+    /* Pixels per touchpad unit along x. Along y, correct for touchpads whose units
+     * aren't square (the resolutions are units per mm), so diagonals stay diagonal. */
+    double scale = 1.5 * d->w / (double)(dev->ax.maximum - dev->ax.minimum);
+    if (!is_x && dev->ax.resolution > 0 && dev->ay.resolution > 0)
+        scale *= (double)dev->ax.resolution / dev->ay.resolution;
+    double* frac = is_x ? &dev->frac_x : &dev->frac_y;
+    double delta = (value - *last) * scale + *frac;
+    *last = value;
+    int whole = (int)delta;
+    *frac = delta - whole;
+    if (!whole) return;
+    if (is_x) mouse_x += whole;
+    else mouse_y += whole;
+    dev->tap_moved += abs(whole);
+    *moved = 1;
+}
+
+static void power_off(void) {
+    if (getpid() != 1) return;
+    logf_("power button: powering off");
+    sync();
+    reboot(RB_POWER_OFF);
+}
 
 static void handle_event(Display* d, InputDev* dev, const struct input_event* ev, int* moved) {
     if (ev->type == EV_REL) {
         if (ev->code == REL_X) mouse_x += ev->value, *moved = 1;
         if (ev->code == REL_Y) mouse_y += ev->value, *moved = 1;
+    } else if (ev->type == EV_ABS && dev->touchpad) {
+        if (ev->code == ABS_X || ev->code == ABS_Y) touchpad_axis(d, dev, ev->code, ev->value, moved);
     } else if (ev->type == EV_ABS && dev->has_abs) {
         if (ev->code == ABS_X)
             mouse_x = (int)((int64_t)(ev->value - dev->ax.minimum) * d->w / (dev->ax.maximum - dev->ax.minimum + 1)), *moved = 1;
@@ -385,9 +477,30 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
             mouse_y = (int)((int64_t)(ev->value - dev->ay.minimum) * d->h / (dev->ay.maximum - dev->ay.minimum + 1)), *moved = 1;
     } else if (ev->type == EV_KEY && ev->value != 2) { /* 2 = autorepeat */
         int down = ev->value == 1;
-        if (ev->code == BTN_LEFT || ev->code == BTN_RIGHT || ev->code == BTN_MIDDLE) {
-            int b = ev->code == BTN_LEFT ? 0 : ev->code == BTN_RIGHT ? 1 : 2;
-            send_input("{\"t\":\"button\",\"b\":%d,\"down\":%s}", b, down ? "true" : "false");
+        if (dev->touchpad && ev->code == BTN_TOUCH) {
+            if (down) {
+                dev->touching = 1;
+                dev->have_last = 0;
+                dev->tap_moved = 0;
+                dev->tap_clicked = 0;
+                dev->frac_x = dev->frac_y = 0;
+                dev->touch_start = event_time(ev);
+            } else {
+                dev->touching = 0;
+                /* A short touch that barely moved, without pressing the pad down: a tap, so click. */
+                if (!dev->tap_clicked && dev->tap_moved < 8 && event_time(ev) - dev->touch_start < 0.2) {
+                    send_button(0, 1);
+                    send_button(0, 0);
+                }
+            }
+        } else if (dev->touchpad && ev->code >= BTN_TOOL_FINGER && ev->code <= BTN_TOOL_QUADTAP) {
+            /* The number of fingers changed, and the reported position may jump to another finger. */
+            dev->have_last = 0;
+        } else if (ev->code == BTN_LEFT || ev->code == BTN_RIGHT || ev->code == BTN_MIDDLE) {
+            if (dev->touchpad) dev->tap_clicked = 1;
+            send_button(ev->code == BTN_LEFT ? 0 : ev->code == BTN_RIGHT ? 1 : 2, down);
+        } else if (ev->code == KEY_POWER) {
+            if (down) power_off();
         } else if (ev->code < BTN_MISC) {
             send_input("{\"t\":\"key\",\"code\":%d,\"down\":%s}", ev->code, down ? "true" : "false");
         }
@@ -396,6 +509,12 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
     if (mouse_y < 0) mouse_y = 0;
     if (mouse_x >= (int)d->w) mouse_x = d->w - 1;
     if (mouse_y >= (int)d->h) mouse_y = d->h - 1;
+}
+
+static double now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
 /* ---------------------------------------------------------------- host thread */
@@ -413,17 +532,22 @@ static void* host_main(void* arg) {
     mouse_x = d->w / 2;
     mouse_y = d->h / 2;
 
-    static InputDev devs[MAX_INPUTS];
-    int ndev = open_inputs(devs);
-    struct pollfd pfds[MAX_INPUTS + 1];
-    pfds[0] = (struct pollfd){.fd = wake_fd, .events = POLLIN};
-    for (int i = 0; i < ndev; i++) pfds[i + 1] = (struct pollfd){.fd = devs[i].fd, .events = POLLIN};
+    for (int i = 0; i < MAX_INPUTS; i++) devs[i].fd = -1;
+    scan_inputs();
+    double last_scan = now();
 
     for (;;) {
-        if (poll(pfds, ndev + 1, -1) < 0) { if (errno == EINTR) continue; break; }
+        struct pollfd pfds[MAX_INPUTS + 1];
+        int idx[MAX_INPUTS + 1], n = 1;
+        pfds[0] = (struct pollfd){.fd = wake_fd, .events = POLLIN};
+        for (int i = 0; i < MAX_INPUTS; i++)
+            if (devs[i].fd >= 0) idx[n] = i, pfds[n++] = (struct pollfd){.fd = devs[i].fd, .events = POLLIN};
+        /* Look for new input devices about once a second. */
+        if (poll(pfds, n, 1000) < 0) { if (errno == EINTR) continue; break; }
+        if (now() - last_scan >= 1) { scan_inputs(); last_scan = now(); }
         if (pfds[0].revents & POLLIN) {
-            uint64_t n;
-            (void)!read(wake_fd, &n, sizeof n);
+            uint64_t k;
+            (void)!read(wake_fd, &k, sizeof k);
             pthread_mutex_lock(&scene_lock);
             char* json = scene_json;
             scene_json = NULL;
@@ -431,13 +555,19 @@ static void* host_main(void* arg) {
             if (json) draw_scene(d, json);
             free(json);
         }
-        for (int i = 0; i < ndev; i++) {
-            if (!(pfds[i + 1].revents & POLLIN)) continue;
+        for (int p = 1; p < n; p++) {
+            if (!pfds[p].revents) continue;
+            InputDev* dev = &devs[idx[p]];
             struct input_event evs[64];
             ssize_t got;
             int moved = 0;
-            while ((got = read(devs[i].fd, evs, sizeof evs)) > 0)
-                for (size_t k = 0; k < (size_t)got / sizeof evs[0]; k++) handle_event(d, &devs[i], &evs[k], &moved);
+            while ((got = read(dev->fd, evs, sizeof evs)) > 0)
+                for (size_t k = 0; k < (size_t)got / sizeof evs[0]; k++) handle_event(d, dev, &evs[k], &moved);
+            if (got < 0 && errno != EAGAIN && errno != EINTR) { /* unplugged */
+                logf_("input /dev/input/%s: gone", dev->name);
+                close(dev->fd);
+                dev->fd = -1;
+            }
             if (moved) send_input("{\"t\":\"mouse\",\"x\":%d,\"y\":%d}", mouse_x, mouse_y);
         }
     }
