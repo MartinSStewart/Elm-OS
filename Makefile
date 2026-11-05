@@ -4,7 +4,7 @@
 #   make run        boot it in QEMU in a window (GTK, mouse and keyboard work)
 #   make test       boot headless, inject input, check a screenshot
 #
-# Needs: eco (https://github.com/eco-lang/eco-compiler/releases, the
+# Needs (`make check-deps` checks them): eco (https://github.com/eco-lang/eco-compiler/releases, the
 # x86_64-linux-musl bundle), musl-gcc, a C toolchain for the kernel, cpio,
 # qemu-system-x86_64, and a Linux source tree in $(KERNEL_SRC).
 
@@ -23,16 +23,24 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: all run test clean kernel-src
+.PHONY: all run test clean kernel-src check-deps check-run-deps
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio
 
+# Fail early, with install hints, if a tool is missing. These are order-only
+# prerequisites below, so they run first but never force a rebuild.
+check-deps:
+	@ECO=$(ECO) scripts/check-deps.sh build
+
+check-run-deps:
+	@scripts/check-deps.sh run
+
 # ---- kernel
 
-kernel-src:
+kernel-src: | check-deps
 	test -d $(KERNEL_SRC) || git clone --depth 1 --branch $(KERNEL_VER) https://github.com/torvalds/linux $(KERNEL_SRC)
 
-$(KERNEL_SRC)/.config: kernel/elmos.config
+$(KERNEL_SRC)/.config: kernel/elmos.config | check-deps
 	$(MAKE) -C $(KERNEL_SRC) tinyconfig
 	cd $(KERNEL_SRC) && scripts/kconfig/merge_config.sh -m .config $(abspath kernel/elmos.config)
 	$(MAKE) -C $(KERNEL_SRC) olddefconfig
@@ -47,11 +55,11 @@ $(BUILD)/kheaders/include/linux/input.h: $(KERNEL_SRC)/.config
 
 # ---- the /init binary: C host + Elm program, one static executable
 
-$(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm)
+$(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
 	@mkdir -p $(BUILD)
 	cd elm && $(ECO) make src/Main.elm --output=$(abspath $@)
 
-$(BUILD)/host.o: host/host.c $(BUILD)/kheaders/include/linux/input.h
+$(BUILD)/host.o: host/host.c $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include
 
 $(BUILD)/init: $(BUILD)/host.o $(BUILD)/elm.o
@@ -76,10 +84,10 @@ $(BUILD)/initramfs.cpio: $(BUILD)/init
 
 # ---- running
 
-run: all
+run: all | check-run-deps
 	scripts/run-qemu.sh
 
-test: all
+test: all | check-run-deps
 	python3 scripts/test-qemu.py
 
 clean:

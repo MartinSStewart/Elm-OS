@@ -37,6 +37,9 @@ You need Linux on x86_64 with:
 - `musl-gcc` (`musl-tools`), the kernel build tools (`flex bison bc libelf-dev libssl-dev rsync`),
   `cpio` and `qemu-system-x86_64`
 
+`make` checks for these first and prints an `apt install` line for anything missing.
+Run `make check-deps` to check without building.
+
 ```sh
 make kernel-src   # shallow clone of Linux v6.12 into ./linux (once)
 make              # kernel, Elm program, host, initramfs
