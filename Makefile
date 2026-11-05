@@ -37,10 +37,13 @@ check-run-deps:
 
 # ---- kernel
 
-kernel-src: | check-deps
-	test -d $(KERNEL_SRC) || git clone --depth 1 --branch $(KERNEL_VER) https://github.com/torvalds/linux $(KERNEL_SRC)
+kernel-src: $(KERNEL_SRC)/Makefile
 
-$(KERNEL_SRC)/.config: kernel/elmos.config | check-deps
+# Shallow clone of Linux the first time you build. Set KERNEL_SRC to use a tree you already have.
+$(KERNEL_SRC)/Makefile: | check-deps
+	test -f $@ || git clone --depth 1 --branch $(KERNEL_VER) https://github.com/torvalds/linux $(KERNEL_SRC)
+
+$(KERNEL_SRC)/.config: kernel/elmos.config | $(KERNEL_SRC)/Makefile check-deps
 	$(MAKE) -C $(KERNEL_SRC) tinyconfig
 	cd $(KERNEL_SRC) && scripts/kconfig/merge_config.sh -m .config $(abspath kernel/elmos.config)
 	$(MAKE) -C $(KERNEL_SRC) olddefconfig

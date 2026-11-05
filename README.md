@@ -41,8 +41,7 @@ You need Linux on x86_64 with:
 Run `make check-deps` to check without building.
 
 ```sh
-make kernel-src   # shallow clone of Linux v6.12 into ./linux (once)
-make              # kernel, Elm program, host, initramfs
+make              # clones Linux v6.12 into ./linux the first time, then builds everything
 make run          # QEMU window; close it to quit
 make test         # headless boot test, saves build/screenshot.png
 ```
