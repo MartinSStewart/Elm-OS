@@ -42,6 +42,14 @@ case "$mode" in
       echo "  https://github.com/eco-lang/eco-compiler/releases"
       echo "and put its bin/ directory on your PATH (or run make with ECO=/path/to/eco)."
       eco_missing=1
+    elif [ -n "$ECO_RUNTIME" ] && [ ! -f "$ECO_RUNTIME/mimalloc.o" ]; then
+      # Every 0.2.0 bundle ships mimalloc.o; 0.1.0 didn't. A 0.2.0 eco binary with a 0.1.0
+      # runtime compiles fine but fails the final link with undefined eco_* symbols.
+      echo "Your eco runtime in $ECO_RUNTIME looks like eco 0.1.0 (no mimalloc.o),"
+      echo "but this needs 0.2.0. Usually that means a newer eco was copied over an old"
+      echo "install. Delete the old install and extract a fresh v0.2.0-rc2 (or newer)"
+      echo "x86_64-linux-musl bundle from https://github.com/eco-lang/eco-compiler/releases"
+      eco_missing=1
     fi
     ;;
   run)
