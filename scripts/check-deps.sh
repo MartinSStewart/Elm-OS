@@ -33,6 +33,8 @@ case "$mode" in
     need rsync rsync
     need cpio cpio
     need perl perl
+    need python3 python3
+    need readelf binutils
     if command -v cc >/dev/null 2>&1; then
       need_header gelf.h libelf-dev
       need_header openssl/ssl.h libssl-dev
@@ -55,6 +57,12 @@ case "$mode" in
   run)
     need qemu-system-x86_64 qemu-system-x86
     need python3 python3
+    # The GPU in QEMU (virgl) is in a separate package on Debian and Ubuntu.
+    if command -v qemu-system-x86_64 >/dev/null 2>&1 &&
+       ! qemu-system-x86_64 -device help 2>/dev/null | grep -q virtio-gpu-gl-pci; then
+      missing="$missing qemu-opengl"
+      pkgs="$pkgs qemu-system-modules-opengl"
+    fi
     ;;
   *)
     echo "usage: $0 [build|run]" >&2

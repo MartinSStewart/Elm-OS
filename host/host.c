@@ -4,9 +4,15 @@
  * before it and, when we are PID 1, mounts the kernel filesystems. It then
  * subscribes to the Elm `render` port and starts one host thread that
  *
- *   - opens the first DRM card and shows a dumb buffer (software rendering),
+ *   - starts the GPU renderer (/usr/bin/elmos-gpu, see gpu.c) and, if there is
+ *     no usable GPU, opens the first DRM card itself and draws on the CPU into
+ *     a dumb buffer instead,
  *   - reads every /dev/input/event* device and sends events to the `input` port,
- *   - draws the latest scene that Elm sent on `render`.
+ *   - sends the latest scene that Elm sent on `render` to whichever renderer
+ *     is in use.
+ *
+ * Set ELMOS_RENDERER=cpu on the kernel command line to skip the GPU, or
+ * ELMOS_RENDERER=gpu to use Mesa even when it only has a software driver.
  *
  * Port payloads are JSON (that is what eco's port API carries):
  *
@@ -24,6 +30,8 @@
 #include <math.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
+#include <spawn.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,6 +43,7 @@
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <drm/drm.h>
@@ -161,6 +170,88 @@ static void present(Display* d) {
     ioctl(d->fd, DRM_IOCTL_MODE_DIRTYFB, &dirty);
 }
 
+/* ---------------------------------------------------------------- GPU renderer */
+
+#define GPU_RENDERER "/usr/bin/elmos-gpu"
+
+extern char** environ;
+static pid_t gpu_pid = -1;
+static int gpu_fd = -1; /* pipe to its stdin */
+
+static void stop_gpu(void) {
+    if (gpu_fd >= 0) close(gpu_fd);
+    gpu_fd = -1;
+    if (gpu_pid > 0) {
+        kill(gpu_pid, SIGTERM);
+        waitpid(gpu_pid, NULL, 0); /* it must let go of the display before we take it */
+    }
+    gpu_pid = -1;
+}
+
+/* Start the renderer and wait for it to report "ok W H RENDERER". */
+static int start_gpu(Display* d) {
+    const char* want = getenv("ELMOS_RENDERER");
+    if (want && strcmp(want, "cpu") == 0) return -1;
+    if (access(GPU_RENDERER, X_OK) != 0) return -1;
+
+    int to_gpu[2], from_gpu[2];
+    if (pipe2(to_gpu, O_CLOEXEC) < 0) return -1;
+    if (pipe2(from_gpu, O_CLOEXEC) < 0) { close(to_gpu[0]); close(to_gpu[1]); return -1; }
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, to_gpu[0], 0);
+    posix_spawn_file_actions_adddup2(&fa, from_gpu[1], 1);
+    setenv("MESA_SHADER_CACHE_DISABLE", "true", 0); /* there is no disk to cache on */
+    char* argv[] = {GPU_RENDERER, NULL};
+    int err = posix_spawn(&gpu_pid, GPU_RENDERER, &fa, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    close(to_gpu[0]);
+    close(from_gpu[1]);
+    if (err) {
+        logf_("spawn %s: %s", GPU_RENDERER, strerror(err));
+        gpu_pid = -1;
+        close(to_gpu[1]);
+        close(from_gpu[0]);
+        return -1;
+    }
+    gpu_fd = to_gpu[1];
+
+    /* Loading Mesa and LLVM can take a while under emulation. */
+    char line[256];
+    size_t len = 0;
+    struct pollfd pfd = {.fd = from_gpu[0], .events = POLLIN};
+    while (len < sizeof line - 1 && poll(&pfd, 1, 60000) > 0) {
+        ssize_t got = read(from_gpu[0], line + len, 1);
+        if (got <= 0 || line[len] == '\n') break;
+        len++;
+    }
+    line[len] = 0;
+    close(from_gpu[0]);
+    unsigned w, h;
+    int at = 0;
+    if (sscanf(line, "ok %u %u %n", &w, &h, &at) == 2 && at > 0) {
+        d->w = w;
+        d->h = h;
+        logf_("display %ux%u on the GPU (%s)", w, h, line + at);
+        return 0;
+    }
+    logf_("GPU renderer unavailable (%s); drawing on the CPU", len ? line : "no answer");
+    stop_gpu();
+    return -1;
+}
+
+static int write_full(int fd, const void* buf, size_t n) {
+    const char* p = buf;
+    while (n) {
+        ssize_t put = write(fd, p, n);
+        if (put < 0 && errno == EINTR) continue;
+        if (put <= 0) return -1;
+        p += put;
+        n -= put;
+    }
+    return 0;
+}
+
 /* ---------------------------------------------------------------- raster */
 
 static inline float edge(float ax, float ay, float bx, float by, float px, float py) {
@@ -199,21 +290,41 @@ static void fill_triangle(Display* d, const float* t) {
     }
 }
 
-static void draw_scene(Display* d, const char* json) {
-    memset(d->back, 0, d->size);
+/* The scene as numbers: 10 per triangle. */
+static float* parse_scene(const char* json, uint32_t* count) {
+    size_t cap = 160, n = 0;
+    float* v = malloc(cap * sizeof *v);
     const char* p = json;
-    float t[10];
-    int n = 0;
     while (*p) {
         if ((*p >= '0' && *p <= '9') || *p == '-' || *p == '.') {
             char* end;
-            t[n++] = strtof(p, &end);
+            if (n == cap) v = realloc(v, (cap *= 2) * sizeof *v);
+            v[n++] = strtof(p, &end);
             p = end;
-            if (n == 10) { fill_triangle(d, t); n = 0; }
         } else {
             p++;
         }
     }
+    *count = n / 10;
+    return v;
+}
+
+static void draw_scene(Display* d, const char* json) {
+    uint32_t n;
+    float* tris = parse_scene(json, &n);
+    if (gpu_fd >= 0) {
+        if (write_full(gpu_fd, &n, sizeof n) == 0 && write_full(gpu_fd, tris, n * 10 * sizeof(float)) == 0) {
+            free(tris);
+            return;
+        }
+        logf_("GPU renderer stopped; drawing on the CPU");
+        stop_gpu();
+        if (open_display(d) < 0) { free(tris); return; }
+    }
+    if (!d->back) { free(tris); return; }
+    memset(d->back, 0, d->size);
+    for (uint32_t i = 0; i < n; i++) fill_triangle(d, tris + i * 10);
+    free(tris);
     present(d);
 }
 
@@ -293,7 +404,7 @@ static void* host_main(void* arg) {
     (void)arg;
     static Display display;
     Display* d = &display;
-    if (open_display(d) < 0) { logf_("no display; input only"); d->w = 640; d->h = 480; }
+    if (start_gpu(d) < 0 && open_display(d) < 0) { logf_("no display; input only"); d->w = 640; d->h = 480; }
 
     /* Ports are registered once Elm starts; retry until it accepts. */
     char screen[64];
@@ -317,7 +428,7 @@ static void* host_main(void* arg) {
             char* json = scene_json;
             scene_json = NULL;
             pthread_mutex_unlock(&scene_lock);
-            if (json && d->back) draw_scene(d, json);
+            if (json) draw_scene(d, json);
             free(json);
         }
         for (int i = 0; i < ndev; i++) {
@@ -352,6 +463,7 @@ __attribute__((constructor)) static void host_init(void) {
         atexit(at_exit_pid1);
     }
     debug = getenv("ELMOS_DEBUG") != NULL;
+    signal(SIGPIPE, SIG_IGN); /* a dead GPU renderer must not take /init with it */
     wake_fd = eventfd(0, EFD_CLOEXEC);
     eco_port_subscribe("render", on_render, NULL);
     pthread_t t;

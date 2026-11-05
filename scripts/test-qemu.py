@@ -1,6 +1,12 @@
 """Boot Elm OS headless in QEMU, drive it through QMP, and check the screen.
 
 Passes when the triangle follows the mouse and a key press changes its colour.
+
+    python3 scripts/test-qemu.py          plain virtio GPU: checks the CPU fallback
+    python3 scripts/test-qemu.py --gpu    virtio GPU with virgl: checks the GPU renderer
+
+--gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
+QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
 """
 import json, os, socket, struct, subprocess, sys, tempfile, time, zlib
 
@@ -9,12 +15,17 @@ tmp = tempfile.mkdtemp()
 qmp_path, serial_path = os.path.join(tmp, "qmp.sock"), os.path.join(tmp, "serial.log")
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
 accel = ["-enable-kvm", "-cpu", "host"] if os.access("/dev/kvm", os.W_OK) else ["-cpu", "max"]
+gpu = "--gpu" in sys.argv[1:]
+if gpu:
+    devices = ["-device", "virtio-gpu-gl-pci", "-display", os.environ.get("QEMU_DISPLAY", "egl-headless")]
+else:
+    devices = ["-device", "virtio-gpu-pci", "-display", "none"]
 
 qemu = subprocess.Popen(
-    ["qemu-system-x86_64", *accel, "-m", "1G", "-smp", "2",
+    ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
      "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
-     "-append", "console=ttyS0", "-vga", "none", "-device", "virtio-gpu-pci", "-device", "virtio-keyboard-pci",
-     "-device", "virtio-tablet-pci", "-display", "none", "-no-reboot",
+     "-append", "console=ttyS0", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
+     "-device", "virtio-tablet-pci", "-no-reboot",
      "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
 
 
@@ -37,7 +48,14 @@ def wait_for(text, timeout=60):
     fail(f"timed out waiting for {text!r}")
 
 
-wait_for("[host] display")
+wait_for("[host] display", timeout=120)
+log = open(serial_path, errors="replace").read()
+on_gpu = "on the GPU" in log
+print("renderer:", "GPU" if on_gpu else "CPU")
+if gpu and not on_gpu:
+    fail("expected the GPU renderer")
+if not gpu and on_gpu:
+    fail("expected the CPU fallback on a GPU without 3D")
 qmp = socket.socket(socket.AF_UNIX)
 qmp.connect(qmp_path)
 f = qmp.makefile("rw")
@@ -60,7 +78,20 @@ cmd("qmp_capabilities")
 
 def screen():
     path = os.path.join(tmp, "shot.ppm")
-    cmd("screendump", filename=path)
+    f.write(json.dumps({"execute": "screendump", "arguments": {"filename": path}}) + "\n")
+    f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r:
+            break
+    if "error" in r:
+        # SDL and GTK windows with gl=on have no surface for QMP to dump; grab
+        # the X screen instead. Only for a bare Xvfb, where the window sits at 0,0
+        # (needs ImageMagick): DISPLAY=:99 QEMU_DISPLAY=gtk,gl=on,show-menubar=off
+        if not os.environ.get("DISPLAY"):
+            fail(f"QMP screendump: {r['error']}")
+        size = log.split("[host] display ")[1].split()[0]
+        subprocess.run(["import", "-window", "root", "-crop", size + "+0+0", "+repage", "-depth", "8", path], check=True)
     time.sleep(0.3)
     data = open(path, "rb").read()
     parts = data.split(b"\n", 3)  # P6, "w h", 255, pixels

@@ -2,7 +2,9 @@
 #
 #   make            build build/bzImage and build/initramfs.cpio
 #   make run        boot it in QEMU in a window (GTK, mouse and keyboard work)
-#   make test       boot headless, inject input, check a screenshot
+#   make test       boot headless, inject input, check a screenshot (CPU fallback)
+#   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
+#   make GPU=0      leave Mesa out: CPU rendering only, and a 9 MB initramfs
 #
 # Needs (`make check-deps` checks them): eco (https://github.com/eco-lang/eco-compiler/releases, the
 # x86_64-linux-musl bundle), musl-gcc, a C toolchain for the kernel, cpio,
@@ -18,6 +20,8 @@ KERNEL_SRC ?= linux
 KERNEL_VER ?= v6.12
 JOBS       ?= $(shell nproc)
 BUILD      := build
+GPU        ?= 1
+ALPINE     := $(BUILD)/alpine
 
 
 # eco's own link line for a static musl executable (captured from
@@ -27,7 +31,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: all run test clean kernel-src check-deps check-run-deps
+.PHONY: FORCE all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio
 
@@ -84,18 +88,50 @@ $(BUILD)/init: $(BUILD)/host.o $(BUILD)/elm.o
 	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
 	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
 
-$(BUILD)/initramfs.cpio: $(BUILD)/init
+# ---- the GPU renderer: a small dynamically linked program, because Mesa's
+# drivers are shared libraries. Mesa and its libraries come from Alpine Linux
+# (musl, like us); see tools/fetch-mesa.py.
+
+$(ALPINE)/.done: tools/fetch-mesa.py
+	rm -rf $(ALPINE)/root
+	python3 -I tools/fetch-mesa.py $(ALPINE)/root
+	touch $@
+
+$(BUILD)/elmos-gpu: host/gpu.c $(ALPINE)/.done $(BUILD)/kheaders/include/linux/input.h | check-deps
+	musl-gcc -O2 -Wall -DEGL_NO_X11 -c $< -o $(BUILD)/gpu.o \
+	  -I$(ALPINE)/root/usr/include -I$(ALPINE)/root/usr/include/libdrm -isystem $(BUILD)/kheaders/include
+	musl-gcc -o $@ $(BUILD)/gpu.o -L$(ALPINE)/root/usr/lib -Wl,--allow-shlib-undefined -lEGL -lGLESv2 -lgbm -ldrm
+
+INITRAMFS_DEPS := $(BUILD)/init $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu)
+
+# Rebuild the initramfs when GPU= changes.
+$(BUILD)/gpu-setting: FORCE
+	@mkdir -p $(BUILD); echo $(GPU) | cmp -s - $@ || echo $(GPU) > $@
+FORCE:
+
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh $(BUILD)/gpu-setting
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs
-	cp $< $(BUILD)/rootfs/init
-	cd $(BUILD)/rootfs && echo init | cpio -o -H newc --quiet > ../initramfs.cpio
+	cp $(BUILD)/init $(BUILD)/rootfs/init
+ifeq ($(GPU),1)
+	mkdir -p $(BUILD)/rootfs/usr/bin
+	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
+	tools/copy-libs.sh $(ALPINE)/root $(BUILD)/rootfs $(BUILD)/elmos-gpu
+endif
+	cd $(BUILD)/rootfs && find . | LC_ALL=C sort | cpio -o -H newc --quiet > ../initramfs.cpio
 
 # ---- running
 
 run: all | check-run-deps
 	scripts/run-qemu.sh
 
+run-cpu: all | check-run-deps
+	QEMU_GPU=0 scripts/run-qemu.sh
+
 test: all | check-run-deps
 	python3 scripts/test-qemu.py
+
+test-gpu: all | check-run-deps
+	python3 scripts/test-qemu.py --gpu
 
 clean:
 	rm -rf $(BUILD)
