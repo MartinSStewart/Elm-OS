@@ -42,13 +42,6 @@ case "$mode" in
       echo "  https://github.com/eco-lang/eco-compiler/releases"
       echo "and put its bin/ directory on your PATH (or run make with ECO=/path/to/eco)."
       eco_missing=1
-    elif [ -n "$ECO_RUNTIME" ] && [ ! -f "$ECO_RUNTIME/mimalloc.o" ]; then
-      # The Makefile copies eco's link line, which needs these objects from v0.2.0-rc1 on.
-      echo "Your eco bundle is too old: $ECO_RUNTIME/mimalloc.o is missing."
-      echo "Install the v0.2.0-rc2 (or newer) x86_64-linux-musl bundle from"
-      echo "  https://github.com/eco-lang/eco-compiler/releases"
-      echo "It is a pre-release, so it is not the one GitHub labels \"Latest\"."
-      eco_missing=1
     fi
     ;;
   run)

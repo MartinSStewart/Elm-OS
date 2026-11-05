@@ -16,6 +16,10 @@ KERNEL_VER ?= v6.12
 JOBS       ?= $(shell nproc)
 BUILD      := build
 
+# Faster malloc and memcpy that eco links ahead of musl's. Some bundles don't ship them,
+# and then musl's own versions are used, which work but are slower.
+RT_FAST_OBJS := $(wildcard $(RT)/mimalloc.o $(RT)/memfuncs.o)
+
 # eco's own link line for a static musl executable (captured from
 # `eco make --output=<exe>`), with host.o added before the Elm object.
 PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel_Bitwise \
@@ -30,7 +34,7 @@ all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio
 # Fail early, with install hints, if a tool is missing. These are order-only
 # prerequisites below, so they run first but never force a rebuild.
 check-deps:
-	@ECO=$(ECO) ECO_RUNTIME=$(RT) scripts/check-deps.sh build
+	@ECO=$(ECO) scripts/check-deps.sh build
 
 check-run-deps:
 	@scripts/check-deps.sh run
@@ -68,7 +72,7 @@ $(BUILD)/host.o: host/host.c $(BUILD)/kheaders/include/linux/input.h | check-dep
 $(BUILD)/init: $(BUILD)/host.o $(BUILD)/elm.o
 	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static -o $@ \
 	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
-	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
+	  $(RT_FAST_OBJS) \
 	  $(BUILD)/host.o $(BUILD)/elm.o \
 	  --start-group \
 	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
