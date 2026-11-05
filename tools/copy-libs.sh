@@ -5,9 +5,13 @@
 # those and the renderer link against.
 #
 #   usage: tools/copy-libs.sh ALPINE_ROOT DEST_ROOT BINARY...
+#
+# A library found in $STUB_DIR is taken from there instead of from Alpine, and
+# its own dependencies are not followed (see tools/llvm-stub.sh).
 set -eu
 src=$1 dest=$2
 shift 2
+stubs=${STUB_DIR:-/nonexistent}
 
 copy() { # copy one path, keeping symlinks, relative to the Alpine root
     [ -e "$dest/$1" ] && return 0
@@ -40,6 +44,11 @@ while [ -n "$todo" ]; do
         case $lib in libc.so | libc.musl-x86_64.so.1) continue ;; esac
         case $seen in *" $lib "*) continue ;; esac
         seen="$seen$lib "
+        if [ -e "$stubs/$lib" ]; then
+            mkdir -p "$dest/usr/lib"
+            cp "$stubs/$lib" "$dest/usr/lib/$lib"
+            continue
+        fi
         path=$(find_lib "$lib")
         copy "$path"
         todo="$todo $src/$path"

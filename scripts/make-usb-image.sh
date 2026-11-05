@@ -7,10 +7,11 @@ set -eu
 efi=$1 img=$2
 tmp=$img.esp
 
-# Room for the kernel plus some slack, at least 64 MiB so FAT32 has enough clusters.
+# Room for the kernel plus some slack, and at least 36 MiB: FAT32 needs 65525
+# clusters, which with 512-byte clusters is a little over 32 MiB.
 efi_mib=$(( ($(stat -c %s "$efi") + 1048575) / 1048576 ))
-esp_mib=$(( efi_mib + 16 ))
-[ "$esp_mib" -lt 64 ] && esp_mib=64
+esp_mib=$(( efi_mib + 4 ))
+[ "$esp_mib" -lt 36 ] && esp_mib=36
 
 rm -f "$tmp" "$img"
 mkfs.vfat -C -F 32 -S 512 -s 1 -n ELMOS "$tmp" $(( esp_mib * 1024 )) >/dev/null

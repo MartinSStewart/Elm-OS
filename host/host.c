@@ -235,7 +235,7 @@ static int start_gpu(Display* d) {
     }
     gpu_fd = to_gpu[1];
 
-    /* Loading Mesa and LLVM can take a while under emulation. */
+    /* Loading Mesa can take a while under emulation. */
     char line[256];
     size_t len = 0;
     struct pollfd pfd = {.fd = from_gpu[0], .events = POLLIN};

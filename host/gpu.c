@@ -13,7 +13,7 @@
  * buffers that KMS can show, EGL renders into them, and each finished frame is
  * shown with a page flip.
  *
- * Mesa falls back to llvmpipe (rendering on the CPU) when no GPU driver fits.
+ * Mesa falls back to softpipe (rendering on the CPU) when no GPU driver fits.
  * That works, but /init's own rasteriser is lighter for that case, so we refuse
  * it unless ELMOS_RENDERER=gpu forces us on.
  */
@@ -178,6 +178,11 @@ static int read_frame(uint32_t* count) {
 }
 
 int main(void) {
+    /* The image carries a stub in place of LLVM (tools/llvm-stub.sh), so keep Mesa
+     * off its LLVM paths: no LLVM in the draw module (used for GL_SELECT/feedback),
+     * and softpipe instead of llvmpipe when no GPU driver fits. */
+    setenv("DRAW_USE_LLVM", "0", 0);
+    setenv("GALLIUM_DRIVER", "softpipe", 0);
     drm_fd = open_card();
     if (drm_fd < 0) die("no connected display");
 

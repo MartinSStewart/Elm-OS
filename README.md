@@ -57,7 +57,7 @@ make run          # QEMU window with the GPU (virgl); close it to quit
 make run-cpu      # QEMU window without 3D, so Elm OS draws on the CPU
 make test         # headless boot test of the CPU fallback, saves build/screenshot.png
 make test-gpu     # the same test drawn on the GPU (needs a host GPU for QEMU's egl-headless)
-make GPU=0        # leave Mesa out: CPU rendering only, 9 MB initramfs instead of 230 MB
+make GPU=0        # leave Mesa out: CPU rendering only, 9 MB initramfs instead of 58 MB
 make usb          # a USB stick image for real PCs, see below
 ```
 
@@ -65,7 +65,7 @@ Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree.
 
 ## Boot it on a real PC from a USB stick
 
-`make usb` builds `build/elmos-usb.img`, a UEFI-bootable image of about 110 MB. The kernel
+`make usb` builds `build/elmos-usb.img`, a UEFI-bootable image of about 38 MB. The kernel
 is its own EFI program (`EFI/BOOT/BOOTX64.EFI`) with the initramfs built in, so there is no
 bootloader. Elm OS runs entirely from RAM. The kernel has no NVMe, SATA or USB storage
 drivers, so it cannot read or write the computer's disk (or the stick, once it has booted).
@@ -154,14 +154,16 @@ render -> [x1,y1,x2,y2,x3,y3,r,g,b,a, ...]       10 numbers per triangle, colour
 
 - eco targets x86-64-v3 (AVX2), so QEMU needs `-cpu max` (or KVM), and real hardware must be
   Haswell or newer.
-- Mesa and LLVM make the initramfs about 230 MB (LLVM alone is 178 MB). It unpacks in a
-  couple of seconds, but QEMU needs `-m 2G`. Building Mesa ourselves with only the drivers
-  we need would shrink it a lot.
+- Mesa makes the initramfs about 58 MB, nearly all of it libgallium (41 MB), which holds
+  every Gallium driver Alpine builds. Alpine's Mesa also links LLVM (178 MB), which our
+  drivers (iris, virgl) never call, so the image carries a small stub in its place
+  (`tools/llvm-stub.sh`). Building Mesa ourselves with only iris and virgl would shrink
+  libgallium a lot more.
 - Real hardware: tested on one Intel Tiger Lake laptop, plus QEMU (UEFI firmware, USB keyboard and tablet).
   Only Intel graphics has a GPU driver; other GPUs fall back to the firmware's framebuffer
   and the CPU renderer. AMD would need amdgpu and its firmware. Touchpads have tap to
   click (two-finger tap for right click) but no scrolling yet. Laptops whose keyboard or touchpad sits behind
   an embedded controller driver the kernel config lacks will need more drivers.
 - Set `ELMOS_RENDERER=cpu` on the kernel command line to skip the GPU, or `ELMOS_RENDERER=gpu`
-  to use Mesa's software driver (llvmpipe) rather than the host's own rasteriser.
+  to use Mesa's software driver (softpipe; llvmpipe isn't in the image) rather than the host's own rasteriser.
 - JSON per frame is fine for a handful of triangles, but a real GUI will need a binary path.
