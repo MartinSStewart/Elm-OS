@@ -112,6 +112,8 @@ and downloads Intel's GPU firmware (10 MB) the first time.
    (an entry that starts with `UEFI`). This doesn't change the laptop's normal boot order.
 3. You'll see a few kernel messages, then the triangle. Move the pointer with the touchpad
    or a USB mouse, tap or click to grow the triangle, and press any key to change its colour.
+   The small square in the top-left corner shows which renderer is drawing: green for the
+   GPU, orange for the CPU fallback.
 4. Press the power button to power off. Unplug the stick and the laptop boots its own system again.
 
 If the screen stays black or shows an error, a photo of the screen helps. You can bake
@@ -155,10 +157,10 @@ render -> [x1,y1,x2,y2,x3,y3,r,g,b,a, ...]       10 numbers per triangle, colour
 - Mesa and LLVM make the initramfs about 230 MB (LLVM alone is 178 MB). It unpacks in a
   couple of seconds, but QEMU needs `-m 2G`. Building Mesa ourselves with only the drivers
   we need would shrink it a lot.
-- Real hardware has only been tried in QEMU so far (UEFI firmware, USB keyboard and tablet).
+- Real hardware: tested on one Intel Tiger Lake laptop, plus QEMU (UEFI firmware, USB keyboard and tablet).
   Only Intel graphics has a GPU driver; other GPUs fall back to the firmware's framebuffer
-  and the CPU renderer. AMD would need amdgpu and its firmware. Touchpads have no
-  two-finger scrolling or right click yet. Laptops whose keyboard or touchpad sits behind
+  and the CPU renderer. AMD would need amdgpu and its firmware. Touchpads have tap to
+  click (two-finger tap for right click) but no scrolling yet. Laptops whose keyboard or touchpad sits behind
   an embedded controller driver the kernel config lacks will need more drivers.
 - Set `ELMOS_RENDERER=cpu` on the kernel command line to skip the GPU, or `ELMOS_RENDERER=gpu`
   to use Mesa's software driver (llvmpipe) rather than the host's own rasteriser.

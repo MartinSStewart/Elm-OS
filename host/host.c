@@ -328,9 +328,22 @@ static float* parse_scene(const char* json, uint32_t* count) {
     return v;
 }
 
+/* A small square in the top-left corner that says which renderer is drawing:
+ * green for the GPU, orange for the CPU. Two triangles added to every frame. */
+static float* add_badge(float* tris, uint32_t* n, int on_gpu) {
+    tris = realloc(tris, (*n + 2) * 10 * sizeof(float));
+    float x0 = 8, y0 = 8, x1 = 24, y1 = 24;
+    float r = on_gpu ? 0.3f : 1.0f, g = on_gpu ? 0.8f : 0.6f, b = on_gpu ? 0.45f : 0.1f;
+    float sq[20] = {x0, y0, x1, y0, x1, y1, r, g, b, 1, x0, y0, x1, y1, x0, y1, r, g, b, 1};
+    memcpy(tris + *n * 10, sq, sizeof sq);
+    *n += 2;
+    return tris;
+}
+
 static void draw_scene(Display* d, const char* json) {
     uint32_t n;
     float* tris = parse_scene(json, &n);
+    tris = add_badge(tris, &n, gpu_fd >= 0);
     if (gpu_fd >= 0) {
         if (write_full(gpu_fd, &n, sizeof n) == 0 && write_full(gpu_fd, tris, n * 10 * sizeof(float)) == 0) {
             free(tris);
@@ -339,6 +352,8 @@ static void draw_scene(Display* d, const char* json) {
         logf_("GPU renderer stopped; drawing on the CPU");
         stop_gpu();
         if (open_display(d) < 0) { free(tris); return; }
+        n -= 2;
+        tris = add_badge(tris, &n, 0);
     }
     if (!d->back) { free(tris); return; }
     memset(d->back, 0, d->size);
@@ -365,6 +380,7 @@ typedef struct {
     struct input_absinfo ax, ay;
     /* touchpad state */
     int touching, have_last, last_x, last_y, tap_moved, tap_clicked;
+    int fingers; /* most fingers down during this touch */
     double touch_start, frac_x, frac_y;
 } InputDev;
 
@@ -424,6 +440,15 @@ static void send_button(int b, int down) {
 }
 
 static int mouse_x, mouse_y;
+static double tap_release_at; /* when to release a tap's click, 0 if none pending */
+static int tap_button;
+
+static double now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
 
 static double event_time(const struct input_event* ev) {
     return ev->input_event_sec + ev->input_event_usec / 1e6;
@@ -483,19 +508,30 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
                 dev->have_last = 0;
                 dev->tap_moved = 0;
                 dev->tap_clicked = 0;
+                dev->fingers = 1;
                 dev->frac_x = dev->frac_y = 0;
                 dev->touch_start = event_time(ev);
             } else {
                 dev->touching = 0;
-                /* A short touch that barely moved, without pressing the pad down: a tap, so click. */
-                if (!dev->tap_clicked && dev->tap_moved < 8 && event_time(ev) - dev->touch_start < 0.2) {
-                    send_button(0, 1);
-                    send_button(0, 0);
+                /* A short touch that barely moved, without pressing the pad down: a tap,
+                 * so click. Hold the button for a moment (released in host_main), because
+                 * a press and release in the same instant is invisible to a program that
+                 * reacts to the button being held. */
+                if (!dev->tap_clicked && !tap_release_at && dev->tap_moved < 20 &&
+                    event_time(ev) - dev->touch_start < 0.25) {
+                    tap_button = dev->fingers >= 2 ? 1 : 0; /* two-finger tap: right click */
+                    send_button(tap_button, 1);
+                    tap_release_at = now() + 0.15;
                 }
             }
         } else if (dev->touchpad && ev->code >= BTN_TOOL_FINGER && ev->code <= BTN_TOOL_QUADTAP) {
             /* The number of fingers changed, and the reported position may jump to another finger. */
             dev->have_last = 0;
+            if (down) {
+                int f = ev->code == BTN_TOOL_FINGER ? 1 : ev->code == BTN_TOOL_DOUBLETAP ? 2
+                      : ev->code == BTN_TOOL_TRIPLETAP ? 3 : 4;
+                if (f > dev->fingers) dev->fingers = f;
+            }
         } else if (ev->code == BTN_LEFT || ev->code == BTN_RIGHT || ev->code == BTN_MIDDLE) {
             if (dev->touchpad) dev->tap_clicked = 1;
             send_button(ev->code == BTN_LEFT ? 0 : ev->code == BTN_RIGHT ? 1 : 2, down);
@@ -509,12 +545,6 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
     if (mouse_y < 0) mouse_y = 0;
     if (mouse_x >= (int)d->w) mouse_x = d->w - 1;
     if (mouse_y >= (int)d->h) mouse_y = d->h - 1;
-}
-
-static double now(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
 /* ---------------------------------------------------------------- host thread */
@@ -543,7 +573,14 @@ static void* host_main(void* arg) {
         for (int i = 0; i < MAX_INPUTS; i++)
             if (devs[i].fd >= 0) idx[n] = i, pfds[n++] = (struct pollfd){.fd = devs[i].fd, .events = POLLIN};
         /* Look for new input devices about once a second. */
-        if (poll(pfds, n, 1000) < 0) { if (errno == EINTR) continue; break; }
+        int timeout = 1000;
+        if (tap_release_at) timeout = (int)((tap_release_at - now()) * 1000) + 1;
+        if (timeout < 0) timeout = 0;
+        if (poll(pfds, n, timeout) < 0) { if (errno == EINTR) continue; break; }
+        if (tap_release_at && now() >= tap_release_at) {
+            send_button(tap_button, 0);
+            tap_release_at = 0;
+        }
         if (now() - last_scan >= 1) { scan_inputs(); last_scan = now(); }
         if (pfds[0].revents & POLLIN) {
             uint64_t k;

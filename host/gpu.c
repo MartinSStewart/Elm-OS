@@ -20,6 +20,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -157,6 +158,25 @@ static GLuint compile(GLenum type, const char* src) {
     return s;
 }
 
+/* One frame from /init: a count, then 10 floats per triangle. */
+static float* tris;
+static float* verts;
+static uint32_t cap;
+
+static int read_frame(uint32_t* count) {
+    uint32_t n;
+    if (read_full(0, &n, sizeof n) < 0) return -1;
+    if (n > 1000000) die("absurd triangle count");
+    if (n > cap) {
+        cap = n;
+        tris = realloc(tris, cap * 10 * sizeof(float));
+        verts = realloc(verts, cap * 18 * sizeof(float));
+    }
+    if (n && read_full(0, tris, n * 10 * sizeof(float)) < 0) return -1;
+    *count = n;
+    return 0;
+}
+
 int main(void) {
     drm_fd = open_card();
     if (drm_fd < 0) die("no connected display");
@@ -232,20 +252,18 @@ int main(void) {
     printf("ok %u %u %s\n", w, h, renderer);
     fflush(stdout);
 
-    float* tris = NULL;
-    float* verts = NULL;
-    uint32_t cap = 0;
     drmEventContext ev = {.version = 2, .page_flip_handler = on_flip};
+    uint32_t n;
     for (;;) {
-        uint32_t n;
-        if (read_full(0, &n, sizeof n) < 0) break; /* /init went away */
-        if (n > 1000000) die("absurd triangle count");
-        if (n > cap) {
-            cap = n;
-            tris = realloc(tris, cap * 10 * sizeof(float));
-            verts = realloc(verts, cap * 18 * sizeof(float));
-        }
-        if (n && read_full(0, tris, n * 10 * sizeof(float)) < 0) break;
+        if (read_frame(&n) < 0) break; /* /init went away */
+        /* Frames can arrive faster than the screen refreshes (a touchpad reports
+         * over 100 times a second, and a page flip waits for the 60 Hz vblank).
+         * Draw only the newest, or the backlog in the pipe makes the screen lag. */
+        struct pollfd more = {.fd = 0, .events = POLLIN};
+        int gone = 0;
+        while (poll(&more, 1, 0) > 0 && (more.revents & POLLIN))
+            if (read_frame(&n) < 0) { gone = 1; break; }
+        if (gone) break;
 
         /* 10 floats per triangle -> 3 vertices of x, y, r, g, b, a. */
         for (uint32_t i = 0; i < n; i++) {
