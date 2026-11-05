@@ -9,8 +9,11 @@
 # qemu-system-x86_64, and a Linux source tree in $(KERNEL_SRC).
 
 ECO        ?= eco
-ECO_ROOT   ?= $(abspath $(dir $(shell command -v $(ECO)))/..)
-RT         := $(ECO_ROOT)/lib/eco-runtime
+# Find eco's runtime the same way eco does: $ECO_RUNTIME_DIR if set, otherwise
+# lib/eco-runtime next to the real eco binary (following symlinks). If this picks a
+# different bundle from the one that compiled elm.o, the link fails with undefined eco_* symbols.
+ECO_BIN    := $(realpath $(shell command -v $(ECO)))
+RT         ?= $(or $(ECO_RUNTIME_DIR),$(abspath $(dir $(ECO_BIN))/../lib/eco-runtime))
 KERNEL_SRC ?= linux
 KERNEL_VER ?= v6.12
 JOBS       ?= $(shell nproc)
