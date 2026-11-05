@@ -19,7 +19,7 @@ if [ -z "$dev" ]; then
   list_usb
   echo
   echo "Then run:  make usb-write DEV=/dev/sdX   (with the NAME from the list)"
-  exit 1
+  exit 0  # just listing, not a failure
 fi
 
 [ -b "$dev" ] || { echo "$dev is not a block device."; list_usb; exit 1; }
