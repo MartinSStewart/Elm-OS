@@ -12,7 +12,8 @@ ACCEL="-cpu max"
 [ -w /dev/kvm ] && ACCEL="-enable-kvm -cpu host"
 if [ "${QEMU_GPU:-1}" = 1 ]; then
   GPU="-device virtio-gpu-gl-pci"
-  DISPLAY_OPT="${QEMU_DISPLAY:-gtk,gl=on}"
+  # SDL rather than GTK: QEMU's GTK window stays black with virgl on NVIDIA's driver.
+  DISPLAY_OPT="${QEMU_DISPLAY:-sdl,gl=on}"
 else
   GPU="-device virtio-gpu-pci"
   DISPLAY_OPT="${QEMU_DISPLAY:-gtk}"
