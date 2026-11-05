@@ -1,0 +1,44 @@
+name: Boot test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  boot:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools qemu-system-x86 cpio flex bison bc libelf-dev libssl-dev rsync
+
+      - name: Install eco
+        run: |
+          curl -sSL -o eco.tar.gz https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc2/eco-0.2.0-rc2-x86_64-linux-musl.tar.gz
+          sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
+          echo /opt/eco/bin >> "$GITHUB_PATH"
+
+      - name: Cache kernel tree
+        uses: actions/cache@v4
+        with:
+          path: linux
+          key: linux-v6.12-${{ hashFiles('kernel/elmos.config') }}
+
+      - name: Build
+        run: |
+          make kernel-src
+          make
+
+      - name: Boot in QEMU and check the screen
+        run: make test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot
+          path: build/screenshot.png
+          if-no-files-found: ignore
