@@ -32,8 +32,9 @@ key changes its colour. `make test` checks all of that headlessly.
 
 You need Linux on x86_64 with:
 
-- eco: the `x86_64-linux-musl` bundle from the
-  [eco releases](https://github.com/eco-lang/eco-compiler/releases), with its `bin/` on your `PATH`
+- eco v0.2.0-rc2 or newer: the `x86_64-linux-musl` bundle from the
+  [eco releases](https://github.com/eco-lang/eco-compiler/releases), with its `bin/` on your `PATH`.
+  It's a pre-release, so it isn't the release GitHub labels "Latest".
 - `musl-gcc` (`musl-tools`), the kernel build tools (`flex bison bc libelf-dev libssl-dev rsync`),
   `cpio` and `qemu-system-x86_64`
 

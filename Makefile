@@ -30,7 +30,7 @@ all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio
 # Fail early, with install hints, if a tool is missing. These are order-only
 # prerequisites below, so they run first but never force a rebuild.
 check-deps:
-	@ECO=$(ECO) scripts/check-deps.sh build
+	@ECO=$(ECO) ECO_RUNTIME=$(RT) scripts/check-deps.sh build
 
 check-run-deps:
 	@scripts/check-deps.sh run
