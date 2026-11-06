@@ -39,3 +39,4 @@ musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev mai
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main zstd-libs 1.5.7-r0 1bdd6e57cfbfbfd6e8481cad37ddd5d199950715bec1879b3afb600272dbb09e
 linux-firmware-i915,linux-firmware-other main linux-firmware-i915 20250509-r0 4f36cc4d9103c62497aee8f11c0e518b7d0e7ee748e884615310ab4337dec2e9
 linux-firmware-i915,linux-firmware-other main linux-firmware-other 20250509-r0 1f798874593224af8e36671505d58bef7fb479d89bab46bda4919b77c981cc8a
+linux-firmware-nvidia main linux-firmware-nvidia 20250509-r0 7c5912e66de600210d1e88af9bfa8ee5b393c2b9afe6a1fed83cc0ff1643b63e

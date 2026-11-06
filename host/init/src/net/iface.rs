@@ -125,7 +125,9 @@ pub fn wireless() -> Vec<String> {
     names
 }
 
-pub fn set_default_route(name: &str, gateway: Ipv4Addr) {
+/// The default route through `gateway` on `name`. `metric` is the route's priority
+/// plus one (0 would mean "unset"); the lowest priority wins.
+pub fn set_default_route(name: &str, gateway: Ipv4Addr, metric: i16) {
     let dev = CString::new(name).unwrap_or_default();
     // SAFETY: rtentry is plain data; zero is a valid empty route.
     let mut rt: libc::rtentry = unsafe { std::mem::zeroed() };
@@ -138,11 +140,43 @@ pub fn set_default_route(name: &str, gateway: Ipv4Addr) {
     put(&mut rt.rt_genmask, Ipv4Addr::UNSPECIFIED);
     put(&mut rt.rt_gateway, gateway);
     rt.rt_flags = libc::RTF_UP | libc::RTF_GATEWAY;
+    rt.rt_metric = metric;
     rt.rt_dev = dev.as_ptr() as *mut libc::c_char;
     let _ = ioctl(SIOCDELRT, &mut rt); // an old one, if any
     if let Err(e) = ioctl(SIOCADDRT, &mut rt) {
         log!("net", "default route via {}: {}", gateway, e);
     }
+}
+
+/// Whether `name` has a cable plugged in (and a link up at the other end). The
+/// interface must be up for the kernel to know.
+pub fn carrier(name: &str) -> bool {
+    std::fs::read_to_string(format!("/sys/class/net/{name}/carrier")).is_ok_and(|s| s.trim() == "1")
+}
+
+/// Wired network cards: real Ethernet devices (ARPHRD_ETHER with a device behind
+/// them), not wifi, bridges, or a card that is in a bridge (QEMU's, in the wifi sim).
+pub fn wired() -> Vec<String> {
+    let has = |n: &str, f: &str| std::path::Path::new(&format!("/sys/class/net/{n}/{f}")).exists();
+    let mut names: Vec<String> = std::fs::read_dir("/sys/class/net")
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| {
+                    !n.starts_with('.')
+                        && n.len() < 16
+                        && std::fs::read_to_string(format!("/sys/class/net/{n}/type")).is_ok_and(|t| t.trim() == "1")
+                        && has(n, "device")
+                        && !has(n, "wireless")
+                        && !has(n, "phy80211")
+                        && !has(n, "bridge")
+                        && !has(n, "brport")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
 }
 
 /// Makes bridge `bridge` and adds `member` to it.

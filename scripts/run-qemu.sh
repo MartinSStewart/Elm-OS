@@ -17,8 +17,9 @@
 # overlay can show its SHA-256, to compare with `sha256sum build/initramfs-qemu.cpio`.
 #
 # --usb boots build/elmos-usb.img instead, the way a PC boots the USB stick: UEFI
-# firmware (OVMF), the image as a USB disk, USB keyboard and mouse, and only the
-# firmware's framebuffer for a display. The image is opened read-only.
+# firmware (OVMF), the image as a USB disk, USB keyboard and mouse, only the
+# firmware's framebuffer for a display, and like a desktop, wired Ethernet (an Intel
+# e1000e card on QEMU's user-mode network) and no wifi. The image is opened read-only.
 set -e
 cd "$(dirname "$0")/.."
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
@@ -35,7 +36,7 @@ if [ "$1" = --usb ]; then
   exec qemu-system-x86_64 $ACCEL -machine q35 -m 2G -smp 2 -bios "$OVMF" \
     -drive if=none,id=stick,format=raw,file=build/elmos-usb.img,snapshot=on \
     -device qemu-xhci -device usb-storage,drive=stick,bootindex=0 \
-    -device usb-kbd -device usb-tablet -vga std \
+    -device usb-kbd -device usb-tablet -vga std -nic user,model=e1000e \
     -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot "$@"
 fi
 RES="${QEMU_RES:-1920x1080}"

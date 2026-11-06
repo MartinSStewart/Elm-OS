@@ -1,6 +1,7 @@
-//! Elm OS networking: wifi through wpa_supplicant, and DHCP.
+//! Elm OS networking: wifi through wpa_supplicant, wired Ethernet (wired.rs, its own
+//! thread), and DHCP.
 //!
-//! One thread. It
+//! The wifi thread
 //!
 //!   - finds the wifi card (the first network interface with a wireless/ directory in
 //!     sysfs) and starts /usr/sbin/wpa_supplicant on it,
@@ -32,6 +33,7 @@
 
 mod dhcp;
 mod iface;
+mod wired;
 mod wpa;
 
 use serde_json::json;
@@ -48,6 +50,8 @@ use crate::sys::{self, now, Waker};
 const WPA_SUPPLICANT: &str = "/usr/sbin/wpa_supplicant";
 const HOSTAPD: &str = "/usr/sbin/hostapd";
 const SIM_CONF: &str = "/etc/elmos/hostapd.conf";
+/// The wifi default route's metric: above wired.rs's, so a cable wins when both are up.
+const WIFI_METRIC: i16 = 600;
 
 #[derive(Debug)]
 pub enum Command {
@@ -219,7 +223,7 @@ impl Net {
             self.set_state(State::Failed, "Joined the network, but got no address from it (DHCP)");
             return;
         };
-        dhcp::apply(&self.iface, &lease);
+        dhcp::apply(&self.iface, &lease, WIFI_METRIC);
         self.renew_at = Some(now() + Self::renew_in(&lease));
         self.lease = Some(lease);
         self.set_state(State::Connected, "");
@@ -415,6 +419,8 @@ fn run() {
         Some((ap, child)) => (Some(ap), Some(child)),
         None => (None, None),
     };
+    // After the sim, which takes QEMU's Ethernet card into its bridge.
+    wired::start();
 
     // A built-in wifi driver may still be loading its firmware.
     let mut card = None;
@@ -513,7 +519,7 @@ fn run() {
                     if l.ip != net.lease.as_ref().and_then(|o| o.ip) {
                         iface::clear_addr(&net.iface);
                     }
-                    dhcp::apply(&net.iface, &l);
+                    dhcp::apply(&net.iface, &l, WIFI_METRIC);
                     net.renew_at = Some(now() + Net::renew_in(&l));
                     net.lease = Some(l);
                     net.send_status();

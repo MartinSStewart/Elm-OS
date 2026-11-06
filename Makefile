@@ -312,7 +312,8 @@ $(BUILD)/initramfs-qemu.cpio: $(BUILD)/initramfs.cpio $(BUILD)/wifi-sim.cpio
 
 # ---- the USB stick: a disk image with one EFI system partition holding
 # EFI/BOOT/BOOTX64.EFI, the path a PC's firmware boots from removable media.
-# The USB initramfs is the normal one plus Intel's GPU and wifi firmware (from Alpine).
+# The USB initramfs is the normal one plus Intel's GPU and wifi firmware and NVIDIA's
+# GPU firmware (from Alpine).
 
 $(BUILD)/firmware/.done-i915-wifi: tools/fetch-mesa.py
 	rm -rf $(BUILD)/firmware
@@ -327,13 +328,27 @@ $(BUILD)/firmware/.done-i915-wifi: tools/fetch-mesa.py
 # iwlwifi-PREFIX here (`dmesg | grep iwlwifi` on Linux names the file it loads).
 WIFI_FIRMWARE ?= Qu-b0-hr-b0:77 Qu-c0-hr-b0:77 QuZ-a0-hr-b0:77 so-a0-hr-b0:89
 
-$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done-i915-wifi $(BUILD)/bzImage tools/pick-wifi-firmware.sh tools/mkcpio.sh $(BUILD)/source-date
+# NVIDIA: nouveau needs NVIDIA's signed firmware to run anything on Maxwell 2 (GTX 900)
+# and newer cards, such as the GTX 1080; without it the screen still works, drawn on
+# the CPU. This takes every desktop card's files, about 1 MB, except the GSP firmware
+# (tens of MB), which only Turing and newer cards use, and only if told to (Ampere
+# and newer then show the screen but draw on the CPU).
+$(BUILD)/firmware-nvidia/.done: tools/fetch-mesa.py
+	rm -rf $(BUILD)/firmware-nvidia
+	python3 -I tools/fetch-mesa.py $(BUILD)/firmware-nvidia/root linux-firmware-nvidia
+	touch $@
+
+$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done-i915-wifi $(BUILD)/firmware-nvidia/.done $(BUILD)/bzImage tools/pick-wifi-firmware.sh tools/mkcpio.sh $(BUILD)/source-date
 	strings $(KOUT)/vmlinux | grep -E '^i915/[A-Za-z0-9_.-]+\.bin$$' | LC_ALL=C sort -u > $(BUILD)/firmware/wanted
 	test -s $(BUILD)/firmware/wanted
 	tools/pick-wifi-firmware.sh $(BUILD)/firmware/root/lib/firmware $(WIFI_FIRMWARE) > $(BUILD)/firmware/wifi
+	rm -rf $(BUILD)/firmware/root/lib/firmware/nvidia
+	cp -a $(BUILD)/firmware-nvidia/root/lib/firmware/nvidia $(BUILD)/firmware/root/lib/firmware/
 	cd $(BUILD)/firmware/root && { echo lib; echo lib/firmware; echo lib/firmware/i915; \
 	  sed 's|^|lib/firmware/|; s|$$|.zst|' ../wanted | while read -r f; do [ ! -e "$$f" ] || echo "$$f"; done; \
-	  sed 's|^|lib/firmware/|' ../wifi; } \
+	  sed 's|^|lib/firmware/|' ../wifi; \
+	  find lib/firmware/nvidia -name 'tegra*' -prune -o -name gk20a -prune -o -name gm20b -prune -o -name gp10b -prune \
+	    -o -name gsp -prune -o -print | LC_ALL=C sort; } \
 	  | $(abspath tools/mkcpio.sh) . $(abspath $@) -
 
 # /dev/console, which the kernel's own default initramfs provides and a built-in one

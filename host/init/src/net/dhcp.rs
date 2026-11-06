@@ -247,8 +247,9 @@ pub fn get_lease(name: &str) -> Option<Lease> {
     None
 }
 
-/// Configures `iface` with the lease, and writes /etc/resolv.conf.
-pub fn apply(name: &str, l: &Lease) {
+/// Configures `iface` with the lease, and writes /etc/resolv.conf. The default route
+/// gets `metric`: with both wired and wifi up, the lower one carries the traffic.
+pub fn apply(name: &str, l: &Lease, metric: i16) {
     let Some(ip) = l.ip else { return };
     let mask = l.mask.unwrap_or(Ipv4Addr::new(255, 255, 255, 0));
     let (ipn, maskn) = (u32::from(ip), u32::from(mask));
@@ -256,7 +257,7 @@ pub fn apply(name: &str, l: &Lease) {
     iface::set_netmask(name, mask);
     iface::set_broadcast(name, Ipv4Addr::from((ipn & maskn) | !maskn));
     if let Some(r) = l.router {
-        iface::set_default_route(name, r);
+        iface::set_default_route(name, r, metric);
     }
     let mut resolv: String = l.dns.iter().map(|d| format!("nameserver {d}\n")).collect();
     if resolv.is_empty() {

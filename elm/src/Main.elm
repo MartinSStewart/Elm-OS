@@ -2,7 +2,8 @@ module Main exposing (main)
 
 {-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
 "Next colour" button), a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
-and a wifi panel: pick a network, type its password, join it, and see the weather.
+and a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
+password, join it), and the weather once either is connected.
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
 including {"t":"frame"} whenever the screen is ready for a frame. `update` answers with a
@@ -25,6 +26,7 @@ import Ui
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
 import Wifi
+import Wired
 
 
 
@@ -44,6 +46,7 @@ type Input
     | WifiDevice Wifi.Device
     | WifiScan (List Wifi.Network)
     | WifiStatus Wifi.Status
+    | WiredLinks (List Wired.Link)
     | NetConfig { geoUrl : String, weatherUrl : String }
     | System SystemInfo
     | BootInfo BootInfo.Input
@@ -131,6 +134,9 @@ decodeInput =
                     "wifiStatus" ->
                         D.map WifiStatus Wifi.decodeStatus
 
+                    "wired" ->
+                        D.map WiredLinks Wired.decodeLinks
+
                     "system" ->
                         D.map3 SystemInfo (D.field "kernel" D.string) (D.field "cpu" D.string) (D.field "commit" D.string)
                             |> D.map System
@@ -211,6 +217,7 @@ type alias Model =
     , networks : List Wifi.Network
     , scanning : Bool
     , wifiStatus : Wifi.Status
+    , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
     , selected : Maybe Wifi.Network
     , password : TextInput.Model
     , showPassword : Bool
@@ -283,6 +290,7 @@ init _ =
       , networks = []
       , scanning = True
       , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
+      , wired = []
       , selected = Nothing
       , password = TextInput.init
       , showPassword = False
@@ -442,18 +450,10 @@ step event model =
             ( { model | networks = networks, scanning = False }, [] )
 
         WifiStatus status ->
-            let
-                justConnected =
-                    status.state == Wifi.Connected && model.wifiStatus.state /= Wifi.Connected
+            whenOnline model { model | wifiStatus = status }
 
-                next =
-                    { model | wifiStatus = status }
-            in
-            if justConnected then
-                fetchWeather next
-
-            else
-                ( next, [] )
+        WiredLinks links ->
+            whenOnline model { model | wired = links }
 
         System info ->
             ( { model | system = Just info }, [] )
@@ -468,6 +468,34 @@ step event model =
               }
             , []
             )
+
+
+{-| Fetches the weather when the computer has just got onto a network, by cable or wifi.
+-}
+whenOnline : Model -> Model -> ( Model, List Effect )
+whenOnline before after =
+    if isOnline after && not (isOnline before) then
+        fetchWeather after
+
+    else
+        ( after, [] )
+
+
+{-| The weather to show when wifi goes (or is about to change networks): it stays if a
+cable keeps the computer online.
+-}
+weatherWithoutWifi : Model -> WeatherState
+weatherWithoutWifi model =
+    if Wired.isConnected model.wired then
+        model.weather
+
+    else
+        NoWeather
+
+
+isOnline : Model -> Bool
+isOnline model =
+    model.wifiStatus.state == Wifi.Connected || Wired.isConnected model.wired
 
 
 nonEmpty : String -> String -> String
@@ -566,7 +594,12 @@ click id model =
             connect model
 
         DisconnectButton ->
-            ( { model | weather = NoWeather, focus = Nothing }, [ Effect.WifiDisconnect ] )
+            ( { model
+                | weather = weatherWithoutWifi model
+                , focus = Nothing
+              }
+            , [ Effect.WifiDisconnect ]
+            )
 
         WeatherButton ->
             fetchWeather { model | focus = Nothing }
@@ -617,7 +650,7 @@ connect model =
             in
             ( { model
                 | focus = Nothing
-                , weather = NoWeather
+                , weather = weatherWithoutWifi model
                 , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
               }
             , [ Effect.WifiConnect { ssid = network.ssid, password = password } ]
@@ -806,7 +839,7 @@ screenUi model =
     Ui.el
         { padding = Ui.noPadding
         , inFront =
-            [ overlay model, wifiPanel model, toolbar model ]
+            [ overlay model, networkPanel model, toolbar model ]
                 ++ (if model.aboutOpen then
                         [ aboutPage model ]
 
@@ -1057,7 +1090,7 @@ main =
 
 
 
--- WIFI AND WEATHER
+-- NETWORK AND WEATHER
 
 
 {-| How wide the wifi panel's contents are, in pixels.
@@ -1067,8 +1100,11 @@ panelWidth =
     em 28
 
 
-wifiPanel : Model -> Ui.Element UiId
-wifiPanel model =
+{-| The panel in the top right: a line for each wired card, then wifi (left out on a
+computer with a wired card and no wifi), then the weather.
+-}
+networkPanel : Model -> Ui.Element UiId
+networkPanel model =
     let
         font =
             bodyFont
@@ -1211,15 +1247,71 @@ wifiPanel model =
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
                 (Ui.column { spacing = 4, padding = Ui.noPadding }
-                    ([ header, statusLine ]
-                        ++ networkRows
-                        ++ joinRows
-                        ++ disconnectRow
+                    (wiredRows model
+                        ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
+                                []
+
+                            else
+                                [ header, statusLine ]
+                                    ++ networkRows
+                                    ++ joinRows
+                                    ++ disconnectRow
+                           )
                         ++ weatherRows model
                     )
                 )
             )
         )
+
+
+{-| Two lines for each wired card: its name, and whether it has a cable and an address.
+-}
+wiredRows : Model -> List (Ui.Element UiId)
+wiredRows model =
+    let
+        font =
+            bodyFont
+
+        width =
+            panelWidth
+
+        t =
+            Ui.text font
+
+        link l =
+            [ t ("Wired (" ++ l.name ++ ")")
+            , case l.state of
+                Wired.NoCable ->
+                    t "No cable plugged in"
+
+                Wired.Dhcp ->
+                    t "Getting an address…"
+
+                Wired.Connected ->
+                    Ui.colorText connectedColor font (Sprite.ellipsis font width ("Connected, " ++ l.ip))
+
+                Wired.Failed ->
+                    Ui.colorText Color.errorColor font (Sprite.wrap font width "Cable plugged in, but no address from the network (DHCP)")
+            ]
+
+        divider =
+            Ui.quads
+                { size = ( width, Units.uiPixels 6 )
+                , triangles = Sprite.rectangle Color.outlineColor (Coord.xy 0 2) ( width, Units.uiPixels 2 )
+                }
+    in
+    case model.wired of
+        [] ->
+            []
+
+        links ->
+            List.concatMap link links
+                ++ (if model.wifiDevice == Wifi.NoCard then
+                        []
+
+                    else
+                        [ divider ]
+                   )
 
 
 connectedColor : Color
@@ -1359,7 +1451,7 @@ weatherRows model =
     in
     case model.weather of
         NoWeather ->
-            if model.wifiStatus.state == Wifi.Connected then
+            if isOnline model then
                 [ divider, Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
 
             else
@@ -1624,6 +1716,27 @@ aboutPage model =
                             "?"
                     )
                 , line "Wifi" wifiText
+                , line "Wired"
+                    (case model.wired of
+                        [] ->
+                            "no wired card found"
+
+                        links ->
+                            links
+                                |> List.map
+                                    (\l ->
+                                        case l.state of
+                                            Wired.Connected ->
+                                                l.name ++ ", connected as " ++ l.ip
+
+                                            Wired.NoCable ->
+                                                l.name ++ ", no cable"
+
+                                            _ ->
+                                                l.name ++ ", not connected"
+                                    )
+                                |> String.join "; "
+                    )
                 , t ""
                 , t
                     (Sprite.wrap font

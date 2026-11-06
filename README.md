@@ -18,7 +18,7 @@ enforced by the type system. See the
 - A debug overlay (bottom left) shows frame timings, which renderer is drawing, CPU load and
   memory, the SHA-256 of the build that booted, the battery, and how long the boot took
   (from the kernel starting to the first frame, plus the firmware's time on real PCs).
-- A wifi panel (top right) joins WPA2 personal (including WPA2/WPA3 mixed) or open networks, then shows the local weather.
+- A network panel (top right) shows wired Ethernet (plug in a cable and it gets an address) and joins wifi networks (WPA2 personal, including WPA2/WPA3 mixed, or open), then shows the local weather.
 - Buttons (top left) open an about page and restart or power off the computer.
 
 The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`) drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
@@ -101,10 +101,13 @@ from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat` an
 3. **Boot from the stick** with the one-time boot menu (F12 on Dell, Lenovo and Acer, F9 on HP,
    Esc or F8 on ASUS) and pick the `UEFI` USB entry. Press the power button to power off.
 
-Hardware support: Intel graphics (i915), with the firmware framebuffer as a fallback; USB and
-PS/2 keyboards and mice; I2C and PS/2 touchpads; Intel wifi (AX201 firmware included, others via
-`WIFI_FIRMWARE` in the `Makefile`). The CPU must be Haswell or newer. Tested on an Intel
-Tiger Lake laptop. Extra kernel options can be baked in with `USB_CMDLINE`, for example
+Hardware support: Intel graphics (i915) and NVIDIA graphics (nouveau, with NVIDIA's firmware for
+GTX 900 to RTX 20 series cards), with the firmware framebuffer as a fallback; USB and PS/2
+keyboards and mice; I2C and PS/2 touchpads; Intel wifi (AX201 firmware included, others via
+`WIFI_FIRMWARE` in the `Makefile`); wired Ethernet on Intel (e1000e, igc) and Realtek (r8169)
+chips. The CPU must be Haswell or newer. One image serves every machine: drivers for hardware
+that isn't there just don't start. Tested on an Intel Tiger Lake laptop; `make test-usb` also
+boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can be baked in with `USB_CMDLINE`, for example
 `make usb USB_CMDLINE="console=tty0 loglevel=7 ELMOS_RENDERER=cpu"`.
 
 ## How it fits together
@@ -147,8 +150,10 @@ Tiger Lake laptop. Extra kernel options can be baked in with `USB_CMDLINE`, for 
 ## Known limits
 
 - eco targets x86-64-v3 (AVX2): QEMU needs `-cpu max` or KVM, and hardware must be Haswell+.
-- Only Intel graphics gets a GPU driver; other GPUs fall back to the CPU renderer.
-- Wifi: Intel cards only, IPv4 only, no WPA3-only networks, no 802.1X or captive portals, US keyboard layout, and
+- Intel and NVIDIA graphics get a GPU driver; others (AMD, which would need LLVM) fall back to
+  the CPU renderer. nouveau can't raise an NVIDIA card's clocks, so it runs at its slow boot
+  clocks (plenty for this UI); RTX 30 and newer cards draw on the CPU (their firmware is tens of MB).
+- Networking is IPv4 only. Wifi: Intel cards only, no WPA3-only networks, no 802.1X or captive portals, US keyboard layout, and
   nothing is remembered across reboots.
 - Frames are sent as JSON because eco's ports can't carry `Bytes` yet, which costs time on
   large scenes.

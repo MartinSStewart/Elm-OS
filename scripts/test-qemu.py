@@ -2,7 +2,8 @@
 
 Passes when the triangle follows the mouse and a key press changes its colour, and
 (except with --usb) when Elm OS joins the simulated wifi network and fetches the
-weather, from a stand-in server here rather than the internet.
+weather, from a stand-in server here rather than the internet. With --usb the machine
+is a desktop without wifi: a wired Intel e1000e card, which must get an address.
 
     python3 scripts/test-qemu.py          plain virtio GPU: checks the CPU fallback
     python3 scripts/test-qemu.py --gpu    virtio GPU with virgl: checks the GPU renderer
@@ -60,7 +61,9 @@ if usb:
     boot = ["-machine", "q35", "-bios", ovmf,
             "-drive", f"if=none,id=stick,format=raw,file={ROOT}/build/elmos-usb.img,snapshot=on",
             "-device", "qemu-xhci", "-device", "usb-storage,drive=stick,bootindex=0",
-            "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none"]
+            "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none",
+            # Like a desktop: wired Ethernet (Intel, the e1000e driver), and no wifi.
+            "-nic", "user,model=e1000e"]
 else:
     boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
             "-nic", "user,model=virtio-net-pci",
@@ -274,6 +277,22 @@ closed = pixel(screen(), *middle)
 print(f"about page: {before}, open {opened}, closed {closed}")
 if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
     fail("the About button did not open and close the about page")
+
+if usb:
+    # No wifi card, so the panel (top right) is just the wired card: its name, then
+    # "Connected, 10.0.2.15" in green once DHCP over the cable has worked.
+    end = time.time() + 60
+    while True:
+        shot = screen()
+        green = sum(1 for x in range(w - 450 * s, w - 20 * s) for y in range(40 * s, 60 * s)
+                    if near(pixel(shot, x, y), (30, 120, 60), tol=30))
+        if green >= 20:
+            break
+        if time.time() > end:
+            save_png(shot, f"{ROOT}/build/screenshot.png")
+            fail(f"expected the panel to say the wired card is connected ({green} green pixels; build/screenshot.png)")
+        time.sleep(2)
+    print("got an address over wired Ethernet")
 
 if not usb:
     # The wifi panel (top right): refresh, pick the test network, type its password
