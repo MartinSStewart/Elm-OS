@@ -57,6 +57,25 @@ static void atlas_build(unsigned char* a) {
     for (int y = 248; y < ATLAS_SIZE; y++) memset(a + y * ATLAS_SIZE + 248, 255, ATLAS_SIZE - 248);
 }
 
+/* The cursor as a 64 x 64 ARGB8888 image for a display's cursor plane (a "hardware
+ * cursor", which the display moves without redrawing anything): a black outline
+ * around a fill of the given 0xRRGGBBAA colour, `scale` pixels per atlas pixel. */
+#define CURSOR_PLANE 64
+
+static void cursor_image(unsigned int* argb, int scale, unsigned int fill) {
+    unsigned int a = fill & 255;
+    /* premultiplied, as the cursor plane blends it */
+    unsigned int fillpx = a << 24 | ((fill >> 24) * a / 255) << 16 | ((fill >> 16 & 255) * a / 255) << 8 |
+                          ((fill >> 8 & 255) * a / 255);
+    memset(argb, 0, CURSOR_PLANE * CURSOR_PLANE * 4);
+    for (int y = 0; y < CURSOR_H * scale && y < CURSOR_PLANE; y++)
+        for (int x = 0; x < CURSOR_W * scale && x < CURSOR_PLANE; x++) {
+            char c = cursor[y / scale][x / scale];
+            if (c == 'X') argb[y * CURSOR_PLANE + x] = 0xff000000;
+            if (c == 'o') argb[y * CURSOR_PLANE + x] = fillpx;
+        }
+}
+
 /* One triangle as /init hands it to a renderer: the 13 numbers Elm sends per triangle,
  * x, y, u, v for each corner (screen and atlas pixels), then the colour as 0xRRGGBBAA. */
 typedef struct {

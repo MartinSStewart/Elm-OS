@@ -4,14 +4,19 @@
  * cannot be loaded into it. So /init starts this small, dynamically linked
  * program and pipes the scene to it. This process owns the display.
  *
- *   stdout -> "ok W H RENDERER\n" once the display is up. Anything else, or
- *             exiting, means "use the CPU renderer instead".
+ *   stdout -> "ok W H CURSOR RENDERER\n" once the display is up, CURSOR 1 if the
+ *             display has a cursor plane we drew the cursor on. Anything else,
+ *             or exiting, means "use the CPU renderer instead".
  *             Then "f GPU_NS\n" each time a frame is on the screen, with how long
  *             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
  *             a frame skipped because a newer one was already waiting. /init uses
  *             these to keep at most two frames on their way to the screen.
  *   stdin  <- frames: uint32 n, then n Tri (atlas.h): per triangle x, y, u, v for
  *             each corner and an 0xRRGGBBAA colour, as Elm sends them on `render`.
+ *
+ *   fd 3   <- cursor commands, one per line, handled on their own thread so the
+ *             cursor moves while a frame is drawing: "m X Y" moves it, "c RGBA S"
+ *             redraws it with that fill colour at scale S.
  *
  * Every triangle samples the texture atlas (atlas.h), which we upload once.
  *
@@ -27,6 +32,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -272,6 +278,44 @@ static long long gpu_timer_end(long long started) {
     return result;
 }
 
+/* ---------------------------------------------------------------- cursor */
+
+static struct gbm_bo* cursor_bo;
+
+static int cursor_draw(unsigned fill, int scale) {
+    static unsigned int argb[CURSOR_PLANE * CURSOR_PLANE];
+    cursor_image(argb, scale, fill);
+    if (gbm_bo_write(cursor_bo, argb, sizeof argb)) return -1;
+    /* Setting the cursor again makes drivers that copy it (virtio-gpu) take the new image. */
+    if (drmModeSetCursor2(drm_fd, crtc_id, gbm_bo_get_handle(cursor_bo).u32, CURSOR_PLANE, CURSOR_PLANE, 0, 0) &&
+        drmModeSetCursor(drm_fd, crtc_id, gbm_bo_get_handle(cursor_bo).u32, CURSOR_PLANE, CURSOR_PLANE))
+        return -1;
+    return 0;
+}
+
+static int cursor_init(struct gbm_device* gbm, int scale) {
+    cursor_bo = gbm_bo_create(gbm, CURSOR_PLANE, CURSOR_PLANE, GBM_FORMAT_ARGB8888, GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE);
+    if (!cursor_bo || cursor_draw(0xffffffff, scale) < 0) {
+        fprintf(stderr, "[gpu] no cursor plane\n");
+        return 0;
+    }
+    return 1;
+}
+
+static void* cursor_thread(void* arg) {
+    (void)arg;
+    FILE* in = fdopen(3, "r");
+    if (!in) return NULL;
+    char line[64];
+    while (fgets(line, sizeof line, in)) {
+        int x, y, scale;
+        unsigned fill;
+        if (sscanf(line, "m %d %d", &x, &y) == 2) drmModeMoveCursor(drm_fd, crtc_id, x, y);
+        else if (sscanf(line, "c %u %d", &fill, &scale) == 2) cursor_draw(fill, scale);
+    }
+    return NULL;
+}
+
 int main(void) {
     /* The image carries a stub in place of LLVM (tools/llvm-stub.sh), so keep Mesa
      * off its LLVM paths: no LLVM in the draw module (used for GL_SELECT/feedback),
@@ -369,7 +413,12 @@ int main(void) {
     saved_crtc = drmModeGetCrtc(drm_fd, crtc_id);
     if (drmModeSetCrtc(drm_fd, crtc_id, fb_for(shown), 0, 0, &conn_id, 1, &mode)) die("drmModeSetCrtc failed");
 
-    printf("ok %u %u %s\n", w, h, renderer);
+    int hw_cursor = cursor_init(gbm, w >= 1600 ? 2 : 1);
+    if (hw_cursor) {
+        pthread_t t;
+        pthread_create(&t, NULL, cursor_thread, NULL);
+    }
+    printf("ok %u %u %d %s\n", w, h, hw_cursor, renderer);
     fflush(stdout);
 
     drmEventContext ev = {.version = 2, .page_flip_handler = on_flip};

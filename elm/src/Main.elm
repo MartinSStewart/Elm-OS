@@ -31,6 +31,13 @@ on the screen and in the texture atlas, then the colour as 0xRRGGBBAA.
 port render : List Float -> Cmd msg
 
 
+{-| The mouse cursor's fill colour, as 0xRRGGBBAA. The host draws the cursor on the
+display's cursor plane and moves it as the mouse moves, without waiting for a frame;
+Elm draws it only when there is no cursor plane (see `RendererInfo.hardwareCursor`).
+-}
+port cursor : Float -> Cmd msg
+
+
 
 -- INPUT
 
@@ -40,8 +47,12 @@ type Input
     | Mouse Int Int
     | Button Int Bool
     | Key Int Bool
-    | Renderer { gpu : Bool, name : String }
+    | Renderer RendererInfo
     | Stats SystemStats
+
+
+type alias RendererInfo =
+    { gpu : Bool, name : String, hardwareCursor : Bool }
 
 
 type alias SystemStats =
@@ -77,9 +88,11 @@ inputDecoder =
                         D.map2 Key (D.field "code" D.int) (D.field "down" D.bool)
 
                     "renderer" ->
-                        D.map2 (\gpu name -> Renderer { gpu = gpu, name = name })
+                        D.map3 RendererInfo
                             (D.field "gpu" D.bool)
                             (D.field "name" D.string)
+                            (D.field "hardwareCursor" D.bool)
+                            |> D.map Renderer
 
                     "stats" ->
                         D.map8 SystemStats
@@ -128,7 +141,7 @@ type alias Model =
     , mouse : Coord
     , colorIndex : Int
     , pressed : Bool
-    , renderer : Maybe { gpu : Bool, name : String }
+    , renderer : Maybe RendererInfo
     , stats : Maybe SystemStats
     , lastFrame : Maybe Float
     , frameIntervals : List Float -- milliseconds, newest first
@@ -196,7 +209,17 @@ update msg model =
         GotInput value ->
             case D.decodeValue inputDecoder value of
                 Ok event ->
-                    ( step event model, Cmd.none )
+                    let
+                        next =
+                            step event model
+                    in
+                    ( next
+                    , if cursorColor next /= cursorColor model || isRenderer event then
+                        cursor (Color.toFloat (cursorColor next))
+
+                      else
+                        Cmd.none
+                    )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -233,6 +256,25 @@ step event model =
 
         Stats stats ->
             { model | stats = Just stats }
+
+
+isRenderer : Input -> Bool
+isRenderer event =
+    case event of
+        Renderer _ ->
+            True
+
+        _ ->
+            False
+
+
+cursorColor : Model -> Color
+cursorColor model =
+    if model.pressed then
+        Color.focusedUiColor
+
+    else
+        Color.white
 
 
 nextColor : Model -> Model
@@ -272,11 +314,13 @@ view model =
     Sprite.triangle color ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
         :: Ui.view hovered Nothing ui
         ++ Sprite.cursor
-            (if model.pressed then
-                Color.focusedUiColor
+            (if Maybe.map .hardwareCursor model.renderer == Just True then
+                -- The host moves the real cursor; this orange one trails it by however
+                -- long a frame takes to get from the mouse to the screen.
+                Color.rgb255 255 150 40
 
              else
-                Color.white
+                cursorColor model
             )
             (textScale model)
             model.mouse
@@ -324,6 +368,16 @@ overlay model =
 
                 Nothing ->
                     line "Renderer" "?"
+
+        cursorLine =
+            line "Cursor"
+                (case Maybe.map .hardwareCursor model.renderer of
+                    Just True ->
+                        "cursor plane, moved by the host (orange: Elm's)"
+
+                    _ ->
+                        "drawn by Elm"
+                )
 
         onGpu =
             Maybe.map .gpu model.renderer |> Maybe.withDefault False
@@ -389,6 +443,7 @@ overlay model =
                      , line "Screen" (String.fromInt model.width ++ " x " ++ String.fromInt model.height)
                      , line "Mouse" (String.fromInt (Coord.x model.mouse) ++ ", " ++ String.fromInt (Coord.y model.mouse))
                      , rendererLine
+                     , cursorLine
                      , line "Frame" (frameText model)
                      ]
                         ++ statsLines

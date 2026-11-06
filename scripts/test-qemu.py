@@ -33,7 +33,9 @@ if usb:
             "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none"]
 else:
     boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
-            "-append", "console=ttyS0", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
+            # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
+            # puts it on the cursor plane, which screendumps leave out.
+            "-append", "console=ttyS0" + ("" if gpu else " ELMOS_CURSOR=software"), "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci"]
 qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
@@ -68,6 +70,13 @@ if not usb:
         fail("expected the GPU renderer")
     if not gpu and on_gpu:
         fail("expected the CPU fallback on a GPU without 3D")
+    wait_for("cursor", timeout=30)
+    hw_cursor = "cursor on the cursor plane" in open(serial_path, errors="replace").read()
+    print("cursor:", "cursor plane" if hw_cursor else "drawn by Elm")
+    if gpu and not hw_cursor:
+        fail("expected the GPU renderer to put the cursor on the cursor plane")
+else:
+    hw_cursor = None  # unknown: on the stick the log goes to the screen
 for _ in range(100):  # QEMU makes the socket a moment after it starts
     if os.path.exists(qmp_path):
         break
@@ -159,11 +168,17 @@ def cursor_at(shot, fx, fy):
     x, y = int(fx * w), int(fy * h)
     # x * w // 0x8000 in host.c; allow a pixel either way
     return [pixel(shot, x + dx * s, y + 8 * s) for dx in (2, 3, 4)]
+# With a cursor plane, Elm still draws its own cursor, in orange, for comparison; the
+# plane's cursor isn't in screendumps.
+ORANGE = (255, 150, 40)
 here, there = cursor_at(shot, 0.25, 0.25), cursor_at(shot, 0.75, 0.25)
 print(f"screen {w}x{h}; under the mouse {here[1]}, elsewhere {there[1]}")
-if not all(near(c, WHITE) for c in here):
-    fail(f"expected the mouse cursor under the mouse, got {here}")
-if any(near(c, WHITE) for c in there):
+if hw_cursor is None:  # on the stick: whichever it is
+    hw_cursor = near(here[1], ORANGE)
+fill = ORANGE if hw_cursor else WHITE
+if not all(near(c, fill) for c in here):
+    fail(f"expected the mouse cursor ({fill}) under the mouse, got {here}")
+if any(near(c, fill) for c in there):
     fail("the cursor is not only under the mouse")
 
 # The debug overlay (elm/src/Main.elm) sits in the bottom left corner: a light panel
@@ -177,7 +192,7 @@ if dark < 20:
     fail(f"the debug overlay has no text ({dark} dark pixels)")
 
 move(0.75, 0.25)
-if not all(near(c, WHITE) for c in cursor_at(screen(), 0.75, 0.25)):
+if not all(near(c, fill) for c in cursor_at(screen(), 0.75, 0.25)):
     fail("the cursor did not follow the mouse")
 
 # A key press changes the colour of the big triangle at the bottom.

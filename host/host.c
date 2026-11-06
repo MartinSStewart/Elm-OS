@@ -198,6 +198,8 @@ static int open_display_on(Display* d, const char* path) {
     return 0;
 }
 
+static void cpu_cursor_init(Display* d);
+
 static void present(Display* d) {
     memcpy(d->scanout, d->back, d->size);
     /* virtio-gpu only uploads a dumb buffer when told which part changed. */
@@ -214,12 +216,92 @@ extern char** environ;
 static pid_t gpu_pid = -1;
 static int gpu_fd = -1;    /* pipe to its stdin: frames */
 static int gpu_in = -1;    /* pipe from its stdout: "f GPU_NS" after showing each frame */
+static int gpu_cursor = -1; /* pipe to its fd 3: cursor moves and redraws */
 static char gpu_name[200]; /* what GL calls the GPU */
+
+/* ---------------------------------------------------------------- cursor
+ *
+ * The pointer is drawn on the display's cursor plane when it has one, and moved
+ * the moment the mouse moves, without waiting for Elm to draw a frame: that's what
+ * keeps a pointer from lagging. Elm picks its colour on the `cursor` port, and draws
+ * it itself when there is no cursor plane. Under the GPU renderer, it owns the
+ * display, so it moves the cursor for us (fd 3); on the CPU we do it here. */
+
+static int hw_cursor; /* the cursor is on a cursor plane */
+static int cursor_scale = 1;
+static volatile unsigned cursor_fill = 0xffffffff; /* from Elm */
+static volatile int cursor_dirty;
+static uint32_t cpu_cursor_handle;
+
+static void cpu_cursor_draw(Display* d) {
+    struct drm_mode_map_dumb md = {.handle = cpu_cursor_handle};
+    if (ioctl(d->fd, DRM_IOCTL_MODE_MAP_DUMB, &md) < 0) return;
+    unsigned int* px = mmap(0, CURSOR_PLANE * CURSOR_PLANE * 4, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, md.offset);
+    if (px == MAP_FAILED) return;
+    cursor_image(px, cursor_scale, cursor_fill);
+    munmap(px, CURSOR_PLANE * CURSOR_PLANE * 4);
+    struct drm_mode_cursor2 c = {.flags = DRM_MODE_CURSOR_BO, .crtc_id = d->crtc_id, .width = CURSOR_PLANE,
+                                 .height = CURSOR_PLANE, .handle = cpu_cursor_handle};
+    if (ioctl(d->fd, DRM_IOCTL_MODE_CURSOR2, &c) < 0) {
+        struct drm_mode_cursor c1 = {.flags = DRM_MODE_CURSOR_BO, .crtc_id = d->crtc_id, .width = CURSOR_PLANE,
+                                     .height = CURSOR_PLANE, .handle = cpu_cursor_handle};
+        if (ioctl(d->fd, DRM_IOCTL_MODE_CURSOR, &c1) < 0) hw_cursor = 0;
+    }
+}
+
+/* The CPU renderer's cursor plane, if the display has one. */
+static void cpu_cursor_init(Display* d) {
+    hw_cursor = 0;
+    if (getenv("ELMOS_CURSOR") && strcmp(getenv("ELMOS_CURSOR"), "software") == 0) {
+        logf_("ELMOS_CURSOR=software: Elm draws the cursor");
+        return;
+    }
+    struct drm_mode_create_dumb cd = {.width = CURSOR_PLANE, .height = CURSOR_PLANE, .bpp = 32};
+    if (ioctl(d->fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0) return;
+    cpu_cursor_handle = cd.handle;
+    hw_cursor = 1;
+    cpu_cursor_draw(d);
+    logf_(hw_cursor ? "cursor on the cursor plane" : "no cursor plane; Elm draws the cursor");
+}
+
+static void cursor_move(Display* d, int x, int y) {
+    if (!hw_cursor) return;
+    if (gpu_cursor >= 0) {
+        char line[40];
+        int len = snprintf(line, sizeof line, "m %d %d\n", x, y);
+        (void)!write(gpu_cursor, line, len); /* non-blocking: if it's backed up, skip a move */
+        return;
+    }
+    struct drm_mode_cursor c = {.flags = DRM_MODE_CURSOR_MOVE, .crtc_id = d->crtc_id, .x = x, .y = y};
+    ioctl(d->fd, DRM_IOCTL_MODE_CURSOR, &c);
+}
+
+static void cursor_redraw(Display* d) {
+    if (!hw_cursor) return;
+    if (gpu_cursor >= 0) {
+        char line[40];
+        int len = snprintf(line, sizeof line, "c %u %d\n", cursor_fill, cursor_scale);
+        (void)!write(gpu_cursor, line, len);
+        return;
+    }
+    cpu_cursor_draw(d);
+}
+
+/* The `cursor` port: the cursor's fill colour, as 0xRRGGBBAA. Runs on Elm's thread. */
+static void on_cursor(const char* json, void* user) {
+    (void)user;
+    double v = strtod(json, NULL);
+    cursor_fill = v < 0 ? 0 : v > 4294967295.0 ? 0xffffffff : (unsigned)v;
+    cursor_dirty = 1;
+    uint64_t one = 1;
+    if (wake_fd >= 0) (void)!write(wake_fd, &one, sizeof one);
+}
 
 static void stop_gpu(void) {
     if (gpu_fd >= 0) close(gpu_fd);
     if (gpu_in >= 0) close(gpu_in);
-    gpu_fd = gpu_in = -1;
+    if (gpu_cursor >= 0) close(gpu_cursor);
+    gpu_fd = gpu_in = gpu_cursor = -1;
     if (gpu_pid > 0) {
         kill(gpu_pid, SIGTERM);
         waitpid(gpu_pid, NULL, 0); /* it must let go of the display before we take it */
@@ -227,33 +309,42 @@ static void stop_gpu(void) {
     gpu_pid = -1;
 }
 
-/* Start the renderer and wait for it to report "ok W H RENDERER". */
+/* Start the renderer and wait for it to report "ok W H CURSOR RENDERER". */
 static int start_gpu(Display* d) {
     const char* want = getenv("ELMOS_RENDERER");
     if (want && strcmp(want, "cpu") == 0) return -1;
     if (access(GPU_RENDERER, X_OK) != 0) return -1;
 
-    int to_gpu[2], from_gpu[2];
+    int to_gpu[2], from_gpu[2], cursor_pipe[2];
     if (pipe2(to_gpu, O_CLOEXEC) < 0) return -1;
     if (pipe2(from_gpu, O_CLOEXEC) < 0) { close(to_gpu[0]); close(to_gpu[1]); return -1; }
+    if (pipe2(cursor_pipe, O_CLOEXEC) < 0) {
+        close(to_gpu[0]), close(to_gpu[1]), close(from_gpu[0]), close(from_gpu[1]);
+        return -1;
+    }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, to_gpu[0], 0);
     posix_spawn_file_actions_adddup2(&fa, from_gpu[1], 1);
+    posix_spawn_file_actions_adddup2(&fa, cursor_pipe[0], 3);
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0); /* there is no disk to cache on */
     char* argv[] = {GPU_RENDERER, NULL};
     int err = posix_spawn(&gpu_pid, GPU_RENDERER, &fa, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     close(to_gpu[0]);
     close(from_gpu[1]);
+    close(cursor_pipe[0]);
     if (err) {
         logf_("spawn %s: %s", GPU_RENDERER, strerror(err));
         gpu_pid = -1;
         close(to_gpu[1]);
         close(from_gpu[0]);
+        close(cursor_pipe[1]);
         return -1;
     }
     gpu_fd = to_gpu[1];
+    gpu_cursor = cursor_pipe[1];
+    fcntl(gpu_cursor, F_SETFL, O_NONBLOCK);
 
     /* Loading Mesa can take a while under emulation. */
     char line[256];
@@ -266,10 +357,14 @@ static int start_gpu(Display* d) {
     }
     line[len] = 0;
     unsigned w, h;
-    int at = 0;
-    if (sscanf(line, "ok %u %u %n", &w, &h, &at) == 2 && at > 0) {
+    int at = 0, hw = 0;
+    if (sscanf(line, "ok %u %u %d %n", &w, &h, &hw, &at) == 3 && at > 0) {
         d->w = w;
         d->h = h;
+        const char* force = getenv("ELMOS_CURSOR");
+        hw_cursor = hw && !(force && strcmp(force, "software") == 0);
+        if (hw && !hw_cursor) (void)!write(gpu_cursor, "m -100 -100\n", 12); /* hide it off screen */
+        logf_(hw_cursor ? "cursor on the cursor plane" : "no cursor plane; Elm draws the cursor");
         snprintf(gpu_name, sizeof gpu_name, "%s", line + at);
         logf_("display %ux%u on the GPU (%s)", w, h, gpu_name);
         gpu_in = from_gpu[0];
@@ -392,6 +487,7 @@ static void draw_scene(Display* d, const char* json) {
         logf_("GPU renderer stopped; drawing on the CPU");
         stop_gpu();
         if (open_display(d) < 0) { free(tris); return; }
+        cpu_cursor_init(d);
         send_renderer(0, "rasteriser in /init");
     }
     if (!d->back) { free(tris); return; }
@@ -590,12 +686,12 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
 
 /* Elm draws only when asked, on `animationFrame`.
  *
- * On the GPU, frames are pipelined one deep: Elm works on the next frame while the
- * GPU renderer waits for the page flip of the current one. So we ask as soon as a
- * frame has gone to the renderer, unless two are already on their way, and then
- * again when it reports a page flip. Waiting for the flip before asking would leave
- * Elm a single refresh for its work and the GPU's, and any slow frame (a garbage
- * collection, say) would miss a vsync and halve the frame rate for that frame.
+ * On the GPU we ask when the renderer reports a page flip, so frames follow the
+ * display's refresh, and Elm reads the mouse one refresh before its frame shows.
+ * ELMOS_FRAMES_IN_FLIGHT=2 pipelines frames instead: we also ask as soon as a frame
+ * has gone to the renderer, so Elm works on the next one while the current one
+ * waits for its flip. That absorbs slow frames (no missed vsyncs) at the cost of
+ * one more refresh of lag.
  *
  * On the CPU we ask 1/60 s after the last ask. If Elm or the GPU goes quiet for a
  * second, ask again anyway. */
@@ -605,6 +701,7 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
 
 static double asked_at;      /* when Elm was last asked for a frame */
 static int awaiting_render;  /* asked, and no scene back yet */
+static int max_in_flight = 1; /* ELMOS_FRAMES_IN_FLIGHT */
 static double cpu_next_at;   /* CPU renderer: when to ask next, 0 if not scheduled */
 
 static void ask_for_frame(void) {
@@ -621,7 +718,7 @@ static void scene_drawn(void) {
     awaiting_render = 0;
     if (gpu_fd >= 0) {
         if (in_flight++ == 0) gpu_progress_at = now();
-        if (in_flight < 2) ask_for_frame();
+        if (in_flight < max_in_flight) ask_for_frame();
     } else {
         in_flight = 0;
         cpu_next_at = asked_at + FRAME_INTERVAL;
@@ -639,7 +736,8 @@ static void send_renderer(int on_gpu, const char* name) {
         else esc[k++] = c;
     }
     esc[k] = 0;
-    send_input("{\"t\":\"renderer\",\"gpu\":%s,\"name\":\"%s\"}", on_gpu ? "true" : "false", esc);
+    send_input("{\"t\":\"renderer\",\"gpu\":%s,\"name\":\"%s\",\"hardwareCursor\":%s}", on_gpu ? "true" : "false",
+               esc, hw_cursor ? "true" : "false");
 }
 
 /* ---------------------------------------------------------------- stats */
@@ -795,6 +893,10 @@ static void* host_main(void* arg) {
     while (eco_port_send("input", screen) != 0) usleep(1000);
     mouse_x = d->w / 2;
     mouse_y = d->h / 2;
+    cursor_scale = d->w >= 1600 ? 2 : 1;
+    if (getenv("ELMOS_FRAMES_IN_FLIGHT")) max_in_flight = atoi(getenv("ELMOS_FRAMES_IN_FLIGHT")) >= 2 ? 2 : 1;
+    if (gpu_fd < 0 && d->back) cpu_cursor_init(d);
+    cursor_move(d, mouse_x, mouse_y);
     send_renderer(gpu_fd >= 0, gpu_fd >= 0 ? gpu_name : "rasteriser in /init");
     if (gpu_fd < 0) atlas_build(atlas);
     cpu_load();
@@ -836,6 +938,10 @@ static void* host_main(void* arg) {
         if (pfds[0].revents & POLLIN) {
             uint64_t k;
             (void)!read(wake_fd, &k, sizeof k);
+            if (cursor_dirty) {
+                cursor_dirty = 0;
+                cursor_redraw(d);
+            }
             pthread_mutex_lock(&scene_lock);
             char* json = scene_json;
             scene_json = NULL;
@@ -856,7 +962,7 @@ static void* host_main(void* arg) {
         if ((pfds[1].revents & (POLLIN | POLLHUP)) && gpu_in >= 0 && (done = read_gpu_acks())) {
             in_flight = done < in_flight ? in_flight - done : 0;
             gpu_progress_at = now();
-            if (!awaiting_render && in_flight < 2) ask_for_frame();
+            if (!awaiting_render && in_flight < max_in_flight) ask_for_frame();
         }
         t = now();
         if (cpu_next_at && t >= cpu_next_at) ask_for_frame();
@@ -878,7 +984,10 @@ static void* host_main(void* arg) {
                 close(dev->fd);
                 dev->fd = -1;
             }
-            if (moved) send_input("{\"t\":\"mouse\",\"x\":%d,\"y\":%d}", mouse_x, mouse_y);
+            if (moved) {
+                cursor_move(d, mouse_x, mouse_y);
+                send_input("{\"t\":\"mouse\",\"x\":%d,\"y\":%d}", mouse_x, mouse_y);
+            }
         }
     }
     return NULL;
@@ -906,6 +1015,7 @@ __attribute__((constructor)) static void host_init(void) {
     signal(SIGPIPE, SIG_IGN); /* a dead GPU renderer must not take /init with it */
     wake_fd = eventfd(0, EFD_CLOEXEC);
     eco_port_subscribe("render", on_render, NULL);
+    eco_port_subscribe("cursor", on_cursor, NULL);
     pthread_t t;
     pthread_create(&t, NULL, host_main, NULL);
     pthread_detach(t);

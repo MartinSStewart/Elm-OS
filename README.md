@@ -147,7 +147,13 @@ make usb USB_CMDLINE="console=tty0 loglevel=7 i915.modeset=0"   # firmware frame
 - Elm draws only when the host asks on `animationFrame`. The host asks again as soon as
   the GPU renderer reports its page flip, so frames follow the display's refresh; on the
   CPU it asks 60 times a second at most. If Elm or the GPU goes quiet for a second it asks
-  anyway.
+  anyway. `ELMOS_FRAMES_IN_FLIGHT=2` on the kernel command line pipelines frames instead
+  (fewer missed vsyncs, one more refresh of lag).
+- The mouse cursor goes on the display's cursor plane when it has one, and the host moves
+  it on every mouse event without waiting for a frame, so it doesn't lag (in QEMU it
+  becomes your desktop's own cursor). Elm sets its colour on the `cursor` port, and still
+  draws its own copy, orange, so you can see how far frames trail the mouse. Without a
+  cursor plane (or with `ELMOS_CURSOR=software`) Elm's copy is the cursor, in white.
 - Every triangle samples one 256 x 256 texture atlas (`host/atlas.h`) and multiplies the
   sample by its colour. The atlas holds coverage only: glyphs, and a solid block for flat
   colours. The host builds it into both renderers, so Elm only needs to know the layout
@@ -163,9 +169,10 @@ input  <- {"t":"screen","w":1280,"h":800}
           {"t":"mouse","x":640,"y":400}          absolute pixels
           {"t":"button","b":0,"down":true}       0 left, 1 right, 2 middle
           {"t":"key","code":30,"down":true}      Linux KEY_* code
-          {"t":"renderer","gpu":true,"name":"Mesa Intel(R) Xe Graphics (TGL GT2)"}
-          {"t":"stats","cpu":12.5,"memUsed":160,"memTotal":2000,"gpuMs":0.4,"elmMs":2.1,"drawMs":0.1}
+          {"t":"renderer","gpu":true,"name":"Mesa Intel(R) Xe Graphics (TGL GT2)","hardwareCursor":true}
+          {"t":"stats","cores":2,"cpu":12.5,"cpuElm":20,"cpuHost":2,"cpuGpu":5,"memUsed":160,"memTotal":2000,"gpuMs":0.4,"elmMs":2.1,"drawMs":0.1}
                                                  twice a second; per-frame averages, -1 if unknown
+cursor -> 4294967295                             cursor fill colour, 0xRRGGBBAA
 animationFrame <- 12345.678                      host's monotonic clock in ms: draw a frame now
 render -> [x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]
                                                  13 numbers per triangle: screen and atlas
