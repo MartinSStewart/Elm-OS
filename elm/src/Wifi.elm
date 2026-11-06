@@ -4,9 +4,9 @@ module Wifi exposing
     , Security(..)
     , State(..)
     , Status
-    , deviceDecoder
-    , networksDecoder
-    , statusDecoder
+    , decodeDevice
+    , decodeNetworks
+    , decodeStatus
     )
 
 {-| What the host's networking thread (host/net.c) tells Elm about the wifi card.
@@ -44,8 +44,8 @@ type alias Status =
     { state : State, ssid : String, ip : String, error : String }
 
 
-deviceDecoder : D.Decoder Device
-deviceDecoder =
+decodeDevice : D.Decoder Device
+decodeDevice =
     D.field "name" (D.nullable D.string)
         |> D.map
             (\name ->
@@ -58,8 +58,8 @@ deviceDecoder =
             )
 
 
-networksDecoder : D.Decoder (List Network)
-networksDecoder =
+decodeNetworks : D.Decoder (List Network)
+decodeNetworks =
     D.field "networks"
         (D.list
             (D.map3 Network
@@ -86,8 +86,8 @@ networksDecoder =
         )
 
 
-statusDecoder : D.Decoder Status
-statusDecoder =
+decodeStatus : D.Decoder Status
+decodeStatus =
     D.map4 Status
         (D.field "state" D.string
             |> D.map

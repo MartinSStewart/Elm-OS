@@ -56,6 +56,7 @@ wifi) and restart or power off the computer, after asking.
 | `scripts/test-qemu.py` | Boots it headless, sends mouse and key events through QMP, checks the screen |
 | `scripts/make-usb-image.sh` | Builds the USB stick image (GPT, one EFI system partition) without root |
 | `scripts/write-usb.sh` | Writes the image to a USB stick, after checking it is one and asking |
+| `elm/review/` | elm-review config, adapted from at-chat's: custom rules in `src/`, their tests in `tests/`, findings left for later in `suppressed/` |
 | `tools/elm-package-mirror.py` | Stand-in package server for sandboxes that cannot reach package.elm-lang.org |
 
 ## Build and run
@@ -85,6 +86,12 @@ make usb          # a USB stick image for real PCs, see below
 ```
 
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree.
+
+Run `make review` before committing Elm changes. It runs
+[elm-review](https://github.com/jfmengels/node-elm-review) through `npx` (so it needs Node.js),
+compiling the rules with eco. `make review-fix` applies the automatic fixes and `make review-tests`
+tests the custom rules. Fix new findings rather than suppressing them; `elm/review/suppressed/`
+holds the unused `Ui`, `Color`, `Coord` and `Sprite` functions kept for later.
 
 ## Boot it on a real PC from a USB stick
 

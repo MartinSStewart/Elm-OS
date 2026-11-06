@@ -94,8 +94,8 @@ type alias SystemStats =
     }
 
 
-inputDecoder : D.Decoder Input
-inputDecoder =
+decodeInput : D.Decoder Input
+decodeInput =
     D.field "t" D.string
         |> D.andThen
             (\t ->
@@ -116,13 +116,13 @@ inputDecoder =
                             (D.maybe (D.field "repeat" D.bool) |> D.map (Maybe.withDefault False))
 
                     "wifiDevice" ->
-                        D.map WifiDevice Wifi.deviceDecoder
+                        D.map WifiDevice Wifi.decodeDevice
 
                     "wifiScan" ->
-                        D.map WifiScan Wifi.networksDecoder
+                        D.map WifiScan Wifi.decodeNetworks
 
                     "wifiStatus" ->
-                        D.map WifiStatus Wifi.statusDecoder
+                        D.map WifiStatus Wifi.decodeStatus
 
                     "system" ->
                         D.map3 SystemInfo (D.field "kernel" D.string) (D.field "cpu" D.string) (D.field "commit" D.string)
@@ -159,7 +159,6 @@ inputDecoder =
                     _ ->
                         D.fail ("unknown input " ++ t)
             )
-
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -311,7 +310,7 @@ update msg model =
             ( next, render (Sprite.encode (view next)) )
 
         GotInput value ->
-            case D.decodeValue inputDecoder value of
+            case D.decodeValue decodeInput value of
                 Ok event ->
                     let
                         ( next, cmd ) =
@@ -1277,16 +1276,16 @@ weatherIcon unit code =
                 |> List.map
                     (\i ->
                         let
-                            a0 =
+                            startAngle =
                                 turns (toFloat i / 12)
 
-                            a1 =
+                            endAngle =
                                 turns (toFloat (i + 1) / 12)
                         in
                         Sprite.triangle color
                             ( cx * s, cy * s )
-                            ( (cx + r * cos a0) * s, (cy + r * sin a0) * s )
-                            ( (cx + r * cos a1) * s, (cy + r * sin a1) * s )
+                            ( (cx + r * cos startAngle) * s, (cy + r * sin startAngle) * s )
+                            ( (cx + r * cos endAngle) * s, (cy + r * sin endAngle) * s )
                     )
 
         sun =
@@ -1309,8 +1308,8 @@ weatherIcon unit code =
                 ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
 
         drops color =
-            List.concatMap
-                (\x -> [ Sprite.triangle color ( x * s, 15 * s ) ( (x + 1.2) * s, 15 * s ) ( (x - 1) * s, 18 * s ) ])
+            List.map
+                (\x -> Sprite.triangle color ( x * s, 15 * s ) ( (x + 1.2) * s, 15 * s ) ( (x - 1) * s, 18 * s ))
                 [ 6, 10, 14 ]
 
         rain =

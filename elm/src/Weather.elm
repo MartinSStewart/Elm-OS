@@ -50,7 +50,7 @@ type alias Day =
 
 fetchPlace : String -> (Result Http.Error Place -> msg) -> Cmd msg
 fetchPlace url toMsg =
-    Http.get { url = url, expect = expectJson toMsg placeDecoder }
+    Http.get { url = url, expect = expectJson toMsg decodePlace }
 
 
 {-| Http.expectJson, without Json.Decode.errorToString: eco's native build of it
@@ -83,7 +83,7 @@ fetchForecast url place toMsg =
                 ++ "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
                 ++ "&daily=weather_code,temperature_2m_max,temperature_2m_min"
                 ++ "&timezone=auto&forecast_days=4"
-        , expect = expectJson toMsg forecastDecoder
+        , expect = expectJson toMsg decodeForecast
         }
 
 
@@ -106,8 +106,8 @@ number =
         ]
 
 
-placeDecoder : D.Decoder Place
-placeDecoder =
+decodePlace : D.Decoder Place
+decodePlace =
     D.map3 Place
         (D.field "latitude" number)
         (D.field "longitude" number)
@@ -125,8 +125,8 @@ placeDecoder =
         )
 
 
-forecastDecoder : D.Decoder Forecast
-forecastDecoder =
+decodeForecast : D.Decoder Forecast
+decodeForecast =
     D.map2
         (\toForecast days -> toForecast days)
         (D.field "current"

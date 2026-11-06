@@ -8,6 +8,8 @@
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
+#   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
+#   make review-tests  run the tests of the custom review rules
 #
 # `make run` and `make test` also give the guest a simulated wifi network to join
 # ("Elm OS test network", password elmos-wifi): see host/net.c.
@@ -37,7 +39,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE review review-fix review-tests all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio
@@ -280,6 +282,17 @@ test: all | check-run-deps
 
 test-gpu: all | check-run-deps
 	python3 scripts/test-qemu.py --gpu
+
+# ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
+
+review:
+	cd elm && npx --yes elm-review --compiler $(ECO_BIN)
+
+review-fix:
+	cd elm && npx --yes elm-review --compiler $(ECO_BIN) --fix-all
+
+review-tests:
+	cd elm/review && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
 
 clean:
 	rm -rf $(BUILD)

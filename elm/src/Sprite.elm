@@ -60,14 +60,14 @@ solidTexturePosition =
 {-| A flat coloured triangle with corners in pixels.
 -}
 triangle : Color -> ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> Triangle
-triangle color ( x1, y1 ) ( x2, y2 ) ( x3, y3 ) =
+triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
     let
         { u, v } =
             solidTexturePosition
     in
-    { a = { x = x1, y = y1, u = u, v = v }
-    , b = { x = x2, y = y2, u = u, v = v }
-    , c = { x = x3, y = y3, u = u, v = v }
+    { a = { x = ax, y = ay, u = u, v = v }
+    , b = { x = bx, y = by, u = u, v = v }
+    , c = { x = cx, y = cy, u = u, v = v }
     , color = color
     }
 
@@ -77,45 +77,44 @@ triangle color ( x1, y1 ) ( x2, y2 ) ( x3, y3 ) =
 sprite : Color -> Coord -> Coord -> Coord -> Coord -> List Triangle
 sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     let
-        x0 =
+        left =
             toFloat x
 
-        y0 =
+        top =
             toFloat y
 
-        x1 =
+        right =
             toFloat (x + w)
 
-        y1 =
+        bottom =
             toFloat (y + h)
 
-        u0 =
+        uLeft =
             toFloat tx
 
-        v0 =
+        vTop =
             toFloat ty
 
-        u1 =
+        uRight =
             toFloat (tx + tw)
 
-        v1 =
+        vBottom =
             toFloat (ty + th)
 
         topLeft =
-            { x = x0, y = y0, u = u0, v = v0 }
+            { x = left, y = top, u = uLeft, v = vTop }
 
         bottomRight =
-            { x = x1, y = y1, u = u1, v = v1 }
+            { x = right, y = bottom, u = uRight, v = vBottom }
     in
-    [ { a = topLeft, b = { x = x1, y = y0, u = u1, v = v0 }, c = bottomRight, color = color }
-    , { a = topLeft, b = bottomRight, c = { x = x0, y = y1, u = u0, v = v1 }, color = color }
+    [ { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color }
+    , { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color }
     ]
 
 
 rectangle : Color -> Coord -> Coord -> List Triangle
 rectangle color position size =
     sprite color position size ( 250, 250 ) ( 4, 4 )
-
 
 
 {-| The mouse cursor with its tip at the given point: a black outline around a fill of
@@ -179,7 +178,7 @@ charTexturePosition char =
     ( modBy charsPerRow index * Coord.x charSize, index // charsPerRow * Coord.y charSize )
 
 
-{-| Text at a position, `charScale` screen pixels per font pixel. '\n' starts a new line.
+{-| Text at a position, `charScale` screen pixels per font pixel. '\\n' starts a new line.
 Spaces draw nothing.
 -}
 text : Color -> Int -> String -> Coord -> List Triangle
