@@ -6,46 +6,28 @@ module Ui exposing
     , Padding
     , RowColumn
     , TextInputData
-    , bottomCenter
     , bottomLeft
-    , bottomRight
     , button
     , center
-    , centerHorizontally
-    , centerRight
     , colorScaledText
-    , colorText
     , column
     , customButton
-    , defaultButtonBorderAndFill
     , defaultButtonBorderAndFillFocus
-    , defaultButtonBorderAndFillHover
     , defaultElBorderAndFill
     , el
-    , elWithId
     , findInput
     , hover
-    , isHoveringOverInput
     , noPadding
     , none
-    , outlinedText
     , paddingXY
     , quads
     , row
     , scaledText
     , selectableButton
-    , size
-    , tabBackward
-    , tabForward
-    , table
-    , text
-    , textInput
     , textInputScaled
-    , topCenter
     , topLeft
     , topRight
     , view
-    , visuallyEqual
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -122,7 +104,6 @@ type Element id
 
 type BorderAndFill
     = NoBorderOrFill
-    | FillOnly Color
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
 
 
@@ -202,11 +183,6 @@ paddingXY x y =
 -- TEXT
 
 
-defaultCharScale : Int
-defaultCharScale =
-    2
-
-
 textHelper : Maybe Color -> Color -> Int -> String -> Element id
 textHelper outline color scale text2 =
     Text
@@ -218,19 +194,9 @@ textHelper outline color scale text2 =
         }
 
 
-text : String -> Element id
-text =
-    textHelper Nothing Color.black defaultCharScale
-
-
 scaledText : Int -> String -> Element id
 scaledText scale =
     textHelper Nothing Color.black scale
-
-
-colorText : Color -> String -> Element id
-colorText color =
-    textHelper Nothing color defaultCharScale
 
 
 colorScaledText : Color -> Int -> String -> Element id
@@ -238,18 +204,8 @@ colorScaledText color scale =
     textHelper Nothing color scale
 
 
-outlinedText : { outline : Color, color : Color, text : String } -> Element id
-outlinedText data =
-    textHelper (Just data.outline) data.color defaultCharScale data.text
-
-
 
 -- TEXT INPUTS
-
-
-textInput : { id : id, width : Int, isValid : Bool, state : TextInput.State } -> Element id
-textInput data =
-    TextInput { id = data.id, width = data.width, textScale = 2, isValid = data.isValid, state = data.state }
 
 
 textInputScaled :
@@ -381,28 +337,6 @@ el data child =
         child
 
 
-elWithId :
-    { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill, id : id }
-    -> Element id
-    -> Element id
-elWithId data child =
-    Single
-        { padding = data.padding
-        , borderAndFill = data.borderAndFill
-        , inFront = data.inFront
-        , cachedSize = paddedSize data.padding child
-        , id = Just data.id
-        }
-        child
-
-
-table : List { header : Element id, row : data -> Element id } -> List data -> Element id
-table columns data =
-    row
-        { spacing = 24, padding = noPadding }
-        (List.map (\a -> column { spacing = 8, padding = noPadding } (a.header :: List.map a.row data)) columns)
-
-
 quads : { size : Coord, triangles : List Triangle } -> Element id
 quads =
     Quads
@@ -435,11 +369,6 @@ align fx fy ( sizeX, sizeY ) child =
         child
 
 
-centerHorizontally : { parentWidth : Int } -> Element id -> Element id
-centerHorizontally data child =
-    align 1 0 ( data.parentWidth, Coord.y (size child) ) child
-
-
 center : { size : Coord } -> Element id -> Element id
 center data =
     align 1 1 data.size
@@ -450,34 +379,14 @@ topLeft data =
     align 0 0 data.size
 
 
-topCenter : { size : Coord } -> Element id -> Element id
-topCenter data =
-    align 1 0 data.size
-
-
 topRight : { size : Coord } -> Element id -> Element id
 topRight data =
     align 2 0 data.size
 
 
-centerRight : { size : Coord } -> Element id -> Element id
-centerRight data =
-    align 2 1 data.size
-
-
 bottomLeft : { size : Coord } -> Element id -> Element id
 bottomLeft data =
     align 0 2 data.size
-
-
-bottomCenter : { size : Coord } -> Element id -> Element id
-bottomCenter data =
-    align 1 2 data.size
-
-
-bottomRight : { size : Coord } -> Element id -> Element id
-bottomRight data =
-    align 2 2 data.size
 
 
 size : Element id -> Coord
@@ -573,24 +482,6 @@ The first element in the list is the top most visible element.
 hover : Coord -> Element id -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
 hover point element =
     hoverHelper [] point Coord.origin element
-
-
-isHoveringOverInput : List ( id, { relativePositionToUi : Coord, ui : Element id } ) -> Bool
-isHoveringOverInput elements =
-    case elements of
-        ( _, { ui } ) :: _ ->
-            case ui of
-                Button _ _ ->
-                    True
-
-                TextInput _ ->
-                    True
-
-                _ ->
-                    False
-
-        [] ->
-            False
 
 
 contains : Coord -> Coord -> Coord -> Bool
@@ -711,64 +602,6 @@ findFirst f list =
                     findFirst f rest
 
 
-{-| The id of the next button after the given one, for the tab key.
--}
-tabForward : id -> Element id -> id
-tabForward id element =
-    tabStep (inputIds element) id
-
-
-tabBackward : id -> Element id -> id
-tabBackward id element =
-    tabStep (List.reverse (inputIds element)) id
-
-
-tabStep : List id -> id -> id
-tabStep ids id =
-    case ids of
-        first :: _ ->
-            nextAfter id first ids
-
-        [] ->
-            id
-
-
-nextAfter : id -> id -> List id -> id
-nextAfter id first ids =
-    case ids of
-        a :: b :: rest ->
-            if a == id then
-                b
-
-            else
-                nextAfter id first (b :: rest)
-
-        _ ->
-            first
-
-
-inputIds : Element id -> List id
-inputIds element =
-    case element of
-        TextInput data ->
-            [ data.id ]
-
-        Button data _ ->
-            [ data.id ]
-
-        Row _ children ->
-            List.concatMap inputIds children
-
-        Column _ children ->
-            List.concatMap inputIds children
-
-        Single data child ->
-            List.concatMap inputIds (child :: data.inFront)
-
-        _ ->
-            []
-
-
 
 -- DRAWING
 
@@ -842,9 +675,6 @@ borderAndFillView position borderAndFill size2 =
     case borderAndFill of
         NoBorderOrFill ->
             []
-
-        FillOnly color ->
-            Sprite.rectangle color position size2
 
         BorderAndFill { borderWidth, borderColor, fillColor } ->
             Sprite.rectangle borderColor position size2

@@ -6,8 +6,6 @@ module Sprite exposing
     , encode
     , outlinedText
     , rectangle
-    , solidTexturePosition
-    , sprite
     , text
     , textSize
     , triangle
