@@ -3,6 +3,7 @@ module BootInfo exposing
     , Model
     , batteryText
     , bootRows
+    , clockText
     , buildText
     , decodeInput
     , init
@@ -24,6 +25,9 @@ and says when the first frame was on screen; working out what they mean is here.
     build/elmos-usb.img (and what `make docker` prints).
   - Battery: every battery in /sys/class/power_supply that powers the computer (not
     a mouse's), added up.
+  - Clock: the CPU cores' clock speeds (cpufreq), and how the kernel picks them: the
+    policy (powersave or performance) and, on Intel CPUs that choose their own clocks
+    (HWP), the hint it gives them (energy\_performance\_preference).
   - Boot: from the kernel starting to the first frame on screen, and before that the
     firmware's own time from ACPI's FPDT table, on PCs that have one.
 
@@ -40,6 +44,8 @@ type alias Model =
     , seconds : Int -- since start
     , imageLengths : Dict String Int -- disks with Elm OS's GPT header: the image's length in bytes
     , battery : Maybe Battery
+    , cpufreqPolicies : List String -- e.g. "policy0", one per core
+    , clock : Maybe Clock
     , boot : Maybe BootTimes
     , firmwareMs : Maybe Float
     }
@@ -50,6 +56,10 @@ type Image
     | LookingForStick
     | Hashed String String -- which file in build/ it should match, the hash
     | NoImage
+
+
+type alias Clock =
+    { minMhz : Float, maxMhz : Float, limitMhz : Float, governor : String, hint : String }
 
 
 type alias Battery =
@@ -118,6 +128,11 @@ powerSupplies =
     "/sys/class/power_supply"
 
 
+cpufreq : String
+cpufreq =
+    "/sys/devices/system/cpu/cpufreq"
+
+
 fpdt : String
 fpdt =
     "/sys/firmware/acpi/fpdt/boot/"
@@ -129,6 +144,8 @@ init =
     , seconds = 0
     , imageLengths = Dict.empty
     , battery = Nothing
+    , cpufreqPolicies = []
+    , clock = Nothing
     , boot = Nothing
     , firmwareMs = Nothing
     }
@@ -141,10 +158,11 @@ start =
     [ Effect.Sha256 { path = initrd, length = Nothing }
     , Effect.ReadFiles { id = "fpdt", paths = [ fpdt ++ "firmware_start_ns", fpdt ++ "exitbootservice_end_ns" ] }
     , Effect.ListDir powerSupplies
+    , Effect.ListDir cpufreq
     ]
 
 
-{-| Every second. The battery is checked every 5 seconds. A USB stick shows up a
+{-| Every second, which also reads the clock speeds. The battery is checked every 5 seconds. A USB stick shows up a
 second or two after boot (usb-storage waits before it scans a new disk), so keep
 looking for one for half a minute.
 -}
@@ -172,6 +190,19 @@ tick model =
 
             else
                 []
+           )
+        ++ (if List.isEmpty model.cpufreqPolicies then
+                []
+
+            else
+                [ Effect.ReadFiles
+                    { id = "clock"
+                    , paths =
+                        List.concatMap
+                            (\policy -> List.map (\attr -> cpufreq ++ "/" ++ policy ++ "/" ++ attr) clockAttributes)
+                            model.cpufreqPolicies
+                    }
+                ]
            )
     )
 
@@ -220,6 +251,9 @@ update input model =
                     |> List.filter (String.startsWith "sd")
                     |> List.map (\name -> Effect.ReadBytes { path = "/dev/" ++ name, offset = 512, length = 512 })
                 )
+
+            else if path == cpufreq then
+                ( { model | cpufreqPolicies = List.filter (String.startsWith "policy") names }, [] )
 
             else if path == powerSupplies then
                 ( model
@@ -289,6 +323,9 @@ update input model =
 
         Files "battery" files ->
             ( { model | battery = Just (battery files) }, [] )
+
+        Files "clock" files ->
+            ( { model | clock = clock files }, [] )
 
         Files _ _ ->
             ( model, [] )
@@ -512,6 +549,70 @@ buildText model =
 
         _ ->
             "hashing the boot image..."
+
+
+clockAttributes : List String
+clockAttributes =
+    [ "scaling_cur_freq", "scaling_max_freq", "scaling_governor", "energy_performance_preference" ]
+
+
+{-| The slowest and fastest core right now, the fastest any core may go, and the policy.
+-}
+clock : List ( String, Maybe String ) -> Maybe Clock
+clock files =
+    let
+        values attr =
+            files
+                |> List.filter (\( path, _ ) -> String.endsWith ("/" ++ attr) path)
+                |> List.filterMap Tuple.second
+                |> List.map String.trim
+
+        mhz attr =
+            values attr |> List.filterMap String.toFloat |> List.map (\khz -> khz / 1000)
+
+        first attr =
+            values attr |> List.head |> Maybe.withDefault ""
+    in
+    case ( List.minimum (mhz "scaling_cur_freq"), List.maximum (mhz "scaling_cur_freq") ) of
+        ( Just low, Just high ) ->
+            Just
+                { minMhz = low
+                , maxMhz = high
+                , limitMhz = List.maximum (mhz "scaling_max_freq") |> Maybe.withDefault 0
+                , governor = first "scaling_governor"
+                , hint = first "energy_performance_preference"
+                }
+
+        _ ->
+            Nothing
+
+
+{-| For example "0.80 - 4.20 GHz of 4.50, powersave, balance_performance".
+-}
+clockText : Model -> String
+clockText model =
+    case model.clock of
+        Just c ->
+            let
+                -- MHz to GHz with two decimals
+                ghz value =
+                    let
+                        hundredths =
+                            round (value / 10)
+                    in
+                    String.fromInt (hundredths // 100) ++ "." ++ String.padLeft 2 '0' (String.fromInt (modBy 100 hundredths))
+            in
+            ([ ghz c.minMhz ++ " - " ++ ghz c.maxMhz ++ " GHz of " ++ ghz c.limitMhz, c.governor, c.hint ]
+                |> List.filter ((/=) "")
+                |> String.join ", "
+            )
+
+        Nothing ->
+            if List.isEmpty model.cpufreqPolicies then
+                "not managed (no cpufreq)"
+
+            else
+                "?"
 
 
 batteryText : Model -> String

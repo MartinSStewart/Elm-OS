@@ -973,7 +973,8 @@ overlay model =
                      , line "Frame" (frameText model)
                      ]
                         ++ statsLines
-                        ++ (line "Battery" (BootInfo.batteryText model.bootInfo)
+                        ++ (line "Clock" (BootInfo.clockText model.bootInfo)
+                                :: line "Battery" (BootInfo.batteryText model.bootInfo)
                                 :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
                            )
                         ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY 6 3 }
