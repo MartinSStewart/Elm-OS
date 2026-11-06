@@ -109,9 +109,9 @@ if not usb:
         fail("expected the GPU renderer to put the cursor on the cursor plane")
     # The debug overlay's build hash: the initramfs QEMU was handed, byte for byte.
     wait_for("[boot] first frame", timeout=60)
-    wait_for("[boot] initramfs-qemu.cpio sha256 ", timeout=60)
+    wait_for("[files] sha256 /sys/firmware/initrd ", timeout=60)
     want = hashlib.sha256(open(f"{ROOT}/build/initramfs-qemu.cpio", "rb").read()).hexdigest()
-    if f"initramfs-qemu.cpio sha256 {want}" not in open(serial_path, errors="replace").read():
+    if f"sha256 /sys/firmware/initrd {want}" not in open(serial_path, errors="replace").read():
         fail(f"expected the boot image hash {want}")
     print("boot image hash matches build/initramfs-qemu.cpio")
 else:

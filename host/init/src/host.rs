@@ -8,7 +8,8 @@
 //!     new one (after the GPU's page flip, or 60 times a second on the CPU), and hands
 //!     the triangles Elm sends back to the renderer in use,
 //!   - carries out the rest of Elm's effects (effects.rs),
-//!   - sends Elm what its debug overlay shows (stats.rs, bootinfo.rs).
+//!   - sends Elm what its debug overlay shows (stats.rs), and when the first frame was on
+//!     screen, for the boot time.
 //!
 //! Set ELMOS_RENDERER=cpu on the kernel command line to skip the GPU, or
 //! ELMOS_RENDERER=gpu to use Mesa even when it only has a software driver.
@@ -17,6 +18,7 @@
 //!   {"t":"screen","w":W,"h":H}                     first, once
 //!   {"t":"renderer","gpu":true,"name":"...","hardwareCursor":true}   which renderer draws
 //!   {"t":"system","kernel":K,"cpu":C,"commit":G}   for the about page
+//!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
 use common::atlas::{self, Tri};
 use serde_json::json;
@@ -28,7 +30,8 @@ use crate::gpu::Gpu;
 use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
-use crate::{bootinfo, eco, http, net, raster};
+use crate::files::{self, Request};
+use crate::{eco, http, net, raster};
 
 /// Elm draws only when asked.
 ///
@@ -171,7 +174,7 @@ impl Host {
     /// For the boot time: call when a frame is on screen.
     fn frame_shown(&mut self) {
         if let Some(t) = self.elm_started_at.take() {
-            bootinfo::first_frame(t);
+            send_boot_times(t);
         }
     }
 
@@ -220,6 +223,12 @@ impl Host {
                     }
                 }
                 Effect::Http(req) => http::request(req),
+                Effect::ListDir { path } => files::request(Request::ListDir { path }),
+                Effect::ReadFiles { id, paths } => files::request(Request::ReadFiles { id, paths }),
+                Effect::ReadBytes { path, offset, length } => {
+                    files::request(Request::ReadBytes { path, offset, length })
+                }
+                Effect::Sha256 { path, length } => files::request(Request::Sha256 { path, length }),
             }
         }
         if cursor_dirty {
@@ -235,6 +244,16 @@ impl Host {
             self.scene_drawn();
         }
     }
+}
+
+/// For the debug overlay's boot time, in milliseconds since the kernel started (the
+/// monotonic clock's zero): when /init started, when Elm took its first message, and
+/// now, when the first frame is on screen.
+fn send_boot_times(elm_at: f64) {
+    let (init, frame) = (crate::init_started_at(), now());
+    log!("boot", "first frame {frame:.2} s after the kernel started (/init {init:.2} s, Elm {elm_at:.2} s)");
+    let ms = |s: f64| (s * 1000.0).round();
+    eco::send(&json!({"t": "boot", "initMs": ms(init), "elmMs": ms(elm_at), "frameMs": ms(frame)}));
 }
 
 /// For Elm's about page: the kernel, the CPU, and which commit this is.
@@ -316,7 +335,6 @@ pub fn run() {
     host.cursor_move();
     host.send_renderer();
     send_system();
-    bootinfo::start();
     host.stats = Stats::new();
     host.stats.send(host.gpu_pid());
     let mut last_stats = now();

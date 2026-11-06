@@ -10,6 +10,8 @@
 //!   {"t":"http","id":ID,"method":M,"url":U,"headers":[[NAME,VALUE],...],"body":B,"timeoutMs":MS|null}
 //!        answered on fromHost with {"t":"httpResponse","id":ID,"status":N,"body":B}
 //!        or {"t":"httpError","id":ID,"error":"badUrl"|"timeout"|"network","message":M}
+//!   {"t":"listDir",...}  {"t":"readFiles",...}  {"t":"readBytes",...}  {"t":"sha256",...}
+//!        reading files and devices, answered on fromHost (see files.rs)
 //!
 //! eco calls us on Elm's thread, so the callback only queues the JSON and wakes the
 //! host thread, which parses it and acts (host.rs).
@@ -29,6 +31,10 @@ pub enum Effect {
     WifiDisconnect,
     Power { action: String },
     Http(crate::http::Request),
+    ListDir { path: String },
+    ReadFiles { id: String, paths: Vec<String> },
+    ReadBytes { path: String, offset: u64, length: usize },
+    Sha256 { path: String, length: Option<u64> },
 }
 
 struct Inbox {

@@ -15,8 +15,8 @@
 //!            and elm/src/Effect.elm.
 //!   fromHost host -> Elm: one message at a time, {"t": KIND, ...}. See
 //!            elm/src/Main.elm's decoder, and where each is sent: host.rs (screen,
-//!            frame, input, renderer, stats, system), bootinfo.rs (bootImage, battery,
-//!            boot), net/ (wifi*, netConfig) and
+//!            frame, input, renderer, stats, system, boot), files.rs (dir, files, bytes,
+//!            sha256), net/ (wifi*, netConfig) and
 //!            http.rs (httpResponse, httpError).
 
 macro_rules! log {
@@ -25,10 +25,10 @@ macro_rules! log {
     };
 }
 
-mod bootinfo;
 mod display;
 mod eco;
 mod effects;
+mod files;
 mod gpu;
 mod host;
 mod http;
@@ -39,6 +39,13 @@ mod raster;
 mod stats;
 mod sys;
 
+/// When /init started, in seconds on the monotonic clock (f64 bits).
+static INIT_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn init_started_at() -> f64 {
+    f64::from_bits(INIT_AT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Runs before eco's `main`: the linker puts it in .init_array, and the Makefile
 /// keeps this object in the link with `-u elmos_host_init`.
 #[used]
@@ -47,7 +54,7 @@ static INIT: extern "C" fn() = elmos_host_init;
 
 #[no_mangle]
 pub extern "C" fn elmos_host_init() {
-    bootinfo::init_started();
+    INIT_AT.store(sys::now().to_bits(), std::sync::atomic::Ordering::Relaxed);
     if sys::is_pid1() {
         sys::mount_kernel_filesystems();
         // PID 1 must never exit: when Elm's main returns, restart the machine

@@ -43,6 +43,13 @@ type Effect
     | Power PowerAction
       -- Answered on `fromHost` with an httpResponse or httpError carrying the same id.
     | Http HttpRequest
+      -- Reading files and devices (host/init/src/files.rs), answered on `fromHost`:
+      -- the directory's entries, the files' text, bytes in hex, a file's SHA-256 (of
+      -- its first `length` bytes, if given). BootInfo.elm decodes the answers.
+    | ListDir String
+    | ReadFiles { id : String, paths : List String }
+    | ReadBytes { path : String, offset : Int, length : Int }
+    | Sha256 { path : String, length : Maybe Int }
 
 
 type PowerAction
@@ -125,4 +132,25 @@ encode effect =
                 , ( "headers", E.list (\( name, value ) -> E.list E.string [ name, value ]) request.headers )
                 , ( "body", E.string request.body )
                 , ( "timeoutMs", Maybe.map E.float request.timeoutMs |> Maybe.withDefault E.null )
+                ]
+
+        ListDir path ->
+            E.object [ ( "t", E.string "listDir" ), ( "path", E.string path ) ]
+
+        ReadFiles { id, paths } ->
+            E.object [ ( "t", E.string "readFiles" ), ( "id", E.string id ), ( "paths", E.list E.string paths ) ]
+
+        ReadBytes { path, offset, length } ->
+            E.object
+                [ ( "t", E.string "readBytes" )
+                , ( "path", E.string path )
+                , ( "offset", E.int offset )
+                , ( "length", E.int length )
+                ]
+
+        Sha256 { path, length } ->
+            E.object
+                [ ( "t", E.string "sha256" )
+                , ( "path", E.string path )
+                , ( "length", Maybe.map E.int length |> Maybe.withDefault E.null )
                 ]
