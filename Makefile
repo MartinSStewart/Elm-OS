@@ -4,10 +4,13 @@
 #   make run        boot it in QEMU in a window (GTK, mouse and keyboard work)
 #   make test       boot headless, inject input, check a screenshot (CPU fallback)
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
-#   make GPU=0      leave Mesa out: CPU rendering only, and a 9 MB initramfs
+#   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
+#
+# `make run` and `make test` also give the guest a simulated wifi network to join
+# ("Elm OS test network", password elmos-wifi): see host/net.c.
 #
 # Needs (`make check-deps` checks them): eco (https://github.com/eco-lang/eco-compiler/releases, the
 # x86_64-linux-musl bundle), musl-gcc, a C toolchain for the kernel, cpio,
@@ -37,7 +40,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
 .PHONY: FORCE all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps
 
-all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio
+all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio
 
 # Fail early, with install hints, if a tool is missing. These are order-only
 # prerequisites below, so they run first but never force a rebuild.
@@ -60,7 +63,8 @@ KOUT_USB := $(BUILD)/kernel-usb
 KMAKE     = $(MAKE) -C $(KERNEL_SRC) -j$(JOBS)
 # The kernel command line on the USB stick: messages on the screen (the last console=),
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
-USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4
+# mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
+USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0
 
 kernel-src: $(KERNEL_SRC)/Makefile
 
@@ -120,11 +124,14 @@ $(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
 $(BUILD)/host.o: host/host.c host/atlas.h host/font.h $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include
 
-$(BUILD)/init: $(BUILD)/host.o $(BUILD)/elm.o
+$(BUILD)/net.o: host/net.c $(BUILD)/kheaders/include/linux/input.h | check-deps
+	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include
+
+$(BUILD)/init: $(BUILD)/host.o $(BUILD)/net.o $(BUILD)/elm.o
 	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static -o $@ \
 	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
 	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
-	  $(BUILD)/host.o $(BUILD)/elm.o \
+	  $(BUILD)/host.o $(BUILD)/net.o $(BUILD)/elm.o \
 	  --start-group \
 	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
 	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
@@ -155,7 +162,16 @@ $(BUILD)/llvm-stub/.done: tools/llvm-stub.sh $(ALPINE)/.done
 	tools/llvm-stub.sh $(ALPINE)/root $(BUILD)/llvm-stub
 	touch $@
 
-INITRAMFS_DEPS := $(BUILD)/init $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
+# ---- networking: wpa_supplicant joins wifi networks, and the CA certificates let
+# elm/http check HTTPS servers. hostapd is only for the simulated network in QEMU.
+NET_ALPINE := $(BUILD)/alpine-net
+
+$(NET_ALPINE)/.done: tools/fetch-mesa.py
+	rm -rf $(NET_ALPINE)/root
+	python3 -I tools/fetch-mesa.py $(NET_ALPINE)/root wpa_supplicant hostapd ca-certificates-bundle
+	touch $@
+
+INITRAMFS_DEPS := $(BUILD)/init $(NET_ALPINE)/.done $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
 
 # Rebuild the initramfs when GPU= changes.
 $(BUILD)/gpu-setting: FORCE
@@ -170,24 +186,49 @@ ifeq ($(GPU),1)
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
 	STUB_DIR=$(BUILD)/llvm-stub tools/copy-libs.sh $(ALPINE)/root $(BUILD)/rootfs $(BUILD)/elmos-gpu
 endif
+	mkdir -p $(BUILD)/rootfs/usr/sbin $(BUILD)/rootfs/etc/ssl/certs
+	cp $(NET_ALPINE)/root/sbin/wpa_supplicant $(BUILD)/rootfs/usr/sbin/
+	cp $(NET_ALPINE)/root/etc/ssl/certs/ca-certificates.crt $(BUILD)/rootfs/etc/ssl/certs/
+	MESA=0 tools/copy-libs.sh $(NET_ALPINE)/root $(BUILD)/rootfs $(BUILD)/rootfs/usr/sbin/wpa_supplicant
 	cd $(BUILD)/rootfs && find . | LC_ALL=C sort | cpio -o -H newc --quiet > ../initramfs.cpio
+
+# QEMU's initramfs: the normal one plus a simulated wifi access point (hostapd and
+# its config, and the libraries it needs that the normal one lacks).
+$(BUILD)/wifi-sim.cpio: $(BUILD)/initramfs.cpio scripts/wifi-sim-hostapd.conf tools/copy-libs.sh
+	rm -rf $(BUILD)/simfs && mkdir -p $(BUILD)/simfs/usr/sbin $(BUILD)/simfs/etc/elmos
+	cp $(NET_ALPINE)/root/usr/sbin/hostapd $(BUILD)/simfs/usr/sbin/
+	cp scripts/wifi-sim-hostapd.conf $(BUILD)/simfs/etc/elmos/hostapd.conf
+	MESA=0 tools/copy-libs.sh $(NET_ALPINE)/root $(BUILD)/simfs $(BUILD)/simfs/usr/sbin/hostapd
+	cd $(BUILD)/simfs && find . -type f -o -type l | while read -r f; do [ ! -e "../rootfs/$$f" ] || rm "$$f"; done
+	cd $(BUILD)/simfs && find . | LC_ALL=C sort | cpio -o -H newc --quiet > ../wifi-sim.cpio
+
+$(BUILD)/initramfs-qemu.cpio: $(BUILD)/initramfs.cpio $(BUILD)/wifi-sim.cpio
+	cat $^ > $@
 
 # ---- the USB stick: a disk image with one EFI system partition holding
 # EFI/BOOT/BOOTX64.EFI, the path a PC's firmware boots from removable media.
-# The USB initramfs is the normal one plus Intel's GPU firmware (from Alpine).
+# The USB initramfs is the normal one plus Intel's GPU and wifi firmware (from Alpine).
 
-$(BUILD)/firmware/.done: tools/fetch-mesa.py
+$(BUILD)/firmware/.done-i915-wifi: tools/fetch-mesa.py
 	rm -rf $(BUILD)/firmware
-	python3 -I tools/fetch-mesa.py $(BUILD)/firmware/root linux-firmware-i915
+	python3 -I tools/fetch-mesa.py $(BUILD)/firmware/root linux-firmware-i915 linux-firmware-other
 	touch $@
 
 # Only the firmware files this kernel's i915 driver asks for (their names are in the
 # kernel as strings): 44 of Alpine's 128 files, 4 MB rather than 10 MB.
-$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done $(BUILD)/bzImage
+#
+# Wifi: firmware for Intel's AX201 (the Tiger Lake laptop's card, and most Intel
+# laptops from 2019 to 2022), about 0.5 MB each. Another Intel card needs its
+# iwlwifi-PREFIX here (`dmesg | grep iwlwifi` on Linux names the file it loads).
+WIFI_FIRMWARE ?= Qu-b0-hr-b0:77 Qu-c0-hr-b0:77 QuZ-a0-hr-b0:77 so-a0-hr-b0:89
+
+$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done-i915-wifi $(BUILD)/bzImage tools/pick-wifi-firmware.sh
 	strings $(KOUT)/vmlinux | grep -E '^i915/[A-Za-z0-9_.-]+\.bin$$' | LC_ALL=C sort -u > $(BUILD)/firmware/wanted
 	test -s $(BUILD)/firmware/wanted
+	tools/pick-wifi-firmware.sh $(BUILD)/firmware/root/lib/firmware $(WIFI_FIRMWARE) > $(BUILD)/firmware/wifi
 	cd $(BUILD)/firmware/root && { echo lib; echo lib/firmware; echo lib/firmware/i915; \
-	  sed 's|^|lib/firmware/|; s|$$|.zst|' ../wanted | while read -r f; do [ ! -e "$$f" ] || echo "$$f"; done; } \
+	  sed 's|^|lib/firmware/|; s|$$|.zst|' ../wanted | while read -r f; do [ ! -e "$$f" ] || echo "$$f"; done; \
+	  sed 's|^|lib/firmware/|' ../wifi; } \
 	  | cpio -o -H newc --quiet > $(abspath $@)
 
 # /dev/console, which the kernel's own default initramfs provides and a built-in one

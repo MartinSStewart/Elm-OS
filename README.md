@@ -24,6 +24,13 @@ memory. The triangles are drawn on the GPU: in QEMU that is a virtio GPU
 with virgl, which passes the guest's OpenGL through to your real graphics card. `make test`
 checks the CPU fallback headlessly, and `make test-gpu` checks the GPU path.
 
+A wifi panel in the top-right corner lists the networks the wifi card sees, with a
+Refresh button. Click one, type its password and press Enter (or Connect). Once Elm OS
+has an address it fetches the weather where you are over HTTPS (your rough location from
+geojs.io, then the forecast from open-meteo.com, neither needs a key) and shows it. In
+QEMU there is a simulated wifi network to join: **Elm OS test network**, password
+`elmos-wifi`, bridged to QEMU's own network, so it reaches the real internet.
+
 ## Layout
 
 | Path | What it is |
@@ -33,6 +40,10 @@ checks the CPU fallback headlessly, and `make test-gpu` checks the GPU path.
 | `elm/src/Sprite.elm` | Turns text, rectangles and atlas sprites into textured triangles, and encodes them for `render` |
 | `host/atlas.h`, `host/font.h` | The texture atlas both renderers sample: town-collab's font plus a solid block (`tools/make-font.py` makes `font.h`) |
 | `host/host.c` | C host: mounts `/dev`, `/proc` and `/sys`, reads evdev, starts the GPU renderer, or draws on the CPU into a DRM dumb buffer |
+| `host/net.c` | Networking thread: starts `wpa_supplicant` on the wifi card, does what Elm asks on the `wifi` port, DHCP, `/etc/resolv.conf` |
+| `elm/src/Wifi.elm`, `Weather.elm`, `Keyboard.elm` | The wifi panel's messages, the weather requests (`elm/http`), and US key codes to characters |
+| `scripts/wifi-sim-hostapd.conf` | The simulated access point QEMU boots with (`build/wifi-sim.cpio`) |
+| `tools/pick-wifi-firmware.sh` | Picks the Intel wifi firmware files for the USB stick |
 | `host/gpu.c` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS, fed triangles by the host |
 | `tools/fetch-mesa.py` | Downloads Mesa and its libraries (musl builds) from Alpine Linux |
 | `tools/copy-libs.sh` | Copies the renderer's shared libraries and Mesa's drivers into the initramfs |
@@ -55,6 +66,7 @@ You need Linux on x86_64 with:
   `cpio`, `python3`, `readelf` (`binutils`) and `qemu-system-x86_64`
 - for the GPU in QEMU: QEMU's OpenGL module (`qemu-system-modules-opengl` on Debian, Ubuntu and Mint)
 - network access to `dl-cdn.alpinelinux.org` on the first build, for Mesa (about 110 MB of packages)
+  and `wpa_supplicant`, `hostapd` and CA certificates
 
 `make` checks for these first and prints an `apt install` line for anything missing.
 Run `make check-deps` to check without building.
@@ -65,7 +77,7 @@ make run          # QEMU window with the GPU (virgl); close it to quit
 make run-cpu      # QEMU window without 3D, so Elm OS draws on the CPU
 make test         # headless boot test of the CPU fallback, saves build/screenshot.png
 make test-gpu     # the same test drawn on the GPU (needs a host GPU for QEMU's egl-headless)
-make GPU=0        # leave Mesa out: CPU rendering only, 9 MB initramfs instead of 58 MB
+make GPU=0        # leave Mesa out: CPU rendering only, 18 MB initramfs instead of 67 MB
 make usb          # a USB stick image for real PCs, see below
 ```
 
@@ -73,14 +85,16 @@ Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree.
 
 ## Boot it on a real PC from a USB stick
 
-`make usb` builds `build/elmos-usb.img`, a UEFI-bootable image of about 38 MB. The kernel
+`make usb` builds `build/elmos-usb.img`, a UEFI-bootable image of about 39 MB. The kernel
 is its own EFI program (`EFI/BOOT/BOOTX64.EFI`) with the initramfs built in, so there is no
 bootloader. Elm OS runs entirely from RAM. The kernel has no NVMe, SATA or USB storage
 drivers, so it cannot read or write the computer's disk (or the stick, once it has booted).
 
 It has drivers for Intel graphics (i915, with Intel's firmware from Alpine Linux), the
 firmware's own framebuffer as a fallback, ACPI, USB keyboards and mice, the built-in PS/2
-keyboard, and touchpads on I2C (the usual setup on Intel laptops since about 2015) or PS/2.
+keyboard, touchpads on I2C (the usual setup on Intel laptops since about 2015) or PS/2,
+and Intel wifi cards (iwlwifi). The stick carries the firmware for Intel's AX201 (most
+Intel laptops from 2019 to 2022); add another card's with `WIFI_FIRMWARE` in the `Makefile`.
 It was written for an Intel Tiger Lake laptop (Core i5-1135G7, Iris Xe). The CPU must be
 Haswell or newer (see Known limits).
 
@@ -93,7 +107,8 @@ make run-usb      # optional: the same in a window
 ```
 
 `make usb` needs `sfdisk`, `mkfs.vfat` and `mtools` (`sudo apt install fdisk dosfstools mtools`)
-and downloads Intel's GPU firmware (10 MB) the first time.
+and downloads Intel's GPU and wifi firmware from Alpine the first time (about 70 MB, of which
+the stick keeps 6 MB).
 
 ### 2. Write it to a USB stick
 
@@ -122,7 +137,10 @@ and downloads Intel's GPU firmware (10 MB) the first time.
    or a USB mouse, tap or click to grow the triangle, and press any key to change its colour.
    The debug overlay in the bottom-left corner says which renderer is drawing (a green
    square for the GPU, orange for the CPU fallback) and how fast frames come.
-4. Press the power button to power off. Unplug the stick and the laptop boots its own system again.
+4. To get online, pick your network in the wifi panel (top right), type its password and
+   press Enter. Then it shows the weather. Only WPA2/WPA3 personal and open networks work:
+   not 802.1X (eduroam, most offices) or captive portals (hotels, cafés).
+5. Press the power button to power off. Unplug the stick and the laptop boots its own system again.
 
 If the screen stays black or shows an error, a photo of the screen helps. You can bake
 other kernel options into the stick with `USB_CMDLINE`, for example more messages and no GPU:
@@ -158,6 +176,17 @@ make usb USB_CMDLINE="console=tty0 loglevel=7 i915.modeset=0"   # firmware frame
   sample by its colour. The atlas holds coverage only: glyphs, and a solid block for flat
   colours. The host builds it into both renderers, so Elm only needs to know the layout
   (`elm/src/Sprite.elm`).
+- `host/net.c` runs its own thread. It starts Alpine's `wpa_supplicant` on the first wifi
+  card and talks to it over its control socket; Elm asks for scans and joins on the `wifi`
+  port. Once joined, it gets an address with its own small DHCP client and writes
+  `/etc/resolv.conf`. Elm then fetches with `elm/http`, which eco implements natively with
+  libcurl and OpenSSL (already in its runtime); `/etc/ssl/certs/ca-certificates.crt` comes
+  from Alpine. Nothing listens for incoming connections. `ELMOS_NET_DEBUG=1` on the kernel
+  command line logs wpa_supplicant's and hostapd's chatter and a test HTTPS request.
+- QEMU boots with `build/initramfs-qemu.cpio`: the normal initramfs plus `build/wifi-sim.cpio`
+  (hostapd and its config). The kernel's `mac80211_hwsim` makes two simulated radios; the
+  host runs the test access point on the second, bridged to QEMU's virtual Ethernet card, and
+  shows Elm the first. The USB stick has neither (`mac80211_hwsim.radios=0`).
 - An idle eco program exits, so `Main.elm` keeps a long `Time.every` subscription to keep the
   event loop alive. When the Elm program exits, the host reboots the machine, because PID 1
   must not exit.
@@ -168,11 +197,16 @@ Port payloads are JSON:
 input  <- {"t":"screen","w":1280,"h":800}
           {"t":"mouse","x":640,"y":400}          absolute pixels
           {"t":"button","b":0,"down":true}       0 left, 1 right, 2 middle
-          {"t":"key","code":30,"down":true}      Linux KEY_* code
+          {"t":"key","code":30,"down":true}      Linux KEY_* code ("repeat":true when held)
+          {"t":"wifiDevice","name":"wlan0"}      or null: no wifi card
+          {"t":"wifiScan","networks":[{"ssid":"Home","signal":-52,"security":"wpa"}]}
+          {"t":"wifiStatus","state":"connected","ssid":"Home","ip":"192.168.1.20","error":""}
+                                                 idle, connecting, dhcp, connected or failed
           {"t":"renderer","gpu":true,"name":"Mesa Intel(R) Xe Graphics (TGL GT2)","hardwareCursor":true}
           {"t":"stats","cores":2,"cpu":12.5,"cpuElm":20,"cpuHost":2,"cpuGpu":5,"memUsed":160,"memTotal":2000,"gpuMs":0.4,"elmMs":2.1,"drawMs":0.1}
                                                  twice a second; per-frame averages, -1 if unknown
 cursor -> 4294967295                             cursor fill colour, 0xRRGGBBAA
+wifi   -> ["scan"]  ["connect","Home","password"]  ["disconnect"]
 animationFrame <- 12345.678                      host's monotonic clock in ms: draw a frame now
 render -> [x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]
                                                  13 numbers per triangle: screen and atlas
@@ -180,6 +214,13 @@ render -> [x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]
 ```
 
 ## Known limits
+
+- Wifi: Intel cards only (others need their driver and firmware added), WPA2/WPA3 personal
+  and open networks, IPv4 only, US keyboard layout for typing passwords. Nothing remembers a
+  network across reboots. eco's native `Json.Decode.errorToString` crashes (seen on an HTML
+  body), so `Weather.elm` decodes HTTP bodies itself rather than with `Http.expectJson`.
+- `wpa_supplicant` and its libraries (OpenSSL, libnl) add about 9 MB to the initramfs, 1 MB
+  to the compressed stick.
 
 - eco targets x86-64-v3 (AVX2), so QEMU needs `-cpu max` (or KVM), and real hardware must be
   Haswell or newer.

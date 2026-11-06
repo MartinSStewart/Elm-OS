@@ -1,7 +1,8 @@
 port module Main exposing (main)
 
 {-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
-"Next colour" button), and a debug overlay drawn by the UI framework (Ui.elm, from town-collab).
+"Next colour" button), a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
+and a wifi panel: pick a network, type its password, join it, and see the weather.
 
 The C host (host/host.c) sends input events on `input` and asks for a frame on
 `animationFrame` whenever the screen is ready for one. Each frame, Elm draws the
@@ -11,10 +12,14 @@ current model and sends the triangles on `render`.
 
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Http
 import Json.Decode as D
+import Keyboard
 import Sprite exposing (Triangle)
 import Time
 import Ui
+import Weather
+import Wifi
 
 
 port input : (D.Value -> msg) -> Sub msg
@@ -38,6 +43,12 @@ Elm draws it only when there is no cursor plane (see `RendererInfo.hardwareCurso
 port cursor : Float -> Cmd msg
 
 
+{-| Asks the host's networking thread (host/net.c) to do something with the wifi card:
+["scan"], ["connect", ssid, password] (password "" for an open network), ["disconnect"].
+-}
+port wifi : List String -> Cmd msg
+
+
 
 -- INPUT
 
@@ -46,9 +57,13 @@ type Input
     = Screen Int Int
     | Mouse Int Int
     | Button Int Bool
-    | Key Int Bool
+    | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
+    | WifiDevice Wifi.Device
+    | WifiScan (List Wifi.Network)
+    | WifiStatus Wifi.Status
+    | NetConfig { geoUrl : String, weatherUrl : String }
 
 
 type alias RendererInfo =
@@ -85,7 +100,24 @@ inputDecoder =
                         D.map2 Button (D.field "b" D.int) (D.field "down" D.bool)
 
                     "key" ->
-                        D.map2 Key (D.field "code" D.int) (D.field "down" D.bool)
+                        D.map3 Key
+                            (D.field "code" D.int)
+                            (D.field "down" D.bool)
+                            (D.maybe (D.field "repeat" D.bool) |> D.map (Maybe.withDefault False))
+
+                    "wifiDevice" ->
+                        D.map WifiDevice Wifi.deviceDecoder
+
+                    "wifiScan" ->
+                        D.map WifiScan Wifi.networksDecoder
+
+                    "wifiStatus" ->
+                        D.map WifiStatus Wifi.statusDecoder
+
+                    "netConfig" ->
+                        D.map2 (\geo weather -> NetConfig { geoUrl = geo, weatherUrl = weather })
+                            (D.field "geoUrl" D.string)
+                            (D.field "weatherUrl" D.string)
 
                     "renderer" ->
                         D.map3 RendererInfo
@@ -146,17 +178,46 @@ type alias Model =
     , lastFrame : Maybe Float
     , frameIntervals : List Float -- milliseconds, newest first
     , frames : Int
+    , shift : Bool
+    , focus : Maybe UiId
+    , wifiDevice : Wifi.Device
+    , networks : List Wifi.Network
+    , scanning : Bool
+    , wifiStatus : Wifi.Status
+    , selected : Maybe Wifi.Network
+    , password : String
+    , showPassword : Bool
+    , weather : WeatherState
+    , geoUrl : String
+    , weatherUrl : String
     }
+
+
+type WeatherState
+    = NoWeather
+    | FindingPlace
+    | LoadingForecast Weather.Place
+    | GotWeather Weather.Place Weather.Forecast
+    | WeatherFailed String
 
 
 type Msg
     = GotInput D.Value
     | AnimationFrame Float
     | Tick
+    | GotPlace (Result Http.Error Weather.Place)
+    | GotForecast Weather.Place (Result Http.Error Weather.Forecast)
 
 
 type UiId
     = NextColorButton
+    | RefreshButton
+    | NetworkButton String
+    | PasswordInput
+    | ShowPasswordButton
+    | ConnectButton
+    | DisconnectButton
+    | WeatherButton
 
 
 init : () -> ( Model, Cmd Msg )
@@ -171,6 +232,18 @@ init _ =
       , lastFrame = Nothing
       , frameIntervals = []
       , frames = 0
+      , shift = False
+      , focus = Nothing
+      , wifiDevice = Wifi.Unknown
+      , networks = []
+      , scanning = True
+      , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
+      , selected = Nothing
+      , password = ""
+      , showPassword = False
+      , weather = NoWeather
+      , geoUrl = Weather.defaultGeoUrl
+      , weatherUrl = Weather.defaultWeatherUrl
       }
     , Cmd.none
     )
@@ -210,52 +283,222 @@ update msg model =
             case D.decodeValue inputDecoder value of
                 Ok event ->
                     let
-                        next =
+                        ( next, cmd ) =
                             step event model
                     in
                     ( next
                     , if cursorColor next /= cursorColor model || isRenderer event then
-                        cursor (Color.toFloat (cursorColor next))
+                        Cmd.batch [ cmd, cursor (Color.toFloat (cursorColor next)) ]
 
                       else
-                        Cmd.none
+                        cmd
                     )
 
                 Err _ ->
                     ( model, Cmd.none )
 
+        GotPlace (Ok place) ->
+            ( { model | weather = LoadingForecast place }
+            , Weather.fetchForecast model.weatherUrl place (GotForecast place)
+            )
 
-step : Input -> Model -> Model
+        GotPlace (Err error) ->
+            ( { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }, Cmd.none )
+
+        GotForecast place (Ok forecast) ->
+            ( { model | weather = GotWeather place forecast }, Cmd.none )
+
+        GotForecast _ (Err error) ->
+            ( { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }, Cmd.none )
+
+
+step : Input -> Model -> ( Model, Cmd Msg )
 step event model =
     case event of
         Screen w h ->
-            { model | width = w, height = h, mouse = ( w // 2, h // 2 ) }
+            ( { model | width = w, height = h, mouse = ( w // 2, h // 2 ) }, Cmd.none )
 
         Mouse x y ->
-            { model | mouse = ( x, y ) }
+            ( { model | mouse = ( x, y ) }, Cmd.none )
 
         Button 0 True ->
-            case Ui.hover model.mouse (overlay model) of
-                ( NextColorButton, _ ) :: _ ->
-                    nextColor model
+            case Ui.hover model.mouse (screenUi model) of
+                ( id, _ ) :: _ ->
+                    click id model
 
                 [] ->
-                    { model | pressed = True }
+                    ( { model | pressed = True, focus = Nothing }, Cmd.none )
 
         Button _ down ->
-            { model | pressed = down }
+            ( { model | pressed = down }, Cmd.none )
 
-        Key _ True ->
-            nextColor model
+        Key code down repeat ->
+            if Keyboard.isShift code then
+                ( { model | shift = down }, Cmd.none )
 
-        Key _ False ->
-            model
+            else if not down then
+                ( model, Cmd.none )
+
+            else if model.focus == Just PasswordInput then
+                typeKey (Keyboard.fromCode model.shift code) model
+
+            else if repeat then
+                ( model, Cmd.none )
+
+            else
+                ( nextColor model, Cmd.none )
 
         Renderer renderer ->
-            { model | renderer = Just renderer }
+            ( { model | renderer = Just renderer }, Cmd.none )
 
         Stats stats ->
-            { model | stats = Just stats }
+            ( { model | stats = Just stats }, Cmd.none )
+
+        WifiDevice device ->
+            ( { model | wifiDevice = device, scanning = device /= Wifi.NoCard && model.scanning }, Cmd.none )
+
+        WifiScan networks ->
+            ( { model | networks = networks, scanning = False }, Cmd.none )
+
+        WifiStatus status ->
+            let
+                justConnected =
+                    status.state == Wifi.Connected && model.wifiStatus.state /= Wifi.Connected
+
+                next =
+                    { model | wifiStatus = status }
+            in
+            if justConnected then
+                fetchWeather next
+
+            else
+                ( next, Cmd.none )
+
+        NetConfig urls ->
+            ( { model
+                | geoUrl = nonEmpty urls.geoUrl Weather.defaultGeoUrl
+                , weatherUrl = nonEmpty urls.weatherUrl Weather.defaultWeatherUrl
+              }
+            , Cmd.none
+            )
+
+
+nonEmpty : String -> String -> String
+nonEmpty value default =
+    if value == "" then
+        default
+
+    else
+        value
+
+
+fetchWeather : Model -> ( Model, Cmd Msg )
+fetchWeather model =
+    ( { model | weather = FindingPlace }, Weather.fetchPlace model.geoUrl GotPlace )
+
+
+click : UiId -> Model -> ( Model, Cmd Msg )
+click id model =
+    case id of
+        NextColorButton ->
+            ( nextColor { model | focus = Nothing }, Cmd.none )
+
+        RefreshButton ->
+            ( { model | scanning = True, focus = Nothing }, wifi [ "scan" ] )
+
+        NetworkButton ssid ->
+            case List.filter (\n -> n.ssid == ssid) model.networks |> List.head of
+                Just network ->
+                    ( { model
+                        | selected = Just network
+                        , password =
+                            if Maybe.map .ssid model.selected == Just ssid then
+                                model.password
+
+                            else
+                                ""
+                        , focus =
+                            if needsPassword network then
+                                Just PasswordInput
+
+                            else
+                                Nothing
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PasswordInput ->
+            ( { model | focus = Just PasswordInput }, Cmd.none )
+
+        ShowPasswordButton ->
+            ( { model | showPassword = not model.showPassword }, Cmd.none )
+
+        ConnectButton ->
+            connect model
+
+        DisconnectButton ->
+            ( { model | weather = NoWeather, focus = Nothing }, wifi [ "disconnect" ] )
+
+        WeatherButton ->
+            fetchWeather { model | focus = Nothing }
+
+
+connect : Model -> ( Model, Cmd Msg )
+connect model =
+    case model.selected of
+        Just network ->
+            let
+                password =
+                    if needsPassword network then
+                        model.password
+
+                    else
+                        ""
+            in
+            ( { model
+                | focus = Nothing
+                , weather = NoWeather
+                , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+              }
+            , wifi [ "connect", network.ssid, password ]
+            )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+needsPassword : Wifi.Network -> Bool
+needsPassword network =
+    network.security /= Wifi.Open
+
+
+typeKey : Keyboard.Key -> Model -> ( Model, Cmd Msg )
+typeKey key model =
+    case key of
+        Keyboard.Character char ->
+            if String.length model.password < 63 then
+                ( { model | password = model.password ++ String.fromChar char }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
+
+        Keyboard.Backspace ->
+            ( { model | password = String.dropRight 1 model.password }, Cmd.none )
+
+        Keyboard.Enter ->
+            connect model
+
+        Keyboard.Escape ->
+            ( { model | focus = Nothing }, Cmd.none )
+
+        Keyboard.Tab ->
+            ( model, Cmd.none )
+
+        Keyboard.Other ->
+            ( model, Cmd.none )
 
 
 isRenderer : Input -> Bool
@@ -306,13 +549,13 @@ view model =
             ( toFloat model.width, toFloat model.height )
 
         ui =
-            overlay model
+            screenUi model
 
         hovered =
             Ui.hover model.mouse ui |> List.head |> Maybe.map Tuple.first
     in
     Sprite.triangle color ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
-        :: Ui.view hovered Nothing ui
+        :: Ui.view hovered model.focus ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however
@@ -335,6 +578,14 @@ textScale model =
 
     else
         1
+
+
+{-| Everything the UI framework draws: the debug panel in the bottom left corner, and
+the wifi panel in the top right.
+-}
+screenUi : Model -> Ui.Element UiId
+screenUi model =
+    Ui.el { padding = Ui.noPadding, inFront = [ overlay model, wifiPanel model ], borderAndFill = Ui.NoBorderOrFill } Ui.none
 
 
 {-| The debug panel, in the bottom left corner of the screen.
@@ -564,3 +815,479 @@ main =
                     , Time.every 60000 (\_ -> Tick)
                     ]
         }
+
+
+
+-- WIFI AND WEATHER
+
+
+{-| Characters across the wifi panel.
+-}
+panelChars : Int
+panelChars =
+    44
+
+
+wifiPanel : Model -> Ui.Element UiId
+wifiPanel model =
+    let
+        scale =
+            textScale model
+
+        t =
+            Ui.scaledText scale
+
+        small =
+            Ui.paddingXY (6 * scale) (3 * scale)
+
+        title =
+            case model.wifiDevice of
+                Wifi.Card name ->
+                    "Wifi (" ++ name ++ ")"
+
+                _ ->
+                    "Wifi"
+
+        header =
+            Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
+                [ t (String.padRight (panelChars - 10) ' ' title)
+                , case model.wifiDevice of
+                    Wifi.Card _ ->
+                        Ui.button { id = RefreshButton, padding = small }
+                            (t
+                                (if model.scanning then
+                                    "Scanning"
+
+                                 else
+                                    " Refresh"
+                                )
+                            )
+
+                    _ ->
+                        Ui.none
+                ]
+
+        status =
+            model.wifiStatus
+
+        statusLine =
+            case model.wifiDevice of
+                Wifi.Unknown ->
+                    t "Looking for a wifi card..."
+
+                Wifi.NoCard ->
+                    t "No wifi card found"
+
+                Wifi.Card _ ->
+                    case status.state of
+                        Wifi.Idle ->
+                            t "Not connected. Pick a network:"
+
+                        Wifi.Connecting ->
+                            t (ellipsis panelChars ("Joining " ++ status.ssid ++ "..."))
+
+                        Wifi.Dhcp ->
+                            t (ellipsis panelChars ("Getting an address on " ++ status.ssid))
+
+                        Wifi.Connected ->
+                            Ui.colorScaledText connectedColor scale (ellipsis panelChars ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
+
+                        Wifi.Failed ->
+                            Ui.colorScaledText Color.errorColor scale (wrap panelChars status.error)
+
+        networkRows =
+            case model.wifiDevice of
+                Wifi.Card _ ->
+                    if List.isEmpty model.networks then
+                        [ t
+                            (if model.scanning then
+                                "Looking for networks..."
+
+                             else
+                                "No networks found"
+                            )
+                        ]
+
+                    else
+                        List.take 8 model.networks |> List.map (networkRow model scale)
+
+                _ ->
+                    []
+
+        joinRows =
+            case model.selected of
+                Just network ->
+                    if network.ssid == status.ssid && status.state /= Wifi.Idle && status.state /= Wifi.Failed then
+                        []
+
+                    else if network.security == Wifi.Enterprise || network.security == Wifi.Wep then
+                        [ Ui.colorScaledText Color.errorColor scale "That kind of network isn't supported yet" ]
+
+                    else
+                        (if needsPassword network then
+                            [ Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
+                                [ t "Password"
+                                , passwordInput scale (model.focus == Just PasswordInput) model
+                                , Ui.button { id = ShowPasswordButton, padding = small }
+                                    (t
+                                        (if model.showPassword then
+                                            "Hide"
+
+                                         else
+                                            "Show"
+                                        )
+                                    )
+                                ]
+                            ]
+
+                         else
+                            []
+                        )
+                            ++ [ Ui.button { id = ConnectButton, padding = small }
+                                    (t (ellipsis (panelChars - 2) ("Connect to " ++ network.ssid)))
+                               ]
+
+                Nothing ->
+                    []
+
+        disconnectRow =
+            if status.state /= Wifi.Idle && status.state /= Wifi.Failed then
+                [ Ui.button { id = DisconnectButton, padding = small } (t "Disconnect") ]
+
+            else
+                []
+    in
+    Ui.topRight { size = ( model.width, model.height ) }
+        (Ui.el { padding = Ui.paddingXY (8 * scale) (8 * scale), inFront = [], borderAndFill = Ui.NoBorderOrFill }
+            (Ui.el
+                { padding = Ui.paddingXY (6 * scale) (6 * scale)
+                , inFront = []
+                , borderAndFill = Ui.defaultElBorderAndFill
+                }
+                (Ui.column { spacing = 4 * scale, padding = Ui.noPadding }
+                    ([ header, statusLine ]
+                        ++ networkRows
+                        ++ joinRows
+                        ++ disconnectRow
+                        ++ weatherRows model scale
+                    )
+                )
+            )
+        )
+
+
+connectedColor : Color
+connectedColor =
+    Color.rgb255 30 120 60
+
+
+networkRow : Model -> Int -> Wifi.Network -> Ui.Element UiId
+networkRow model scale network =
+    let
+        connectedHere =
+            model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
+
+        label =
+            if connectedHere then
+                "connected"
+
+            else
+                case network.security of
+                    Wifi.Open ->
+                        "open"
+
+                    Wifi.Wpa ->
+                        "locked"
+
+                    Wifi.Enterprise ->
+                        "802.1X"
+
+                    Wifi.Wep ->
+                        "WEP"
+
+        nameChars =
+            panelChars - 15
+    in
+    Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY (4 * scale) (2 * scale) }
+        (Maybe.map .ssid model.selected == Just network.ssid)
+        (Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
+            [ signalBars scale network.signal
+            , Ui.scaledText scale (String.padRight nameChars ' ' (ellipsis nameChars network.ssid))
+            , Ui.scaledText scale (String.padLeft 9 ' ' label)
+            ]
+        )
+
+
+{-| Four bars, filled by signal strength in dBm.
+-}
+signalBars : Int -> Int -> Ui.Element id
+signalBars scale dbm =
+    let
+        filled =
+            if dbm >= -55 then
+                4
+
+            else if dbm >= -65 then
+                3
+
+            else if dbm >= -75 then
+                2
+
+            else
+                1
+
+        bar i =
+            let
+                h =
+                    (4 + 4 * i) * scale
+            in
+            Sprite.rectangle
+                (if i < filled then
+                    Color.rgb255 40 40 40
+
+                 else
+                    Color.outlineColor
+                )
+                ( i * 4 * scale, 18 * scale - h )
+                ( 3 * scale, h )
+    in
+    Ui.quads { size = ( 16 * scale, 18 * scale ), triangles = List.concatMap bar (List.range 0 3) }
+
+
+passwordInput : Int -> Bool -> Model -> Ui.Element UiId
+passwordInput scale focused model =
+    let
+        chars =
+            22
+
+        shown =
+            if model.showPassword then
+                model.password
+
+            else
+                String.repeat (String.length model.password) "*"
+
+        visible =
+            String.right
+                (if focused then
+                    chars - 1
+
+                 else
+                    chars
+                )
+                shown
+                ++ (if focused then
+                        "_"
+
+                    else
+                        ""
+                   )
+    in
+    Ui.elWithId
+        { id = PasswordInput
+        , padding = Ui.paddingXY (4 * scale) (2 * scale)
+        , inFront = []
+        , borderAndFill =
+            Ui.BorderAndFill
+                { borderWidth = 2
+                , borderColor =
+                    if focused then
+                        Color.focusedUiColor
+
+                    else
+                        Color.outlineColor
+                , fillColor = Color.fillColor3
+                }
+        }
+        (Ui.scaledText scale (String.padRight chars ' ' visible))
+
+
+weatherRows : Model -> Int -> List (Ui.Element UiId)
+weatherRows model scale =
+    let
+        t =
+            Ui.scaledText scale
+
+        small =
+            Ui.paddingXY (6 * scale) (3 * scale)
+
+        divider =
+            Ui.quads
+                { size = ( panelChars * 10 * scale, 6 * scale )
+                , triangles = Sprite.rectangle Color.outlineColor ( 0, 2 * scale ) ( panelChars * 10 * scale, 2 )
+                }
+
+        degrees value =
+            String.fromInt (round value) ++ "°"
+    in
+    case model.weather of
+        NoWeather ->
+            if model.wifiStatus.state == Wifi.Connected then
+                [ divider, Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
+
+            else
+                []
+
+        FindingPlace ->
+            [ divider, t "Weather: finding where we are..." ]
+
+        LoadingForecast place ->
+            [ divider, t (ellipsis panelChars ("Weather in " ++ place.name ++ "...")) ]
+
+        WeatherFailed error ->
+            [ divider
+            , Ui.colorScaledText Color.errorColor scale (wrap panelChars error)
+            , Ui.button { id = WeatherButton, padding = small } (t "Try again")
+            ]
+
+        GotWeather place forecast ->
+            [ divider
+            , Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
+                [ t (String.padRight (panelChars - 10) ' ' (ellipsis (panelChars - 10) ("Weather in " ++ place.name)))
+                , Ui.button { id = WeatherButton, padding = small } (t " Refresh")
+                ]
+            , Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
+                [ weatherIcon (3 * scale) forecast.code
+                , Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
+                    [ Ui.scaledText (2 * scale) (fixed 1 forecast.temperature ++ "°C")
+                    , t (Weather.describe forecast.code)
+                    , t
+                        ("Wind "
+                            ++ String.fromInt (round forecast.wind)
+                            ++ " km/h, humidity "
+                            ++ String.fromInt (round forecast.humidity)
+                            ++ "%"
+                        )
+                    ]
+                ]
+            , Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
+                (List.indexedMap
+                    (\i day ->
+                        Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
+                            [ weatherIcon scale day.code
+                            , t
+                                (String.padRight 10
+                                    ' '
+                                    (if i == 0 then
+                                        "Today"
+
+                                     else
+                                        Weather.weekday day.date
+                                    )
+                                    ++ String.padLeft 4 ' ' (degrees day.high)
+                                    ++ " / "
+                                    ++ String.padRight 5 ' ' (degrees day.low)
+                                    ++ Weather.describe day.code
+                                )
+                            ]
+                    )
+                    forecast.days
+                )
+            , Ui.colorScaledText Color.outlineColor scale ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            ]
+
+
+{-| A small picture of the weather, 18 by 18 `unit`-pixel squares.
+-}
+weatherIcon : Int -> Int -> Ui.Element id
+weatherIcon unit code =
+    let
+        s =
+            toFloat unit
+
+        side =
+            18 * unit
+
+        circle color ( cx, cy ) r =
+            List.range 0 11
+                |> List.map
+                    (\i ->
+                        let
+                            a0 =
+                                turns (toFloat i / 12)
+
+                            a1 =
+                                turns (toFloat (i + 1) / 12)
+                        in
+                        Sprite.triangle color
+                            ( cx * s, cy * s )
+                            ( (cx + r * cos a0) * s, (cy + r * sin a0) * s )
+                            ( (cx + r * cos a1) * s, (cy + r * sin a1) * s )
+                    )
+
+        sun =
+            circle (Color.rgb255 250 190 40) ( 9, 9 ) 6
+
+        smallSun =
+            circle (Color.rgb255 250 190 40) ( 6, 6 ) 4.5
+
+        cloudColor =
+            if code >= 61 || code == 3 then
+                Color.rgb255 120 125 135
+
+            else
+                Color.rgb255 170 175 185
+
+        cloud =
+            circle cloudColor ( 6, 11 ) 4
+                ++ circle cloudColor ( 11, 9 ) 5
+                ++ circle cloudColor ( 14, 12 ) 3.5
+                ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
+
+        drops color =
+            List.concatMap
+                (\x -> [ Sprite.triangle color ( x * s, 15 * s ) ( (x + 1.2) * s, 15 * s ) ( (x - 1) * s, 18 * s ) ])
+                [ 6, 10, 14 ]
+
+        rain =
+            drops (Color.rgb255 60 110 220)
+
+        snow =
+            List.concatMap (\x -> circle Color.white ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
+
+        bolt =
+            [ Sprite.triangle (Color.rgb255 250 200 40) ( 10 * s, 13 * s ) ( 8 * s, 18 * s ) ( 12 * s, 15 * s ) ]
+
+        triangles =
+            if code <= 1 then
+                sun
+
+            else if code == 2 then
+                smallSun ++ cloud
+
+            else if code <= 48 then
+                cloud
+
+            else if code <= 67 || (code >= 80 && code <= 82) then
+                cloud ++ rain
+
+            else if code <= 86 then
+                cloud ++ snow
+
+            else
+                cloud ++ bolt
+    in
+    Ui.quads { size = ( side, side ), triangles = triangles }
+
+
+{-| Breaks text into lines of at most `width` characters, between words.
+-}
+wrap : Int -> String -> String
+wrap width text =
+    String.words text
+        |> List.foldl
+            (\word lines ->
+                case lines of
+                    line :: rest ->
+                        if String.length line + 1 + String.length word <= width then
+                            (line ++ " " ++ word) :: rest
+
+                        else
+                            String.left width word :: line :: rest
+
+                    [] ->
+                        [ String.left width word ]
+            )
+            []
+        |> List.reverse
+        |> String.join "\n"

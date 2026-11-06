@@ -1,6 +1,8 @@
 """Boot Elm OS headless in QEMU, drive it through QMP, and check the screen.
 
-Passes when the triangle follows the mouse and a key press changes its colour.
+Passes when the triangle follows the mouse and a key press changes its colour, and
+(except with --usb) when Elm OS joins the simulated wifi network and fetches the
+weather, from a stand-in server here rather than the internet.
 
     python3 scripts/test-qemu.py          plain virtio GPU: checks the CPU fallback
     python3 scripts/test-qemu.py --gpu    virtio GPU with virgl: checks the GPU renderer
@@ -10,7 +12,7 @@ Passes when the triangle follows the mouse and a key press changes its colour.
 --gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
 QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
 """
-import json, os, socket, struct, subprocess, sys, tempfile, time, zlib
+import http.server, json, os, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -24,6 +26,34 @@ else:
     devices = ["-device", "virtio-gpu-pci", "-display", "none"]
 
 usb = "--usb" in sys.argv[1:]
+
+# Stands in for geojs.io and open-meteo.com: the guest reaches it at 10.0.2.2 through
+# QEMU's user-mode network, over the simulated wifi.
+GEO = {"latitude": "59.33", "longitude": "18.07", "city": "Stockholm", "country": "Sweden"}
+FORECAST = {"current": {"time": "2026-11-06T12:00", "temperature_2m": 4.6, "relative_humidity_2m": 81,
+                        "weather_code": 2, "wind_speed_10m": 12.6},
+            "daily": {"time": ["2026-11-06", "2026-11-07"], "weather_code": [3, 61],
+                      "temperature_2m_max": [6.6, 5.5], "temperature_2m_min": [3.1, 2.6]}}
+web_requests = []
+
+
+class Stub(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        web_requests.append(self.path)
+        body = json.dumps(GEO if self.path.startswith("/geo") else FORECAST).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+web = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stub)
+threading.Thread(target=web.serve_forever, daemon=True).start()
+web_url = f"http://10.0.2.2:{web.server_address[1]}"
 if usb:
     ovmf = next(f for f in ["/usr/share/ovmf/OVMF.fd", "/usr/share/qemu/OVMF.fd", "/usr/share/edk2/x64/OVMF.fd"]
                 if os.path.exists(f))
@@ -32,10 +62,12 @@ if usb:
             "-device", "qemu-xhci", "-device", "usb-storage,drive=stick,bootindex=0",
             "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none"]
 else:
-    boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
+    boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
+            "-nic", "user,model=virtio-net-pci",
             # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
             # puts it on the cursor plane, which screendumps leave out.
-            "-append", "console=ttyS0" + ("" if gpu else " ELMOS_CURSOR=software"), "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
+            "-append", "console=ttyS0" + ("" if gpu else " ELMOS_CURSOR=software")
+            + f" ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci"]
 qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
@@ -213,6 +245,44 @@ def save_png(shot, path):
     open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
                           + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
+
+def click(fx, fy):
+    move(fx, fy)
+    cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
+    time.sleep(0.4)
+    cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
+    time.sleep(0.5)
+
+
+if not usb:
+    # The wifi panel (top right): refresh, pick the test network, type its password
+    # and press Enter. Then the host joins it, gets an address by DHCP, and Elm
+    # fetches the weather.
+    wait_for("AP-ENABLED", timeout=60)
+    click((w - 60 * s) / w, 26 * s / h)  # Refresh
+    time.sleep(5)
+    click((w - 330 * s) / w, 75 * s / h)  # the first network
+    for ch in "elmos-wifi":
+        cmd("send-key", keys=[{"type": "qcode", "data": {"-": "minus"}.get(ch, ch)}])
+        time.sleep(0.2)
+    cmd("send-key", keys=[{"type": "qcode", "data": "ret"}])
+    wait_for("[net] wlan0: 10.0.2.", timeout=90)
+    print("joined the simulated wifi network")
+    end = time.time() + 60
+    while not any(r.startswith("/forecast") for r in web_requests):
+        if time.time() > end or qemu.poll() is not None:
+            fail(f"Elm never asked for the weather (requests: {web_requests})")
+        time.sleep(0.5)
+    time.sleep(3)
+    shot = screen()
+    if "segfault" in open(serial_path, errors="replace").read():
+        fail("/init crashed after fetching the weather")
+    # "Connected to ..." in green, and the weather below it.
+    green = sum(1 for x in range(w - 450 * s, w - 20 * s) for y in range(40 * s, 60 * s)
+                if near(pixel(shot, x, y), (30, 120, 60), tol=30))
+    if green < 20:
+        fail(f"expected the wifi panel to say it is connected ({green} green pixels)")
+    print(f"fetched the weather: {web_requests}")
 
 save_png(screen(), f"{ROOT}/build/screenshot.png")
 

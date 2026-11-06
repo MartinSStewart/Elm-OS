@@ -25,6 +25,8 @@
  *             {"t":"mouse","x":X,"y":Y}            absolute pixels
  *             {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
  *             {"t":"key","code":C,"down":true}     C: Linux KEY_* code
+ *             {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
+ *             wifi and network messages: see net.c
  *             {"t":"renderer","gpu":true,"name":"..."}   which renderer draws
  *             {"t":"stats","cores":N,"cpu":P,"cpuElm":P,"cpuHost":P,"cpuGpu":P,
  *              "memUsed":MB,"memTotal":MB,"gpuMs":MS,"elmMs":MS,"drawMs":MS}
@@ -74,6 +76,19 @@
 typedef void (*eco_port_callback)(const char* json_utf8, void* user);
 int eco_port_send(const char* port, const char* json_utf8);
 int eco_port_subscribe(const char* port, eco_port_callback cb, void* user);
+
+void net_start(void);
+
+/* eco_port_send from more than one thread at once loses messages, so the host
+ * thread and net.c's thread take turns. */
+static pthread_mutex_t port_lock = PTHREAD_MUTEX_INITIALIZER;
+
+int port_send(const char* port, const char* json) {
+    pthread_mutex_lock(&port_lock);
+    int r = eco_port_send(port, json);
+    pthread_mutex_unlock(&port_lock);
+    return r;
+}
 
 static void logf_(const char* fmt, ...) {
     va_list ap;
@@ -567,7 +582,7 @@ static void send_input(const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    eco_port_send("input", buf);
+    port_send("input", buf);
 }
 
 static void send_button(int b, int down) {
@@ -635,7 +650,10 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
             mouse_x = (int)((int64_t)(ev->value - dev->ax.minimum) * d->w / (dev->ax.maximum - dev->ax.minimum + 1)), *moved = 1;
         if (ev->code == ABS_Y)
             mouse_y = (int)((int64_t)(ev->value - dev->ay.minimum) * d->h / (dev->ay.maximum - dev->ay.minimum + 1)), *moved = 1;
-    } else if (ev->type == EV_KEY && ev->value != 2) { /* 2 = autorepeat */
+    } else if (ev->type == EV_KEY && ev->value == 2) { /* autorepeat: for typing */
+        if (ev->code < BTN_MISC && ev->code != KEY_POWER)
+            send_input("{\"t\":\"key\",\"code\":%d,\"down\":true,\"repeat\":true}", ev->code);
+    } else if (ev->type == EV_KEY) {
         int down = ev->value == 1;
         if (dev->touchpad && ev->code == BTN_TOUCH) {
             if (down) {
@@ -708,7 +726,7 @@ static void ask_for_frame(void) {
     char ms[32];
     asked_at = now();
     snprintf(ms, sizeof ms, "%.3f", asked_at * 1000);
-    eco_port_send("animationFrame", ms);
+    port_send("animationFrame", ms);
     awaiting_render = 1;
     cpu_next_at = 0;
 }
@@ -890,7 +908,7 @@ static void* host_main(void* arg) {
     /* Ports are registered once Elm starts; retry until it accepts. */
     char screen[64];
     snprintf(screen, sizeof screen, "{\"t\":\"screen\",\"w\":%u,\"h\":%u}", d->w, d->h);
-    while (eco_port_send("input", screen) != 0) usleep(1000);
+    while (port_send("input", screen) != 0) usleep(1000);
     mouse_x = d->w / 2;
     mouse_y = d->h / 2;
     cursor_scale = d->w >= 1600 ? 2 : 1;
@@ -1016,6 +1034,7 @@ __attribute__((constructor)) static void host_init(void) {
     wake_fd = eventfd(0, EFD_CLOEXEC);
     eco_port_subscribe("render", on_render, NULL);
     eco_port_subscribe("cursor", on_cursor, NULL);
+    net_start(); /* wifi and DHCP: net.c */
     pthread_t t;
     pthread_create(&t, NULL, host_main, NULL);
     pthread_detach(t);
