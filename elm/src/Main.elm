@@ -16,10 +16,12 @@ import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Json.Decode as D
 import Keyboard
+import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
 import TextInput
 import Time
 import Ui
+import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
 import Wifi
 
@@ -227,10 +229,8 @@ milliseconds =
 
 
 type alias Model =
-    { width : Int
-    , height : Int
-    , pixelScale : Int
-    , mouse : Coord
+    { screenSize : Coord DevicePixels
+    , mouse : Coord DevicePixels
     , colorIndex : Int
     , pressed : Bool
     , renderer : Maybe RendererInfo
@@ -275,8 +275,11 @@ type WeatherState
     | WeatherFailed String
 
 
+{-| Msg and Model hold only plain data (no Json values or functions), so they can be
+saved and sent elsewhere later.
+-}
 type Msg
-    = GotInput (Result D.Error Input)
+    = GotInput (Result String Input)
     | Tick
 
 
@@ -300,10 +303,8 @@ type UiId
 
 init : () -> ( Model, List Effect )
 init _ =
-    ( { width = 640
-      , height = 480
-      , pixelScale = 1
-      , mouse = ( 320, 240 )
+    ( { screenSize = Coord.xy 640 480
+      , mouse = Coord.xy 320 240
       , colorIndex = 0
       , pressed = False
       , renderer = Nothing
@@ -373,7 +374,7 @@ step : Input -> Model -> ( Model, List Effect )
 step event model =
     case event of
         Screen w h ->
-            ( { model | width = w, height = h, mouse = ( w // 2, h // 2 ) }, [] )
+            ( { model | screenSize = Coord.xy w h, mouse = Coord.xy (w // 2) (h // 2) }, [] )
 
         Frame time ->
             let
@@ -408,13 +409,13 @@ step event model =
         Mouse x y ->
             let
                 moved =
-                    { model | mouse = ( x, y ) }
+                    { model | mouse = Coord.xy x y }
             in
             if model.selectingText then
                 case Ui.findInput PasswordInput (screenUi model) of
                     Just (Ui.TextInputType { position }) ->
                         ( { moved
-                            | password = TextInput.mouseDownMove (passwordStyle model) moved.mouse position model.password
+                            | password = TextInput.mouseDownMove (passwordStyle model) (uiMouse moved) position model.password
                           }
                         , []
                         )
@@ -426,12 +427,12 @@ step event model =
                 ( moved, [] )
 
         Button 0 True ->
-            case Ui.hover model.mouse (screenUi model) of
+            case Ui.hover (uiMouse model) (screenUi model) of
                 ( PasswordInput, { relativePositionToUi } ) :: _ ->
                     ( { model
                         | focus = Just PasswordInput
                         , selectingText = True
-                        , password = TextInput.mouseDown (passwordStyle model) model.mouse relativePositionToUi model.password
+                        , password = TextInput.mouseDown (passwordStyle model) (uiMouse model) relativePositionToUi model.password
                       }
                     , []
                     )
@@ -771,23 +772,23 @@ palette =
 -- VIEW
 
 
-view : Model -> List Triangle
+view : Model -> List (Triangle DevicePixels)
 view model =
     let
         color =
             palette |> List.drop model.colorIndex |> List.head |> Maybe.withDefault Color.white
 
         ( w, h ) =
-            ( toFloat model.width, toFloat model.height )
+            Coord.toTuple model.screenSize |> Tuple.mapBoth toFloat toFloat
 
         ui =
             screenUi model
 
         hovered =
-            Ui.hover model.mouse ui |> List.head |> Maybe.map Tuple.first
+            Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
     Sprite.triangle color ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
-        :: Ui.view hovered model.focus ui
+        :: Ui.view (uiScale model) hovered model.focus ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however
@@ -801,30 +802,32 @@ view model =
             model.mouse
 
 
-{-| Screen pixels per UI pixel, for padding, borders, icons and the debug overlay's
-pixel font: bigger on big screens.
+{-| Device pixels per UI pixel: 2 on screens at least 1600 pixels wide, otherwise 1.
 -}
-uiScale : Model -> Int
+uiScale : Model -> UiScale
 uiScale model =
-    if model.width >= 1600 then
-        2
-
-    else
-        1
+    Units.scaleFor (Coord.x model.screenSize)
 
 
-{-| The size of normal UI text: Noto Sans, drawn at that size (NotoSans.faces has the sizes).
+{-| The screen's size in UI pixels.
 -}
-bodySize : Model -> Int
-bodySize model =
-    if model.width >= 2400 then
-        32
+uiSize : Model -> Coord UiPixels
+uiSize model =
+    Coord.toUi (uiScale model) model.screenSize
 
-    else if model.width >= 1600 then
-        24
 
-    else
-        16
+{-| The UI pixel the mouse is over.
+-}
+uiMouse : Model -> Coord UiPixels
+uiMouse model =
+    Coord.toUi (uiScale model) model.mouse
+
+
+{-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
+-}
+em : Int -> Quantity Int UiPixels
+em n =
+    Units.uiPixels (16 * n)
 
 
 bodyFont : Sprite.Font
@@ -886,7 +889,7 @@ overlay model =
                               else
                                 "CPU, "
                              )
-                                ++ Sprite.ellipsis mono (40 * 10) name
+                                ++ Sprite.ellipsis mono (Units.uiPixels (40 * 10)) name
                             )
                         ]
 
@@ -982,7 +985,7 @@ overlay model =
                 Nothing ->
                     [ line "Boot" "waiting for the first frame" ]
     in
-    Ui.bottomLeft { size = ( model.width, model.height ) }
+    Ui.bottomLeft { size = uiSize model }
         (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
                 { padding = Ui.paddingXY 6 6
@@ -992,15 +995,22 @@ overlay model =
                 (Ui.column { spacing = 3, padding = Ui.noPadding }
                     ([ Ui.text mono "Elm OS debug"
                      , line "Build" (buildText model.bootImage)
-                     , line "Screen" (String.fromInt model.width ++ " x " ++ String.fromInt model.height)
-                     , line "Mouse" (String.fromInt (Coord.x model.mouse) ++ ", " ++ String.fromInt (Coord.y model.mouse))
+                     , line "Screen"
+                        (String.fromInt (Coord.xRaw model.screenSize)
+                            ++ " x "
+                            ++ String.fromInt (Coord.yRaw model.screenSize)
+                            ++ ", UI scale "
+                            ++ String.fromInt (Units.scaleInt (uiScale model))
+                            ++ "x"
+                        )
+                     , line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
                      , rendererLine
                      , cursorLine
                      , line "Frame" (frameText model)
                      ]
                         ++ statsLines
                         ++ (line "Battery" (batteryText model.battery) :: bootLines)
-                        ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY (6 * scale) (3 * scale) }
+                        ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY 6 3 }
                                 (Ui.text mono "Next colour")
                            ]
                     )
@@ -1016,9 +1026,12 @@ badge font gpu =
     let
         side =
             Sprite.lineHeight font
+
+        size =
+            ( side, side )
     in
     Ui.quads
-        { size = ( side, side )
+        { size = size
         , triangles =
             Sprite.rectangle
                 (if gpu then
@@ -1027,8 +1040,8 @@ badge font gpu =
                  else
                     Color.rgb 1 0.6 0.1
                 )
-                ( 0, 0 )
-                ( side, side )
+                Coord.origin
+                size
         }
 
 
@@ -1171,7 +1184,7 @@ main =
         , subscriptions =
             \_ ->
                 Sub.batch
-                    [ Effect.fromHost (\json -> D.decodeValue decodeInput json |> GotInput)
+                    [ Effect.fromHost (\json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput)
 
                     -- An idle eco program exits; a timer keeps the event loop alive.
                     , Time.every 60000 (\_ -> Tick)
@@ -1185,22 +1198,19 @@ main =
 
 {-| How wide the wifi panel's contents are, in pixels.
 -}
-panelWidth : Model -> Int
-panelWidth model =
-    28 * bodySize model
+panelWidth : Quantity Int UiPixels
+panelWidth =
+    em 28
 
 
 wifiPanel : Model -> Ui.Element UiId
 wifiPanel model =
     let
-        scale =
-            uiScale model
-
         font =
             bodyFont
 
         width =
-            panelWidth model
+            panelWidth
 
         t =
             Ui.text font
@@ -1209,7 +1219,7 @@ wifiPanel model =
             Sprite.ellipsis font width string
 
         small =
-            Ui.paddingXY (6 * scale) (3 * scale)
+            Ui.paddingXY 6 3
 
         title =
             case model.wifiDevice of
@@ -1296,7 +1306,7 @@ wifiPanel model =
 
                     else
                         (if needsPassword selected then
-                            [ Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
+                            [ Ui.row { spacing = 6, padding = Ui.noPadding }
                                 [ -- lined up with the text in the box, which is inset by its padding
                                   Ui.el { padding = Ui.paddingXY 0 4, inFront = [], borderAndFill = Ui.NoBorderOrFill } (t "Password")
                                 , passwordInput model
@@ -1316,7 +1326,7 @@ wifiPanel model =
                             []
                         )
                             ++ [ Ui.button { id = ConnectButton, padding = small }
-                                    (t (Sprite.ellipsis font (width - 12 * scale) ("Connect to " ++ selected.ssid)))
+                                    (t (Sprite.ellipsis font (width |> Quantity.minus (Units.uiPixels 12)) ("Connect to " ++ selected.ssid)))
                                ]
 
                 Nothing ->
@@ -1329,14 +1339,14 @@ wifiPanel model =
             else
                 []
     in
-    Ui.topRight { size = ( model.width, model.height ) }
-        (Ui.el { padding = Ui.paddingXY (8 * scale) (8 * scale), inFront = [], borderAndFill = Ui.NoBorderOrFill }
+    Ui.topRight { size = uiSize model }
+        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
-                { padding = Ui.paddingXY (6 * scale) (6 * scale)
+                { padding = Ui.paddingXY 6 6
                 , inFront = []
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
-                (Ui.column { spacing = 4 * scale, padding = Ui.noPadding }
+                (Ui.column { spacing = 4, padding = Ui.noPadding }
                     ([ header, statusLine ]
                         ++ networkRows
                         ++ joinRows
@@ -1356,9 +1366,6 @@ connectedColor =
 networkRow : Model -> Wifi.Network -> Ui.Element UiId
 networkRow model network =
     let
-        scale =
-            uiScale model
-
         font =
             bodyFont
 
@@ -1386,23 +1393,23 @@ networkRow model network =
                     Wifi.Wpa3 ->
                         "WPA3"
 
-        -- The row fills the panel: its button's padding is 4 * scale each side.
+        -- The row fills the panel: its button's padding is 4 UI pixels each side.
         width =
-            panelWidth model - 8 * scale
+            panelWidth |> Quantity.minus (Units.uiPixels 8)
 
         labelWidth =
-            5 * bodySize model
+            em 5
 
         bars =
-            signalBars scale network.signal
+            signalBars network.signal
 
         nameWidth =
-            width - labelWidth - 12 * scale - 16 * scale
+            width |> Quantity.minus labelWidth |> Quantity.minus (Units.uiPixels (12 + 16))
     in
-    Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY (4 * scale) (2 * scale) }
+    Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY 4 2 }
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
-            (Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
+            (Ui.row { spacing = 6, padding = Ui.noPadding }
                 [ bars, Ui.text font (Sprite.ellipsis font nameWidth network.ssid) ]
             )
             (Ui.text font label)
@@ -1411,8 +1418,8 @@ networkRow model network =
 
 {-| Four bars, filled by signal strength in dBm.
 -}
-signalBars : Int -> Int -> Ui.Element id
-signalBars scale dbm =
+signalBars : Int -> Ui.Element id
+signalBars dbm =
     let
         filled =
             if dbm >= -55 then
@@ -1430,7 +1437,7 @@ signalBars scale dbm =
         bar i =
             let
                 h =
-                    (4 + 4 * i) * scale
+                    4 + 4 * i
             in
             Sprite.rectangle
                 (if i < filled then
@@ -1439,17 +1446,17 @@ signalBars scale dbm =
                  else
                     Color.outlineColor
                 )
-                ( i * 4 * scale, 18 * scale - h )
-                ( 3 * scale, h )
+                (Coord.xy (i * 4) (18 - h))
+                (Coord.xy 3 h)
     in
-    Ui.quads { size = ( 16 * scale, 18 * scale ), triangles = List.concatMap bar (List.range 0 3) }
+    Ui.quads { size = Coord.xy 16 18, triangles = List.concatMap bar (List.range 0 3) }
 
 
 {-| The password box: town-collab's text input, showing dots unless "Show" is on.
 -}
 passwordStyle : Model -> TextInput.Style
 passwordStyle model =
-    { font = bodyFont, width = 14 * bodySize model, masked = not model.showPassword }
+    { font = bodyFont, width = em 14, masked = not model.showPassword }
 
 
 passwordInput : Model -> Ui.Element UiId
@@ -1465,25 +1472,22 @@ passwordInput model =
 weatherRows : Model -> List (Ui.Element UiId)
 weatherRows model =
     let
-        scale =
-            uiScale model
-
         font =
             bodyFont
 
         width =
-            panelWidth model
+            panelWidth
 
         t =
             Ui.text font
 
         small =
-            Ui.paddingXY (6 * scale) (3 * scale)
+            Ui.paddingXY 6 3
 
         divider =
             Ui.quads
-                { size = ( width, 6 * scale )
-                , triangles = Sprite.rectangle Color.outlineColor ( 0, 2 * scale ) ( width, 2 )
+                { size = ( width, Units.uiPixels 6 )
+                , triangles = Sprite.rectangle Color.outlineColor (Coord.xy 0 2) ( width, Units.uiPixels 2 )
                 }
 
         degrees value =
@@ -1512,11 +1516,11 @@ weatherRows model =
         GotWeather place forecast ->
             [ divider
             , Ui.leftAndRight width
-                (t (Sprite.ellipsis font (width - 6 * bodySize model) ("Weather in " ++ place.name)))
+                (t (Sprite.ellipsis font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
-            , Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
-                [ weatherIcon (3 * scale) forecast.code
-                , Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
+            , Ui.row { spacing = 8, padding = Ui.noPadding }
+                [ weatherIcon 3 forecast.code
+                , Ui.column { spacing = 3, padding = Ui.noPadding }
                     [ Ui.text headingFont (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
@@ -1528,12 +1532,12 @@ weatherRows model =
                         )
                     ]
                 ]
-            , Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
+            , Ui.column { spacing = 3, padding = Ui.noPadding }
                 (List.indexedMap
                     (\i day ->
-                        Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
-                            [ weatherIcon scale day.code
-                            , Ui.minWidth (6 * bodySize model)
+                        Ui.row { spacing = 6, padding = Ui.noPadding }
+                            [ weatherIcon 1 day.code
+                            , Ui.minWidth (em 6)
                                 (t
                                     (if i == 0 then
                                         "Today"
@@ -1542,7 +1546,7 @@ weatherRows model =
                                         Weather.weekday day.date
                                     )
                                 )
-                            , Ui.minWidth (5 * bodySize model) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.minWidth (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
                             , t (Weather.describe day.code)
                             ]
                     )
@@ -1552,7 +1556,7 @@ weatherRows model =
             ]
 
 
-{-| A small picture of the weather, 18 by 18 `unit`-pixel squares.
+{-| A small picture of the weather, 18 by 18 squares `unit` UI pixels wide.
 -}
 weatherIcon : Int -> Int -> Ui.Element id
 weatherIcon unit code =
@@ -1632,7 +1636,7 @@ weatherIcon unit code =
             else
                 cloud ++ bolt
     in
-    Ui.quads { size = ( side, side ), triangles = triangles }
+    Ui.quads { size = Coord.xy side side, triangles = triangles }
 
 
 
@@ -1642,14 +1646,11 @@ weatherIcon unit code =
 toolbar : Model -> Ui.Element UiId
 toolbar model =
     let
-        scale =
-            uiScale model
-
         t =
             Ui.text bodyFont
 
         small =
-            Ui.paddingXY (6 * scale) (3 * scale)
+            Ui.paddingXY 6 3
 
         buttons =
             case model.confirmPower of
@@ -1687,16 +1688,13 @@ toolbar model =
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
                     ]
     in
-    Ui.topLeft { size = ( model.width, model.height ) }
-        (Ui.row { spacing = 6 * scale, padding = Ui.paddingXY (8 * scale) (8 * scale) } buttons)
+    Ui.topLeft { size = uiSize model }
+        (Ui.row { spacing = 6, padding = Ui.paddingXY 8 8 } buttons)
 
 
 aboutPage : Model -> Ui.Element UiId
 aboutPage model =
     let
-        scale =
-            uiScale model
-
         font =
             bodyFont
 
@@ -1704,11 +1702,11 @@ aboutPage model =
             Ui.text font
 
         valueWidth =
-            26 * bodySize model
+            em 26
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (5 * bodySize model) (t label), t (Sprite.ellipsis font valueWidth value) ]
+                [ Ui.minWidth (em 5) (t label), t (Sprite.ellipsis font valueWidth value) ]
 
         system =
             model.system
@@ -1732,13 +1730,13 @@ aboutPage model =
                 Wifi.Unknown ->
                     "?"
     in
-    Ui.center { size = ( model.width, model.height ) }
+    Ui.center { size = uiSize model }
         (Ui.el
-            { padding = Ui.paddingXY (12 * scale) (10 * scale)
+            { padding = Ui.paddingXY 12 10
             , inFront = []
-            , borderAndFill = Ui.BorderAndFill { borderWidth = 2 * scale, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+            , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
             }
-            (Ui.column { spacing = 4 * scale, padding = Ui.noPadding }
+            (Ui.column { spacing = 4, padding = Ui.noPadding }
                 [ Ui.text headingFont "Elm OS"
                 , t "A Linux kernel that boots straight into one Elm program."
                 , t ""
@@ -1765,7 +1763,7 @@ aboutPage model =
                 , t ""
                 , t
                     (Sprite.wrap font
-                        (31 * bodySize model)
+                        (em 31)
                         ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
                             ++ "The UI framework and the debug overlay's pixel font are from town-collab. "
                             ++ "Text is in Noto Sans (SIL Open Font License). "
@@ -1773,7 +1771,7 @@ aboutPage model =
                         )
                     )
                 , t ""
-                , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY (6 * scale) (3 * scale) } (t "Close")
+                , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
                 ]
             )
         )

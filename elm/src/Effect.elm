@@ -24,6 +24,7 @@ import Color exposing (Color)
 import Json.Decode as D
 import Json.Encode as E
 import Sprite exposing (Triangle)
+import Units exposing (DevicePixels)
 
 
 port toHost : E.Value -> Cmd msg
@@ -33,7 +34,7 @@ port fromHost : (D.Value -> msg) -> Sub msg
 
 
 type Effect
-    = Render (List Triangle)
+    = Render (List (Triangle DevicePixels))
       -- The mouse cursor's fill colour. The host draws the cursor on the display's
       -- cursor plane and moves it as the mouse moves, without waiting for a frame.
     | SetCursorColor Color

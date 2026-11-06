@@ -2,17 +2,17 @@ module Sprite exposing
     ( Font(..)
     , FontSize(..)
     , Triangle
-    , Vertex
     , caretPositions
     , clippedText
     , cursor
     , ellipsis
     , encode
-    , fontSizeInt
     , lineHeight
+    , move
     , rectangle
     , text
     , textSize
+    , toDevice
     , triangle
     , wrap
     )
@@ -28,32 +28,66 @@ pixels) and multiplies the sample by its colour:
   - a solid white block at x 248-256, y 248-256, for flat colours
   - Noto Sans at a few sizes everywhere else, where NotoSans.elm says
 
+A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
+UI pixels and `toDevice` scales them; text is measured in UI pixels but drawn straight
+in device pixels, so on a 2x screen it uses the font drawn at twice the size rather
+than blown up pixels.
+
 -}
 
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import NotoSans
+import Quantity exposing (Quantity(..))
+import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
-{-| A corner of a triangle: where it is on the screen and where it samples the atlas, both in pixels.
+{-| A corner of a triangle: where it is (in the triangle's units) and where it samples the atlas (atlas pixels).
 -}
 type alias Vertex =
     { x : Float, y : Float, u : Float, v : Float }
 
 
-type alias Triangle =
-    { a : Vertex, b : Vertex, c : Vertex, color : Color }
+type Triangle units
+    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color }
 
 
 {-| 13 numbers per triangle: x, y, u, v for each corner, then the colour as 0xRRGGBBAA.
 -}
-encode : List Triangle -> List Float
+encode : List (Triangle DevicePixels) -> List Float
 encode =
     List.concatMap
-        (\t ->
+        (\(Triangle t) ->
             [ t.a.x, t.a.y, t.a.u, t.a.v, t.b.x, t.b.y, t.b.u, t.b.v, t.c.x, t.c.y, t.c.u, t.c.v, Color.toFloat t.color ]
         )
+
+
+mapCorners : (Vertex -> Vertex) -> List (Triangle a) -> List (Triangle b)
+mapCorners f =
+    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color })
+
+
+{-| Shapes moved by an offset.
+-}
+move : Coord units -> List (Triangle units) -> List (Triangle units)
+move offset triangles =
+    let
+        ( dx, dy ) =
+            Coord.toTuple offset |> Tuple.mapBoth toFloat toFloat
+    in
+    mapCorners (\v -> { v | x = v.x + dx, y = v.y + dy }) triangles
+
+
+{-| Shapes made in UI pixels, on the screen.
+-}
+toDevice : UiScale -> List (Triangle UiPixels) -> List (Triangle DevicePixels)
+toDevice scale triangles =
+    let
+        s =
+            toFloat (Units.scaleInt scale)
+    in
+    mapCorners (\v -> { v | x = v.x * s, y = v.y * s }) triangles
 
 
 {-| The middle of the atlas's white block. A triangle with every corner here is a flat colour.
@@ -63,24 +97,25 @@ solidTexturePosition =
     { u = 252, v = 252 }
 
 
-{-| A flat coloured triangle with corners in pixels.
+{-| A flat coloured triangle.
 -}
-triangle : Color -> ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> Triangle
+triangle : Color -> ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> Triangle units
 triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
     let
         { u, v } =
             solidTexturePosition
     in
-    { a = { x = ax, y = ay, u = u, v = v }
-    , b = { x = bx, y = by, u = u, v = v }
-    , c = { x = cx, y = cy, u = u, v = v }
-    , color = color
-    }
+    Triangle
+        { a = { x = ax, y = ay, u = u, v = v }
+        , b = { x = bx, y = by, u = u, v = v }
+        , c = { x = cx, y = cy, u = u, v = v }
+        , color = color
+        }
 
 
-{-| A rectangle of the atlas stretched over a rectangle of the screen, as two triangles.
+{-| A rectangle of the atlas stretched over a rectangle (x, y, w, h), as two triangles.
 -}
-sprite : Color -> Coord -> Coord -> Coord -> Coord -> List Triangle
+sprite : Color -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> List (Triangle units)
 sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     let
         left =
@@ -113,27 +148,30 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
         bottomRight =
             { x = right, y = bottom, u = uRight, v = vBottom }
     in
-    [ { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color }
-    , { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color }
+    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color }
+    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color }
     ]
 
 
-rectangle : Color -> Coord -> Coord -> List Triangle
+rectangle : Color -> Coord units -> Coord units -> List (Triangle units)
 rectangle color position size =
-    sprite color position size ( 250, 250 ) ( 4, 4 )
+    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 250, 250 ) ( 4, 4 )
 
 
 {-| The mouse cursor with its tip at the given point: a black outline around a fill of
-the given colour, `scale` screen pixels per atlas pixel.
+the given colour, 12 x 19 UI pixels.
 -}
-cursor : Color -> Int -> Coord -> List Triangle
+cursor : Color -> UiScale -> Coord DevicePixels -> List (Triangle DevicePixels)
 cursor fill scale position =
     let
         size =
-            Coord.scalar scale ( 12, 19 )
+            Coord.toDevice scale (Coord.xy 12 19) |> Coord.toTuple
+
+        at =
+            Coord.toTuple position
     in
-    sprite Color.black position size ( 0, 184 ) ( 12, 19 )
-        ++ sprite fill position size ( 16, 184 ) ( 12, 19 )
+    sprite Color.black at size ( 0, 184 ) ( 12, 19 )
+        ++ sprite fill at size ( 16, 184 ) ( 12, 19 )
 
 
 
@@ -142,11 +180,11 @@ cursor fill scale position =
 
 {-| Which font text is drawn in:
 
-  - `Mono scale` is town-collab's 10 x 18 pixel font, a monospace "Courier New",
-    `scale` screen pixels per font pixel. The debug overlay uses it.
-  - `Sans size` is Noto Sans (what at-chat uses), drawn natively at `size` pixels, with
-    antialiasing and kerning. NotoSans.faces has the sizes in the atlas (16, 24, 32 and
-    48); others use the nearest one below.
+  - `Mono` is town-collab's 10 x 18 pixel font, a monospace "Courier New", one font
+    pixel per UI pixel (`Small`) or two (`Big`). The debug overlay uses it.
+  - `Sans` is Noto Sans (what at-chat uses), 16 UI pixels (`Small`) or 24 (`Big`),
+    drawn natively at that many device pixels times the UI scale, with antialiasing and
+    kerning.
 
 -}
 type Font
@@ -159,17 +197,31 @@ type FontSize
     | Big
 
 
-fontSizeInt : number -> FontSize -> number
-fontSizeInt pixelScale fontSize =
+{-| Font pixels per UI pixel.
+-}
+monoScale : FontSize -> Int
+monoScale fontSize =
     case fontSize of
         Small ->
-            pixelScale
+            1
 
         Big ->
-            2 * pixelScale
+            2
 
 
-charSize : Coord
+{-| In UI pixels.
+-}
+sansSize : FontSize -> Int
+sansSize fontSize =
+    case fontSize of
+        Small ->
+            16
+
+        Big ->
+            24
+
+
+charSize : ( Int, Int )
 charSize =
     ( 10, 18 )
 
@@ -204,13 +256,13 @@ questionMark =
     Dict.get '?' charToInt |> Maybe.withDefault 0
 
 
-charTexturePosition : Char -> Coord
+charTexturePosition : Char -> ( Int, Int )
 charTexturePosition char =
     let
         index =
             Dict.get char charToInt |> Maybe.withDefault questionMark
     in
-    ( modBy charsPerRow index * Coord.x charSize, index // charsPerRow * Coord.y charSize )
+    ( modBy charsPerRow index * Tuple.first charSize, index // charsPerRow * Tuple.second charSize )
 
 
 {-| The Noto Sans face for a size: that size if the atlas has it, otherwise the nearest smaller one.
@@ -235,37 +287,47 @@ missingGlyph f =
     Dict.get '?' f.glyphs |> Maybe.withDefault { x = 0, y = 0, w = 0, h = 0, left = 0, top = 0, advance = 0 }
 
 
-{-| How tall a line of text is.
+{-| How tall a line of text is, in UI pixels.
 -}
-lineHeight : Int -> Font -> Int
-lineHeight pixelScale font =
-    case font of
-        Mono scale ->
-            Coord.y charSize * fontSizeInt pixelScale scale
+lineHeight : Font -> Quantity Int UiPixels
+lineHeight font =
+    Quantity (lineHeightRaw font)
 
-        Sans size ->
+
+lineHeightRaw : Font -> Int
+lineHeightRaw font =
+    case font of
+        Mono fontSize ->
+            Tuple.second charSize * monoScale fontSize
+
+        Sans fontSize ->
             let
                 f =
-                    face (fontSizeInt pixelScale size)
+                    face (sansSize fontSize)
             in
             f.ascent + f.descent
 
 
-{-| Where each character of one line of text starts, in 1/64 pixels from the left, and
-where the line ends. Glyphs are placed at whole pixels: the pen rounded.
+{-| Where each character of one line of text starts, in 1/64 UI pixels from the left,
+and where the line ends. Text is laid out with the font at its UI size, so it measures
+the same at every UI scale.
 -}
-layoutLine : Int -> Font -> String -> ( List ( Int, Char ), Int )
-layoutLine pixelScale font string =
+layoutLine : Font -> String -> ( List ( Int, Char ), Int )
+layoutLine font string =
     case font of
-        Mono scale ->
-            ( String.toList string |> List.indexedMap (\i c -> ( i * Coord.x charSize * fontSizeInt pixelScale scale * 64, c ))
-            , String.length string * Coord.x charSize * fontSizeInt pixelScale scale * 64
+        Mono fontSize ->
+            let
+                advance =
+                    Tuple.first charSize * monoScale fontSize * 64
+            in
+            ( String.toList string |> List.indexedMap (\i c -> ( i * advance, c ))
+            , String.length string * advance
             )
 
-        Sans size ->
+        Sans fontSize ->
             let
                 ( placed, end ) =
-                    layoutSans (face (fontSizeInt pixelScale size)) string
+                    layoutSans (face (sansSize fontSize)) string
             in
             ( List.map (\( at, char, _ ) -> ( at, char )) placed, end )
 
@@ -299,45 +361,66 @@ layoutSans f string =
     ( List.reverse placed, end )
 
 
-{-| How wide one line of text is, in pixels.
--}
-textWidth : Int -> Font -> String -> Int
-textWidth pixelScale font string =
-    (Tuple.second (layoutLine pixelScale font string) + 63) // 64
+textWidthRaw : Font -> String -> Int
+textWidthRaw font string =
+    (Tuple.second (layoutLine font string) + 63) // 64
 
 
 {-| Where the cursor goes before each character of one line of text, and after the last,
-in pixels from its left: one more number than there are characters.
+from its left: one more number than there are characters.
 -}
-caretPositions : Int -> Font -> String -> List Int
-caretPositions pixelScale font string =
+caretPositions : Font -> String -> List (Quantity Int UiPixels)
+caretPositions font string =
     let
         ( placed, end ) =
-            layoutLine pixelScale font string
+            layoutLine font string
     in
-    List.map (\( at, _ ) -> (at + 32) // 64) placed ++ [ (end + 32) // 64 ]
+    List.map (\( at, _ ) -> Quantity ((at + 32) // 64)) placed ++ [ Quantity ((end + 32) // 64) ]
 
 
 {-| Text at a position (its top left). '\\n' starts a new line.
 -}
-text : Int -> Color -> Font -> String -> Coord -> List Triangle
-text pixelScale color font string position =
-    clippedText pixelScale color font Nothing string position
+text : UiScale -> Color -> Font -> String -> Coord UiPixels -> List (Triangle DevicePixels)
+text scale color font string position =
+    clippedText scale color font Nothing string position
 
 
-{-| Text, leaving out whatever falls outside the screen columns `left` to `right`.
+{-| Text, leaving out whatever falls outside the columns `left` to `right`.
 -}
-clippedText : Int -> Color -> Font -> Maybe { left : Int, right : Int } -> String -> Coord -> List Triangle
-clippedText pixelScale color font clip string ( x, y ) =
+clippedText :
+    UiScale
+    -> Color
+    -> Font
+    -> Maybe { left : Quantity Int UiPixels, right : Quantity Int UiPixels }
+    -> String
+    -> Coord UiPixels
+    -> List (Triangle DevicePixels)
+clippedText uiScale color font clip string position =
     let
+        s =
+            Units.scaleInt uiScale
+
+        ( x, y ) =
+            Coord.toTuple position
+
+        deviceClip =
+            Maybe.map (\c -> { left = Quantity.unwrap c.left * s, right = Quantity.unwrap c.right * s }) clip
+
         height =
-            lineHeight pixelScale font
+            lineHeightRaw font
 
         lines =
             String.split "\n" string
     in
     case font of
-        Mono scale ->
+        Mono fontSize ->
+            let
+                m =
+                    monoScale fontSize * s
+
+                ( charW, charH ) =
+                    charSize
+            in
             List.indexedMap
                 (\lineIndex line ->
                     String.toList line
@@ -348,9 +431,9 @@ clippedText pixelScale color font clip string ( x, y ) =
 
                                 else
                                     clippedSprite color
-                                        clip
-                                        ( x + i * Coord.x charSize * fontSizeInt pixelScale scale, y + lineIndex * height )
-                                        (Coord.scalar (fontSizeInt pixelScale scale) charSize)
+                                        deviceClip
+                                        ( x * s + i * charW * m, (y + lineIndex * height) * s )
+                                        ( charW * m, charH * m )
                                         (charTexturePosition char)
                                         charSize
                             )
@@ -359,28 +442,39 @@ clippedText pixelScale color font clip string ( x, y ) =
                 lines
                 |> List.concat
 
-        Sans size ->
+        Sans fontSize ->
             let
-                f =
-                    face (fontSizeInt pixelScale size)
+                -- Laid out at the UI size (as measured), drawn with the face for the device size.
+                layoutFace =
+                    face (sansSize fontSize)
+
+                drawFace =
+                    face (sansSize fontSize * s)
+
+                missing =
+                    missingGlyph drawFace
             in
             List.indexedMap
                 (\lineIndex line ->
                     let
                         baseline =
-                            y + lineIndex * height + f.ascent
+                            (y + lineIndex * height + layoutFace.ascent) * s
                     in
-                    layoutSans f line
+                    layoutSans layoutFace line
                         |> Tuple.first
                         |> List.concatMap
-                            (\( at, _, glyph ) ->
+                            (\( at, char, _ ) ->
+                                let
+                                    glyph =
+                                        Dict.get char drawFace.glyphs |> Maybe.withDefault missing
+                                in
                                 if glyph.w == 0 then
                                     []
 
                                 else
                                     clippedSprite color
-                                        clip
-                                        ( x + (at + 32) // 64 + glyph.left, baseline + glyph.top )
+                                        deviceClip
+                                        ( x * s + (at * s + 32) // 64 + glyph.left, baseline + glyph.top )
                                         ( glyph.w, glyph.h )
                                         ( glyph.x, glyph.y )
                                         ( glyph.w, glyph.h )
@@ -393,7 +487,7 @@ clippedText pixelScale color font clip string ( x, y ) =
 {-| A sprite cut to the screen columns `left` to `right`. The atlas rectangle is cut by
 the same fraction, which is exact when it isn't scaled.
 -}
-clippedSprite : Color -> Maybe { left : Int, right : Int } -> Coord -> Coord -> Coord -> Coord -> List Triangle
+clippedSprite : Color -> Maybe { left : Int, right : Int } -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> List (Triangle units)
 clippedSprite color clip ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     case clip of
         Nothing ->
@@ -420,30 +514,30 @@ clippedSprite color clip ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
 
 {-| The size of text: its widest line by its lines.
 -}
-textSize : Int -> Font -> String -> Coord
-textSize pixelScale font string =
+textSize : Font -> String -> Coord UiPixels
+textSize font string =
     let
         lines =
             String.split "\n" string
     in
-    ( lines |> List.map (textWidth pixelScale font) |> List.maximum |> Maybe.withDefault 0
-    , (List.length lines |> max 1) * lineHeight pixelScale font
-    )
+    Coord.xy
+        (lines |> List.map (textWidthRaw font) |> List.maximum |> Maybe.withDefault 0)
+        ((List.length lines |> max 1) * lineHeightRaw font)
 
 
-{-| Text cut short with "…" to fit in `maxWidth` pixels.
+{-| Text cut short with "…" to fit in `maxWidth`.
 -}
-ellipsis : Int -> Font -> Int -> String -> String
-ellipsis pixelScale font maxWidth string =
-    if textWidth pixelScale font string <= maxWidth then
+ellipsis : Font -> Quantity Int UiPixels -> String -> String
+ellipsis font maxWidth string =
+    if textWidthRaw font string <= Quantity.unwrap maxWidth then
         string
 
     else
-        ellipsisHelper pixelScale font maxWidth (String.dropRight 1 string)
+        ellipsisHelper font (Quantity.unwrap maxWidth) (String.dropRight 1 string)
 
 
-ellipsisHelper : Int -> Font -> Int -> String -> String
-ellipsisHelper pixelScale font maxWidth string =
+ellipsisHelper : Font -> Int -> String -> String
+ellipsisHelper font maxWidth string =
     let
         dots =
             case font of
@@ -456,24 +550,24 @@ ellipsisHelper pixelScale font maxWidth string =
         candidate =
             String.trimRight string ++ dots
     in
-    if String.isEmpty string || textWidth pixelScale font candidate <= maxWidth then
+    if String.isEmpty string || textWidthRaw font candidate <= maxWidth then
         candidate
 
     else
-        ellipsisHelper pixelScale font maxWidth (String.dropRight 1 string)
+        ellipsisHelper font maxWidth (String.dropRight 1 string)
 
 
-{-| Breaks text into lines at most `maxWidth` pixels wide, between words. A word wider
-than that gets a line of its own.
+{-| Breaks text into lines at most `maxWidth` wide, between words. A word wider than
+that gets a line of its own.
 -}
-wrap : Int -> Font -> Int -> String -> String
-wrap pixelScale font maxWidth string =
+wrap : Font -> Quantity Int UiPixels -> String -> String
+wrap font maxWidth string =
     String.words string
         |> List.foldl
             (\word lines ->
                 case lines of
                     line :: rest ->
-                        if textWidth pixelScale font (line ++ " " ++ word) <= maxWidth then
+                        if textWidthRaw font (line ++ " " ++ word) <= Quantity.unwrap maxWidth then
                             (line ++ " " ++ word) :: rest
 
                         else
