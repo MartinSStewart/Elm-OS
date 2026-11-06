@@ -374,7 +374,8 @@ static Tri* parse_scene(const char* json, uint32_t* count) {
 }
 
 static void send_renderer(int on_gpu, const char* name);
-static double frame_sent_at; /* when the last frame went to the GPU renderer, 0 if it has shown it */
+static int in_flight;          /* frames sent to the GPU renderer that it hasn't shown or skipped */
+static double gpu_progress_at; /* when it last took a frame, or showed one */
 
 static void draw_scene(Display* d, const char* json) {
     uint32_t n;
@@ -583,10 +584,17 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
 
 /* ---------------------------------------------------------------- frames */
 
-/* Elm draws only when asked, on `animationFrame`. The next ask goes out as soon as
- * the screen can show a new frame: when the GPU renderer reports its page flip
- * (so frames follow the display's refresh), or 1/60 s after the last ask when
- * drawing on the CPU. If Elm or the GPU goes quiet for a second, ask again anyway. */
+/* Elm draws only when asked, on `animationFrame`.
+ *
+ * On the GPU, frames are pipelined one deep: Elm works on the next frame while the
+ * GPU renderer waits for the page flip of the current one. So we ask as soon as a
+ * frame has gone to the renderer, unless two are already on their way, and then
+ * again when it reports a page flip. Waiting for the flip before asking would leave
+ * Elm a single refresh for its work and the GPU's, and any slow frame (a garbage
+ * collection, say) would miss a vsync and halve the frame rate for that frame.
+ *
+ * On the CPU we ask 1/60 s after the last ask. If Elm or the GPU goes quiet for a
+ * second, ask again anyway. */
 
 #define FRAME_INTERVAL (1 / 60.0)
 #define FRAME_TIMEOUT 1.0
@@ -608,8 +616,10 @@ static void ask_for_frame(void) {
 static void scene_drawn(void) {
     awaiting_render = 0;
     if (gpu_fd >= 0) {
-        frame_sent_at = now();
+        if (in_flight++ == 0) gpu_progress_at = now();
+        if (in_flight < 2) ask_for_frame();
     } else {
+        in_flight = 0;
         cpu_next_at = asked_at + FRAME_INTERVAL;
         if (cpu_next_at < now()) cpu_next_at = now();
     }
@@ -635,11 +645,12 @@ static int gpu_ns_count;
 static double elm_sum, draw_sum; /* seconds Elm took to answer, and we took to draw */
 static int elm_count, draw_count;
 
-/* Reads the GPU renderer's "f GPU_NS" lines. Returns 1 if it showed a frame. */
+/* Reads the GPU renderer's "f GPU_NS" (shown) and "d" (skipped) lines. Returns how
+ * many frames it is done with. */
 static int read_gpu_acks(void) {
     static char buf[256];
     static size_t len;
-    int shown = 0;
+    int done = 0;
     for (;;) {
         ssize_t got = read(gpu_in, buf + len, sizeof buf - 1 - len);
         if (got == 0) { /* it exited; the next frame we send it finds out */
@@ -655,15 +666,17 @@ static int read_gpu_acks(void) {
             *nl = 0;
             long long ns;
             if (sscanf(buf, "f %lld", &ns) == 1) {
-                shown = 1;
+                done++;
                 if (ns >= 0) gpu_ns_sum += ns, gpu_ns_count++;
+            } else if (buf[0] == 'd') {
+                done++;
             }
             len -= nl + 1 - buf;
             memmove(buf, nl + 1, len + 1);
         }
         if (len == sizeof buf - 1) len = 0; /* a line too long to be ours */
     }
-    return shown;
+    return done;
 }
 
 /* CPU load since the last call, from /proc/stat, in percent. */
@@ -747,7 +760,7 @@ static void* host_main(void* arg) {
         if (tap_release_at && tap_release_at < due) due = tap_release_at;
         if (cpu_next_at && cpu_next_at < due) due = cpu_next_at;
         if (awaiting_render && asked_at + FRAME_TIMEOUT < due) due = asked_at + FRAME_TIMEOUT;
-        if (frame_sent_at && frame_sent_at + FRAME_TIMEOUT < due) due = frame_sent_at + FRAME_TIMEOUT;
+        if (in_flight && gpu_progress_at + FRAME_TIMEOUT < due) due = gpu_progress_at + FRAME_TIMEOUT;
         int timeout = due > t ? (int)((due - t) * 1000) + 1 : 0;
         if (poll(pfds, n, timeout) < 0) { if (errno == EINTR) continue; break; }
 
@@ -777,15 +790,18 @@ static void* host_main(void* arg) {
             }
             free(json);
         }
-        if ((pfds[1].revents & (POLLIN | POLLHUP)) && gpu_in >= 0 && read_gpu_acks()) {
-            frame_sent_at = 0;
-            if (!awaiting_render) ask_for_frame();
+        int done;
+        if ((pfds[1].revents & (POLLIN | POLLHUP)) && gpu_in >= 0 && (done = read_gpu_acks())) {
+            in_flight = done < in_flight ? in_flight - done : 0;
+            gpu_progress_at = now();
+            if (!awaiting_render && in_flight < 2) ask_for_frame();
         }
         t = now();
         if (cpu_next_at && t >= cpu_next_at) ask_for_frame();
-        if ((awaiting_render && t >= asked_at + FRAME_TIMEOUT) || (frame_sent_at && t >= frame_sent_at + FRAME_TIMEOUT)) {
-            frame_sent_at = 0;
-            ask_for_frame();
+        if (awaiting_render && t >= asked_at + FRAME_TIMEOUT) ask_for_frame();
+        if (in_flight && t >= gpu_progress_at + FRAME_TIMEOUT) {
+            in_flight = 0;
+            if (!awaiting_render) ask_for_frame();
         }
         for (int p = 2; p < n; p++) {
             if (!pfds[p].revents) continue;

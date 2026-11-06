@@ -132,14 +132,14 @@ def near(c, want, tol=40):
     return all(abs(a - b) <= tol for a, b in zip(c, want))
 
 
-RED, GREEN = (242, 89, 76), (76, 204, 115)
+GREEN = (76, 204, 115)
 if usb:
     # On the stick, /init's messages go to the screen, not the serial port (a laptop
-    # has none), so wait for Elm's scene instead: the red triangle in the middle.
+    # has none), so wait for Elm's scene instead: the dark triangle at the bottom.
     end = time.time() + 180
     while True:
         shot = screen()
-        if near(pixel(shot, shot[0] // 2, shot[1] // 2), RED):
+        if near(pixel(shot, shot[0] * 19 // 20, shot[1] * 49 // 50), (31, 36, 51), tol=15):
             break
         if time.time() > end:
             fail("Elm OS never drew its scene")
@@ -151,16 +151,23 @@ time.sleep(1)
 move(0.25, 0.25)
 shot = screen()
 w, h, _ = shot
-here, there = pixel(shot, w // 4, h // 4 + 10), pixel(shot, 3 * w // 4, h // 4 + 10)
-print(f"screen {w}x{h}; under the mouse {here}, elsewhere {there}")
-if not near(here, RED):
-    fail(f"expected the red triangle under the mouse, got {here}")
-if near(there, RED):
-    fail("the triangle is not only under the mouse")
+# The mouse cursor: a white arrow with a black outline, its tip at the pointer, drawn
+# from the texture atlas at 1 screen pixel per atlas pixel (2 on screens 1600 wide or more).
+s = 2 if w >= 1600 else 1
+WHITE = (255, 255, 255)
+def cursor_at(shot, fx, fy):
+    x, y = int(fx * w), int(fy * h)
+    # x * w // 0x8000 in host.c; allow a pixel either way
+    return [pixel(shot, x + dx * s, y + 8 * s) for dx in (2, 3, 4)]
+here, there = cursor_at(shot, 0.25, 0.25), cursor_at(shot, 0.75, 0.25)
+print(f"screen {w}x{h}; under the mouse {here[1]}, elsewhere {there[1]}")
+if not all(near(c, WHITE) for c in here):
+    fail(f"expected the mouse cursor under the mouse, got {here}")
+if any(near(c, WHITE) for c in there):
+    fail("the cursor is not only under the mouse")
 
 # The debug overlay (elm/src/Main.elm) sits in the bottom left corner: a light panel
 # with dark text, drawn from the texture atlas's font.
-s = 2 if w >= 1600 else 1
 panel = pixel(shot, 11 * s, h - 11 * s)
 print(f"overlay panel {panel}")
 if not near(panel, (220, 210, 199)):
@@ -170,16 +177,18 @@ if dark < 20:
     fail(f"the debug overlay has no text ({dark} dark pixels)")
 
 move(0.75, 0.25)
-if not near(pixel(screen(), 3 * w // 4, h // 4 + 10), RED):
-    fail("the triangle did not follow the mouse")
+if not all(near(c, WHITE) for c in cursor_at(screen(), 0.75, 0.25)):
+    fail("the cursor did not follow the mouse")
 
+# A key press changes the colour of the big triangle at the bottom.
+mx, my = int(0.95 * w), int(0.98 * h)  # clear of the overlay, even on a 640 px screen
+before = pixel(screen(), mx, my)
 cmd("send-key", keys=[{"type": "qcode", "data": "a"}])
 time.sleep(1)
-c = pixel(screen(), 3 * w // 4, h // 4 + 10)
-print(f"after a key press {c}")
-if not near(c, GREEN):
-    fail(f"expected green after a key press, got {c}")
-
+c = pixel(screen(), mx, my)
+print(f"triangle {before}, after a key press {c}")
+if not near(before, (31, 36, 51)) or not near(c, GREEN):
+    fail(f"expected the triangle to turn from dark blue to green after a key press, got {before} then {c}")
 
 
 def save_png(shot, path):

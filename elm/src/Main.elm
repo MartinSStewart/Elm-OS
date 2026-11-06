@@ -1,7 +1,7 @@
 port module Main exposing (main)
 
-{-| Elm OS: a triangle follows the mouse and a key press changes its colour, with a
-debug overlay drawn by the UI framework (Ui.elm, from town-collab).
+{-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
+"Next colour" button), and a debug overlay drawn by the UI framework (Ui.elm, from town-collab).
 
 The C host (host/host.c) sends input events on `input` and asks for a frame on
 `animationFrame` whenever the screen is ready for one. Each frame, Elm draws the
@@ -232,10 +232,11 @@ nextColor model =
 
 palette : List Color
 palette =
-    [ Color.rgb 0.95 0.35 0.3
+    [ Color.rgb 0.12 0.14 0.2
     , Color.rgb 0.3 0.8 0.45
     , Color.rgb 0.3 0.55 0.95
     , Color.rgb 0.95 0.8 0.25
+    , Color.rgb 0.95 0.35 0.3
     ]
 
 
@@ -249,16 +250,6 @@ view model =
         color =
             palette |> List.drop model.colorIndex |> List.head |> Maybe.withDefault Color.white
 
-        size =
-            if model.pressed then
-                90
-
-            else
-                60
-
-        ( mx, my ) =
-            ( toFloat (Coord.x model.mouse), toFloat (Coord.y model.mouse) )
-
         ( w, h ) =
             ( toFloat model.width, toFloat model.height )
 
@@ -268,9 +259,17 @@ view model =
         hovered =
             Ui.hover model.mouse ui |> List.head |> Maybe.map Tuple.first
     in
-    Sprite.triangle (Color.rgb 0.12 0.14 0.2) ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
+    Sprite.triangle color ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
         :: Ui.view hovered Nothing ui
-        ++ [ Sprite.triangle color ( mx, my - size ) ( mx - size, my + size * 0.7 ) ( mx + size, my + size * 0.7 ) ]
+        ++ Sprite.cursor
+            (if model.pressed then
+                Color.focusedUiColor
+
+             else
+                Color.white
+            )
+            (textScale model)
+            model.mouse
 
 
 {-| Font pixels per screen pixel: bigger on big screens.

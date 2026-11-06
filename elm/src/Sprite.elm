@@ -2,6 +2,7 @@ module Sprite exposing
     ( Triangle
     , Vertex
     , charSize
+    , cursor
     , encode
     , outlinedText
     , rectangle
@@ -19,6 +20,7 @@ multiplies the sample by its colour:
 
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-250, y 0-180, 25 to a row,
     in the order of `asciiChars` below
+  - the mouse cursor, 12 x 19: its outline at x 0, y 184 and its fill at x 16, y 184
   - a solid white block at x 248-256, y 248-256, for flat colours
 
 -}
@@ -113,6 +115,20 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
 rectangle : Color -> Coord -> Coord -> List Triangle
 rectangle color position size =
     sprite color position size ( 250, 250 ) ( 4, 4 )
+
+
+
+{-| The mouse cursor with its tip at the given point: a black outline around a fill of
+the given colour, `scale` screen pixels per atlas pixel.
+-}
+cursor : Color -> Int -> Coord -> List Triangle
+cursor fill scale position =
+    let
+        size =
+            Coord.scalar scale ( 12, 19 )
+    in
+    sprite Color.black position size ( 0, 184 ) ( 12, 19 )
+        ++ sprite fill position size ( 16, 184 ) ( 12, 19 )
 
 
 

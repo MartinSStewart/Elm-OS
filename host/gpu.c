@@ -7,8 +7,9 @@
  *   stdout -> "ok W H RENDERER\n" once the display is up. Anything else, or
  *             exiting, means "use the CPU renderer instead".
  *             Then "f GPU_NS\n" each time a frame is on the screen, with how long
- *             the GPU took to draw it in nanoseconds (-1 if unknown). /init asks
- *             Elm for the next frame when it gets this.
+ *             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
+ *             a frame skipped because a newer one was already waiting. /init uses
+ *             these to keep at most two frames on their way to the screen.
  *   stdin  <- frames: uint32 n, then n Tri (atlas.h): per triangle x, y, u, v for
  *             each corner and an 0xRRGGBBAA colour, as Elm sends them on `render`.
  *
@@ -377,11 +378,14 @@ int main(void) {
         if (read_frame(&n) < 0) break; /* /init went away */
         /* Frames can arrive faster than the screen refreshes (a touchpad reports
          * over 100 times a second, and a page flip waits for the 60 Hz vblank).
-         * Draw only the newest, or the backlog in the pipe makes the screen lag. */
+         * Draw only the newest, or the backlog in the pipe makes the screen lag.
+         * Each frame skipped is reported as "d", so /init knows it is done with it. */
         struct pollfd more = {.fd = 0, .events = POLLIN};
         int gone = 0;
-        while (poll(&more, 1, 0) > 0 && (more.revents & POLLIN))
+        while (poll(&more, 1, 0) > 0 && (more.revents & POLLIN)) {
             if (read_frame(&n) < 0) { gone = 1; break; }
+            printf("d\n");
+        }
         if (gone) break;
 
         for (uint32_t i = 0; i < n; i++) {
