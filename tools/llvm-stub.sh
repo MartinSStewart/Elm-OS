@@ -70,6 +70,7 @@ join "$out/defined" "$out/wanted" > "$out/symbols"
     echo '    .section .note.GNU-stack, "", @progbits'
 } > "$tmp"
 
-cc -shared -nostdlib -Wl,-soname,"$lib" -Wl,-z,noexecstack -o "$out/$lib" "$tmp"
+# -s: no symbol table, which would name cc's randomly named temporary object file.
+cc -shared -nostdlib -s -Wl,-soname,"$lib" -Wl,-z,noexecstack -o "$out/$lib" "$tmp"
 rm -f "$out/defined" "$out/wanted"
 echo "$out/$lib: $(wc -l < "$out/symbols") symbols stand in for LLVM" >&2

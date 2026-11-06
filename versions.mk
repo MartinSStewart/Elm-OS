@@ -8,3 +8,6 @@ KERNEL_VER := v6.12.115
 HOSTAP_VER := 2.12
 WPA_SUPPLICANT_SHA256 := 08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6
 HOSTAPD_SHA256 := f43502561c28ba47ab77e18e1a973d07361c68cc8b14178e619bd5796b70eabd
+
+# When `make refresh` last ran (seconds since 1970). `make` warns when it's 30 days old.
+REFRESHED := 1793970461

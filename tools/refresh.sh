@@ -5,8 +5,8 @@
 #   - the Linux kernel: the newest stable release of the 6.12 long-term series
 #   - wpa_supplicant and hostapd: the newest release from w1.fi
 #     (these three are pinned in versions.mk, which this rewrites: commit it)
-#   - Alpine packages (Mesa, libnl, firmware): a fresh package index, so the next
-#     build fetches the newest builds in Alpine's v3.22 branch
+#   - Alpine packages (Mesa, libnl, firmware): empties alpine.lock, so the next build
+#     pins the newest builds in Alpine's v3.22 branch (commit alpine.lock)
 #   - Rust crates (rustls, webpki-roots with the CA certificates, ...): `cargo update`,
 #     within the versions host/*/Cargo.toml allow (commit host/Cargo.lock)
 #
@@ -52,16 +52,18 @@ else
     echo "wpa_supplicant and hostapd: $(current HOSTAP_VER) is the newest"
 fi
 
-# ---- Alpine: forget the package index, and everything unpacked from the old one
-rm -f "$build"/apk-cache/APKINDEX-*.tar.gz
-rm -f "$build"/alpine/.done "$build"/alpine-net/.done "$build"/firmware/.done-*
-echo "Alpine: the next build fetches a fresh package index"
+# ---- Alpine: forget the pinned versions, the package index, and everything unpacked
+# from them; the next build pins the newest versions in alpine.lock again
+: > alpine.lock
+rm -f "$build"/*/apk-cache/APKINDEX-*.tar.gz
+rm -f "$build"/alpine/.done "$build"/libnl/.done "$build"/firmware/.done-*
+echo "Alpine: the next build pins the newest packages in alpine.lock"
 
 # ---- Rust crates
 if command -v cargo >/dev/null 2>&1; then
     (cd host && cargo update 2>&1 | grep -E '^ *(Updating|Locking|Adding|Removing)' || echo "Rust crates: all up to date")
 fi
 
-date +%s > "$build/refreshed"
+set_version REFRESHED "$(date +%s)"
 echo
-echo "Done. Run make to rebuild, then commit versions.mk and host/Cargo.lock if they changed."
+echo "Done. Run make to rebuild, then commit versions.mk, alpine.lock and host/Cargo.lock if they changed."

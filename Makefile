@@ -12,6 +12,8 @@
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
 #   make review-tests  run the tests of the custom review rules
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
+#   make docker     build the USB image in a pinned Docker environment, into build-docker/:
+#                   the same commit gives the same bytes on any machine (make docker TARGET=all)
 #
 # `make run` and `make test` also give the guest a simulated wifi network to join
 # ("Elm OS test network", password elmos-wifi): see host/init/src/net/mod.rs.
@@ -31,9 +33,13 @@ KERNEL_SRC ?= linux
 # Linux's stable releases (6.12.1 onwards) are only in the stable tree, not Linus's.
 KERNEL_GIT ?= https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 JOBS       ?= $(shell nproc)
-BUILD      := build
+BUILD      ?= build
 GPU        ?= 1
 ALPINE     := $(BUILD)/alpine
+# Reproducible builds: every timestamp that ends up in the output is the last commit's
+# time, so two builds of the same commit give the same bytes (see README).
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+export SOURCE_DATE_EPOCH
 
 
 # eco's own link line for a static musl executable (captured from
@@ -44,7 +50,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE atlas review review-fix review-tests all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -54,7 +60,23 @@ refresh:
 	tools/refresh.sh $(BUILD) $(KERNEL_GIT)
 
 check-fresh:
-	@tools/check-fresh.sh $(BUILD) 30
+	@tools/check-fresh.sh $(REFRESHED) 30
+
+# Reproducible builds: any build of a commit is the same bytes on one machine (fixed
+# timestamps and IDs, pinned downloads). Across machines the compilers must match too,
+# so this builds inside tools/build-env/Dockerfile, with the checkout at /elmos and
+# the output in build-docker/. Pass extra `docker build` flags in DOCKER_BUILD_FLAGS.
+DOCKER ?= docker
+TARGET ?= usb
+docker:
+	$(DOCKER) build $(DOCKER_BUILD_FLAGS) -t elmos-build tools/build-env
+	mkdir -p build-docker/home
+	$(DOCKER) run --rm --network host --user $$(id -u):$$(id -g) \
+	  -e HTTPS_PROXY -e HTTP_PROXY -e https_proxy -e http_proxy -e NO_PROXY -e GUIDA_REGISTRY \
+	  -e HOME=/elmos/build-docker/home -e CARGO_HOME=/elmos/build-docker/home/.cargo \
+	  -v $(CURDIR):/elmos -w /elmos $(DOCKER_RUN_FLAGS) elmos-build \
+	  make BUILD=build-docker $(TARGET)
+	@[ ! -f build-docker/elmos-usb.img ] || sha256sum build-docker/elmos-usb.img
 
 # Fail early, with install hints, if a tool is missing. These are order-only
 # prerequisites below, so they run first but never force a rebuild.
@@ -74,7 +96,9 @@ check-run-deps:
 
 KOUT     := $(BUILD)/kernel
 KOUT_USB := $(BUILD)/kernel-usb
-KMAKE     = $(MAKE) -C $(KERNEL_SRC) -j$(JOBS)
+# The kernel otherwise stamps in the build's time, user, host and a build counter.
+KMAKE     = $(MAKE) -C $(KERNEL_SRC) -j$(JOBS) KBUILD_BUILD_USER=elmos KBUILD_BUILD_HOST=elmos \
+            KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP='$(shell date -u -d @$(SOURCE_DATE_EPOCH) '+%a %b %e %H:%M:%S UTC %Y')'
 # The kernel command line on the USB stick: messages on the screen (the last console=),
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
@@ -116,7 +140,7 @@ $(KOUT)/.config: kernel/elmos.config $(BUILD)/kernel-version | $(KERNEL_SRC)/.el
 	cd $(KOUT) && $(abspath $(KERNEL_SRC))/scripts/kconfig/merge_config.sh -m -O . .config $(abspath kernel/elmos.config)
 	$(KMAKE) O=$(abspath $(KOUT)) olddefconfig
 
-$(BUILD)/bzImage: $(KOUT)/.config
+$(BUILD)/bzImage: $(KOUT)/.config $(BUILD)/source-date
 	$(KMAKE) O=$(abspath $(KOUT)) bzImage
 	cp $(KOUT)/arch/x86/boot/bzImage $@
 
@@ -141,7 +165,7 @@ $(KOUT_USB)/.config: kernel/elmos.config $(BUILD)/usb.config $(BUILD)/kernel-ver
 	  $(abspath kernel/elmos.config) $(abspath $(BUILD)/usb.config)
 	$(KMAKE) O=$(abspath $(KOUT_USB)) olddefconfig
 
-$(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio
+$(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/source-date
 	$(KMAKE) O=$(abspath $(KOUT_USB)) bzImage
 	cp $(KOUT_USB)/arch/x86/boot/bzImage $@
 
@@ -152,6 +176,11 @@ $(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
 	cd elm && $(ECO) make src/Main.elm --output=$(abspath $@)
 
 # The commit goes on Elm's about page. Rewritten only when it changes, like gpu-setting.
+# SOURCE_DATE_EPOCH, so what stamps it in (the kernels, the cpio archives) is rebuilt
+# when it changes, not only when their other inputs do.
+$(BUILD)/source-date: FORCE
+	@mkdir -p $(BUILD); echo $(SOURCE_DATE_EPOCH) | cmp -s - $@ || echo $(SOURCE_DATE_EPOCH) > $@
+
 $(BUILD)/commit: FORCE
 	@mkdir -p $(BUILD); c=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
 	  echo "$$c" | cmp -s - $@ || echo "$$c" > $@
@@ -163,12 +192,18 @@ $(BUILD)/commit: FORCE
 CARGO       ?= cargo
 RUST_TARGET := x86_64-unknown-linux-musl
 HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/init host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
-CARGO_BUILD  = cd host && CC_x86_64_unknown_linux_musl=musl-gcc $(CARGO) build --release --locked --target $(RUST_TARGET)
+# Paths to this checkout and to cargo's crate sources end up in panic messages and in
+# ring's C code; map them to fixed names so the output doesn't depend on where they are.
+CARGO_HOME_DIR := $(or $(CARGO_HOME),$(HOME)/.cargo)
+RUST_REMAP   = "--remap-path-prefix=$(abspath .)=/elmos","--remap-path-prefix=$(CARGO_HOME_DIR)=/cargo"
+CARGO_BUILD  = cd host && CC_x86_64_unknown_linux_musl=musl-gcc \
+  CFLAGS_x86_64_unknown_linux_musl='-ffile-prefix-map=$(abspath .)=/elmos -ffile-prefix-map=$(CARGO_HOME_DIR)=/cargo' \
+  $(CARGO) build --release --locked --target $(RUST_TARGET)
 
 $(BUILD)/libelmos_host.a: $(HOST_SRC) $(BUILD)/commit | check-deps
 	$(CARGO_BUILD) -p elmos-host --target-dir $(abspath $(BUILD)/cargo-init) \
 	  --config 'env.ELMOS_COMMIT="$(shell cat $(BUILD)/commit)"' \
-	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-cpu=x86-64-v3"]'
+	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-cpu=x86-64-v3",$(RUST_REMAP)]'
 	cp $(BUILD)/cargo-init/$(RUST_TARGET)/release/libelmos_host.a $@
 
 # eco's own link line for a static musl executable, with the host's library added
@@ -204,7 +239,7 @@ $(BUILD)/elmos-gpu: $(HOST_SRC) $(ALPINE)/.done | check-deps
 	$(CARGO_BUILD) -p elmos-gpu --target-dir $(abspath $(BUILD)/cargo-gpu) \
 	  --config 'env.ELMOS_MESA_LIB="$(abspath $(ALPINE)/root/usr/lib)"' \
 	  --config 'target.$(RUST_TARGET).linker="musl-gcc"' \
-	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-feature=-crt-static","-Clink-self-contained=no","-Clink-arg=-Wl,--allow-shlib-undefined","-Ctarget-cpu=x86-64-v3"]'
+	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-feature=-crt-static","-Clink-self-contained=no","-Clink-arg=-Wl,--allow-shlib-undefined","-Ctarget-cpu=x86-64-v3",$(RUST_REMAP)]'
 	strip -o $@ $(BUILD)/cargo-gpu/$(RUST_TARGET)/release/elmos-gpu
 
 # Stands in for Alpine's 178 MB libLLVM, which our GPU drivers never call (see the script).
@@ -253,7 +288,7 @@ $(BUILD)/gpu-setting: FORCE
 	@mkdir -p $(BUILD); echo $(GPU) | cmp -s - $@ || echo $(GPU) > $@
 FORCE:
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh $(BUILD)/gpu-setting
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs
 	cp $(BUILD)/init $(BUILD)/rootfs/init
 ifeq ($(GPU),1)
@@ -263,14 +298,14 @@ ifeq ($(GPU),1)
 endif
 	mkdir -p $(BUILD)/rootfs/usr/sbin
 	cp $(BUILD)/wpa_supplicant $(BUILD)/rootfs/usr/sbin/
-	cd $(BUILD)/rootfs && find . | LC_ALL=C sort | cpio -o -H newc --quiet > ../initramfs.cpio
+	tools/mkcpio.sh $(BUILD)/rootfs $@
 
 # QEMU's initramfs: the normal one plus a simulated wifi access point (hostapd and its config).
-$(BUILD)/wifi-sim.cpio: $(BUILD)/hostapd scripts/wifi-sim-hostapd.conf
+$(BUILD)/wifi-sim.cpio: $(BUILD)/hostapd scripts/wifi-sim-hostapd.conf tools/mkcpio.sh $(BUILD)/source-date
 	rm -rf $(BUILD)/simfs && mkdir -p $(BUILD)/simfs/usr/sbin $(BUILD)/simfs/etc/elmos
 	cp $(BUILD)/hostapd $(BUILD)/simfs/usr/sbin/
 	cp scripts/wifi-sim-hostapd.conf $(BUILD)/simfs/etc/elmos/hostapd.conf
-	cd $(BUILD)/simfs && find . | LC_ALL=C sort | cpio -o -H newc --quiet > ../wifi-sim.cpio
+	tools/mkcpio.sh $(BUILD)/simfs $@
 
 $(BUILD)/initramfs-qemu.cpio: $(BUILD)/initramfs.cpio $(BUILD)/wifi-sim.cpio
 	cat $^ > $@
@@ -292,22 +327,22 @@ $(BUILD)/firmware/.done-i915-wifi: tools/fetch-mesa.py
 # iwlwifi-PREFIX here (`dmesg | grep iwlwifi` on Linux names the file it loads).
 WIFI_FIRMWARE ?= Qu-b0-hr-b0:77 Qu-c0-hr-b0:77 QuZ-a0-hr-b0:77 so-a0-hr-b0:89
 
-$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done-i915-wifi $(BUILD)/bzImage tools/pick-wifi-firmware.sh
+$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done-i915-wifi $(BUILD)/bzImage tools/pick-wifi-firmware.sh tools/mkcpio.sh $(BUILD)/source-date
 	strings $(KOUT)/vmlinux | grep -E '^i915/[A-Za-z0-9_.-]+\.bin$$' | LC_ALL=C sort -u > $(BUILD)/firmware/wanted
 	test -s $(BUILD)/firmware/wanted
 	tools/pick-wifi-firmware.sh $(BUILD)/firmware/root/lib/firmware $(WIFI_FIRMWARE) > $(BUILD)/firmware/wifi
 	cd $(BUILD)/firmware/root && { echo lib; echo lib/firmware; echo lib/firmware/i915; \
 	  sed 's|^|lib/firmware/|; s|$$|.zst|' ../wanted | while read -r f; do [ ! -e "$$f" ] || echo "$$f"; done; \
 	  sed 's|^|lib/firmware/|' ../wifi; } \
-	  | cpio -o -H newc --quiet > $(abspath $@)
+	  | $(abspath tools/mkcpio.sh) . $(abspath $@) -
 
 # /dev/console, which the kernel's own default initramfs provides and a built-in one
 # replaces. Without it /init has no stdout or stderr. Made with the kernel's own tool,
 # because a device node in a cpio archive otherwise needs root.
-$(BUILD)/console.cpio: | $(KERNEL_SRC)/Makefile
+$(BUILD)/console.cpio: $(BUILD)/source-date | $(KERNEL_SRC)/Makefile
 	@mkdir -p $(BUILD)
 	cc -O2 -o $(BUILD)/gen_init_cpio $(KERNEL_SRC)/usr/gen_init_cpio.c
-	$(BUILD)/gen_init_cpio $(KERNEL_SRC)/usr/default_cpio_list > $@
+	$(BUILD)/gen_init_cpio -t $(SOURCE_DATE_EPOCH) $(KERNEL_SRC)/usr/default_cpio_list > $@
 
 # The kernel unpacks concatenated cpio archives one after the other.
 $(BUILD)/initramfs-usb.cpio: $(BUILD)/console.cpio $(BUILD)/initramfs.cpio $(BUILD)/firmware.cpio

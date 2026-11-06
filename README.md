@@ -51,12 +51,30 @@ wifi network to join: **Elm OS test network**, password `elmos-wifi`.
 ## Staying up to date
 
 Nothing updates by itself: the kernel tag and the `wpa_supplicant`/`hostapd` release are
-pinned in `versions.mk`, Alpine packages are cached in `build/apk-cache`, and Rust crates
-(rustls and its CA list, `webpki-roots`, included) are pinned in `host/Cargo.lock`.
+pinned in `versions.mk`, Alpine packages (Mesa, libnl, firmware) in `alpine.lock`, and Rust
+crates (rustls and its CA list, `webpki-roots`, included) in `host/Cargo.lock`.
 `make refresh` moves all of them to the newest versions (newest 6.12.x kernel, newest hostap
-release with its checksum, fresh Alpine index, `cargo update`); the next `make` rebuilds what
-changed. `make` warns when the last refresh was more than 30 days ago. Commit `versions.mk`
-and `host/Cargo.lock` after a refresh that still passes `make test`.
+release with its checksum, newest Alpine builds, `cargo update`); the next `make` rebuilds what
+changed. `make` warns when the last refresh was more than 30 days ago. Commit `versions.mk`,
+`alpine.lock` and `host/Cargo.lock` after a refresh that still passes `make test`.
+
+Alpine keeps only the newest build of each package, so after Alpine updates one, a fresh
+checkout of an older commit can't download its pinned version any more and the build asks for
+`make refresh`. Machines that already have the files cached keep working.
+
+## Reproducible builds
+
+Every build of a commit gives the same bytes on the same machine: timestamps come from the
+commit's date (`SOURCE_DATE_EPOCH`), the kernel's build user and host are fixed, the cpio
+archives have fixed owners, modes and inode numbers, the USB image's FAT and GPT IDs come from
+the kernel's hash, and paths to the checkout don't end up in the output. If the commit has
+uncommitted changes, `/init` records it as `-dirty`, so commit before comparing builds.
+
+Across machines the compilers have to match too (gcc for the kernel and wpa_supplicant, Rust,
+eco). `make docker` builds inside a pinned environment (`tools/build-env/Dockerfile`: Ubuntu
+packages from a dated snapshot, Rust from `host/rust-toolchain.toml`, eco checked against its
+SHA-256), leaving the image in `build-docker/elmos-usb.img` and printing its SHA-256. Two
+machines building the same commit with `make docker` should print the same hash.
 
 Run `make review` (elm-review, needs Node.js) before committing Elm changes;
 `make review-fix` applies automatic fixes.
