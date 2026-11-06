@@ -18,8 +18,8 @@ module Ui exposing
     , findInput
     , hover
     , leftAndRight
-    , noPadding
     , minWidth
+    , noPadding
     , none
     , paddingXY
     , quads
@@ -82,8 +82,7 @@ type alias TextInputData id =
 type Element id
     = TextInput (TextInputData id)
     | Text
-        { outline : Maybe Color
-        , color : Color
+        { color : Color
         , font : Sprite.Font
         , text : String
         , cachedSize : Coord
@@ -126,27 +125,26 @@ paddingXY x y =
 -- TEXT
 
 
-textHelper : Maybe Color -> Color -> Sprite.Font -> String -> Element id
-textHelper outline color font text2 =
+textHelper : Color -> Sprite.Font -> String -> Element id
+textHelper color font text2 =
     Text
-        { outline = outline
-        , color = color
+        { color = color
         , font = font
         , text = text2
         , cachedSize = Sprite.textSize font text2
         }
 
 
-{-| Black text. '\n' starts a new line.
+{-| Black text. '\\n' starts a new line.
 -}
 text : Sprite.Font -> String -> Element id
 text font =
-    textHelper Nothing Color.black font
+    textHelper Color.black font
 
 
 colorText : Color -> Sprite.Font -> String -> Element id
 colorText color font =
-    textHelper Nothing color font
+    textHelper color font
 
 
 
@@ -245,9 +243,9 @@ selectableButton data isSelected child =
 -- LAYOUT
 
 
-paddedSize : Padding -> Element id -> Coord
-paddedSize padding child =
-    Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (size child)
+paddedSize : Int -> Padding -> Element id -> Coord
+paddedSize pixelScale padding child =
+    Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (size pixelScale child)
 
 
 row : { spacing : Int, padding : Padding } -> List (Element id) -> Element id
@@ -256,7 +254,7 @@ row data children =
         children2 =
             List.filter (\a -> a /= Empty) children
     in
-    Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize data children2 } children2
+    Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize pixelScale data children2 } children2
 
 
 column : { spacing : Int, padding : Padding } -> List (Element id) -> Element id
@@ -265,7 +263,7 @@ column data children =
         children2 =
             List.filter (\a -> a /= Empty) children
     in
-    Column { spacing = data.spacing, padding = data.padding, cachedSize = columnSize data children2 } children2
+    Column { spacing = data.spacing, padding = data.padding, cachedSize = columnSize pixelScale data children2 } children2
 
 
 el : { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
@@ -287,11 +285,11 @@ quads =
 
 {-| Put a child somewhere in an area of the given size. `fx` and `fy` go from 0 (left, top) to 2 (right, bottom).
 -}
-align : Int -> Int -> Coord -> Element id -> Element id
-align fx fy ( sizeX, sizeY ) child =
+align : Int -> Int -> Int -> Coord -> Element id -> Element id
+align pixelScale fx fy ( sizeX, sizeY ) child =
     let
         ( childX, childY ) =
-            size child
+            size pixelScale child
 
         left =
             (sizeX - childX) * fx // 2
@@ -314,16 +312,16 @@ align fx fy ( sizeX, sizeY ) child =
 
 {-| A child at the left of a space at least `width` wide, for lining things up in columns.
 -}
-minWidth : Int -> Element id -> Element id
-minWidth width child =
-    align 0 0 ( max width (Coord.x (size child)), Coord.y (size child) ) child
+minWidth : Int -> Int -> Element id -> Element id
+minWidth pixelScale width child =
+    align 0 0 ( max width (Coord.x (size pixelScale child)), Coord.y (size pixelScale child) ) child
 
 
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
-leftAndRight : Int -> Element id -> Element id -> Element id
-leftAndRight width left right =
-    row { spacing = 0, padding = noPadding } [ minWidth (width - Coord.x (size right)) left, right ]
+leftAndRight : Int -> Int -> Element id -> Element id -> Element id
+leftAndRight pixelScale width left right =
+    row { spacing = 0, padding = noPadding } [ minWidth pixelScale (width - Coord.x (size pixelScale right)) left, right ]
 
 
 center : { size : Coord } -> Element id -> Element id
@@ -346,11 +344,11 @@ bottomLeft data =
     align 0 2 data.size
 
 
-size : Element id -> Coord
-size element =
+size : Int -> Element id -> Coord
+size pixelScale element =
     case element of
         TextInput data ->
-            TextInput.size data.style
+            TextInput.size pixelScale data.style
 
         Text data ->
             data.cachedSize
@@ -374,11 +372,11 @@ size element =
             Coord.origin
 
 
-rowSize : { a | spacing : Int, padding : Padding } -> List (Element id) -> Coord
-rowSize data children =
+rowSize : Int -> { a | spacing : Int, padding : Padding } -> List (Element id) -> Coord
+rowSize pixelScale data children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( Coord.x (size child) + data.spacing + x, max (Coord.y (size child)) y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( Coord.x (size pixelScale child) + data.spacing + x, max (Coord.y (size pixelScale child)) y )) ( 0, 0 ) children
     in
     Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
         ( if List.isEmpty children then
@@ -390,11 +388,11 @@ rowSize data children =
         )
 
 
-columnSize : { a | spacing : Int, padding : Padding } -> List (Element id) -> Coord
-columnSize data children =
+columnSize : Int -> { a | spacing : Int, padding : Padding } -> List (Element id) -> Coord
+columnSize pixelScale data children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( max (Coord.x (size child)) x, Coord.y (size child) + data.spacing + y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( max (Coord.x (size pixelScale child)) x, Coord.y (size pixelScale child) + data.spacing + y )) ( 0, 0 ) children
     in
     Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
         ( w
@@ -408,16 +406,16 @@ columnSize data children =
 
 {-| Where each child of a row or column goes.
 -}
-childPositions : Bool -> RowColumn -> Coord -> List (Element id) -> List ( Coord, Element id )
-childPositions isRow data position children =
+childPositions : Int -> Bool -> RowColumn -> Coord -> List (Element id) -> List ( Coord, Element id )
+childPositions pixelScale isRow data position children =
     List.foldl
         (\child ( at, acc ) ->
             ( Coord.plus
                 (if isRow then
-                    ( Coord.x (size child) + data.spacing, 0 )
+                    ( Coord.x (size pixelScale child) + data.spacing, 0 )
 
                  else
-                    ( 0, Coord.y (size child) + data.spacing )
+                    ( 0, Coord.y (size pixelScale child) + data.spacing )
                 )
                 at
             , ( at, child ) :: acc
@@ -436,9 +434,9 @@ childPositions isRow data position children =
 {-| All of the elements with ids that contain the given point (usually the mouse cursor position).
 The first element in the list is the top most visible element.
 -}
-hover : Coord -> Element id -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
-hover point element =
-    hoverHelper [] point Coord.origin element
+hover : Int -> Coord -> Element id -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
+hover pixelScale point element =
+    hoverHelper pixelScale [] point Coord.origin element
 
 
 contains : Coord -> Coord -> Coord -> Bool
@@ -447,15 +445,16 @@ contains ( px, py ) ( x, y ) ( w, h ) =
 
 
 hoverHelper :
-    List ( id, { relativePositionToUi : Coord, ui : Element id } )
+    Int
+    -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
     -> Coord
     -> Coord
     -> Element id
     -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
-hoverHelper hovers point position element =
+hoverHelper pixelScale hovers point position element =
     case element of
         TextInput data ->
-            if contains point position (TextInput.size data.style) then
+            if contains point position (TextInput.size pixelScale data.style) then
                 ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             else
@@ -469,12 +468,12 @@ hoverHelper hovers point position element =
                 hovers
 
         Row data children ->
-            childPositions True data position children
-                |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
+            childPositions pixelScale True data position children
+                |> List.foldl (\( at, child ) acc -> hoverHelper pixelScale acc point at child) hovers
 
         Column data children ->
-            childPositions False data position children
-                |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
+            childPositions pixelScale False data position children
+                |> List.foldl (\( at, child ) acc -> hoverHelper pixelScale acc point at child) hovers
 
         Single data child ->
             let
@@ -491,9 +490,9 @@ hoverHelper hovers point position element =
                             hovers
 
                 hovers3 =
-                    hoverHelper hovers2 point (Coord.plus data.padding.topLeft position) child
+                    hoverHelper pixelScale hovers2 point (Coord.plus data.padding.topLeft position) child
             in
-            List.foldr (\inFront acc -> hoverHelper acc point position inFront) hovers3 data.inFront
+            List.foldr (\inFront acc -> hoverHelper pixelScale acc point position inFront) hovers3 data.inFront
 
         _ ->
             hovers
@@ -504,17 +503,17 @@ type InputType id
     | TextInputType { position : Coord, size : Coord }
 
 
-findInput : id -> Element id -> Maybe (InputType id)
-findInput id element =
-    findInputHelper id Coord.origin element
+findInput : Int -> id -> Element id -> Maybe (InputType id)
+findInput pixelScale id element =
+    findInputHelper pixelScale id Coord.origin element
 
 
-findInputHelper : id -> Coord -> Element id -> Maybe (InputType id)
-findInputHelper id position element =
+findInputHelper : Int -> id -> Coord -> Element id -> Maybe (InputType id)
+findInputHelper pixelScale id position element =
     case element of
         TextInput data ->
             if data.id == id then
-                Just (TextInputType { position = position, size = TextInput.size data.style })
+                Just (TextInputType { position = position, size = TextInput.size pixelScale data.style })
 
             else
                 Nothing
@@ -527,18 +526,18 @@ findInputHelper id position element =
                 Nothing
 
         Row data children ->
-            findFirst (\( at, child ) -> findInputHelper id at child) (childPositions True data position children)
+            findFirst (\( at, child ) -> findInputHelper pixelScale id at child) (childPositions pixelScale True data position children)
 
         Column data children ->
-            findFirst (\( at, child ) -> findInputHelper id at child) (childPositions False data position children)
+            findFirst (\( at, child ) -> findInputHelper pixelScale id at child) (childPositions pixelScale False data position children)
 
         Single data child ->
-            case findFirst (findInputHelper id position) data.inFront of
+            case findFirst (findInputHelper pixelScale id position) data.inFront of
                 Just result ->
                     Just result
 
                 Nothing ->
-                    findInputHelper id (Coord.plus data.padding.topLeft position) child
+                    findInputHelper pixelScale id (Coord.plus data.padding.topLeft position) child
 
         _ ->
             Nothing
@@ -566,24 +565,19 @@ findFirst f list =
 {-| The triangles that draw the UI in drawing order (back to front), given the hovered and focused ids.
 A parent draws before its children, and `inFront` elements after the child.
 -}
-view : Maybe id -> Maybe id -> Element id -> List Triangle
-view maybeHover focus element =
-    viewList maybeHover focus Coord.origin element
+view : Int -> Maybe id -> Maybe id -> Element id -> List Triangle
+view pixelScale maybeHover focus element =
+    viewList pixelScale maybeHover focus Coord.origin element
 
 
-viewList : Maybe id -> Maybe id -> Coord -> Element id -> List Triangle
-viewList maybeHover focus position element =
+viewList : Int -> Maybe id -> Maybe id -> Coord -> Element id -> List Triangle
+viewList pixelScale maybeHover focus position element =
     case element of
         TextInput data ->
-            TextInput.view data.style position (focus == Just data.id) data.isValid data.state
+            TextInput.view pixelScale data.style position (focus == Just data.id) data.isValid data.state
 
         Text data ->
-            case data.outline of
-                Just outline ->
-                    Sprite.outlinedText outline data.color data.font data.text position
-
-                Nothing ->
-                    Sprite.text data.color data.font data.text position
+            Sprite.text pixelScale data.color data.font data.text position
 
         Button data child ->
             borderAndFillView position
@@ -597,21 +591,21 @@ viewList maybeHover focus position element =
                     data.borderAndFill
                 )
                 data.cachedSize
-                ++ viewList maybeHover focus (Coord.plus data.padding.topLeft position) child
-                ++ List.concatMap (viewList maybeHover focus position) data.inFront
+                ++ viewList pixelScale maybeHover focus (Coord.plus data.padding.topLeft position) child
+                ++ List.concatMap (viewList pixelScale maybeHover focus position) data.inFront
 
         Row data children ->
-            childPositions True data position children
-                |> List.concatMap (\( at, child ) -> viewList maybeHover focus at child)
+            childPositions pixelScale True data position children
+                |> List.concatMap (\( at, child ) -> viewList pixelScale maybeHover focus at child)
 
         Column data children ->
-            childPositions False data position children
-                |> List.concatMap (\( at, child ) -> viewList maybeHover focus at child)
+            childPositions pixelScale False data position children
+                |> List.concatMap (\( at, child ) -> viewList pixelScale maybeHover focus at child)
 
         Single data child ->
             borderAndFillView position data.borderAndFill data.cachedSize
-                ++ viewList maybeHover focus (Coord.plus data.padding.topLeft position) child
-                ++ List.concatMap (viewList maybeHover focus position) data.inFront
+                ++ viewList pixelScale maybeHover focus (Coord.plus data.padding.topLeft position) child
+                ++ List.concatMap (viewList pixelScale maybeHover focus position) data.inFront
 
         Quads data ->
             let

@@ -10,6 +10,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 
 -}
 
+import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Effect exposing (Effect)
@@ -228,6 +229,7 @@ milliseconds =
 type alias Model =
     { width : Int
     , height : Int
+    , pixelScale : Int
     , mouse : Coord
     , colorIndex : Int
     , pressed : Bool
@@ -274,7 +276,7 @@ type WeatherState
 
 
 type Msg
-    = GotInput D.Value
+    = GotInput (Result D.Error Input)
     | Tick
 
 
@@ -293,12 +295,14 @@ type UiId
     | RestartButton
     | ConfirmPowerButton
     | CancelPowerButton
+    | CalculatorUiId Calculator.UiId
 
 
 init : () -> ( Model, List Effect )
 init _ =
     ( { width = 640
       , height = 480
+      , pixelScale = 1
       , mouse = ( 320, 240 )
       , colorIndex = 0
       , pressed = False
@@ -347,7 +351,7 @@ update msg model =
             ( model, [] )
 
         GotInput value ->
-            case D.decodeValue decodeInput value of
+            case value of
                 Ok event ->
                     let
                         ( next, cmd ) =
@@ -639,6 +643,9 @@ click id model =
               ]
             )
 
+        CalculatorUiId uiId ->
+            ( model, [] )
+
 
 connect : Model -> ( Model, List Effect )
 connect model =
@@ -820,16 +827,16 @@ bodySize model =
         16
 
 
-bodyFont : Model -> Sprite.Font
-bodyFont model =
-    Sprite.Sans (bodySize model)
+bodyFont : Sprite.Font
+bodyFont =
+    Sprite.Sans Sprite.Small
 
 
 {-| For titles and the temperature: the next size up.
 -}
-headingFont : Model -> Sprite.Font
-headingFont model =
-    Sprite.Sans (bodySize model * 3 // 2)
+headingFont : Sprite.Font
+headingFont =
+    Sprite.Sans Sprite.Big
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
@@ -858,12 +865,9 @@ screenUi model =
 overlay : Model -> Ui.Element UiId
 overlay model =
     let
-        scale =
-            uiScale model
-
         -- The debug overlay keeps town-collab's pixel font.
         mono =
-            Sprite.Mono scale
+            Sprite.Mono Sprite.Small
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
@@ -872,7 +876,7 @@ overlay model =
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
-                    Ui.row { spacing = 4 * scale, padding = Ui.noPadding }
+                    Ui.row { spacing = 4, padding = Ui.noPadding }
                         [ Ui.text mono (String.padRight 10 ' ' "Renderer")
                         , badge mono gpu
                         , Ui.text mono
@@ -882,7 +886,7 @@ overlay model =
                               else
                                 "CPU, "
                              )
-                                ++ Sprite.ellipsis mono (40 * 10 * scale) name
+                                ++ Sprite.ellipsis mono (40 * 10) name
                             )
                         ]
 
@@ -979,13 +983,13 @@ overlay model =
                     [ line "Boot" "waiting for the first frame" ]
     in
     Ui.bottomLeft { size = ( model.width, model.height ) }
-        (Ui.el { padding = Ui.paddingXY (8 * scale) (8 * scale), inFront = [], borderAndFill = Ui.NoBorderOrFill }
+        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
-                { padding = Ui.paddingXY (6 * scale) (6 * scale)
+                { padding = Ui.paddingXY 6 6
                 , inFront = []
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
-                (Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
+                (Ui.column { spacing = 3, padding = Ui.noPadding }
                     ([ Ui.text mono "Elm OS debug"
                      , line "Build" (buildText model.bootImage)
                      , line "Screen" (String.fromInt model.width ++ " x " ++ String.fromInt model.height)
@@ -1167,7 +1171,7 @@ main =
         , subscriptions =
             \_ ->
                 Sub.batch
-                    [ Effect.fromHost GotInput
+                    [ Effect.fromHost (\json -> D.decodeValue decodeInput json |> GotInput)
 
                     -- An idle eco program exits; a timer keeps the event loop alive.
                     , Time.every 60000 (\_ -> Tick)
@@ -1193,7 +1197,7 @@ wifiPanel model =
             uiScale model
 
         font =
-            bodyFont model
+            bodyFont
 
         width =
             panelWidth model
@@ -1356,7 +1360,7 @@ networkRow model network =
             uiScale model
 
         font =
-            bodyFont model
+            bodyFont
 
         connectedHere =
             model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
@@ -1445,7 +1449,7 @@ signalBars scale dbm =
 -}
 passwordStyle : Model -> TextInput.Style
 passwordStyle model =
-    { font = bodyFont model, width = 14 * bodySize model, masked = not model.showPassword }
+    { font = bodyFont, width = 14 * bodySize model, masked = not model.showPassword }
 
 
 passwordInput : Model -> Ui.Element UiId
@@ -1465,7 +1469,7 @@ weatherRows model =
             uiScale model
 
         font =
-            bodyFont model
+            bodyFont
 
         width =
             panelWidth model
@@ -1513,7 +1517,7 @@ weatherRows model =
             , Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
                 [ weatherIcon (3 * scale) forecast.code
                 , Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
-                    [ Ui.text (headingFont model) (fixed 1 forecast.temperature ++ "°C")
+                    [ Ui.text headingFont (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -1631,6 +1635,7 @@ weatherIcon unit code =
     Ui.quads { size = ( side, side ), triangles = triangles }
 
 
+
 -- TOOLBAR AND ABOUT PAGE
 
 
@@ -1641,7 +1646,7 @@ toolbar model =
             uiScale model
 
         t =
-            Ui.text (bodyFont model)
+            Ui.text bodyFont
 
         small =
             Ui.paddingXY (6 * scale) (3 * scale)
@@ -1693,7 +1698,7 @@ aboutPage model =
             uiScale model
 
         font =
-            bodyFont model
+            bodyFont
 
         t =
             Ui.text font
@@ -1734,7 +1739,7 @@ aboutPage model =
             , borderAndFill = Ui.BorderAndFill { borderWidth = 2 * scale, borderColor = Color.outlineColor, fillColor = Color.fillColor }
             }
             (Ui.column { spacing = 4 * scale, padding = Ui.noPadding }
-                [ Ui.text (headingFont model) "Elm OS"
+                [ Ui.text headingFont "Elm OS"
                 , t "A Linux kernel that boots straight into one Elm program."
                 , t ""
                 , line "Version" (field .commit)

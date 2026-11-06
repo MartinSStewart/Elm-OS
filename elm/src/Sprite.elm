@@ -1,5 +1,6 @@
 module Sprite exposing
     ( Font(..)
+    , FontSize(..)
     , Triangle
     , Vertex
     , caretPositions
@@ -7,8 +8,8 @@ module Sprite exposing
     , cursor
     , ellipsis
     , encode
+    , fontSizeInt
     , lineHeight
-    , outlinedText
     , rectangle
     , text
     , textSize
@@ -149,8 +150,23 @@ cursor fill scale position =
 
 -}
 type Font
-    = Mono Int
-    | Sans Int
+    = Mono FontSize
+    | Sans FontSize
+
+
+type FontSize
+    = Small
+    | Big
+
+
+fontSizeInt : number -> FontSize -> number
+fontSizeInt pixelScale fontSize =
+    case fontSize of
+        Small ->
+            pixelScale
+
+        Big ->
+            2 * pixelScale
 
 
 charSize : Coord
@@ -221,16 +237,16 @@ missingGlyph f =
 
 {-| How tall a line of text is.
 -}
-lineHeight : Font -> Int
-lineHeight font =
+lineHeight : Int -> Font -> Int
+lineHeight pixelScale font =
     case font of
         Mono scale ->
-            Coord.y charSize * scale
+            Coord.y charSize * fontSizeInt pixelScale scale
 
         Sans size ->
             let
                 f =
-                    face size
+                    face (fontSizeInt pixelScale size)
             in
             f.ascent + f.descent
 
@@ -238,18 +254,18 @@ lineHeight font =
 {-| Where each character of one line of text starts, in 1/64 pixels from the left, and
 where the line ends. Glyphs are placed at whole pixels: the pen rounded.
 -}
-layoutLine : Font -> String -> ( List ( Int, Char ), Int )
-layoutLine font string =
+layoutLine : Int -> Font -> String -> ( List ( Int, Char ), Int )
+layoutLine pixelScale font string =
     case font of
         Mono scale ->
-            ( String.toList string |> List.indexedMap (\i c -> ( i * Coord.x charSize * scale * 64, c ))
-            , String.length string * Coord.x charSize * scale * 64
+            ( String.toList string |> List.indexedMap (\i c -> ( i * Coord.x charSize * fontSizeInt pixelScale scale * 64, c ))
+            , String.length string * Coord.x charSize * fontSizeInt pixelScale scale * 64
             )
 
         Sans size ->
             let
                 ( placed, end ) =
-                    layoutSans (face size) string
+                    layoutSans (face (fontSizeInt pixelScale size)) string
             in
             ( List.map (\( at, char, _ ) -> ( at, char )) placed, end )
 
@@ -285,37 +301,37 @@ layoutSans f string =
 
 {-| How wide one line of text is, in pixels.
 -}
-textWidth : Font -> String -> Int
-textWidth font string =
-    (Tuple.second (layoutLine font string) + 63) // 64
+textWidth : Int -> Font -> String -> Int
+textWidth pixelScale font string =
+    (Tuple.second (layoutLine pixelScale font string) + 63) // 64
 
 
 {-| Where the cursor goes before each character of one line of text, and after the last,
 in pixels from its left: one more number than there are characters.
 -}
-caretPositions : Font -> String -> List Int
-caretPositions font string =
+caretPositions : Int -> Font -> String -> List Int
+caretPositions pixelScale font string =
     let
         ( placed, end ) =
-            layoutLine font string
+            layoutLine pixelScale font string
     in
     List.map (\( at, _ ) -> (at + 32) // 64) placed ++ [ (end + 32) // 64 ]
 
 
 {-| Text at a position (its top left). '\\n' starts a new line.
 -}
-text : Color -> Font -> String -> Coord -> List Triangle
-text color font string position =
-    clippedText color font Nothing string position
+text : Int -> Color -> Font -> String -> Coord -> List Triangle
+text pixelScale color font string position =
+    clippedText pixelScale color font Nothing string position
 
 
 {-| Text, leaving out whatever falls outside the screen columns `left` to `right`.
 -}
-clippedText : Color -> Font -> Maybe { left : Int, right : Int } -> String -> Coord -> List Triangle
-clippedText color font clip string ( x, y ) =
+clippedText : Int -> Color -> Font -> Maybe { left : Int, right : Int } -> String -> Coord -> List Triangle
+clippedText pixelScale color font clip string ( x, y ) =
     let
         height =
-            lineHeight font
+            lineHeight pixelScale font
 
         lines =
             String.split "\n" string
@@ -333,8 +349,8 @@ clippedText color font clip string ( x, y ) =
                                 else
                                     clippedSprite color
                                         clip
-                                        ( x + i * Coord.x charSize * scale, y + lineIndex * height )
-                                        (Coord.scalar scale charSize)
+                                        ( x + i * Coord.x charSize * fontSizeInt pixelScale scale, y + lineIndex * height )
+                                        (Coord.scalar (fontSizeInt pixelScale scale) charSize)
                                         (charTexturePosition char)
                                         charSize
                             )
@@ -346,7 +362,7 @@ clippedText color font clip string ( x, y ) =
         Sans size ->
             let
                 f =
-                    face size
+                    face (fontSizeInt pixelScale size)
             in
             List.indexedMap
                 (\lineIndex line ->
@@ -402,50 +418,32 @@ clippedSprite color clip ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
                     ( (shownRight - shownLeft) * tw // w, th )
 
 
-outlinedText : Color -> Color -> Font -> String -> Coord -> List Triangle
-outlinedText outlineColor color font string position =
-    let
-        d =
-            case font of
-                Mono scale ->
-                    scale
-
-                Sans _ ->
-                    1
-    in
-    text outlineColor font string (Coord.plus ( 0, d ) position)
-        ++ text outlineColor font string (Coord.plus ( d, 0 ) position)
-        ++ text outlineColor font string (Coord.plus ( 0, -d ) position)
-        ++ text outlineColor font string (Coord.plus ( -d, 0 ) position)
-        ++ text color font string position
-
-
 {-| The size of text: its widest line by its lines.
 -}
-textSize : Font -> String -> Coord
-textSize font string =
+textSize : Int -> Font -> String -> Coord
+textSize pixelScale font string =
     let
         lines =
             String.split "\n" string
     in
-    ( lines |> List.map (textWidth font) |> List.maximum |> Maybe.withDefault 0
-    , (List.length lines |> max 1) * lineHeight font
+    ( lines |> List.map (textWidth pixelScale font) |> List.maximum |> Maybe.withDefault 0
+    , (List.length lines |> max 1) * lineHeight pixelScale font
     )
 
 
 {-| Text cut short with "…" to fit in `maxWidth` pixels.
 -}
-ellipsis : Font -> Int -> String -> String
-ellipsis font maxWidth string =
-    if textWidth font string <= maxWidth then
+ellipsis : Int -> Font -> Int -> String -> String
+ellipsis pixelScale font maxWidth string =
+    if textWidth pixelScale font string <= maxWidth then
         string
 
     else
-        ellipsisHelper font maxWidth (String.dropRight 1 string)
+        ellipsisHelper pixelScale font maxWidth (String.dropRight 1 string)
 
 
-ellipsisHelper : Font -> Int -> String -> String
-ellipsisHelper font maxWidth string =
+ellipsisHelper : Int -> Font -> Int -> String -> String
+ellipsisHelper pixelScale font maxWidth string =
     let
         dots =
             case font of
@@ -458,24 +456,24 @@ ellipsisHelper font maxWidth string =
         candidate =
             String.trimRight string ++ dots
     in
-    if String.isEmpty string || textWidth font candidate <= maxWidth then
+    if String.isEmpty string || textWidth pixelScale font candidate <= maxWidth then
         candidate
 
     else
-        ellipsisHelper font maxWidth (String.dropRight 1 string)
+        ellipsisHelper pixelScale font maxWidth (String.dropRight 1 string)
 
 
 {-| Breaks text into lines at most `maxWidth` pixels wide, between words. A word wider
 than that gets a line of its own.
 -}
-wrap : Font -> Int -> String -> String
-wrap font maxWidth string =
+wrap : Int -> Font -> Int -> String -> String
+wrap pixelScale font maxWidth string =
     String.words string
         |> List.foldl
             (\word lines ->
                 case lines of
                     line :: rest ->
-                        if textWidth font (line ++ " " ++ word) <= maxWidth then
+                        if textWidth pixelScale font (line ++ " " ++ word) <= maxWidth then
                             (line ++ " " ++ word) :: rest
 
                         else
