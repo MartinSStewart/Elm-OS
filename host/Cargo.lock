@@ -51,6 +51,7 @@ version = "0.1.0"
 dependencies = [
  "common",
  "libc",
+ "ring",
  "serde",
  "serde_json",
  "ureq",

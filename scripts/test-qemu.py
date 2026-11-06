@@ -12,7 +12,7 @@ weather, from a stand-in server here rather than the internet.
 --gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
 QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
 """
-import http.server, json, os, socket, struct, subprocess, sys, tempfile, threading, time, zlib
+import hashlib, http.server, json, os, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -66,7 +66,7 @@ else:
             "-nic", "user,model=virtio-net-pci",
             # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
             # puts it on the cursor plane, which screendumps leave out.
-            "-append", "console=ttyS0" + ("" if gpu else " ELMOS_CURSOR=software")
+            "-append", "console=ttyS0 retain_initrd" + ("" if gpu else " ELMOS_CURSOR=software")
             + f" ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci"]
 qemu = subprocess.Popen(
@@ -107,6 +107,13 @@ if not usb:
     print("cursor:", "cursor plane" if hw_cursor else "drawn by Elm")
     if gpu and not hw_cursor:
         fail("expected the GPU renderer to put the cursor on the cursor plane")
+    # The debug overlay's build hash: the initramfs QEMU was handed, byte for byte.
+    wait_for("[boot] first frame", timeout=60)
+    wait_for("[boot] initramfs-qemu.cpio sha256 ", timeout=60)
+    want = hashlib.sha256(open(f"{ROOT}/build/initramfs-qemu.cpio", "rb").read()).hexdigest()
+    if f"initramfs-qemu.cpio sha256 {want}" not in open(serial_path, errors="replace").read():
+        fail(f"expected the boot image hash {want}")
+    print("boot image hash matches build/initramfs-qemu.cpio")
 else:
     hw_cursor = None  # unknown: on the stick the log goes to the screen
 for _ in range(100):  # QEMU makes the socket a moment after it starts

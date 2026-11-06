@@ -13,6 +13,9 @@
 # network; Elm OS runs a test access point on one radio, bridged to that network
 # ("Elm OS test network", password elmos-wifi), and shows the other to Elm.
 #
+# retain_initrd keeps the initramfs readable (/sys/firmware/initrd), so the debug
+# overlay can show its SHA-256, to compare with `sha256sum build/initramfs-qemu.cpio`.
+#
 # --usb boots build/elmos-usb.img instead, the way a PC boots the USB stick: UEFI
 # firmware (OVMF), the image as a USB disk, USB keyboard and mouse, and only the
 # firmware's framebuffer for a display. The image is opened read-only.
@@ -48,6 +51,6 @@ fi
 exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
   -kernel build/bzImage -initrd build/initramfs-qemu.cpio \
   -nic user,model=virtio-net-pci \
-  -append "console=ttyS0 quiet" \
+  -append "console=ttyS0 quiet retain_initrd" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
   -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"

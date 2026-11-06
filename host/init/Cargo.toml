@@ -17,3 +17,5 @@ serde_json = "1"
 # compiled in (webpki-roots), so no OpenSSL and no certificate files. `make refresh`
 # updates these with `cargo update`.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# SHA-256 of the boot image for the debug overlay (bootinfo.rs); rustls already uses it.
+ring = "0.17"

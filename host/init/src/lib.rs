@@ -15,7 +15,8 @@
 //!            and elm/src/Effect.elm.
 //!   fromHost host -> Elm: one message at a time, {"t": KIND, ...}. See
 //!            elm/src/Main.elm's decoder, and where each is sent: host.rs (screen,
-//!            frame, input, renderer, stats, system), net/ (wifi*, netConfig) and
+//!            frame, input, renderer, stats, system), bootinfo.rs (bootImage, battery,
+//!            boot), net/ (wifi*, netConfig) and
 //!            http.rs (httpResponse, httpError).
 
 macro_rules! log {
@@ -24,6 +25,7 @@ macro_rules! log {
     };
 }
 
+mod bootinfo;
 mod display;
 mod eco;
 mod effects;
@@ -45,6 +47,7 @@ static INIT: extern "C" fn() = elmos_host_init;
 
 #[no_mangle]
 pub extern "C" fn elmos_host_init() {
+    bootinfo::init_started();
     if sys::is_pid1() {
         sys::mount_kernel_filesystems();
         // PID 1 must never exit: when Elm's main returns, restart the machine

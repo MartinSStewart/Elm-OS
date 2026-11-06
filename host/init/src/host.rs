@@ -8,7 +8,7 @@
 //!     new one (after the GPU's page flip, or 60 times a second on the CPU), and hands
 //!     the triangles Elm sends back to the renderer in use,
 //!   - carries out the rest of Elm's effects (effects.rs),
-//!   - sends Elm what its debug overlay shows (stats.rs).
+//!   - sends Elm what its debug overlay shows (stats.rs, bootinfo.rs).
 //!
 //! Set ELMOS_RENDERER=cpu on the kernel command line to skip the GPU, or
 //! ELMOS_RENDERER=gpu to use Mesa even when it only has a software driver.
@@ -28,7 +28,7 @@ use crate::gpu::Gpu;
 use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
-use crate::{eco, http, net, raster};
+use crate::{bootinfo, eco, http, net, raster};
 
 /// Elm draws only when asked.
 ///
@@ -66,6 +66,8 @@ struct Host {
     gpu_progress_at: f64,
     stats: Stats,
     inputs: Inputs,
+    /// When Elm took its first message, until the first frame is on screen.
+    elm_started_at: Option<f64>,
 }
 
 impl Host {
@@ -166,6 +168,13 @@ impl Host {
         }
     }
 
+    /// For the boot time: call when a frame is on screen.
+    fn frame_shown(&mut self) {
+        if let Some(t) = self.elm_started_at.take() {
+            bootinfo::first_frame(t);
+        }
+    }
+
     /// After a scene went to the renderer.
     fn scene_drawn(&mut self) {
         self.awaiting_render = false;
@@ -178,6 +187,9 @@ impl Host {
                 self.ask_for_frame();
             }
         } else {
+            if matches!(self.renderer, Renderer::Cpu(..)) {
+                self.frame_shown();
+            }
             self.in_flight = 0;
             self.cpu_next_at = Some((self.asked_at + FRAME_INTERVAL).max(now()));
         }
@@ -278,6 +290,7 @@ pub fn run() {
         gpu_progress_at: 0.0,
         stats: Stats::default(),
         inputs: Inputs::new(0, 0),
+        elm_started_at: None,
     };
     // The cursor's size depends on the screen's, which we only know once a renderer is
     // up; both renderers draw the cursor themselves at start, so fix it up after.
@@ -297,11 +310,13 @@ pub fn run() {
     while !eco::try_send(&screen) {
         std::thread::sleep(Duration::from_millis(1));
     }
+    host.elm_started_at = Some(now());
     host.inputs = Inputs::new(host.w, host.h);
     host.inputs.scan();
     host.cursor_move();
     host.send_renderer();
     send_system();
+    bootinfo::start();
     host.stats = Stats::new();
     host.stats.send(host.gpu_pid());
     let mut last_stats = now();
@@ -354,6 +369,7 @@ pub fn run() {
                 _ => 0,
             };
             if done > 0 {
+                host.frame_shown();
                 host.in_flight = host.in_flight.saturating_sub(done);
                 host.gpu_progress_at = now();
                 if !host.awaiting_render && host.in_flight < host.max_in_flight {

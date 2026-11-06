@@ -15,7 +15,9 @@ enforced by the type system. See the
 ## What it does today
 
 - A triangle follows the mouse, grows while a button is held, and changes colour on any key.
-- A debug overlay (bottom left) shows frame timings, which renderer is drawing, CPU load and memory.
+- A debug overlay (bottom left) shows frame timings, which renderer is drawing, CPU load and
+  memory, the SHA-256 of the build that booted, the battery, and how long the boot took
+  (from the kernel starting to the first frame, plus the firmware's time on real PCs).
 - A wifi panel (top right) joins WPA2 personal (including WPA2/WPA3 mixed) or open networks, then shows the local weather.
 - Buttons (top left) open an about page and restart or power off the computer.
 
@@ -75,6 +77,11 @@ eco). `make docker` builds inside a pinned environment (`tools/build-env/Dockerf
 packages from a dated snapshot, Rust from `host/rust-toolchain.toml`, eco checked against its
 SHA-256), leaving the image in `build-docker/elmos-usb.img` and printing its SHA-256. Two
 machines building the same commit with `make docker` should print the same hash.
+
+The debug overlay shows the start of that hash for the build that booted: on a USB stick, the
+SHA-256 of the Elm OS image on the stick, which matches `sha256sum build/elmos-usb.img` (or
+what `make docker` printed). In QEMU (`make run`) it is the initramfs's, matching
+`sha256sum build/initramfs-qemu.cpio`; the kernel isn't covered there.
 
 Run `make review` (elm-review, needs Node.js) before committing Elm changes;
 `make review-fix` applies automatic fixes.

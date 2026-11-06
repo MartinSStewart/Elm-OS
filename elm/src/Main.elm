@@ -42,6 +42,29 @@ type Input
     | WifiStatus Wifi.Status
     | NetConfig { geoUrl : String, weatherUrl : String }
     | System SystemInfo
+    | BootImage BootImageInfo
+    | Battery BatteryInfo
+    | Boot BootTimes
+
+
+{-| The SHA-256 of what booted (host/init/src/bootinfo.rs): the USB image, or in QEMU
+the initramfs. `what` is the file in build/ it should match, "" if nothing was found.
+-}
+type alias BootImageInfo =
+    { what : String, sha256 : String }
+
+
+{-| All of the computer's batteries together. minutes: left on battery, or until full
+when charging.
+-}
+type alias BatteryInfo =
+    { batteries : Int, percent : Maybe Float, status : String, minutes : Maybe Float }
+
+
+{-| Milliseconds since the kernel started (firmwareMs: from power on to the kernel).
+-}
+type alias BootTimes =
+    { firmwareMs : Maybe Float, initMs : Float, elmMs : Float, frameMs : Float }
 
 
 type alias SystemInfo =
@@ -130,6 +153,26 @@ decodeInput =
                         D.map3 SystemInfo (D.field "kernel" D.string) (D.field "cpu" D.string) (D.field "commit" D.string)
                             |> D.map System
 
+                    "bootImage" ->
+                        D.map2 BootImageInfo (D.field "what" D.string) (D.field "sha256" D.string)
+                            |> D.map BootImage
+
+                    "battery" ->
+                        D.map4 BatteryInfo
+                            (D.field "batteries" D.int)
+                            (D.field "percent" milliseconds)
+                            (D.field "status" D.string)
+                            (D.field "minutes" milliseconds)
+                            |> D.map Battery
+
+                    "boot" ->
+                        D.map4 BootTimes
+                            (D.field "firmwareMs" milliseconds)
+                            (D.field "initMs" D.float)
+                            (D.field "elmMs" D.float)
+                            (D.field "frameMs" D.float)
+                            |> D.map Boot
+
                     "netConfig" ->
                         D.map2 (\geo weather -> NetConfig { geoUrl = geo, weatherUrl = weather })
                             (D.field "geoUrl" D.string)
@@ -163,7 +206,7 @@ decodeInput =
             )
 
 
-{-| The host sends -1 for a time it doesn't know.
+{-| The host sends -1 for a time (or a battery level) it doesn't know.
 -}
 milliseconds : D.Decoder (Maybe Float)
 milliseconds =
@@ -209,6 +252,9 @@ type alias Model =
     , geoUrl : String
     , weatherUrl : String
     , system : Maybe SystemInfo
+    , bootImage : Maybe BootImageInfo
+    , battery : Maybe BatteryInfo
+    , boot : Maybe BootTimes
     , aboutOpen : Bool
     , confirmPower : Maybe PowerAction
     }
@@ -277,6 +323,9 @@ init _ =
       , geoUrl = Weather.defaultGeoUrl
       , weatherUrl = Weather.defaultWeatherUrl
       , system = Nothing
+      , bootImage = Nothing
+      , battery = Nothing
+      , boot = Nothing
       , aboutOpen = False
       , confirmPower = Nothing
       }
@@ -442,6 +491,15 @@ step event model =
 
         System info ->
             ( { model | system = Just info }, [] )
+
+        BootImage info ->
+            ( { model | bootImage = Just info }, [] )
+
+        Battery info ->
+            ( { model | battery = Just info }, [] )
+
+        Boot times ->
+            ( { model | boot = Just times }, [] )
 
         NetConfig urls ->
             ( { model
@@ -892,6 +950,33 @@ overlay model =
 
                 Nothing ->
                     []
+
+        seconds ms =
+            fixed 2 (ms / 1000) ++ " s"
+
+        bootLines =
+            case model.boot of
+                Just boot ->
+                    [ line "Boot" (seconds boot.frameMs ++ " from kernel start to first frame")
+                    , line ""
+                        ("kernel "
+                            ++ seconds boot.initMs
+                            ++ ", Elm start "
+                            ++ seconds (boot.elmMs - boot.initMs)
+                            ++ ", 1st frame "
+                            ++ seconds (boot.frameMs - boot.elmMs)
+                        )
+                    ]
+                        ++ (case boot.firmwareMs of
+                                Just ms ->
+                                    [ line "Firmware" (seconds ms ++ " before the kernel") ]
+
+                                Nothing ->
+                                    []
+                           )
+
+                Nothing ->
+                    [ line "Boot" "waiting for the first frame" ]
     in
     Ui.bottomLeft { size = ( model.width, model.height ) }
         (Ui.el { padding = Ui.paddingXY (8 * scale) (8 * scale), inFront = [], borderAndFill = Ui.NoBorderOrFill }
@@ -902,6 +987,7 @@ overlay model =
                 }
                 (Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
                     ([ Ui.text mono "Elm OS debug"
+                     , line "Build" (buildText model.bootImage)
                      , line "Screen" (String.fromInt model.width ++ " x " ++ String.fromInt model.height)
                      , line "Mouse" (String.fromInt (Coord.x model.mouse) ++ ", " ++ String.fromInt (Coord.y model.mouse))
                      , rendererLine
@@ -909,6 +995,7 @@ overlay model =
                      , line "Frame" (frameText model)
                      ]
                         ++ statsLines
+                        ++ (line "Battery" (batteryText model.battery) :: bootLines)
                         ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY (6 * scale) (3 * scale) }
                                 (Ui.text mono "Next colour")
                            ]
@@ -939,6 +1026,76 @@ badge font gpu =
                 ( 0, 0 )
                 ( side, side )
         }
+
+
+{-| The start of the boot image's SHA-256, enough to tell builds apart, and which file
+in build/ it should match.
+-}
+buildText : Maybe BootImageInfo -> String
+buildText bootImage =
+    case bootImage of
+        Just { what, sha256 } ->
+            if sha256 == "" then
+                "no boot image found to hash"
+
+            else
+                "sha256 " ++ String.left 16 sha256 ++ " (" ++ what ++ ")"
+
+        Nothing ->
+            "hashing the boot image..."
+
+
+batteryText : Maybe BatteryInfo -> String
+batteryText battery =
+    case battery of
+        Just info ->
+            if info.batteries == 0 then
+                "none"
+
+            else
+                [ Maybe.map (\p -> fixed 0 p ++ "%") info.percent
+                , if info.status == "" then
+                    Nothing
+
+                  else
+                    Just (String.toLower info.status)
+                , Maybe.map
+                    (\m ->
+                        hoursAndMinutes m
+                            ++ (if info.status == "Charging" then
+                                    " to full"
+
+                                else
+                                    " left"
+                               )
+                    )
+                    info.minutes
+                ]
+                    |> List.filterMap identity
+                    |> String.join ", "
+                    |> (\text ->
+                            if text == "" then
+                                "unknown"
+
+                            else
+                                text
+                       )
+
+        Nothing ->
+            "?"
+
+
+hoursAndMinutes : Float -> String
+hoursAndMinutes minutes =
+    let
+        m =
+            round minutes
+    in
+    if m >= 60 then
+        String.fromInt (m // 60) ++ " h " ++ String.fromInt (modBy 60 m) ++ " min"
+
+    else
+        String.fromInt m ++ " min"
 
 
 frameText : Model -> String
