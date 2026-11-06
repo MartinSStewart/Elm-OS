@@ -162,7 +162,7 @@ $(BUILD)/commit: FORCE
 # assembly, which cargo compiles with musl-gcc.
 CARGO       ?= cargo
 RUST_TARGET := x86_64-unknown-linux-musl
-HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/init host/gpu -name '*.rs' -o -name Cargo.toml)
+HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/init host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
 CARGO_BUILD  = cd host && CC_x86_64_unknown_linux_musl=musl-gcc $(CARGO) build --release --locked --target $(RUST_TARGET)
 
 $(BUILD)/libelmos_host.a: $(HOST_SRC) $(BUILD)/commit | check-deps

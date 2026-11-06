@@ -12,13 +12,19 @@ pixel font. It writes:
     curl -LO https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf
     python3 tools/make-noto-sans.py NotoSans-Regular.ttf
 
-Needs Pillow with FreeType and Raqm (for kerning). The output is checked in, so
+Needs Pillow with FreeType and Raqm (for kerning), and the hinted Noto Sans above. The output is checked in, so
 building Elm OS doesn't.
 """
 import os
 import sys
 
-from PIL import Image, ImageDraw, ImageFont
+# Full hinting: FreeType's older TrueType interpreter (v35) runs the font's hints in
+# both directions, so vertical stems land on whole pixels. The default (v40) only
+# hints vertically, which leaves stems smeared over two columns at 16 px. FreeType
+# reads this when Pillow starts it, so it has to be set before the import.
+os.environ["FREETYPE_PROPERTIES"] = "truetype:interpreter-version=35"
+
+from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_W, ATLAS_H = 1024, 512
@@ -72,7 +78,8 @@ def place(w, h):
 faces = []
 work = []
 for size in SIZES:
-    font = ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.RAQM)
+    # Basic layout: the hinted advances, whole pixels, so stems stay evenly spaced.
+    font = ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
     ascent, descent = font.getmetrics()
     glyphs = {}
     for code in [32] + CHARS:
