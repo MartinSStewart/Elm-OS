@@ -444,15 +444,12 @@ clippedText uiScale color font clip string position =
 
         Sans fontSize ->
             let
-                -- Laid out at the UI size (as measured), drawn with the face for the device size.
+                -- Measured at the UI size, drawn with the face for the device size.
                 layoutFace =
                     face (sansSize fontSize)
 
                 drawFace =
                     face (sansSize fontSize * s)
-
-                missing =
-                    missingGlyph drawFace
             in
             List.indexedMap
                 (\lineIndex line ->
@@ -460,21 +457,16 @@ clippedText uiScale color font clip string position =
                         baseline =
                             (y + lineIndex * height + layoutFace.ascent) * s
                     in
-                    layoutSans layoutFace line
-                        |> Tuple.first
+                    sansPens s layoutFace drawFace line
                         |> List.concatMap
-                            (\( at, char, _ ) ->
-                                let
-                                    glyph =
-                                        Dict.get char drawFace.glyphs |> Maybe.withDefault missing
-                                in
+                            (\( pen, glyph ) ->
                                 if glyph.w == 0 then
                                     []
 
                                 else
                                     clippedSprite color
                                         deviceClip
-                                        ( x * s + (at * s + 32) // 64 + glyph.left, baseline + glyph.top )
+                                        ( x * s + pen + glyph.left, baseline + glyph.top )
                                         ( glyph.w, glyph.h )
                                         ( glyph.x, glyph.y )
                                         ( glyph.w, glyph.h )
@@ -482,6 +474,42 @@ clippedText uiScale color font clip string position =
                 )
                 lines
                 |> List.concat
+
+
+{-| Where each glyph of one line goes, in device pixels from its left, and the glyph.
+
+At 1x that's the UI size's own (hinted) layout. At a bigger scale the face for the
+device size is laid out with its own hinted advances, which its glyphs were hinted to
+fit, then stretched or squeezed to the UI layout's width times the scale, so the text
+takes the room it was measured to take. (Doubling the UI size's advances instead
+doubles their rounding, which leaves uneven gaps; the font's unrounded advances make
+glyphs touch at 1x.)
+
+-}
+sansPens : Int -> NotoSans.Face -> NotoSans.Face -> String -> List ( Int, NotoSans.Glyph )
+sansPens s layoutFace drawFace line =
+    if s == 1 then
+        layoutSans layoutFace line |> Tuple.first |> List.map (\( at, _, glyph ) -> ( (at + 32) // 64, glyph ))
+
+    else
+        let
+            target =
+                Tuple.second (layoutSans layoutFace line) * s
+
+            ( placed, end ) =
+                layoutSans drawFace line
+        in
+        List.map
+            (\( at, _, glyph ) ->
+                ( if end <= 0 then
+                    (at + 32) // 64
+
+                  else
+                    (at * target + end * 32) // (end * 64)
+                , glyph
+                )
+            )
+            placed
 
 
 {-| A sprite cut to the screen columns `left` to `right`. The atlas rectangle is cut by
