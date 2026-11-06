@@ -8,6 +8,7 @@
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
+#   make atlas      build/atlas.png, the texture atlas (pixel font, cursor, Noto Sans) to look at
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
 #   make review-tests  run the tests of the custom review rules
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
@@ -42,7 +43,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE review review-fix review-tests all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE atlas review review-fix review-tests all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -355,6 +356,13 @@ review-fix:
 
 review-tests:
 	cd elm/review && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+
+# The texture atlas as an image. The host builds it in memory at boot (atlas::build),
+# so it is never in build/ otherwise.
+atlas:
+	@mkdir -p $(BUILD)
+	$(CARGO) run -q --manifest-path host/Cargo.toml -p common --example atlas-png \
+	  --target-dir $(abspath $(BUILD)/cargo-tools) -- $(abspath $(BUILD)/atlas.png)
 
 clean:
 	rm -rf $(BUILD)
