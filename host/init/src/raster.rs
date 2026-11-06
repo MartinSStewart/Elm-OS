@@ -1,15 +1,15 @@
 //! The CPU rasteriser: draws Elm's textured triangles into the back buffer.
 
-use common::atlas::{Tri, ATLAS_SIZE};
+use common::atlas::{Tri, ATLAS_H, ATLAS_W};
 
 fn edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (bx - ax) * (py - ay) - (by - ay) * (px - ax)
 }
 
 fn sample(atlas: &[u8], u: f32, v: f32) -> u32 {
-    let x = (u as i32).clamp(0, ATLAS_SIZE as i32 - 1) as usize;
-    let y = (v as i32).clamp(0, ATLAS_SIZE as i32 - 1) as usize;
-    atlas[y * ATLAS_SIZE + x] as u32
+    let x = (u as i32).clamp(0, ATLAS_W as i32 - 1) as usize;
+    let y = (v as i32).clamp(0, ATLAS_H as i32 - 1) as usize;
+    atlas[y * ATLAS_W + x] as u32
 }
 
 /// One textured triangle into `back` (w x h pixels, `stride` per row): each pixel

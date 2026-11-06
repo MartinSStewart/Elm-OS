@@ -361,7 +361,7 @@ step event model =
                 case Ui.findInput PasswordInput (screenUi model) of
                     Just (Ui.TextInputType { position }) ->
                         ( { moved
-                            | password = TextInput.mouseDownMove (textScale model) (passwordWidth model) moved.mouse position model.password
+                            | password = TextInput.mouseDownMove (passwordStyle model) moved.mouse position model.password
                           }
                         , []
                         )
@@ -378,7 +378,7 @@ step event model =
                     ( { model
                         | focus = Just PasswordInput
                         , selectingText = True
-                        , password = TextInput.mouseDown (textScale model) (passwordWidth model) model.mouse relativePositionToUi model.password
+                        , password = TextInput.mouseDown (passwordStyle model) model.mouse relativePositionToUi model.password
                       }
                     , []
                     )
@@ -732,19 +732,46 @@ view model =
              else
                 cursorColor model
             )
-            (textScale model)
+            (uiScale model)
             model.mouse
 
 
-{-| Font pixels per screen pixel: bigger on big screens.
+{-| Screen pixels per UI pixel, for padding, borders, icons and the debug overlay's
+pixel font: bigger on big screens.
 -}
-textScale : Model -> Int
-textScale model =
+uiScale : Model -> Int
+uiScale model =
     if model.width >= 1600 then
         2
 
     else
         1
+
+
+{-| The size of normal UI text: Noto Sans, drawn at that size (NotoSans.faces has the sizes).
+-}
+bodySize : Model -> Int
+bodySize model =
+    if model.width >= 2400 then
+        32
+
+    else if model.width >= 1600 then
+        24
+
+    else
+        16
+
+
+bodyFont : Model -> Sprite.Font
+bodyFont model =
+    Sprite.Sans (bodySize model)
+
+
+{-| For titles and the temperature: the next size up.
+-}
+headingFont : Model -> Sprite.Font
+headingFont model =
+    Sprite.Sans (bodySize model * 3 // 2)
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
@@ -774,26 +801,30 @@ overlay : Model -> Ui.Element UiId
 overlay model =
     let
         scale =
-            textScale model
+            uiScale model
+
+        -- The debug overlay keeps town-collab's pixel font.
+        mono =
+            Sprite.Mono scale
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.scaledText scale (String.padRight 10 ' ' label), Ui.scaledText scale value ]
+                [ Ui.text mono (String.padRight 10 ' ' label), Ui.text mono value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
                     Ui.row { spacing = 4 * scale, padding = Ui.noPadding }
-                        [ Ui.scaledText scale (String.padRight 10 ' ' "Renderer")
-                        , badge scale gpu
-                        , Ui.scaledText scale
+                        [ Ui.text mono (String.padRight 10 ' ' "Renderer")
+                        , badge mono gpu
+                        , Ui.text mono
                             ((if gpu then
                                 "GPU, "
 
                               else
                                 "CPU, "
                              )
-                                ++ ellipsis 40 name
+                                ++ Sprite.ellipsis mono (40 * 10 * scale) name
                             )
                         ]
 
@@ -870,7 +901,7 @@ overlay model =
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
                 (Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
-                    ([ Ui.scaledText scale "Elm OS debug"
+                    ([ Ui.text mono "Elm OS debug"
                      , line "Screen" (String.fromInt model.width ++ " x " ++ String.fromInt model.height)
                      , line "Mouse" (String.fromInt (Coord.x model.mouse) ++ ", " ++ String.fromInt (Coord.y model.mouse))
                      , rendererLine
@@ -879,7 +910,7 @@ overlay model =
                      ]
                         ++ statsLines
                         ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY (6 * scale) (3 * scale) }
-                                (Ui.scaledText scale "Next colour")
+                                (Ui.text mono "Next colour")
                            ]
                     )
                 )
@@ -889,11 +920,11 @@ overlay model =
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
 -}
-badge : Int -> Bool -> Ui.Element id
-badge scale gpu =
+badge : Sprite.Font -> Bool -> Ui.Element id
+badge font gpu =
     let
         side =
-            Coord.y Sprite.charSize * scale
+            Sprite.lineHeight font
     in
     Ui.quads
         { size = ( side, side )
@@ -971,15 +1002,6 @@ fixed decimals value =
         sign ++ whole ++ "." ++ String.padLeft decimals '0' (String.fromInt (modBy factor n))
 
 
-ellipsis : Int -> String -> String
-ellipsis maxLength string =
-    if String.length string > maxLength then
-        String.left (maxLength - 3) string ++ "..."
-
-    else
-        string
-
-
 main : Program () Model Msg
 main =
     Platform.worker
@@ -1000,21 +1022,30 @@ main =
 -- WIFI AND WEATHER
 
 
-{-| Characters across the wifi panel.
+{-| How wide the wifi panel's contents are, in pixels.
 -}
-panelChars : Int
-panelChars =
-    44
+panelWidth : Model -> Int
+panelWidth model =
+    28 * bodySize model
 
 
 wifiPanel : Model -> Ui.Element UiId
 wifiPanel model =
     let
         scale =
-            textScale model
+            uiScale model
+
+        font =
+            bodyFont model
+
+        width =
+            panelWidth model
 
         t =
-            Ui.scaledText scale
+            Ui.text font
+
+        fit string =
+            Sprite.ellipsis font width string
 
         small =
             Ui.paddingXY (6 * scale) (3 * scale)
@@ -1028,23 +1059,23 @@ wifiPanel model =
                     "Wifi"
 
         header =
-            Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
-                [ t (String.padRight (panelChars - 10) ' ' title)
-                , case model.wifiDevice of
-                    Wifi.Card _ ->
-                        Ui.button { id = RefreshButton, padding = small }
+            case model.wifiDevice of
+                Wifi.Card _ ->
+                    Ui.leftAndRight width
+                        (t title)
+                        (Ui.button { id = RefreshButton, padding = small }
                             (t
                                 (if model.scanning then
                                     "Scanning"
 
                                  else
-                                    " Refresh"
+                                    "Refresh"
                                 )
                             )
+                        )
 
-                    _ ->
-                        Ui.none
-                ]
+                _ ->
+                    t title
 
         status =
             model.wifiStatus
@@ -1052,7 +1083,7 @@ wifiPanel model =
         statusLine =
             case model.wifiDevice of
                 Wifi.Unknown ->
-                    t "Looking for a wifi card..."
+                    t "Looking for a wifi card…"
 
                 Wifi.NoCard ->
                     t "No wifi card found"
@@ -1063,16 +1094,16 @@ wifiPanel model =
                             t "Not connected. Pick a network:"
 
                         Wifi.Connecting ->
-                            t (ellipsis panelChars ("Joining " ++ status.ssid ++ "..."))
+                            t (fit ("Joining " ++ status.ssid ++ "…"))
 
                         Wifi.Dhcp ->
-                            t (ellipsis panelChars ("Getting an address on " ++ status.ssid))
+                            t (fit ("Getting an address on " ++ status.ssid))
 
                         Wifi.Connected ->
-                            Ui.colorScaledText connectedColor scale (ellipsis panelChars ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
+                            Ui.colorText connectedColor font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
 
                         Wifi.Failed ->
-                            Ui.colorScaledText Color.errorColor scale (wrap panelChars status.error)
+                            Ui.colorText Color.errorColor font (Sprite.wrap font width status.error)
 
         networkRows =
             case model.wifiDevice of
@@ -1080,7 +1111,7 @@ wifiPanel model =
                     if List.isEmpty model.networks then
                         [ t
                             (if model.scanning then
-                                "Looking for networks..."
+                                "Looking for networks…"
 
                              else
                                 "No networks found"
@@ -1088,24 +1119,25 @@ wifiPanel model =
                         ]
 
                     else
-                        List.take 8 model.networks |> List.map (networkRow model scale)
+                        List.take 8 model.networks |> List.map (networkRow model)
 
                 _ ->
                     []
 
         joinRows =
             case model.selected of
-                Just network ->
-                    if network.ssid == status.ssid && status.state /= Wifi.Idle && status.state /= Wifi.Failed then
+                Just selected ->
+                    if selected.ssid == status.ssid && status.state /= Wifi.Idle && status.state /= Wifi.Failed then
                         []
 
-                    else if network.security == Wifi.Enterprise || network.security == Wifi.Wep || network.security == Wifi.Wpa3 then
-                        [ Ui.colorScaledText Color.errorColor scale "That kind of network isn't supported yet" ]
+                    else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
+                        [ Ui.colorText Color.errorColor font "That kind of network isn't supported yet" ]
 
                     else
-                        (if needsPassword network then
+                        (if needsPassword selected then
                             [ Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
-                                [ t "Password"
+                                [ -- lined up with the text in the box, which is inset by its padding
+                                  Ui.el { padding = Ui.paddingXY 0 4, inFront = [], borderAndFill = Ui.NoBorderOrFill } (t "Password")
                                 , passwordInput model
                                 , Ui.button { id = ShowPasswordButton, padding = small }
                                     (t
@@ -1123,7 +1155,7 @@ wifiPanel model =
                             []
                         )
                             ++ [ Ui.button { id = ConnectButton, padding = small }
-                                    (t (ellipsis (panelChars - 2) ("Connect to " ++ network.ssid)))
+                                    (t (Sprite.ellipsis font (width - 12 * scale) ("Connect to " ++ selected.ssid)))
                                ]
 
                 Nothing ->
@@ -1148,7 +1180,7 @@ wifiPanel model =
                         ++ networkRows
                         ++ joinRows
                         ++ disconnectRow
-                        ++ weatherRows model scale
+                        ++ weatherRows model
                     )
                 )
             )
@@ -1160,9 +1192,15 @@ connectedColor =
     Color.rgb255 30 120 60
 
 
-networkRow : Model -> Int -> Wifi.Network -> Ui.Element UiId
-networkRow model scale network =
+networkRow : Model -> Wifi.Network -> Ui.Element UiId
+networkRow model network =
     let
+        scale =
+            uiScale model
+
+        font =
+            bodyFont model
+
         connectedHere =
             model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
 
@@ -1187,16 +1225,26 @@ networkRow model scale network =
                     Wifi.Wpa3 ->
                         "WPA3"
 
-        nameChars =
-            panelChars - 15
+        -- The row fills the panel: its button's padding is 4 * scale each side.
+        width =
+            panelWidth model - 8 * scale
+
+        labelWidth =
+            5 * bodySize model
+
+        bars =
+            signalBars scale network.signal
+
+        nameWidth =
+            width - labelWidth - 12 * scale - 16 * scale
     in
     Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY (4 * scale) (2 * scale) }
         (Maybe.map .ssid model.selected == Just network.ssid)
-        (Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
-            [ signalBars scale network.signal
-            , Ui.scaledText scale (String.padRight nameChars ' ' (ellipsis nameChars network.ssid))
-            , Ui.scaledText scale (String.padLeft 9 ' ' label)
-            ]
+        (Ui.leftAndRight width
+            (Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
+                [ bars, Ui.text font (Sprite.ellipsis font nameWidth network.ssid) ]
+            )
+            (Ui.text font label)
         )
 
 
@@ -1236,50 +1284,45 @@ signalBars scale dbm =
     Ui.quads { size = ( 16 * scale, 18 * scale ), triangles = List.concatMap bar (List.range 0 3) }
 
 
-passwordWidth : Model -> Int
-passwordWidth model =
-    let
-        scale =
-            textScale model
-    in
-    22 * Coord.x Sprite.charSize * scale + 2 * Coord.x TextInput.padding + 2 * scale
-
-
-{-| town-collab's text input, showing a star for each character unless "Show" is on.
+{-| The password box: town-collab's text input, showing dots unless "Show" is on.
 -}
+passwordStyle : Model -> TextInput.Style
+passwordStyle model =
+    { font = bodyFont model, width = 14 * bodySize model, masked = not model.showPassword }
+
+
 passwordInput : Model -> Ui.Element UiId
 passwordInput model =
-    let
-        state =
-            model.password.current
-    in
-    Ui.textInputScaled
+    Ui.textInput
         { id = PasswordInput
-        , width = passwordWidth model
-        , textScale = textScale model
+        , style = passwordStyle model
         , isValid = True
-        , state =
-            if model.showPassword then
-                state
-
-            else
-                { state | text = String.repeat (String.length state.text) "*" }
+        , state = model.password.current
         }
 
 
-weatherRows : Model -> Int -> List (Ui.Element UiId)
-weatherRows model scale =
+weatherRows : Model -> List (Ui.Element UiId)
+weatherRows model =
     let
+        scale =
+            uiScale model
+
+        font =
+            bodyFont model
+
+        width =
+            panelWidth model
+
         t =
-            Ui.scaledText scale
+            Ui.text font
 
         small =
             Ui.paddingXY (6 * scale) (3 * scale)
 
         divider =
             Ui.quads
-                { size = ( panelChars * 10 * scale, 6 * scale )
-                , triangles = Sprite.rectangle Color.outlineColor ( 0, 2 * scale ) ( panelChars * 10 * scale, 2 )
+                { size = ( width, 6 * scale )
+                , triangles = Sprite.rectangle Color.outlineColor ( 0, 2 * scale ) ( width, 2 )
                 }
 
         degrees value =
@@ -1294,27 +1337,26 @@ weatherRows model scale =
                 []
 
         FindingPlace ->
-            [ divider, t "Weather: finding where we are..." ]
+            [ divider, t "Weather: finding where we are…" ]
 
         LoadingForecast place ->
-            [ divider, t (ellipsis panelChars ("Weather in " ++ place.name ++ "...")) ]
+            [ divider, t (Sprite.ellipsis font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
             [ divider
-            , Ui.colorScaledText Color.errorColor scale (wrap panelChars error)
+            , Ui.colorText Color.errorColor font (Sprite.wrap font width error)
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
         GotWeather place forecast ->
             [ divider
-            , Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
-                [ t (String.padRight (panelChars - 10) ' ' (ellipsis (panelChars - 10) ("Weather in " ++ place.name)))
-                , Ui.button { id = WeatherButton, padding = small } (t " Refresh")
-                ]
+            , Ui.leftAndRight width
+                (t (Sprite.ellipsis font (width - 6 * bodySize model) ("Weather in " ++ place.name)))
+                (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
             , Ui.row { spacing = 8 * scale, padding = Ui.noPadding }
                 [ weatherIcon (3 * scale) forecast.code
                 , Ui.column { spacing = 3 * scale, padding = Ui.noPadding }
-                    [ Ui.scaledText (2 * scale) (fixed 1 forecast.temperature ++ "°C")
+                    [ Ui.text (headingFont model) (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -1330,25 +1372,22 @@ weatherRows model scale =
                     (\i day ->
                         Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
                             [ weatherIcon scale day.code
-                            , t
-                                (String.padRight 10
-                                    ' '
+                            , Ui.minWidth (6 * bodySize model)
+                                (t
                                     (if i == 0 then
                                         "Today"
 
                                      else
                                         Weather.weekday day.date
                                     )
-                                    ++ String.padLeft 4 ' ' (degrees day.high)
-                                    ++ " / "
-                                    ++ String.padRight 5 ' ' (degrees day.low)
-                                    ++ Weather.describe day.code
                                 )
+                            , Ui.minWidth (5 * bodySize model) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , t (Weather.describe day.code)
                             ]
                     )
                     forecast.days
                 )
-            , Ui.colorScaledText Color.outlineColor scale ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            , Ui.colorText Color.outlineColor font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
             ]
 
 
@@ -1435,30 +1474,6 @@ weatherIcon unit code =
     Ui.quads { size = ( side, side ), triangles = triangles }
 
 
-{-| Breaks text into lines of at most `width` characters, between words.
--}
-wrap : Int -> String -> String
-wrap width text =
-    String.words text
-        |> List.foldl
-            (\word lines ->
-                case lines of
-                    line :: rest ->
-                        if String.length line + 1 + String.length word <= width then
-                            (line ++ " " ++ word) :: rest
-
-                        else
-                            String.left width word :: line :: rest
-
-                    [] ->
-                        [ String.left width word ]
-            )
-            []
-        |> List.reverse
-        |> String.join "\n"
-
-
-
 -- TOOLBAR AND ABOUT PAGE
 
 
@@ -1466,10 +1481,10 @@ toolbar : Model -> Ui.Element UiId
 toolbar model =
     let
         scale =
-            textScale model
+            uiScale model
 
         t =
-            Ui.scaledText scale
+            Ui.text (bodyFont model)
 
         small =
             Ui.paddingXY (6 * scale) (3 * scale)
@@ -1518,13 +1533,20 @@ aboutPage : Model -> Ui.Element UiId
 aboutPage model =
     let
         scale =
-            textScale model
+            uiScale model
+
+        font =
+            bodyFont model
 
         t =
-            Ui.scaledText scale
+            Ui.text font
+
+        valueWidth =
+            26 * bodySize model
 
         line label value =
-            t (String.padRight 10 ' ' label ++ value)
+            Ui.row { spacing = 0, padding = Ui.noPadding }
+                [ Ui.minWidth (5 * bodySize model) (t label), t (Sprite.ellipsis font valueWidth value) ]
 
         system =
             model.system
@@ -1555,12 +1577,12 @@ aboutPage model =
             , borderAndFill = Ui.BorderAndFill { borderWidth = 2 * scale, borderColor = Color.outlineColor, fillColor = Color.fillColor }
             }
             (Ui.column { spacing = 4 * scale, padding = Ui.noPadding }
-                [ Ui.scaledText (2 * scale) "Elm OS"
+                [ Ui.text (headingFont model) "Elm OS"
                 , t "A Linux kernel that boots straight into one Elm program."
                 , t ""
                 , line "Version" (field .commit)
                 , line "Kernel" (field .kernel)
-                , line "CPU" (ellipsis 50 (field .cpu))
+                , line "CPU" (field .cpu)
                 , line "Memory"
                     (case model.stats of
                         Just stats ->
@@ -1572,17 +1594,22 @@ aboutPage model =
                 , line "Graphics"
                     (case model.renderer of
                         Just r ->
-                            ellipsis 50 r.name
+                            r.name
 
                         Nothing ->
                             "?"
                     )
-                , line "Wifi" (ellipsis 50 wifiText)
+                , line "Wifi" wifiText
                 , t ""
-                , t "The Elm program is compiled to native code by eco"
-                , t "(github.com/eco-lang/eco-compiler). The UI framework and"
-                , t "font are from town-collab. Weather: open-meteo.com,"
-                , t "location: geojs.io."
+                , t
+                    (Sprite.wrap font
+                        (31 * bodySize model)
+                        ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
+                            ++ "The UI framework and the debug overlay's pixel font are from town-collab. "
+                            ++ "Text is in Noto Sans (SIL Open Font License). "
+                            ++ "Weather: open-meteo.com, location: geojs.io."
+                        )
+                    )
                 , t ""
                 , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY (6 * scale) (3 * scale) } (t "Close")
                 ]

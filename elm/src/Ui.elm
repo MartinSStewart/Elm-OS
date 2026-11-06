@@ -9,7 +9,7 @@ module Ui exposing
     , bottomLeft
     , button
     , center
-    , colorScaledText
+    , colorText
     , column
     , customButton
     , defaultButtonBorderAndFillFocus
@@ -17,14 +17,16 @@ module Ui exposing
     , el
     , findInput
     , hover
+    , leftAndRight
     , noPadding
+    , minWidth
     , none
     , paddingXY
     , quads
     , row
-    , scaledText
     , selectableButton
-    , textInputScaled
+    , text
+    , textInput
     , topLeft
     , topRight
     , view
@@ -71,10 +73,9 @@ type alias ButtonData id =
 
 type alias TextInputData id =
     { id : id
-    , width : Int
+    , style : TextInput.Style
     , isValid : Bool
     , state : TextInput.State
-    , textScale : Int
     }
 
 
@@ -83,7 +84,7 @@ type Element id
     | Text
         { outline : Maybe Color
         , color : Color
-        , scale : Int
+        , font : Sprite.Font
         , text : String
         , cachedSize : Coord
         }
@@ -125,35 +126,35 @@ paddingXY x y =
 -- TEXT
 
 
-textHelper : Maybe Color -> Color -> Int -> String -> Element id
-textHelper outline color scale text2 =
+textHelper : Maybe Color -> Color -> Sprite.Font -> String -> Element id
+textHelper outline color font text2 =
     Text
         { outline = outline
         , color = color
-        , scale = scale
+        , font = font
         , text = text2
-        , cachedSize = Sprite.textSize scale text2
+        , cachedSize = Sprite.textSize font text2
         }
 
 
-scaledText : Int -> String -> Element id
-scaledText scale =
-    textHelper Nothing Color.black scale
+{-| Black text. '\n' starts a new line.
+-}
+text : Sprite.Font -> String -> Element id
+text font =
+    textHelper Nothing Color.black font
 
 
-colorScaledText : Color -> Int -> String -> Element id
-colorScaledText color scale =
-    textHelper Nothing color scale
+colorText : Color -> Sprite.Font -> String -> Element id
+colorText color font =
+    textHelper Nothing color font
 
 
 
 -- TEXT INPUTS
 
 
-textInputScaled :
-    { id : id, width : Int, textScale : Int, isValid : Bool, state : TextInput.State }
-    -> Element id
-textInputScaled =
+textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.State } -> Element id
+textInput =
     TextInput
 
 
@@ -311,6 +312,20 @@ align fx fy ( sizeX, sizeY ) child =
         child
 
 
+{-| A child at the left of a space at least `width` wide, for lining things up in columns.
+-}
+minWidth : Int -> Element id -> Element id
+minWidth width child =
+    align 0 0 ( max width (Coord.x (size child)), Coord.y (size child) ) child
+
+
+{-| Two children in a row at least `width` wide: one at the left, the other at the right.
+-}
+leftAndRight : Int -> Element id -> Element id -> Element id
+leftAndRight width left right =
+    row { spacing = 0, padding = noPadding } [ minWidth (width - Coord.x (size right)) left, right ]
+
+
 center : { size : Coord } -> Element id -> Element id
 center data =
     align 1 1 data.size
@@ -335,7 +350,7 @@ size : Element id -> Coord
 size element =
     case element of
         TextInput data ->
-            TextInput.size data.textScale data.width
+            TextInput.size data.style
 
         Text data ->
             data.cachedSize
@@ -440,7 +455,7 @@ hoverHelper :
 hoverHelper hovers point position element =
     case element of
         TextInput data ->
-            if contains point position (TextInput.size data.textScale data.width) then
+            if contains point position (TextInput.size data.style) then
                 ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             else
@@ -499,7 +514,7 @@ findInputHelper id position element =
     case element of
         TextInput data ->
             if data.id == id then
-                Just (TextInputType { position = position, size = TextInput.size data.textScale data.width })
+                Just (TextInputType { position = position, size = TextInput.size data.style })
 
             else
                 Nothing
@@ -560,15 +575,15 @@ viewList : Maybe id -> Maybe id -> Coord -> Element id -> List Triangle
 viewList maybeHover focus position element =
     case element of
         TextInput data ->
-            TextInput.view data.textScale position data.width (focus == Just data.id) data.isValid data.state
+            TextInput.view data.style position (focus == Just data.id) data.isValid data.state
 
         Text data ->
             case data.outline of
                 Just outline ->
-                    Sprite.outlinedText outline data.color data.scale data.text position
+                    Sprite.outlinedText outline data.color data.font data.text position
 
                 Nothing ->
-                    Sprite.text data.color data.scale data.text position
+                    Sprite.text data.color data.font data.text position
 
         Button data child ->
             borderAndFillView position

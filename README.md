@@ -19,7 +19,7 @@ enforced by the type system. See the
 - A wifi panel (top right) joins WPA2 personal (including WPA2/WPA3 mixed) or open networks, then shows the local weather.
 - Buttons (top left) open an about page and restart or power off the computer.
 
-The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework and pixel font.
+The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`) drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
 
 ## Build and run in QEMU
 
@@ -91,7 +91,7 @@ Tiger Lake laptop. Extra kernel options can be baked in with `USB_CMDLINE`, for 
 | `host/init/` | Rust host, linked into `/init`: mounts `/dev`, `/proc` and `/sys`, reads evdev, runs effects, CPU renderer, HTTP |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
-| `host/common/` | Shared by both: the texture atlas and pixel font, DRM/KMS ioctls |
+| `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
 | `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
 | `versions.mk` | Pinned kernel and hostap versions, updated by `make refresh` |
 | `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig` |

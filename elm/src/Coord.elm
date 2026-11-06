@@ -1,4 +1,4 @@
-module Coord exposing (Coord, minus, multiply, origin, plus, scalar, x, xy, y)
+module Coord exposing (Coord, minus, origin, plus, scalar, x, xy, y)
 
 {-| Integer pixel coordinates and sizes, a cut-down version of town-collab's Coord
 (without the units, which need elm-units).
@@ -39,11 +39,6 @@ plus ( dx, dy ) ( px, py ) =
 minus : Coord -> Coord -> Coord
 minus ( dx, dy ) ( px, py ) =
     ( px - dx, py - dy )
-
-
-multiply : Coord -> Coord -> Coord
-multiply ( dx, dy ) ( px, py ) =
-    ( px * dx, py * dy )
 
 
 scalar : Int -> Coord -> Coord

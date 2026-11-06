@@ -1,17 +1,24 @@
 //! The texture atlas that every triangle samples (see elm/src/Sprite.elm), shared by
 //! both renderers: /init's CPU rasteriser and elmos-gpu.
 //!
-//! 256 x 256 pixels, one byte each: how much of the pixel is covered, 0 to 255.
+//! 1024 x 512 pixels, one byte each: how much of the pixel is covered, 0 to 255.
 //! A triangle's colour is multiplied by it, so the atlas only holds shapes:
 //!
 //!   x 0-250, y 0-180     town-collab's 10 x 18 pixel font, 25 glyphs to a row
 //!   x 0-12, y 184-203    the mouse cursor's outline (12 x 19, tip at the top left)
 //!   x 16-28, y 184-203   the mouse cursor's fill; Elm draws the two in different colours
 //!   x 248-256, y 248-256 solid, for flat colours
+//!   everywhere else      Noto Sans at a few sizes, antialiased (tools/make-noto-sans.py;
+//!                        elm/src/NotoSans.elm says where each glyph is)
 
 use crate::font;
 
-pub const ATLAS_SIZE: usize = 256;
+pub const ATLAS_W: usize = 1024;
+pub const ATLAS_H: usize = 512;
+
+/// Noto Sans's glyphs over the whole atlas, run-length coded: a 0 byte is followed by
+/// how many 0s (1-255) it stands for, and any other byte is itself.
+static NOTO_SANS: &[u8] = include_bytes!("noto_sans.rle");
 
 const CURSOR_W: usize = 12;
 const CURSOR_H: usize = 19;
@@ -42,26 +49,36 @@ const CURSOR: [&[u8; CURSOR_W]; CURSOR_H] = [
 ];
 
 pub fn build() -> Vec<u8> {
-    let mut a = vec![0u8; ATLAS_SIZE * ATLAS_SIZE];
+    let mut a = Vec::with_capacity(ATLAS_W * ATLAS_H);
+    let mut bytes = NOTO_SANS.iter();
+    while let Some(&b) = bytes.next() {
+        if b == 0 {
+            let n = *bytes.next().unwrap_or(&0) as usize;
+            a.resize(a.len() + n, 0);
+        } else {
+            a.push(b);
+        }
+    }
+    a.resize(ATLAS_W * ATLAS_H, 0);
     for y in 0..font::FONT_H {
         for x in 0..font::FONT_W {
             if font::FONT_BITS[y * font::FONT_STRIDE + x / 8] & (0x80 >> (x % 8)) != 0 {
-                a[y * ATLAS_SIZE + x] = 255;
+                a[y * ATLAS_W + x] = 255;
             }
         }
     }
     for (y, row) in CURSOR.iter().enumerate() {
         for (x, &c) in row.iter().enumerate() {
             if c == b'X' {
-                a[(CURSOR_Y + y) * ATLAS_SIZE + x] = 255;
+                a[(CURSOR_Y + y) * ATLAS_W + x] = 255;
             }
             if c == b'o' {
-                a[(CURSOR_Y + y) * ATLAS_SIZE + CURSOR_FILL_X + x] = 255;
+                a[(CURSOR_Y + y) * ATLAS_W + CURSOR_FILL_X + x] = 255;
             }
         }
     }
-    for y in 248..ATLAS_SIZE {
-        a[y * ATLAS_SIZE + 248..(y + 1) * ATLAS_SIZE].fill(255);
+    for y in 248..256 {
+        a[y * ATLAS_W + 248..y * ATLAS_W + 256].fill(255);
     }
     a
 }
@@ -122,5 +139,24 @@ impl Tri {
     pub fn as_bytes(tris: &[Tri]) -> &[u8] {
         // SAFETY: Tri is repr(C), made of f32s and a u32 with no padding.
         unsafe { std::slice::from_raw_parts(tris.as_ptr() as *const u8, tris.len() * Tri::SIZE) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noto_sans_fills_the_atlas_exactly() {
+        let mut n = 0;
+        let mut bytes = NOTO_SANS.iter();
+        while let Some(&b) = bytes.next() {
+            n += if b == 0 { *bytes.next().unwrap() as usize } else { 1 };
+        }
+        assert_eq!(n, ATLAS_W * ATLAS_H);
+        // and it leaves the pixel font's corner alone
+        let a = build();
+        assert_eq!(a.len(), ATLAS_W * ATLAS_H);
+        assert_eq!(a[250 * ATLAS_W + 250], 255);
     }
 }

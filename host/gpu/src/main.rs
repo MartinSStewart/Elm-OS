@@ -29,7 +29,7 @@
 
 mod ffi;
 
-use common::atlas::{self, Tri, ATLAS_SIZE, CURSOR_PLANE};
+use common::atlas::{self, Tri, ATLAS_H, ATLAS_W, CURSOR_PLANE};
 use common::drm;
 use ffi::*;
 use std::collections::HashMap;
@@ -67,13 +67,18 @@ varying vec4 v_col;
 void main() {
     vec2 ndc = pos / screen * 2.0 - 1.0;
     gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0); // y grows downwards in Elm's pixels
-    v_uv = uv / 256.0; // ATLAS_SIZE
+    v_uv = uv / vec2(1024.0, 512.0); // ATLAS_W, ATLAS_H
     v_col = col;
 }
 ";
 
 /// The atlas holds coverage only (GL_ALPHA): it scales the colour's alpha.
-const FS: &str = "precision mediump float;
+// highp where there is one: mediump can be half a texel out across a 1024 pixel atlas.
+const FS: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
 uniform sampler2D atlas;
 varying vec2 v_uv;
 varying vec4 v_col;
@@ -456,20 +461,19 @@ fn main() {
             std::mem::offset_of!(Vertex, rgba) as *const c_void,
         );
 
-        // The atlas, sampled pixel for pixel: the font is pixel art.
+        // The atlas, sampled pixel for pixel: Elm puts glyphs on whole pixels.
         let atlas = atlas::build();
         let mut tex = 0;
         glGenTextures(1, &mut tex);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        let size = ATLAS_SIZE as i32;
         glTexImage2D(
             GL_TEXTURE_2D,
             0,
             GL_ALPHA as i32,
-            size,
-            size,
+            ATLAS_W as i32,
+            ATLAS_H as i32,
             0,
             GL_ALPHA,
             GL_UNSIGNED_BYTE,
