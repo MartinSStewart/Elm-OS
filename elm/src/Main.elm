@@ -16,6 +16,7 @@ import Http
 import Json.Decode as D
 import Keyboard
 import Sprite exposing (Triangle)
+import TextInput
 import Time
 import Ui
 import Weather
@@ -192,13 +193,16 @@ type alias Model =
     , frameIntervals : List Float -- milliseconds, newest first
     , frames : Int
     , shift : Bool
+    , ctrl : Bool
+    , clipboard : String
+    , selectingText : Bool -- the mouse went down in the password box and is still down
     , focus : Maybe UiId
     , wifiDevice : Wifi.Device
     , networks : List Wifi.Network
     , scanning : Bool
     , wifiStatus : Wifi.Status
     , selected : Maybe Wifi.Network
-    , password : String
+    , password : TextInput.Model
     , showPassword : Bool
     , weather : WeatherState
     , geoUrl : String
@@ -260,13 +264,16 @@ init _ =
       , frameIntervals = []
       , frames = 0
       , shift = False
+      , ctrl = False
+      , clipboard = ""
+      , selectingText = False
       , focus = Nothing
       , wifiDevice = Wifi.Unknown
       , networks = []
       , scanning = True
       , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
       , selected = Nothing
-      , password = ""
+      , password = TextInput.init
       , showPassword = False
       , weather = NoWeather
       , geoUrl = Weather.defaultGeoUrl
@@ -349,15 +356,44 @@ step event model =
             ( { model | width = w, height = h, mouse = ( w // 2, h // 2 ) }, Cmd.none )
 
         Mouse x y ->
-            ( { model | mouse = ( x, y ) }, Cmd.none )
+            let
+                moved =
+                    { model | mouse = ( x, y ) }
+            in
+            if model.selectingText then
+                case Ui.findInput PasswordInput (screenUi model) of
+                    Just (Ui.TextInputType { position }) ->
+                        ( { moved
+                            | password = TextInput.mouseDownMove (textScale model) (passwordWidth model) moved.mouse position model.password
+                          }
+                        , Cmd.none
+                        )
+
+                    _ ->
+                        ( moved, Cmd.none )
+
+            else
+                ( moved, Cmd.none )
 
         Button 0 True ->
             case Ui.hover model.mouse (screenUi model) of
+                ( PasswordInput, { relativePositionToUi } ) :: _ ->
+                    ( { model
+                        | focus = Just PasswordInput
+                        , selectingText = True
+                        , password = TextInput.mouseDown (textScale model) (passwordWidth model) model.mouse relativePositionToUi model.password
+                      }
+                    , Cmd.none
+                    )
+
                 ( id, _ ) :: _ ->
                     click id model
 
                 [] ->
                     ( { model | pressed = True, focus = Nothing }, Cmd.none )
+
+        Button 0 False ->
+            ( { model | pressed = False, selectingText = False }, Cmd.none )
 
         Button _ down ->
             ( { model | pressed = down }, Cmd.none )
@@ -365,6 +401,9 @@ step event model =
         Key code down repeat ->
             if Keyboard.isShift code then
                 ( { model | shift = down }, Cmd.none )
+
+            else if Keyboard.isCtrl code then
+                ( { model | ctrl = down }, Cmd.none )
 
             else if not down then
                 ( model, Cmd.none )
@@ -449,7 +488,7 @@ click id model =
                                 model.password
 
                             else
-                                ""
+                                TextInput.init
                         , focus =
                             if needsPassword network then
                                 Just PasswordInput
@@ -513,7 +552,7 @@ connect model =
             let
                 password =
                     if needsPassword network then
-                        model.password
+                        model.password.current.text
 
                     else
                         ""
@@ -535,30 +574,61 @@ needsPassword network =
     network.security /= Wifi.Open
 
 
+{-| A key for the password box. Elm OS has no system clipboard yet, so Ctrl+C and Ctrl+X
+copy into one of its own for Ctrl+V, and only while the password is shown.
+-}
 typeKey : Keyboard.Key -> Model -> ( Model, Cmd Msg )
 typeKey key model =
-    case key of
-        Keyboard.Character char ->
-            if String.length model.password < 63 then
-                ( { model | password = model.password ++ String.fromChar char }, Cmd.none )
-
-            else
-                ( model, Cmd.none )
-
-        Keyboard.Backspace ->
-            ( { model | password = String.dropRight 1 model.password }, Cmd.none )
-
-        Keyboard.Enter ->
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
             connect model
 
-        Keyboard.Escape ->
+        ( False, Keyboard.Escape ) ->
             ( { model | focus = Nothing }, Cmd.none )
 
-        Keyboard.Tab ->
-            ( model, Cmd.none )
+        ( True, Keyboard.Character "v" ) ->
+            ( { model | password = TextInput.paste model.clipboard model.password |> limitPassword }, Cmd.none )
 
-        Keyboard.Other ->
-            ( model, Cmd.none )
+        _ ->
+            let
+                ( password, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key model.password
+            in
+            ( { model
+                | password = limitPassword password
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            if model.showPassword then
+                                text
+
+                            else
+                                model.clipboard
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+            , Cmd.none
+            )
+
+
+{-| WPA passphrases have at most 63 characters.
+-}
+limitPassword : TextInput.Model -> TextInput.Model
+limitPassword textInput =
+    if String.length textInput.current.text > 63 then
+        TextInput.replaceState
+            (\state ->
+                { state
+                    | text = String.left 63 state.text
+                    , cursorPosition = min 63 state.cursorPosition
+                    , cursorSize = 0
+                }
+            )
+            textInput
+
+    else
+        textInput
 
 
 isRenderer : Input -> Bool
@@ -1000,7 +1070,7 @@ wifiPanel model =
                         (if needsPassword network then
                             [ Ui.row { spacing = 6 * scale, padding = Ui.noPadding }
                                 [ t "Password"
-                                , passwordInput scale (model.focus == Just PasswordInput) model
+                                , passwordInput model
                                 , Ui.button { id = ShowPasswordButton, padding = small }
                                     (t
                                         (if model.showPassword then
@@ -1127,52 +1197,35 @@ signalBars scale dbm =
     Ui.quads { size = ( 16 * scale, 18 * scale ), triangles = List.concatMap bar (List.range 0 3) }
 
 
-passwordInput : Int -> Bool -> Model -> Ui.Element UiId
-passwordInput scale focused model =
+passwordWidth : Model -> Int
+passwordWidth model =
     let
-        chars =
-            22
+        scale =
+            textScale model
+    in
+    22 * Coord.x Sprite.charSize * scale + 2 * Coord.x TextInput.padding + 2 * scale
 
-        shown =
+
+{-| town-collab's text input, showing a star for each character unless "Show" is on.
+-}
+passwordInput : Model -> Ui.Element UiId
+passwordInput model =
+    let
+        state =
+            model.password.current
+    in
+    Ui.textInputScaled
+        { id = PasswordInput
+        , width = passwordWidth model
+        , textScale = textScale model
+        , isValid = True
+        , state =
             if model.showPassword then
-                model.password
+                state
 
             else
-                String.repeat (String.length model.password) "*"
-
-        visible =
-            String.right
-                (if focused then
-                    chars - 1
-
-                 else
-                    chars
-                )
-                shown
-                ++ (if focused then
-                        "_"
-
-                    else
-                        ""
-                   )
-    in
-    Ui.elWithId
-        { id = PasswordInput
-        , padding = Ui.paddingXY (4 * scale) (2 * scale)
-        , inFront = []
-        , borderAndFill =
-            Ui.BorderAndFill
-                { borderWidth = 2
-                , borderColor =
-                    if focused then
-                        Color.focusedUiColor
-
-                    else
-                        Color.outlineColor
-                , fillColor = Color.fillColor3
-                }
+                { state | text = String.repeat (String.length state.text) "*" }
         }
-        (Ui.scaledText scale (String.padRight chars ' ' visible))
 
 
 weatherRows : Model -> Int -> List (Ui.Element UiId)

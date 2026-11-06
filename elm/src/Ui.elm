@@ -5,6 +5,7 @@ module Ui exposing
     , InputType(..)
     , Padding
     , RowColumn
+    , TextInputData
     , bottomCenter
     , bottomLeft
     , bottomRight
@@ -38,6 +39,8 @@ module Ui exposing
     , tabForward
     , table
     , text
+    , textInput
+    , textInputScaled
     , topCenter
     , topLeft
     , topRight
@@ -54,14 +57,16 @@ fill, and the alignment helpers (`center`, `topRight`, ...) pad a child out to a
 given size. `view` turns the tree into triangles, and `hover` finds the elements
 with ids under a point.
 
-Left out for now: text inputs (they need town-collab's TextInput modules and a
-keyboard layout), underlined text and sprites from town-collab's texture.
+Text inputs come from town-collab's TextInput (TextInput.elm, with a US layout in
+Keyboard.elm). Left out for now: multiline text inputs, underlined text and sprites from
+town-collab's texture.
 
 -}
 
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Sprite exposing (Triangle)
+import TextInput
 
 
 type alias RowColumn =
@@ -82,8 +87,18 @@ type alias ButtonData id =
     }
 
 
+type alias TextInputData id =
+    { id : id
+    , width : Int
+    , isValid : Bool
+    , state : TextInput.State
+    , textScale : Int
+    }
+
+
 type Element id
-    = Text
+    = TextInput (TextInputData id)
+    | Text
         { outline : Maybe Color
         , color : Color
         , scale : Int
@@ -160,6 +175,12 @@ visuallyEqual a b =
         ( Quads aQuad, Quads bQuad ) ->
             aQuad == bQuad
 
+        ( TextInput aTextInput, TextInput bTextInput ) ->
+            (aTextInput.width == bTextInput.width)
+                && (aTextInput.isValid == bTextInput.isValid)
+                && (aTextInput.textScale == bTextInput.textScale)
+                && (aTextInput.state == bTextInput.state)
+
         ( Empty, Empty ) ->
             True
 
@@ -220,6 +241,22 @@ colorScaledText color scale =
 outlinedText : { outline : Color, color : Color, text : String } -> Element id
 outlinedText data =
     textHelper (Just data.outline) data.color defaultCharScale data.text
+
+
+
+-- TEXT INPUTS
+
+
+textInput : { id : id, width : Int, isValid : Bool, state : TextInput.State } -> Element id
+textInput data =
+    TextInput { id = data.id, width = data.width, textScale = 2, isValid = data.isValid, state = data.state }
+
+
+textInputScaled :
+    { id : id, width : Int, textScale : Int, isValid : Bool, state : TextInput.State }
+    -> Element id
+textInputScaled =
+    TextInput
 
 
 
@@ -446,6 +483,9 @@ bottomRight data =
 size : Element id -> Coord
 size element =
     case element of
+        TextInput data ->
+            TextInput.size data.textScale data.width
+
         Text data ->
             data.cachedSize
 
@@ -543,6 +583,9 @@ isHoveringOverInput elements =
                 Button _ _ ->
                     True
 
+                TextInput _ ->
+                    True
+
                 _ ->
                     False
 
@@ -563,6 +606,13 @@ hoverHelper :
     -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
 hoverHelper hovers point position element =
     case element of
+        TextInput data ->
+            if contains point position (TextInput.size data.textScale data.width) then
+                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+
+            else
+                hovers
+
         Button data _ ->
             if contains point position data.cachedSize then
                 ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -603,6 +653,7 @@ hoverHelper hovers point position element =
 
 type InputType id
     = ButtonType { data : ButtonData id, position : Coord, size : Coord }
+    | TextInputType { position : Coord, size : Coord }
 
 
 findInput : id -> Element id -> Maybe (InputType id)
@@ -613,6 +664,13 @@ findInput id element =
 findInputHelper : id -> Coord -> Element id -> Maybe (InputType id)
 findInputHelper id position element =
     case element of
+        TextInput data ->
+            if data.id == id then
+                Just (TextInputType { position = position, size = TextInput.size data.textScale data.width })
+
+            else
+                Nothing
+
         Button data _ ->
             if data.id == id then
                 Just (ButtonType { data = data, position = position, size = data.cachedSize })
@@ -692,6 +750,9 @@ nextAfter id first ids =
 inputIds : Element id -> List id
 inputIds element =
     case element of
+        TextInput data ->
+            [ data.id ]
+
         Button data _ ->
             [ data.id ]
 
@@ -723,6 +784,9 @@ view maybeHover focus element =
 viewList : Maybe id -> Maybe id -> Coord -> Element id -> List Triangle
 viewList maybeHover focus position element =
     case element of
+        TextInput data ->
+            TextInput.view data.textScale position data.width (focus == Just data.id) data.isValid data.state
+
         Text data ->
             case data.outline of
                 Just outline ->

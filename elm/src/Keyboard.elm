@@ -1,21 +1,36 @@
-module Keyboard exposing (Key(..), fromCode, isShift)
+module Keyboard exposing (Key(..), fromCode, isCtrl, isShift)
 
-{-| Linux key codes (KEY\_\* in linux/input-event-codes.h) to what they type on a US keyboard.
+{-| Linux key codes (KEY\_\* in linux/input-event-codes.h) to keys, with what they type on a
+US keyboard. The Key names follow the ones town-collab's TextInput uses (from the
+elm-keyboard package).
 -}
 
 
 type Key
-    = Character Char
+    = Character String
+    | Spacebar
     | Backspace
+    | Delete
     | Enter
     | Escape
     | Tab
+    | ArrowLeft
+    | ArrowRight
+    | ArrowUp
+    | ArrowDown
+    | Home
+    | End
     | Other
 
 
 isShift : Int -> Bool
 isShift code =
     code == 42 || code == 54
+
+
+isCtrl : Int -> Bool
+isCtrl code =
+    code == 29 || code == 97
 
 
 fromCode : Bool -> Int -> Key
@@ -38,17 +53,40 @@ fromCode shift code =
             Enter
 
         57 ->
-            Character ' '
+            Spacebar
+
+        102 ->
+            Home
+
+        103 ->
+            ArrowUp
+
+        105 ->
+            ArrowLeft
+
+        106 ->
+            ArrowRight
+
+        107 ->
+            End
+
+        108 ->
+            ArrowDown
+
+        111 ->
+            Delete
 
         _ ->
             case lookup code of
                 Just ( plain, shifted ) ->
                     Character
-                        (if shift then
-                            shifted
+                        (String.fromChar
+                            (if shift then
+                                shifted
 
-                         else
-                            plain
+                             else
+                                plain
+                            )
                         )
 
                 Nothing ->
