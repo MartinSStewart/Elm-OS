@@ -1,7 +1,7 @@
 # Elm OS build.
 #
 #   make            build build/bzImage and build/initramfs.cpio
-#   make run        boot it in QEMU in a window (GTK, mouse and keyboard work)
+#   make run        boot it in QEMU in a window, 1920 x 1080 (QEMU_RES=WxH to change)
 #   make test       boot headless, inject input, check a screenshot (CPU fallback)
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
