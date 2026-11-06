@@ -117,7 +117,7 @@ $(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
 	@mkdir -p $(BUILD)
 	cd elm && $(ECO) make src/Main.elm --output=$(abspath $@)
 
-$(BUILD)/host.o: host/host.c $(BUILD)/kheaders/include/linux/input.h | check-deps
+$(BUILD)/host.o: host/host.c host/atlas.h host/font.h $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include
 
 $(BUILD)/init: $(BUILD)/host.o $(BUILD)/elm.o
@@ -144,12 +144,18 @@ $(ALPINE)/.done: tools/fetch-mesa.py
 	python3 -I tools/fetch-mesa.py $(ALPINE)/root
 	touch $@
 
-$(BUILD)/elmos-gpu: host/gpu.c $(ALPINE)/.done $(BUILD)/kheaders/include/linux/input.h | check-deps
+$(BUILD)/elmos-gpu: host/gpu.c host/atlas.h host/font.h $(ALPINE)/.done $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -DEGL_NO_X11 -c $< -o $(BUILD)/gpu.o \
 	  -I$(ALPINE)/root/usr/include -I$(ALPINE)/root/usr/include/libdrm -isystem $(BUILD)/kheaders/include
 	musl-gcc -o $@ $(BUILD)/gpu.o -L$(ALPINE)/root/usr/lib -Wl,--allow-shlib-undefined -lEGL -lGLESv2 -lgbm -ldrm
 
-INITRAMFS_DEPS := $(BUILD)/init $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu)
+# Stands in for Alpine's 178 MB libLLVM, which our GPU drivers never call (see the script).
+$(BUILD)/llvm-stub/.done: tools/llvm-stub.sh $(ALPINE)/.done
+	rm -rf $(BUILD)/llvm-stub
+	tools/llvm-stub.sh $(ALPINE)/root $(BUILD)/llvm-stub
+	touch $@
+
+INITRAMFS_DEPS := $(BUILD)/init $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
 
 # Rebuild the initramfs when GPU= changes.
 $(BUILD)/gpu-setting: FORCE
@@ -162,7 +168,7 @@ $(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh $(BUILD)/gpu-setti
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
-	tools/copy-libs.sh $(ALPINE)/root $(BUILD)/rootfs $(BUILD)/elmos-gpu
+	STUB_DIR=$(BUILD)/llvm-stub tools/copy-libs.sh $(ALPINE)/root $(BUILD)/rootfs $(BUILD)/elmos-gpu
 endif
 	cd $(BUILD)/rootfs && find . | LC_ALL=C sort | cpio -o -H newc --quiet > ../initramfs.cpio
 
@@ -175,8 +181,14 @@ $(BUILD)/firmware/.done: tools/fetch-mesa.py
 	python3 -I tools/fetch-mesa.py $(BUILD)/firmware/root linux-firmware-i915
 	touch $@
 
-$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done
-	cd $(BUILD)/firmware/root && find lib | LC_ALL=C sort | cpio -o -H newc --quiet > $(abspath $@)
+# Only the firmware files this kernel's i915 driver asks for (their names are in the
+# kernel as strings): 44 of Alpine's 128 files, 4 MB rather than 10 MB.
+$(BUILD)/firmware.cpio: $(BUILD)/firmware/.done $(BUILD)/bzImage
+	strings $(KOUT)/vmlinux | grep -E '^i915/[A-Za-z0-9_.-]+\.bin$$' | LC_ALL=C sort -u > $(BUILD)/firmware/wanted
+	test -s $(BUILD)/firmware/wanted
+	cd $(BUILD)/firmware/root && { echo lib; echo lib/firmware; echo lib/firmware/i915; \
+	  sed 's|^|lib/firmware/|; s|$$|.zst|' ../wanted | while read -r f; do [ ! -e "$$f" ] || echo "$$f"; done; } \
+	  | cpio -o -H newc --quiet > $(abspath $@)
 
 # /dev/console, which the kernel's own default initramfs provides and a built-in one
 # replaces. Without it /init has no stdout or stderr. Made with the kernel's own tool,

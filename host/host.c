@@ -10,8 +10,11 @@
  *   - reads every /dev/input/event* device (rescanning for new ones every second)
  *     and sends events to the `input` port; a touchpad works like a mouse, and
  *     the power button powers the machine off,
- *   - sends the latest scene that Elm sent on `render` to whichever renderer
- *     is in use.
+ *   - asks Elm for a frame on `animationFrame` whenever the screen can show a
+ *     new one (after the GPU's page flip, or 60 times a second on the CPU), and
+ *     hands the triangles Elm sends back on `render` to the renderer in use,
+ *   - sends Elm what its debug overlay shows: which renderer draws, and twice a
+ *     second the CPU load, memory use and GPU time per frame.
  *
  * Set ELMOS_RENDERER=cpu on the kernel command line to skip the GPU, or
  * ELMOS_RENDERER=gpu to use Mesa even when it only has a software driver.
@@ -22,8 +25,20 @@
  *             {"t":"mouse","x":X,"y":Y}            absolute pixels
  *             {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
  *             {"t":"key","code":C,"down":true}     C: Linux KEY_* code
- *   render -> [x1,y1,x2,y2,x3,y3,r,g,b,a, ...]     10 numbers per triangle,
- *                                                 pixels, colour 0..1
+ *             {"t":"renderer","gpu":true,"name":"..."}   which renderer draws
+ *             {"t":"stats","cores":N,"cpu":P,"cpuElm":P,"cpuHost":P,"cpuGpu":P,
+ *              "memUsed":MB,"memTotal":MB,"gpuMs":MS,"elmMs":MS,"drawMs":MS}
+ *                                                 cpu: all cores; cpuElm/Host/Gpu: % of one
+ *                                                 core used by the Elm program's threads, the
+ *                                                 host thread, and elmos-gpu
+ *                                                 every 0.5 s, averages per frame (-1 if
+ *                                                 unknown): GPU time, how long Elm took
+ *                                                 to answer a frame, and how long /init
+ *                                                 took to draw it (CPU) or pass it on (GPU)
+ *   animationFrame <- T                           monotonic clock in ms: draw now
+ *   render -> [x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]
+ *             13 numbers per triangle: screen pixels, texture atlas pixels
+ *             (see atlas.h), and the colour as 0xRRGGBBAA
  */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -52,6 +67,8 @@
 #include <drm/drm.h>
 #include <drm/drm_mode.h>
 #include <linux/input.h>
+
+#include "atlas.h"
 
 /* From eco's runtime (runtime/src/embed/eco_embed.h). */
 typedef void (*eco_port_callback)(const char* json_utf8, void* user);
@@ -181,6 +198,8 @@ static int open_display_on(Display* d, const char* path) {
     return 0;
 }
 
+static void cpu_cursor_init(Display* d);
+
 static void present(Display* d) {
     memcpy(d->scanout, d->back, d->size);
     /* virtio-gpu only uploads a dumb buffer when told which part changed. */
@@ -195,11 +214,94 @@ static void present(Display* d) {
 
 extern char** environ;
 static pid_t gpu_pid = -1;
-static int gpu_fd = -1; /* pipe to its stdin */
+static int gpu_fd = -1;    /* pipe to its stdin: frames */
+static int gpu_in = -1;    /* pipe from its stdout: "f GPU_NS" after showing each frame */
+static int gpu_cursor = -1; /* pipe to its fd 3: cursor moves and redraws */
+static char gpu_name[200]; /* what GL calls the GPU */
+
+/* ---------------------------------------------------------------- cursor
+ *
+ * The pointer is drawn on the display's cursor plane when it has one, and moved
+ * the moment the mouse moves, without waiting for Elm to draw a frame: that's what
+ * keeps a pointer from lagging. Elm picks its colour on the `cursor` port, and draws
+ * it itself when there is no cursor plane. Under the GPU renderer, it owns the
+ * display, so it moves the cursor for us (fd 3); on the CPU we do it here. */
+
+static int hw_cursor; /* the cursor is on a cursor plane */
+static int cursor_scale = 1;
+static volatile unsigned cursor_fill = 0xffffffff; /* from Elm */
+static volatile int cursor_dirty;
+static uint32_t cpu_cursor_handle;
+
+static void cpu_cursor_draw(Display* d) {
+    struct drm_mode_map_dumb md = {.handle = cpu_cursor_handle};
+    if (ioctl(d->fd, DRM_IOCTL_MODE_MAP_DUMB, &md) < 0) return;
+    unsigned int* px = mmap(0, CURSOR_PLANE * CURSOR_PLANE * 4, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, md.offset);
+    if (px == MAP_FAILED) return;
+    cursor_image(px, cursor_scale, cursor_fill);
+    munmap(px, CURSOR_PLANE * CURSOR_PLANE * 4);
+    struct drm_mode_cursor2 c = {.flags = DRM_MODE_CURSOR_BO, .crtc_id = d->crtc_id, .width = CURSOR_PLANE,
+                                 .height = CURSOR_PLANE, .handle = cpu_cursor_handle};
+    if (ioctl(d->fd, DRM_IOCTL_MODE_CURSOR2, &c) < 0) {
+        struct drm_mode_cursor c1 = {.flags = DRM_MODE_CURSOR_BO, .crtc_id = d->crtc_id, .width = CURSOR_PLANE,
+                                     .height = CURSOR_PLANE, .handle = cpu_cursor_handle};
+        if (ioctl(d->fd, DRM_IOCTL_MODE_CURSOR, &c1) < 0) hw_cursor = 0;
+    }
+}
+
+/* The CPU renderer's cursor plane, if the display has one. */
+static void cpu_cursor_init(Display* d) {
+    hw_cursor = 0;
+    if (getenv("ELMOS_CURSOR") && strcmp(getenv("ELMOS_CURSOR"), "software") == 0) {
+        logf_("ELMOS_CURSOR=software: Elm draws the cursor");
+        return;
+    }
+    struct drm_mode_create_dumb cd = {.width = CURSOR_PLANE, .height = CURSOR_PLANE, .bpp = 32};
+    if (ioctl(d->fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0) return;
+    cpu_cursor_handle = cd.handle;
+    hw_cursor = 1;
+    cpu_cursor_draw(d);
+    logf_(hw_cursor ? "cursor on the cursor plane" : "no cursor plane; Elm draws the cursor");
+}
+
+static void cursor_move(Display* d, int x, int y) {
+    if (!hw_cursor) return;
+    if (gpu_cursor >= 0) {
+        char line[40];
+        int len = snprintf(line, sizeof line, "m %d %d\n", x, y);
+        (void)!write(gpu_cursor, line, len); /* non-blocking: if it's backed up, skip a move */
+        return;
+    }
+    struct drm_mode_cursor c = {.flags = DRM_MODE_CURSOR_MOVE, .crtc_id = d->crtc_id, .x = x, .y = y};
+    ioctl(d->fd, DRM_IOCTL_MODE_CURSOR, &c);
+}
+
+static void cursor_redraw(Display* d) {
+    if (!hw_cursor) return;
+    if (gpu_cursor >= 0) {
+        char line[40];
+        int len = snprintf(line, sizeof line, "c %u %d\n", cursor_fill, cursor_scale);
+        (void)!write(gpu_cursor, line, len);
+        return;
+    }
+    cpu_cursor_draw(d);
+}
+
+/* The `cursor` port: the cursor's fill colour, as 0xRRGGBBAA. Runs on Elm's thread. */
+static void on_cursor(const char* json, void* user) {
+    (void)user;
+    double v = strtod(json, NULL);
+    cursor_fill = v < 0 ? 0 : v > 4294967295.0 ? 0xffffffff : (unsigned)v;
+    cursor_dirty = 1;
+    uint64_t one = 1;
+    if (wake_fd >= 0) (void)!write(wake_fd, &one, sizeof one);
+}
 
 static void stop_gpu(void) {
     if (gpu_fd >= 0) close(gpu_fd);
-    gpu_fd = -1;
+    if (gpu_in >= 0) close(gpu_in);
+    if (gpu_cursor >= 0) close(gpu_cursor);
+    gpu_fd = gpu_in = gpu_cursor = -1;
     if (gpu_pid > 0) {
         kill(gpu_pid, SIGTERM);
         waitpid(gpu_pid, NULL, 0); /* it must let go of the display before we take it */
@@ -207,35 +309,44 @@ static void stop_gpu(void) {
     gpu_pid = -1;
 }
 
-/* Start the renderer and wait for it to report "ok W H RENDERER". */
+/* Start the renderer and wait for it to report "ok W H CURSOR RENDERER". */
 static int start_gpu(Display* d) {
     const char* want = getenv("ELMOS_RENDERER");
     if (want && strcmp(want, "cpu") == 0) return -1;
     if (access(GPU_RENDERER, X_OK) != 0) return -1;
 
-    int to_gpu[2], from_gpu[2];
+    int to_gpu[2], from_gpu[2], cursor_pipe[2];
     if (pipe2(to_gpu, O_CLOEXEC) < 0) return -1;
     if (pipe2(from_gpu, O_CLOEXEC) < 0) { close(to_gpu[0]); close(to_gpu[1]); return -1; }
+    if (pipe2(cursor_pipe, O_CLOEXEC) < 0) {
+        close(to_gpu[0]), close(to_gpu[1]), close(from_gpu[0]), close(from_gpu[1]);
+        return -1;
+    }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, to_gpu[0], 0);
     posix_spawn_file_actions_adddup2(&fa, from_gpu[1], 1);
+    posix_spawn_file_actions_adddup2(&fa, cursor_pipe[0], 3);
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0); /* there is no disk to cache on */
     char* argv[] = {GPU_RENDERER, NULL};
     int err = posix_spawn(&gpu_pid, GPU_RENDERER, &fa, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     close(to_gpu[0]);
     close(from_gpu[1]);
+    close(cursor_pipe[0]);
     if (err) {
         logf_("spawn %s: %s", GPU_RENDERER, strerror(err));
         gpu_pid = -1;
         close(to_gpu[1]);
         close(from_gpu[0]);
+        close(cursor_pipe[1]);
         return -1;
     }
     gpu_fd = to_gpu[1];
+    gpu_cursor = cursor_pipe[1];
+    fcntl(gpu_cursor, F_SETFL, O_NONBLOCK);
 
-    /* Loading Mesa and LLVM can take a while under emulation. */
+    /* Loading Mesa can take a while under emulation. */
     char line[256];
     size_t len = 0;
     struct pollfd pfd = {.fd = from_gpu[0], .events = POLLIN};
@@ -245,15 +356,22 @@ static int start_gpu(Display* d) {
         len++;
     }
     line[len] = 0;
-    close(from_gpu[0]);
     unsigned w, h;
-    int at = 0;
-    if (sscanf(line, "ok %u %u %n", &w, &h, &at) == 2 && at > 0) {
+    int at = 0, hw = 0;
+    if (sscanf(line, "ok %u %u %d %n", &w, &h, &hw, &at) == 3 && at > 0) {
         d->w = w;
         d->h = h;
-        logf_("display %ux%u on the GPU (%s)", w, h, line + at);
+        const char* force = getenv("ELMOS_CURSOR");
+        hw_cursor = hw && !(force && strcmp(force, "software") == 0);
+        if (hw && !hw_cursor) (void)!write(gpu_cursor, "m -100 -100\n", 12); /* hide it off screen */
+        logf_(hw_cursor ? "cursor on the cursor plane" : "no cursor plane; Elm draws the cursor");
+        snprintf(gpu_name, sizeof gpu_name, "%s", line + at);
+        logf_("display %ux%u on the GPU (%s)", w, h, gpu_name);
+        gpu_in = from_gpu[0];
+        fcntl(gpu_in, F_SETFL, O_NONBLOCK);
         return 0;
     }
+    close(from_gpu[0]);
     logf_("GPU renderer unavailable (%s); drawing on the CPU", len ? line : "no answer");
     stop_gpu();
     return -1;
@@ -273,91 +391,108 @@ static int write_full(int fd, const void* buf, size_t n) {
 
 /* ---------------------------------------------------------------- raster */
 
+static unsigned char atlas[ATLAS_SIZE * ATLAS_SIZE];
+
 static inline float edge(float ax, float ay, float bx, float by, float px, float py) {
     return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
-static void fill_triangle(Display* d, const float* t) {
-    float x1 = t[0], y1 = t[1], x2 = t[2], y2 = t[3], x3 = t[4], y3 = t[5];
-    float area = edge(x1, y1, x2, y2, x3, y3);
+static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* One textured triangle into the back buffer: each pixel samples the atlas at its
+ * interpolated u, v (nearest pixel), and blends the colour in by the sample. */
+static void fill_triangle(Display* d, const Tri* t) {
+    const float* p0 = t->p[0];
+    const float* p1 = t->p[1];
+    const float* p2 = t->p[2];
+    float area = edge(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]);
     if (area == 0) return;
-    if (area < 0) { float tx = x2, ty = y2; x2 = x3; y2 = y3; x3 = tx; y3 = ty; area = -area; }
-    int minx = (int)floorf(fminf(x1, fminf(x2, x3))), maxx = (int)ceilf(fmaxf(x1, fmaxf(x2, x3)));
-    int miny = (int)floorf(fminf(y1, fminf(y2, y3))), maxy = (int)ceilf(fmaxf(y1, fmaxf(y2, y3)));
+    if (area < 0) { const float* tmp = p1; p1 = p2; p2 = tmp; area = -area; }
+    int minx = (int)floorf(fminf(p0[0], fminf(p1[0], p2[0]))), maxx = (int)ceilf(fmaxf(p0[0], fmaxf(p1[0], p2[0])));
+    int miny = (int)floorf(fminf(p0[1], fminf(p1[1], p2[1]))), maxy = (int)ceilf(fmaxf(p0[1], fmaxf(p1[1], p2[1])));
     if (minx < 0) minx = 0;
     if (miny < 0) miny = 0;
     if (maxx > (int)d->w) maxx = d->w;
     if (maxy > (int)d->h) maxy = d->h;
-    float a = fminf(fmaxf(t[9], 0), 1);
-    float r = fminf(fmaxf(t[6], 0), 1) * 255, g = fminf(fmaxf(t[7], 0), 1) * 255, b = fminf(fmaxf(t[8], 0), 1) * 255;
+    uint32_t r = t->rgba >> 24, g = (t->rgba >> 16) & 255, b = (t->rgba >> 8) & 255, a = t->rgba & 255;
+    if (!a) return;
+    /* A flat colour (every corner samples the same atlas pixel) needs no interpolation. */
+    int flat = p0[2] == p1[2] && p1[2] == p2[2] && p0[3] == p1[3] && p1[3] == p2[3];
+    int flat_cover = atlas[clampi((int)p0[3], 0, ATLAS_SIZE - 1) * ATLAS_SIZE + clampi((int)p0[2], 0, ATLAS_SIZE - 1)];
+    float inv = 1 / area;
     uint32_t stride = d->pitch / 4;
     for (int y = miny; y < maxy; y++) {
         uint32_t* row = d->back + (size_t)y * stride;
         float py = y + 0.5f;
         for (int x = minx; x < maxx; x++) {
             float px = x + 0.5f;
-            if (edge(x2, y2, x3, y3, px, py) < 0 || edge(x3, y3, x1, y1, px, py) < 0 ||
-                edge(x1, y1, x2, y2, px, py) < 0)
-                continue;
+            float w0 = edge(p1[0], p1[1], p2[0], p2[1], px, py);
+            float w1 = edge(p2[0], p2[1], p0[0], p0[1], px, py);
+            float w2 = edge(p0[0], p0[1], p1[0], p1[1], px, py);
+            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+            uint32_t cover = flat_cover;
+            if (!flat) {
+                float u = (w0 * p0[2] + w1 * p1[2] + w2 * p2[2]) * inv;
+                float v = (w0 * p0[3] + w1 * p1[3] + w2 * p2[3]) * inv;
+                cover = atlas[clampi((int)v, 0, ATLAS_SIZE - 1) * ATLAS_SIZE + clampi((int)u, 0, ATLAS_SIZE - 1)];
+            }
+            if (!cover) continue;
+            uint32_t k = a * cover; /* 0 .. 255*255 */
+            if (k == 255 * 255) { row[x] = (r << 16) | (g << 8) | b; continue; }
             uint32_t dst = row[x];
             uint32_t dr = (dst >> 16) & 255, dg = (dst >> 8) & 255, db = dst & 255;
-            uint32_t nr = (uint32_t)(r * a + dr * (1 - a));
-            uint32_t ng = (uint32_t)(g * a + dg * (1 - a));
-            uint32_t nb = (uint32_t)(b * a + db * (1 - a));
+            uint32_t nr = (r * k + dr * (65025 - k)) / 65025;
+            uint32_t ng = (g * k + dg * (65025 - k)) / 65025;
+            uint32_t nb = (b * k + db * (65025 - k)) / 65025;
             row[x] = (nr << 16) | (ng << 8) | nb;
         }
     }
 }
 
-/* The scene as numbers: 10 per triangle. */
-static float* parse_scene(const char* json, uint32_t* count) {
-    size_t cap = 160, n = 0;
-    float* v = malloc(cap * sizeof *v);
+/* The scene: 13 numbers per triangle. Doubles, because a colour needs all 32 bits. */
+static Tri* parse_scene(const char* json, uint32_t* count) {
+    size_t cap = 64, n = 0, k = 0;
+    Tri* tris = malloc(cap * sizeof *tris);
     const char* p = json;
     while (*p) {
         if ((*p >= '0' && *p <= '9') || *p == '-' || *p == '.') {
             char* end;
-            if (n == cap) v = realloc(v, (cap *= 2) * sizeof *v);
-            v[n++] = strtof(p, &end);
+            double v = strtod(p, &end);
+            if (end == p) { p++; continue; }
             p = end;
+            if (n == cap) tris = realloc(tris, (cap *= 2) * sizeof *tris);
+            if (k < 12) tris[n].p[k / 4][k % 4] = (float)v;
+            else tris[n].rgba = (uint32_t)(v < 0 ? 0 : v > 4294967295.0 ? 4294967295.0 : v);
+            if (++k == 13) k = 0, n++;
         } else {
             p++;
         }
     }
-    *count = n / 10;
-    return v;
-}
-
-/* A small square in the top-left corner that says which renderer is drawing:
- * green for the GPU, orange for the CPU. Two triangles added to every frame. */
-static float* add_badge(float* tris, uint32_t* n, int on_gpu) {
-    tris = realloc(tris, (*n + 2) * 10 * sizeof(float));
-    float x0 = 8, y0 = 8, x1 = 24, y1 = 24;
-    float r = on_gpu ? 0.3f : 1.0f, g = on_gpu ? 0.8f : 0.6f, b = on_gpu ? 0.45f : 0.1f;
-    float sq[20] = {x0, y0, x1, y0, x1, y1, r, g, b, 1, x0, y0, x1, y1, x0, y1, r, g, b, 1};
-    memcpy(tris + *n * 10, sq, sizeof sq);
-    *n += 2;
+    *count = n;
     return tris;
 }
 
+static void send_renderer(int on_gpu, const char* name);
+static int in_flight;          /* frames sent to the GPU renderer that it hasn't shown or skipped */
+static double gpu_progress_at; /* when it last took a frame, or showed one */
+
 static void draw_scene(Display* d, const char* json) {
     uint32_t n;
-    float* tris = parse_scene(json, &n);
-    tris = add_badge(tris, &n, gpu_fd >= 0);
+    Tri* tris = parse_scene(json, &n);
     if (gpu_fd >= 0) {
-        if (write_full(gpu_fd, &n, sizeof n) == 0 && write_full(gpu_fd, tris, n * 10 * sizeof(float)) == 0) {
+        if (write_full(gpu_fd, &n, sizeof n) == 0 && write_full(gpu_fd, tris, n * sizeof *tris) == 0) {
             free(tris);
             return;
         }
         logf_("GPU renderer stopped; drawing on the CPU");
         stop_gpu();
         if (open_display(d) < 0) { free(tris); return; }
-        n -= 2;
-        tris = add_badge(tris, &n, 0);
+        cpu_cursor_init(d);
+        send_renderer(0, "rasteriser in /init");
     }
     if (!d->back) { free(tris); return; }
     memset(d->back, 0, d->size);
-    for (uint32_t i = 0; i < n; i++) fill_triangle(d, tris + i * 10);
+    for (uint32_t i = 0; i < n; i++) fill_triangle(d, &tris[i]);
     free(tris);
     present(d);
 }
@@ -427,7 +562,7 @@ static void scan_inputs(void) {
 }
 
 static void send_input(const char* fmt, ...) {
-    char buf[160];
+    char buf[512];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
@@ -547,12 +682,209 @@ static void handle_event(Display* d, InputDev* dev, const struct input_event* ev
     if (mouse_y >= (int)d->h) mouse_y = d->h - 1;
 }
 
+/* ---------------------------------------------------------------- frames */
+
+/* Elm draws only when asked, on `animationFrame`.
+ *
+ * On the GPU we ask when the renderer reports a page flip, so frames follow the
+ * display's refresh, and Elm reads the mouse one refresh before its frame shows.
+ * ELMOS_FRAMES_IN_FLIGHT=2 pipelines frames instead: we also ask as soon as a frame
+ * has gone to the renderer, so Elm works on the next one while the current one
+ * waits for its flip. That absorbs slow frames (no missed vsyncs) at the cost of
+ * one more refresh of lag.
+ *
+ * On the CPU we ask 1/60 s after the last ask. If Elm or the GPU goes quiet for a
+ * second, ask again anyway. */
+
+#define FRAME_INTERVAL (1 / 60.0)
+#define FRAME_TIMEOUT 1.0
+
+static double asked_at;      /* when Elm was last asked for a frame */
+static int awaiting_render;  /* asked, and no scene back yet */
+static int max_in_flight = 1; /* ELMOS_FRAMES_IN_FLIGHT */
+static double cpu_next_at;   /* CPU renderer: when to ask next, 0 if not scheduled */
+
+static void ask_for_frame(void) {
+    char ms[32];
+    asked_at = now();
+    snprintf(ms, sizeof ms, "%.3f", asked_at * 1000);
+    eco_port_send("animationFrame", ms);
+    awaiting_render = 1;
+    cpu_next_at = 0;
+}
+
+/* After a scene went to the renderer. */
+static void scene_drawn(void) {
+    awaiting_render = 0;
+    if (gpu_fd >= 0) {
+        if (in_flight++ == 0) gpu_progress_at = now();
+        if (in_flight < max_in_flight) ask_for_frame();
+    } else {
+        in_flight = 0;
+        cpu_next_at = asked_at + FRAME_INTERVAL;
+        if (cpu_next_at < now()) cpu_next_at = now();
+    }
+}
+
+static void send_renderer(int on_gpu, const char* name) {
+    char esc[256];
+    size_t k = 0;
+    for (const char* p = name; *p && k < sizeof esc - 7; p++) {
+        unsigned char c = *p;
+        if (c == '"' || c == '\\') esc[k++] = '\\', esc[k++] = c;
+        else if (c < 32) k += snprintf(esc + k, 7, "\\u%04x", c);
+        else esc[k++] = c;
+    }
+    esc[k] = 0;
+    send_input("{\"t\":\"renderer\",\"gpu\":%s,\"name\":\"%s\",\"hardwareCursor\":%s}", on_gpu ? "true" : "false",
+               esc, hw_cursor ? "true" : "false");
+}
+
+/* ---------------------------------------------------------------- stats */
+
+static double gpu_ns_sum; /* GPU time of the frames since the last stats, where known */
+static int gpu_ns_count;
+static double elm_sum, draw_sum; /* seconds Elm took to answer, and we took to draw */
+static int elm_count, draw_count;
+
+/* Reads the GPU renderer's "f GPU_NS" (shown) and "d" (skipped) lines. Returns how
+ * many frames it is done with. */
+static int read_gpu_acks(void) {
+    static char buf[256];
+    static size_t len;
+    int done = 0;
+    for (;;) {
+        ssize_t got = read(gpu_in, buf + len, sizeof buf - 1 - len);
+        if (got == 0) { /* it exited; the next frame we send it finds out */
+            close(gpu_in);
+            gpu_in = -1;
+            break;
+        }
+        if (got < 0) break;
+        len += got;
+        buf[len] = 0;
+        char* nl;
+        while ((nl = strchr(buf, '\n'))) {
+            *nl = 0;
+            long long ns;
+            if (sscanf(buf, "f %lld", &ns) == 1) {
+                done++;
+                if (ns >= 0) gpu_ns_sum += ns, gpu_ns_count++;
+            } else if (buf[0] == 'd') {
+                done++;
+            }
+            len -= nl + 1 - buf;
+            memmove(buf, nl + 1, len + 1);
+        }
+        if (len == sizeof buf - 1) len = 0; /* a line too long to be ours */
+    }
+    return done;
+}
+
+/* CPU load since the last call, from /proc/stat, in percent. */
+static double cpu_load(void) {
+    static unsigned long long last_busy, last_total;
+    unsigned long long v[8] = {0};
+    FILE* f = fopen("/proc/stat", "r");
+    if (!f) return 0;
+    int got = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5],
+                     &v[6], &v[7]);
+    fclose(f);
+    if (got < 4) return 0;
+    unsigned long long total = 0;
+    for (int i = 0; i < 8; i++) total += v[i];
+    unsigned long long busy = total - v[3] - v[4]; /* minus idle and iowait */
+    double load = total > last_total ? 100.0 * (busy - last_busy) / (total - last_total) : 0;
+    last_busy = busy;
+    last_total = total;
+    return load;
+}
+
+/* CPU ticks (user + system) a /proc/.../stat file reports. */
+static long long proc_ticks(const char* path) {
+    char buf[512];
+    FILE* f = fopen(path, "r");
+    if (!f) return -1;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    char* p = strrchr(buf, ')'); /* the name can hold spaces */
+    unsigned long long ut, st;
+    if (!p || sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &ut, &st) != 2) return -1;
+    return ut + st;
+}
+
+static pid_t host_tid;
+
+/* Where the CPU time goes, in percent of one core since the last call: the Elm
+ * program (every thread of /init but ours), this host thread, and elmos-gpu. */
+static void cpu_split(double* elm, double* host, double* gpu) {
+    static long long last[3];
+    static double last_t;
+    long long now_ticks[3] = {0, 0, 0};
+    DIR* dir = opendir("/proc/self/task");
+    struct dirent* e;
+    while (dir && (e = readdir(dir))) {
+        if (e->d_name[0] == '.') continue;
+        char path[300];
+        snprintf(path, sizeof path, "/proc/self/task/%s/stat", e->d_name);
+        long long t = proc_ticks(path);
+        if (t < 0) continue;
+        now_ticks[atoi(e->d_name) == host_tid ? 1 : 0] += t;
+        if (debug) {
+            char cpath[300], comm[32] = "?";
+            snprintf(cpath, sizeof cpath, "/proc/self/task/%s/comm", e->d_name);
+            FILE* f = fopen(cpath, "r");
+            if (f) { if (fgets(comm, sizeof comm, f)) comm[strcspn(comm, "\n")] = 0; fclose(f); }
+            logf_("task %s (%s): %lld ticks", e->d_name, comm, t);
+        }
+    }
+    if (dir) closedir(dir);
+    if (gpu_pid > 0) {
+        char path[64];
+        snprintf(path, sizeof path, "/proc/%d/stat", gpu_pid);
+        long long t = proc_ticks(path);
+        if (t > 0) now_ticks[2] = t;
+    }
+    double t = now(), hz = sysconf(_SC_CLK_TCK), span = t - last_t;
+    double* out[3] = {elm, host, gpu};
+    for (int i = 0; i < 3; i++) {
+        *out[i] = last_t && span > 0 && now_ticks[i] >= last[i] ? 100.0 * (now_ticks[i] - last[i]) / hz / span : 0;
+        last[i] = now_ticks[i];
+    }
+    last_t = t;
+}
+
+static void send_stats(void) {
+    long total_kb = 0, avail_kb = 0;
+    FILE* f = fopen("/proc/meminfo", "r");
+    if (f) {
+        char line[128];
+        while (fgets(line, sizeof line, f)) {
+            sscanf(line, "MemTotal: %ld", &total_kb);
+            sscanf(line, "MemAvailable: %ld", &avail_kb);
+        }
+        fclose(f);
+    }
+    double gpu_ms = gpu_ns_count ? gpu_ns_sum / gpu_ns_count / 1e6 : -1;
+    double elm_ms = elm_count ? elm_sum / elm_count * 1000 : -1;
+    double draw_ms = draw_count ? draw_sum / draw_count * 1000 : -1;
+    gpu_ns_sum = elm_sum = draw_sum = 0;
+    gpu_ns_count = elm_count = draw_count = 0;
+    double elm_cpu, host_cpu, gpu_cpu;
+    cpu_split(&elm_cpu, &host_cpu, &gpu_cpu);
+    send_input("{\"t\":\"stats\",\"cores\":%ld,\"cpuElm\":%.1f,\"cpuHost\":%.1f,\"cpuGpu\":%.1f,\"cpu\":%.1f,\"memUsed\":%ld,\"memTotal\":%ld,\"gpuMs\":%.3f,"
+               "\"elmMs\":%.3f,\"drawMs\":%.3f}",
+               sysconf(_SC_NPROCESSORS_ONLN), elm_cpu, host_cpu, gpu_cpu, cpu_load(), (total_kb - avail_kb) / 1024, total_kb / 1024, gpu_ms, elm_ms, draw_ms);
+}
+
 /* ---------------------------------------------------------------- host thread */
 
 static void* host_main(void* arg) {
     (void)arg;
     static Display display;
     Display* d = &display;
+    host_tid = gettid();
     if (start_gpu(d) < 0 && open_display(d) < 0) { logf_("no display; input only"); d->w = 640; d->h = 480; }
 
     /* Ports are registered once Elm starts; retry until it accepts. */
@@ -561,38 +893,85 @@ static void* host_main(void* arg) {
     while (eco_port_send("input", screen) != 0) usleep(1000);
     mouse_x = d->w / 2;
     mouse_y = d->h / 2;
+    cursor_scale = d->w >= 1600 ? 2 : 1;
+    if (getenv("ELMOS_FRAMES_IN_FLIGHT")) max_in_flight = atoi(getenv("ELMOS_FRAMES_IN_FLIGHT")) >= 2 ? 2 : 1;
+    if (gpu_fd < 0 && d->back) cpu_cursor_init(d);
+    cursor_move(d, mouse_x, mouse_y);
+    send_renderer(gpu_fd >= 0, gpu_fd >= 0 ? gpu_name : "rasteriser in /init");
+    if (gpu_fd < 0) atlas_build(atlas);
+    cpu_load();
+    send_stats();
+    double last_stats = now();
+    ask_for_frame();
 
     for (int i = 0; i < MAX_INPUTS; i++) devs[i].fd = -1;
     scan_inputs();
     double last_scan = now();
 
     for (;;) {
-        struct pollfd pfds[MAX_INPUTS + 1];
-        int idx[MAX_INPUTS + 1], n = 1;
+        struct pollfd pfds[MAX_INPUTS + 2];
+        int idx[MAX_INPUTS + 2], n = 2;
         pfds[0] = (struct pollfd){.fd = wake_fd, .events = POLLIN};
+        pfds[1] = (struct pollfd){.fd = gpu_in, .events = POLLIN}; /* ignored while -1 */
         for (int i = 0; i < MAX_INPUTS; i++)
             if (devs[i].fd >= 0) idx[n] = i, pfds[n++] = (struct pollfd){.fd = devs[i].fd, .events = POLLIN};
-        /* Look for new input devices about once a second. */
-        int timeout = 1000;
-        if (tap_release_at) timeout = (int)((tap_release_at - now()) * 1000) + 1;
-        if (timeout < 0) timeout = 0;
+
+        /* Sleep until the next thing that is due: an input device scan (about once a
+         * second), stats, a tap's release, the CPU renderer's next frame, or the
+         * frame timeout. */
+        double t = now(), due = last_scan + 1;
+        if (last_stats + 0.5 < due) due = last_stats + 0.5;
+        if (tap_release_at && tap_release_at < due) due = tap_release_at;
+        if (cpu_next_at && cpu_next_at < due) due = cpu_next_at;
+        if (awaiting_render && asked_at + FRAME_TIMEOUT < due) due = asked_at + FRAME_TIMEOUT;
+        if (in_flight && gpu_progress_at + FRAME_TIMEOUT < due) due = gpu_progress_at + FRAME_TIMEOUT;
+        int timeout = due > t ? (int)((due - t) * 1000) + 1 : 0;
         if (poll(pfds, n, timeout) < 0) { if (errno == EINTR) continue; break; }
-        if (tap_release_at && now() >= tap_release_at) {
+
+        t = now();
+        if (tap_release_at && t >= tap_release_at) {
             send_button(tap_button, 0);
             tap_release_at = 0;
         }
-        if (now() - last_scan >= 1) { scan_inputs(); last_scan = now(); }
+        if (t - last_scan >= 1) { scan_inputs(); last_scan = t; }
+        if (t - last_stats >= 0.5) { send_stats(); last_stats = t; }
         if (pfds[0].revents & POLLIN) {
             uint64_t k;
             (void)!read(wake_fd, &k, sizeof k);
+            if (cursor_dirty) {
+                cursor_dirty = 0;
+                cursor_redraw(d);
+            }
             pthread_mutex_lock(&scene_lock);
             char* json = scene_json;
             scene_json = NULL;
             pthread_mutex_unlock(&scene_lock);
-            if (json) draw_scene(d, json);
+            if (json) {
+                int was_gpu = gpu_fd >= 0;
+                double start = now();
+                if (awaiting_render) elm_sum += start - asked_at, elm_count++;
+                draw_scene(d, json);
+                draw_sum += now() - start;
+                draw_count++;
+                if (was_gpu && gpu_fd < 0) atlas_build(atlas); /* fell back to the CPU */
+                scene_drawn();
+            }
             free(json);
         }
-        for (int p = 1; p < n; p++) {
+        int done;
+        if ((pfds[1].revents & (POLLIN | POLLHUP)) && gpu_in >= 0 && (done = read_gpu_acks())) {
+            in_flight = done < in_flight ? in_flight - done : 0;
+            gpu_progress_at = now();
+            if (!awaiting_render && in_flight < max_in_flight) ask_for_frame();
+        }
+        t = now();
+        if (cpu_next_at && t >= cpu_next_at) ask_for_frame();
+        if (awaiting_render && t >= asked_at + FRAME_TIMEOUT) ask_for_frame();
+        if (in_flight && t >= gpu_progress_at + FRAME_TIMEOUT) {
+            in_flight = 0;
+            if (!awaiting_render) ask_for_frame();
+        }
+        for (int p = 2; p < n; p++) {
             if (!pfds[p].revents) continue;
             InputDev* dev = &devs[idx[p]];
             struct input_event evs[64];
@@ -605,7 +984,10 @@ static void* host_main(void* arg) {
                 close(dev->fd);
                 dev->fd = -1;
             }
-            if (moved) send_input("{\"t\":\"mouse\",\"x\":%d,\"y\":%d}", mouse_x, mouse_y);
+            if (moved) {
+                cursor_move(d, mouse_x, mouse_y);
+                send_input("{\"t\":\"mouse\",\"x\":%d,\"y\":%d}", mouse_x, mouse_y);
+            }
         }
     }
     return NULL;
@@ -633,6 +1015,7 @@ __attribute__((constructor)) static void host_init(void) {
     signal(SIGPIPE, SIG_IGN); /* a dead GPU renderer must not take /init with it */
     wake_fd = eventfd(0, EFD_CLOEXEC);
     eco_port_subscribe("render", on_render, NULL);
+    eco_port_subscribe("cursor", on_cursor, NULL);
     pthread_t t;
     pthread_create(&t, NULL, host_main, NULL);
     pthread_detach(t);

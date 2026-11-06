@@ -33,7 +33,9 @@ if usb:
             "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none"]
 else:
     boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
-            "-append", "console=ttyS0", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
+            # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
+            # puts it on the cursor plane, which screendumps leave out.
+            "-append", "console=ttyS0" + ("" if gpu else " ELMOS_CURSOR=software"), "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci"]
 qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
@@ -68,6 +70,13 @@ if not usb:
         fail("expected the GPU renderer")
     if not gpu and on_gpu:
         fail("expected the CPU fallback on a GPU without 3D")
+    wait_for("cursor", timeout=30)
+    hw_cursor = "cursor on the cursor plane" in open(serial_path, errors="replace").read()
+    print("cursor:", "cursor plane" if hw_cursor else "drawn by Elm")
+    if gpu and not hw_cursor:
+        fail("expected the GPU renderer to put the cursor on the cursor plane")
+else:
+    hw_cursor = None  # unknown: on the stick the log goes to the screen
 for _ in range(100):  # QEMU makes the socket a moment after it starts
     if os.path.exists(qmp_path):
         break
@@ -132,14 +141,14 @@ def near(c, want, tol=40):
     return all(abs(a - b) <= tol for a, b in zip(c, want))
 
 
-RED, GREEN = (242, 89, 76), (76, 204, 115)
+GREEN = (76, 204, 115)
 if usb:
     # On the stick, /init's messages go to the screen, not the serial port (a laptop
-    # has none), so wait for Elm's scene instead: the red triangle in the middle.
+    # has none), so wait for Elm's scene instead: the dark triangle at the bottom.
     end = time.time() + 180
     while True:
         shot = screen()
-        if near(pixel(shot, shot[0] // 2, shot[1] // 2), RED):
+        if near(pixel(shot, shot[0] * 19 // 20, shot[1] * 49 // 50), (31, 36, 51), tol=15):
             break
         if time.time() > end:
             fail("Elm OS never drew its scene")
@@ -151,24 +160,50 @@ time.sleep(1)
 move(0.25, 0.25)
 shot = screen()
 w, h, _ = shot
-here, there = pixel(shot, w // 4, h // 4 + 10), pixel(shot, 3 * w // 4, h // 4 + 10)
-print(f"screen {w}x{h}; under the mouse {here}, elsewhere {there}")
-if not near(here, RED):
-    fail(f"expected the red triangle under the mouse, got {here}")
-if near(there, RED):
-    fail("the triangle is not only under the mouse")
+# The mouse cursor: a white arrow with a black outline, its tip at the pointer, drawn
+# from the texture atlas at 1 screen pixel per atlas pixel (2 on screens 1600 wide or more).
+s = 2 if w >= 1600 else 1
+WHITE = (255, 255, 255)
+def cursor_at(shot, fx, fy):
+    x, y = int(fx * w), int(fy * h)
+    # x * w // 0x8000 in host.c; allow a pixel either way
+    return [pixel(shot, x + dx * s, y + 8 * s) for dx in (2, 3, 4)]
+# With a cursor plane, Elm still draws its own cursor, in orange, for comparison; the
+# plane's cursor isn't in screendumps.
+ORANGE = (255, 150, 40)
+here, there = cursor_at(shot, 0.25, 0.25), cursor_at(shot, 0.75, 0.25)
+print(f"screen {w}x{h}; under the mouse {here[1]}, elsewhere {there[1]}")
+if hw_cursor is None:  # on the stick: whichever it is
+    hw_cursor = near(here[1], ORANGE)
+fill = ORANGE if hw_cursor else WHITE
+if not all(near(c, fill) for c in here):
+    fail(f"expected the mouse cursor ({fill}) under the mouse, got {here}")
+if any(near(c, fill) for c in there):
+    fail("the cursor is not only under the mouse")
+
+# The debug overlay (elm/src/Main.elm) sits in the bottom left corner: a light panel
+# with dark text, drawn from the texture atlas's font.
+panel = pixel(shot, 11 * s, h - 11 * s)
+print(f"overlay panel {panel}")
+if not near(panel, (220, 210, 199)):
+    fail(f"expected the debug overlay's panel in the bottom left corner, got {panel}")
+dark = sum(1 for x in range(14 * s, 200 * s) for y in range(h - 40 * s, h - 14 * s) if max(pixel(shot, x, y)) < 60)
+if dark < 20:
+    fail(f"the debug overlay has no text ({dark} dark pixels)")
 
 move(0.75, 0.25)
-if not near(pixel(screen(), 3 * w // 4, h // 4 + 10), RED):
-    fail("the triangle did not follow the mouse")
+if not all(near(c, fill) for c in cursor_at(screen(), 0.75, 0.25)):
+    fail("the cursor did not follow the mouse")
 
+# A key press changes the colour of the big triangle at the bottom.
+mx, my = int(0.95 * w), int(0.98 * h)  # clear of the overlay, even on a 640 px screen
+before = pixel(screen(), mx, my)
 cmd("send-key", keys=[{"type": "qcode", "data": "a"}])
 time.sleep(1)
-c = pixel(screen(), 3 * w // 4, h // 4 + 10)
-print(f"after a key press {c}")
-if not near(c, GREEN):
-    fail(f"expected green after a key press, got {c}")
-
+c = pixel(screen(), mx, my)
+print(f"triangle {before}, after a key press {c}")
+if not near(before, (31, 36, 51)) or not near(c, GREEN):
+    fail(f"expected the triangle to turn from dark blue to green after a key press, got {before} then {c}")
 
 
 def save_png(shot, path):

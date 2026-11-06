@@ -36,6 +36,9 @@ case "$mode" in
     need perl perl
     need python3 python3
     need readelf binutils
+    need nm binutils
+    need strings binutils
+    need join coreutils
     if command -v cc >/dev/null 2>&1; then
       need_header gelf.h libelf-dev
       need_header openssl/ssl.h libssl-dev
