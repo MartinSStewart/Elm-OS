@@ -12,19 +12,19 @@ pixel font. It writes:
     curl -LO https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf
     python3 tools/make-noto-sans.py NotoSans-Regular.ttf
 
-Needs Pillow with FreeType and Raqm (for kerning), and the hinted Noto Sans above. The output is checked in, so
-building Elm OS doesn't.
+Needs freetype-py (pip install freetype-py) to draw the glyphs, and Pillow with Raqm
+for kerning. The output is checked in, so building Elm OS doesn't.
 """
 import os
 import sys
 
-# Full hinting: FreeType's older TrueType interpreter (v35) runs the font's hints in
-# both directions, so vertical stems land on whole pixels. The default (v40) only
-# hints vertically, which leaves stems smeared over two columns at 16 px. FreeType
-# reads this when Pillow starts it, so it has to be set before the import.
-os.environ["FREETYPE_PROPERTIES"] = "truetype:interpreter-version=35"
+import freetype
+from PIL import Image, ImageFont
 
-from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+# FreeType's autohinter at its normal strength, which fits stems to whole pixels across
+# as well as down. The font's own hints (and the light autohinter) only fit them
+# vertically, which leaves a 16 px stem smeared over two columns at 64% and 77%.
+LOAD = freetype.FT_LOAD_RENDER | freetype.FT_LOAD_FORCE_AUTOHINT | freetype.FT_LOAD_TARGET_NORMAL
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_W, ATLAS_H = 1024, 512
@@ -44,15 +44,17 @@ path = sys.argv[1]
 atlas = Image.new("L", (ATLAS_W, ATLAS_H), 0)
 
 
-def glyph_image(font, ch):
-    """The glyph's coverage and where its top left is from the pen (on the baseline)."""
-    left, top, right, bottom = font.getbbox(ch, anchor="ls")
-    w, h = right - left, bottom - top
-    if w <= 0 or h <= 0:
-        return None, left, top
-    im = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(im).text((-left, -top), ch, font=font, fill=255, anchor="ls")
-    return im, left, top
+def glyph_image(face, ch):
+    """The glyph's coverage, where its top left is from the pen (on the baseline), and
+    its advance in 1/64 pixels (hinted, so whole pixels)."""
+    face.load_char(ch, LOAD)
+    g = face.glyph
+    b = g.bitmap
+    left, top, advance = g.bitmap_left, -g.bitmap_top, g.advance.x
+    if b.width == 0 or b.rows == 0:
+        return None, left, top, advance
+    rows = [bytes(b.buffer[y * b.pitch : y * b.pitch + b.width]) for y in range(b.rows)]
+    return Image.frombytes("L", (b.width, b.rows), b"".join(rows)), left, top, advance
 
 
 # Shelf packing, tallest first, into the free parts of the atlas.
@@ -78,14 +80,13 @@ def place(w, h):
 faces = []
 work = []
 for size in SIZES:
-    # Basic layout: the hinted advances, whole pixels, so stems stay evenly spaced.
-    font = ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
-    ascent, descent = font.getmetrics()
+    face = freetype.Face(path)
+    face.set_pixel_sizes(0, size)
+    ascent, descent = face.size.ascender // 64, -face.size.descender // 64
     glyphs = {}
     for code in [32] + CHARS:
         ch = chr(code)
-        im, left, top = glyph_image(font, ch)
-        advance = round(font.getlength(ch) * 64)
+        im, left, top, advance = glyph_image(face, ch)
         glyphs[code] = [0, 0, 0, 0, left, top, advance]
         if im is not None:
             work.append((im.height, im.width, size, code, im))

@@ -41,6 +41,12 @@ pub fn fill_triangle(back: &mut [u32], stride: usize, w: u32, h: u32, atlas: &[u
     if minx >= maxx || miny >= maxy {
         return;
     }
+    // A pixel centre exactly on an edge belongs to only one of the two triangles that
+    // share it, or the pair's diagonal would be blended in twice (a darker line through
+    // antialiased glyphs). The triangle whose edge points down (or left, when flat)
+    // keeps it; its neighbour sees the same edge pointing the other way.
+    let owns = |a: [f32; 4], b: [f32; 4]| b[1] > a[1] || (b[1] == a[1] && b[0] < a[0]);
+    let (own0, own1, own2) = (owns(p1, p2), owns(p2, p0), owns(p0, p1));
     // Each edge function grows by a fixed step per pixel along x.
     let (dw0, dw1, dw2) = (-(p2[1] - p1[1]), -(p0[1] - p2[1]), -(p1[1] - p0[1]));
     for y in miny..maxy {
@@ -56,7 +62,8 @@ pub fn fill_triangle(back: &mut [u32], stride: usize, w: u32, h: u32, atlas: &[u
             w0 += dw0;
             w1 += dw1;
             w2 += dw2;
-            if e0 < 0.0 || e1 < 0.0 || e2 < 0.0 {
+            let outside = |e: f32, own: bool| e < 0.0 || (e == 0.0 && !own);
+            if outside(e0, own0) || outside(e1, own1) || outside(e2, own2) {
                 continue;
             }
             let (w0, w1, w2) = (e0, e1, e2);
