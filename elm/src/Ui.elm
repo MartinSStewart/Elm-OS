@@ -111,64 +111,6 @@ type alias Padding =
     { topLeft : Coord, bottomRight : Coord }
 
 
-listsVisuallyEqual : List (Element id) -> List (Element id) -> Bool
-listsVisuallyEqual a b =
-    if List.length a == List.length b then
-        List.all identity (List.map2 visuallyEqual a b)
-
-    else
-        False
-
-
-visuallyEqual : Element id -> Element id -> Bool
-visuallyEqual a b =
-    case ( a, b ) of
-        ( Single aData aChild, Single bData bChild ) ->
-            (aData.padding == bData.padding)
-                && (aData.borderAndFill == bData.borderAndFill)
-                && listsVisuallyEqual aData.inFront bData.inFront
-                && visuallyEqual aChild bChild
-
-        ( Row aRow aChildren, Row bRow bChildren ) ->
-            (aRow.spacing == bRow.spacing)
-                && (aRow.padding == bRow.padding)
-                && listsVisuallyEqual aChildren bChildren
-
-        ( Column aColumn aChildren, Column bColumn bChildren ) ->
-            (aColumn.spacing == bColumn.spacing)
-                && (aColumn.padding == bColumn.padding)
-                && listsVisuallyEqual aChildren bChildren
-
-        ( Text aText, Text bText ) ->
-            (aText.text == bText.text)
-                && (aText.outline == bText.outline)
-                && (aText.color == bText.color)
-                && (aText.scale == bText.scale)
-
-        ( Button aButton aChild, Button bButton bChild ) ->
-            (aButton.padding == bButton.padding)
-                && (aButton.borderAndFill == bButton.borderAndFill)
-                && (aButton.borderAndFillFocus == bButton.borderAndFillFocus)
-                && (aButton.borderAndFillHover == bButton.borderAndFillHover)
-                && listsVisuallyEqual aButton.inFront bButton.inFront
-                && visuallyEqual aChild bChild
-
-        ( Quads aQuad, Quads bQuad ) ->
-            aQuad == bQuad
-
-        ( TextInput aTextInput, TextInput bTextInput ) ->
-            (aTextInput.width == bTextInput.width)
-                && (aTextInput.isValid == bTextInput.isValid)
-                && (aTextInput.textScale == bTextInput.textScale)
-                && (aTextInput.state == bTextInput.state)
-
-        ( Empty, Empty ) ->
-            True
-
-        _ ->
-            False
-
-
 noPadding : Padding
 noPadding =
     { topLeft = Coord.origin, bottomRight = Coord.origin }
