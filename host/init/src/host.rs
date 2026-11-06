@@ -229,6 +229,7 @@ impl Host {
                     files::request(Request::ReadBytes { path, offset, length })
                 }
                 Effect::Sha256 { path, length } => files::request(Request::Sha256 { path, length }),
+                Effect::WriteSys { path, text } => files::write_sys(path, text),
             }
         }
         if cursor_dirty {

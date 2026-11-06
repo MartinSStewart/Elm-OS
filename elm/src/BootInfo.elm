@@ -28,6 +28,11 @@ and says when the first frame was on screen; working out what they mean is here.
   - Clock: the CPU cores' clock speeds (cpufreq), and how the kernel picks them: the
     policy (powersave or performance) and, on Intel CPUs that choose their own clocks
     (HWP), the hint it gives them (energy\_performance\_preference).
+    It also sets that policy: full speed ("performance") unless the computer is
+    running on its battery, when the CPU picks its own clocks to save power
+    ("powersave", which with HWP still speeds up under load). The CPU's own choice
+    goes back and forth between a low and a high clock at 60 fps (Elm 7 ms, then
+    20 ms per frame on Martin's desktop), so the frame rate halves now and then.
   - Boot: from the kernel starting to the first frame on screen, and before that the
     firmware's own time from ACPI's FPDT table, on PCs that have one.
 
@@ -325,7 +330,11 @@ update input model =
             ( { model | battery = Just (battery files) }, [] )
 
         Files "clock" files ->
-            ( { model | clock = clock files }, [] )
+            let
+                next =
+                    { model | clock = clock files }
+            in
+            ( next, setClockPolicy next )
 
         Files _ _ ->
             ( model, [] )
@@ -549,6 +558,39 @@ buildText model =
 
         _ ->
             "hashing the boot image..."
+
+
+{-| "performance" unless we know we're on the battery. Written to every core's policy
+when it isn't what they have.
+-}
+setClockPolicy : Model -> List Effect
+setClockPolicy model =
+    let
+        wanted =
+            case model.battery of
+                Just info ->
+                    if info.batteries > 0 && info.status == "Discharging" then
+                        "powersave"
+
+                    else
+                        "performance"
+
+                Nothing ->
+                    -- not read yet
+                    ""
+    in
+    case model.clock of
+        Just c ->
+            if wanted /= "" && c.governor /= "" && c.governor /= wanted then
+                List.map
+                    (\policy -> Effect.WriteSys { path = cpufreq ++ "/" ++ policy ++ "/scaling_governor", text = wanted })
+                    model.cpufreqPolicies
+
+            else
+                []
+
+        Nothing ->
+            []
 
 
 clockAttributes : List String

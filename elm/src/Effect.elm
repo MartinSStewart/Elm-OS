@@ -51,6 +51,9 @@ type Effect
     | ReadFiles { id : String, paths : List String }
     | ReadBytes { path : String, offset : Int, length : Int }
     | Sha256 { path : String, length : Maybe Int }
+      -- Writing a kernel setting in /sys (anything else is refused). No answer: read
+      -- the file again to see whether it took.
+    | WriteSys { path : String, text : String }
 
 
 type PowerAction
@@ -155,3 +158,6 @@ encode effect =
                 , ( "path", E.string path )
                 , ( "length", Maybe.map E.int length |> Maybe.withDefault E.null )
                 ]
+
+        WriteSys { path, text } ->
+            E.object [ ( "t", E.string "writeSys" ), ( "path", E.string path ), ( "text", E.string text ) ]

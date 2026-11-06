@@ -9,6 +9,7 @@
 //!   -> {"t":"files","id":ID,"files":[[P,TEXT],...]}   TEXT is null if P can't be read
 //!   {"t":"readBytes","path":P,"offset":O,"length":N}
 //!   -> {"t":"bytes","path":P,"offset":O,"hex":HEX}   null unless all N bytes were read
+//!   {"t":"writeSys","path":P,"text":T}   (write_sys) no answer
 //!   {"t":"sha256","path":P,"length":N|null}
 //!   -> {"t":"sha256","path":P,"hex":HEX}   of the first N bytes (all of P if null);
 //!      null if P is shorter or can't be read
@@ -25,6 +26,27 @@ pub enum Request {
     ReadFiles { id: String, paths: Vec<String> },
     ReadBytes { path: String, offset: u64, length: usize },
     Sha256 { path: String, length: Option<u64> },
+}
+
+/// Writes `text` to a kernel setting under /sys, such as a CPU's clock policy. Only
+/// /sys: Elm can change how the kernel runs the hardware, but not touch a disk. A
+/// failure is only logged; Elm reads the setting back to see what it is.
+pub fn write_sys(path: String, text: String) {
+    std::thread::Builder::new()
+        .name("files".into())
+        .spawn(move || {
+            let real = std::fs::canonicalize(&path);
+            match real {
+                Ok(p) if p.starts_with("/sys/") => {
+                    if let Err(e) = std::fs::write(&p, text.as_bytes()) {
+                        log!("host", "writing {:?} to {}: {}", text, path, e);
+                    }
+                }
+                Ok(_) => log!("host", "not writing {}: only /sys can be written", path),
+                Err(e) => log!("host", "writing {}: {}", path, e),
+            }
+        })
+        .expect("start a files thread");
 }
 
 pub fn request(req: Request) {
