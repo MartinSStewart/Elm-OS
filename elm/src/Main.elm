@@ -1,18 +1,18 @@
-port module Main exposing (main)
+module Main exposing (main)
 
 {-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
 "Next colour" button), a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 and a wifi panel: pick a network, type its password, join it, and see the weather.
 
-The C host (host/host.c) sends input events on `input` and asks for a frame on
-`animationFrame` whenever the screen is ready for one. Each frame, Elm draws the
-current model and sends the triangles on `render`.
+The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
+including {"t":"frame"} whenever the screen is ready for a frame. `update` answers with a
+list of effects (Effect.elm), such as the triangles to draw, which go back on one port.
 
 -}
 
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Http
+import Effect exposing (Effect)
 import Json.Decode as D
 import Keyboard
 import Sprite exposing (Triangle)
@@ -23,44 +23,15 @@ import Weather
 import Wifi
 
 
-port input : (D.Value -> msg) -> Sub msg
-
-
-{-| The host's monotonic clock, in milliseconds, when it asked for the frame.
--}
-port animationFrame : (Float -> msg) -> Sub msg
-
-
-{-| 13 numbers per triangle (see Sprite.encode): x, y, u, v for each corner, in pixels
-on the screen and in the texture atlas, then the colour as 0xRRGGBBAA.
--}
-port render : List Float -> Cmd msg
-
-
-{-| The mouse cursor's fill colour, as 0xRRGGBBAA. The host draws the cursor on the
-display's cursor plane and moves it as the mouse moves, without waiting for a frame;
-Elm draws it only when there is no cursor plane (see `RendererInfo.hardwareCursor`).
--}
-port cursor : Float -> Cmd msg
-
-
-{-| Asks the host's networking thread (host/net.c) to do something with the wifi card:
-["scan"], ["connect", ssid, password] (password "" for an open network), ["disconnect"].
--}
-port wifi : List String -> Cmd msg
-
-
-{-| "off" powers the computer off, "restart" restarts it.
--}
-port power : String -> Cmd msg
-
-
 
 -- INPUT
 
 
 type Input
     = Screen Int Int
+      -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
+    | Frame Float
+    | HttpResponse String (Result Effect.HttpError { status : Int, body : String })
     | Mouse Int Int
     | Button Int Bool
     | Key Int Bool Bool -- code, down, autorepeat
@@ -103,6 +74,36 @@ decodeInput =
                 case t of
                     "screen" ->
                         D.map2 Screen (D.field "w" D.int) (D.field "h" D.int)
+
+                    "frame" ->
+                        D.map Frame (D.field "time" D.float)
+
+                    "httpResponse" ->
+                        D.map3 (\id status body -> HttpResponse id (Ok { status = status, body = body }))
+                            (D.field "id" D.string)
+                            (D.field "status" D.int)
+                            (D.field "body" D.string)
+
+                    "httpError" ->
+                        D.map3
+                            (\id error message ->
+                                HttpResponse id
+                                    (Err
+                                        (case error of
+                                            "badUrl" ->
+                                                Effect.BadUrl message
+
+                                            "timeout" ->
+                                                Effect.Timeout
+
+                                            _ ->
+                                                Effect.NetworkError message
+                                        )
+                                    )
+                            )
+                            (D.field "id" D.string)
+                            (D.field "error" D.string)
+                            (D.field "message" D.string)
 
                     "mouse" ->
                         D.map2 Mouse (D.field "x" D.int) (D.field "y" D.int)
@@ -228,10 +229,7 @@ type WeatherState
 
 type Msg
     = GotInput D.Value
-    | AnimationFrame Float
     | Tick
-    | GotPlace (Result Http.Error Weather.Place)
-    | GotForecast Weather.Place (Result Http.Error Weather.Forecast)
 
 
 type UiId
@@ -251,7 +249,7 @@ type UiId
     | CancelPowerButton
 
 
-init : () -> ( Model, Cmd Msg )
+init : () -> ( Model, List Effect )
 init _ =
     ( { width = 640
       , height = 480
@@ -282,7 +280,7 @@ init _ =
       , aboutOpen = False
       , confirmPower = Nothing
       }
-    , Cmd.none
+    , []
     )
 
 
@@ -293,13 +291,38 @@ frameWindow =
     60
 
 
-update : Msg -> Model -> ( Model, Cmd Msg )
+update : Msg -> Model -> ( Model, List Effect )
 update msg model =
     case msg of
         Tick ->
-            ( model, Cmd.none )
+            ( model, [] )
 
-        AnimationFrame time ->
+        GotInput value ->
+            case D.decodeValue decodeInput value of
+                Ok event ->
+                    let
+                        ( next, cmd ) =
+                            step event model
+                    in
+                    ( next
+                    , if cursorColor next /= cursorColor model || isRenderer event then
+                        cmd ++ [ Effect.SetCursorColor (cursorColor next) ]
+
+                      else
+                        cmd
+                    )
+
+                Err _ ->
+                    ( model, [] )
+
+
+step : Input -> Model -> ( Model, List Effect )
+step event model =
+    case event of
+        Screen w h ->
+            ( { model | width = w, height = h, mouse = ( w // 2, h // 2 ) }, [] )
+
+        Frame time ->
             let
                 next =
                     { model
@@ -314,46 +337,20 @@ update msg model =
                                     model.frameIntervals
                     }
             in
-            ( next, render (Sprite.encode (view next)) )
+            ( next, [ Effect.Render (view next) ] )
 
-        GotInput value ->
-            case D.decodeValue decodeInput value of
-                Ok event ->
-                    let
-                        ( next, cmd ) =
-                            step event model
-                    in
-                    ( next
-                    , if cursorColor next /= cursorColor model || isRenderer event then
-                        Cmd.batch [ cmd, cursor (Color.toFloat (cursorColor next)) ]
+        HttpResponse id result ->
+            let
+                next =
+                    gotHttp id result model
+            in
+            case ( model.weather, next.weather ) of
+                ( FindingPlace, LoadingForecast place ) ->
+                    -- Now that we know where we are, ask for the forecast there.
+                    ( next, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
 
-                      else
-                        cmd
-                    )
-
-                Err _ ->
-                    ( model, Cmd.none )
-
-        GotPlace (Ok place) ->
-            ( { model | weather = LoadingForecast place }
-            , Weather.fetchForecast model.weatherUrl place (GotForecast place)
-            )
-
-        GotPlace (Err error) ->
-            ( { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }, Cmd.none )
-
-        GotForecast place (Ok forecast) ->
-            ( { model | weather = GotWeather place forecast }, Cmd.none )
-
-        GotForecast _ (Err error) ->
-            ( { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }, Cmd.none )
-
-
-step : Input -> Model -> ( Model, Cmd Msg )
-step event model =
-    case event of
-        Screen w h ->
-            ( { model | width = w, height = h, mouse = ( w // 2, h // 2 ) }, Cmd.none )
+                _ ->
+                    ( next, [] )
 
         Mouse x y ->
             let
@@ -366,14 +363,14 @@ step event model =
                         ( { moved
                             | password = TextInput.mouseDownMove (textScale model) (passwordWidth model) moved.mouse position model.password
                           }
-                        , Cmd.none
+                        , []
                         )
 
                     _ ->
-                        ( moved, Cmd.none )
+                        ( moved, [] )
 
             else
-                ( moved, Cmd.none )
+                ( moved, [] )
 
         Button 0 True ->
             case Ui.hover model.mouse (screenUi model) of
@@ -383,51 +380,51 @@ step event model =
                         , selectingText = True
                         , password = TextInput.mouseDown (textScale model) (passwordWidth model) model.mouse relativePositionToUi model.password
                       }
-                    , Cmd.none
+                    , []
                     )
 
                 ( id, _ ) :: _ ->
                     click id model
 
                 [] ->
-                    ( { model | pressed = True, focus = Nothing }, Cmd.none )
+                    ( { model | pressed = True, focus = Nothing }, [] )
 
         Button 0 False ->
-            ( { model | pressed = False, selectingText = False }, Cmd.none )
+            ( { model | pressed = False, selectingText = False }, [] )
 
         Button _ down ->
-            ( { model | pressed = down }, Cmd.none )
+            ( { model | pressed = down }, [] )
 
         Key code down repeat ->
             if Keyboard.isShift code then
-                ( { model | shift = down }, Cmd.none )
+                ( { model | shift = down }, [] )
 
             else if Keyboard.isCtrl code then
-                ( { model | ctrl = down }, Cmd.none )
+                ( { model | ctrl = down }, [] )
 
             else if not down then
-                ( model, Cmd.none )
+                ( model, [] )
 
             else if model.focus == Just PasswordInput then
                 typeKey (Keyboard.fromCode model.shift code) model
 
             else if repeat then
-                ( model, Cmd.none )
+                ( model, [] )
 
             else
-                ( nextColor model, Cmd.none )
+                ( nextColor model, [] )
 
         Renderer renderer ->
-            ( { model | renderer = Just renderer }, Cmd.none )
+            ( { model | renderer = Just renderer }, [] )
 
         Stats stats ->
-            ( { model | stats = Just stats }, Cmd.none )
+            ( { model | stats = Just stats }, [] )
 
         WifiDevice device ->
-            ( { model | wifiDevice = device, scanning = device /= Wifi.NoCard && model.scanning }, Cmd.none )
+            ( { model | wifiDevice = device, scanning = device /= Wifi.NoCard && model.scanning }, [] )
 
         WifiScan networks ->
-            ( { model | networks = networks, scanning = False }, Cmd.none )
+            ( { model | networks = networks, scanning = False }, [] )
 
         WifiStatus status ->
             let
@@ -441,17 +438,17 @@ step event model =
                 fetchWeather next
 
             else
-                ( next, Cmd.none )
+                ( next, [] )
 
         System info ->
-            ( { model | system = Just info }, Cmd.none )
+            ( { model | system = Just info }, [] )
 
         NetConfig urls ->
             ( { model
                 | geoUrl = nonEmpty urls.geoUrl Weather.defaultGeoUrl
                 , weatherUrl = nonEmpty urls.weatherUrl Weather.defaultWeatherUrl
               }
-            , Cmd.none
+            , []
             )
 
 
@@ -464,19 +461,58 @@ nonEmpty value default =
         value
 
 
-fetchWeather : Model -> ( Model, Cmd Msg )
+fetchWeather : Model -> ( Model, List Effect )
 fetchWeather model =
-    ( { model | weather = FindingPlace }, Weather.fetchPlace model.geoUrl GotPlace )
+    ( { model | weather = FindingPlace }, [ Effect.get "geo" model.geoUrl ] )
 
 
-click : UiId -> Model -> ( Model, Cmd Msg )
+{-| The answers to the weather's two requests: where we are ("geo"), then the
+forecast for there ("forecast").
+-}
+gotHttp : String -> Result Effect.HttpError { status : Int, body : String } -> Model -> Model
+gotHttp id result model =
+    let
+        decoded decoder =
+            case result of
+                Ok response ->
+                    if response.status >= 200 && response.status < 300 then
+                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
+
+                    else
+                        Err (Ok response.status)
+
+                Err error ->
+                    Err (Err error)
+    in
+    case ( id, model.weather ) of
+        ( "geo", FindingPlace ) ->
+            case decoded Weather.decodePlace of
+                Ok place ->
+                    { model | weather = LoadingForecast place }
+
+                Err error ->
+                    { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+
+        ( "forecast", LoadingForecast place ) ->
+            case decoded Weather.decodeForecast of
+                Ok forecast ->
+                    { model | weather = GotWeather place forecast }
+
+                Err error ->
+                    { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+
+        _ ->
+            model
+
+
+click : UiId -> Model -> ( Model, List Effect )
 click id model =
     case id of
         NextColorButton ->
-            ( nextColor { model | focus = Nothing }, Cmd.none )
+            ( nextColor { model | focus = Nothing }, [] )
 
         RefreshButton ->
-            ( { model | scanning = True, focus = Nothing }, wifi [ "scan" ] )
+            ( { model | scanning = True, focus = Nothing }, [ Effect.WifiScan ] )
 
         NetworkButton ssid ->
             case List.filter (\n -> n.ssid == ssid) model.networks |> List.head of
@@ -496,56 +532,57 @@ click id model =
                             else
                                 Nothing
                       }
-                    , Cmd.none
+                    , []
                     )
 
                 Nothing ->
-                    ( model, Cmd.none )
+                    ( model, [] )
 
         PasswordInput ->
-            ( { model | focus = Just PasswordInput }, Cmd.none )
+            ( { model | focus = Just PasswordInput }, [] )
 
         ShowPasswordButton ->
-            ( { model | showPassword = not model.showPassword }, Cmd.none )
+            ( { model | showPassword = not model.showPassword }, [] )
 
         ConnectButton ->
             connect model
 
         DisconnectButton ->
-            ( { model | weather = NoWeather, focus = Nothing }, wifi [ "disconnect" ] )
+            ( { model | weather = NoWeather, focus = Nothing }, [ Effect.WifiDisconnect ] )
 
         WeatherButton ->
             fetchWeather { model | focus = Nothing }
 
         AboutButton ->
-            ( { model | aboutOpen = not model.aboutOpen, focus = Nothing }, Cmd.none )
+            ( { model | aboutOpen = not model.aboutOpen, focus = Nothing }, [] )
 
         CloseAboutButton ->
-            ( { model | aboutOpen = False }, Cmd.none )
+            ( { model | aboutOpen = False }, [] )
 
         PowerOffButton ->
-            ( { model | confirmPower = Just PowerOff, focus = Nothing }, Cmd.none )
+            ( { model | confirmPower = Just PowerOff, focus = Nothing }, [] )
 
         RestartButton ->
-            ( { model | confirmPower = Just Restart, focus = Nothing }, Cmd.none )
+            ( { model | confirmPower = Just Restart, focus = Nothing }, [] )
 
         CancelPowerButton ->
-            ( { model | confirmPower = Nothing }, Cmd.none )
+            ( { model | confirmPower = Nothing }, [] )
 
         ConfirmPowerButton ->
             ( { model | confirmPower = Nothing }
-            , power
-                (case model.confirmPower of
-                    Just Restart ->
-                        "restart"
+            , [ Effect.Power
+                    (case model.confirmPower of
+                        Just Restart ->
+                            Effect.Restart
 
-                    _ ->
-                        "off"
-                )
+                        _ ->
+                            Effect.PowerOff
+                    )
+              ]
             )
 
 
-connect : Model -> ( Model, Cmd Msg )
+connect : Model -> ( Model, List Effect )
 connect model =
     case model.selected of
         Just network ->
@@ -562,11 +599,11 @@ connect model =
                 , weather = NoWeather
                 , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
               }
-            , wifi [ "connect", network.ssid, password ]
+            , [ Effect.WifiConnect { ssid = network.ssid, password = password } ]
             )
 
         Nothing ->
-            ( model, Cmd.none )
+            ( model, [] )
 
 
 needsPassword : Wifi.Network -> Bool
@@ -577,17 +614,17 @@ needsPassword network =
 {-| A key for the password box. Elm OS has no system clipboard yet, so Ctrl+C and Ctrl+X
 copy into one of its own for Ctrl+V, and only while the password is shown.
 -}
-typeKey : Keyboard.Key -> Model -> ( Model, Cmd Msg )
+typeKey : Keyboard.Key -> Model -> ( Model, List Effect )
 typeKey key model =
     case ( model.ctrl, key ) of
         ( False, Keyboard.Enter ) ->
             connect model
 
         ( False, Keyboard.Escape ) ->
-            ( { model | focus = Nothing }, Cmd.none )
+            ( { model | focus = Nothing }, [] )
 
         ( True, Keyboard.Character "v" ) ->
-            ( { model | password = TextInput.paste model.clipboard model.password |> limitPassword }, Cmd.none )
+            ( { model | password = TextInput.paste model.clipboard model.password |> limitPassword }, [] )
 
         _ ->
             let
@@ -608,7 +645,7 @@ typeKey key model =
                         TextInput.NoOutMsg ->
                             model.clipboard
               }
-            , Cmd.none
+            , []
             )
 
 
@@ -946,13 +983,12 @@ ellipsis maxLength string =
 main : Program () Model Msg
 main =
     Platform.worker
-        { init = init
-        , update = update
+        { init = \flags -> init flags |> Tuple.mapSecond Effect.toCmd
+        , update = \msg model -> update msg model |> Tuple.mapSecond Effect.toCmd
         , subscriptions =
             \_ ->
                 Sub.batch
-                    [ input GotInput
-                    , animationFrame AnimationFrame
+                    [ Effect.fromHost GotInput
 
                     -- An idle eco program exits; a timer keeps the event loop alive.
                     , Time.every 60000 (\_ -> Tick)
@@ -1063,7 +1099,7 @@ wifiPanel model =
                     if network.ssid == status.ssid && status.state /= Wifi.Idle && status.state /= Wifi.Failed then
                         []
 
-                    else if network.security == Wifi.Enterprise || network.security == Wifi.Wep then
+                    else if network.security == Wifi.Enterprise || network.security == Wifi.Wep || network.security == Wifi.Wpa3 then
                         [ Ui.colorScaledText Color.errorColor scale "That kind of network isn't supported yet" ]
 
                     else
@@ -1147,6 +1183,9 @@ networkRow model scale network =
 
                     Wifi.Wep ->
                         "WEP"
+
+                    Wifi.Wpa3 ->
+                        "WPA3"
 
         nameChars =
             panelChars - 15

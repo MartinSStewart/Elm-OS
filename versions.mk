@@ -1,0 +1,10 @@
+# Versions of what the build downloads, pinned so every build of a commit is the same.
+# `make refresh` moves each one to the newest release and updates this file; commit it.
+#
+# The Linux kernel: a stable release from the 6.12 long-term series.
+KERNEL_VER := v6.12.115
+# wpa_supplicant (joins wifi networks) and hostapd (the simulated access point in QEMU),
+# built from source with their own crypto instead of OpenSSL. SHA-256 of each tarball.
+HOSTAP_VER := 2.12
+WPA_SUPPLICANT_SHA256 := 08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6
+HOSTAPD_SHA256 := f43502561c28ba47ab77e18e1a973d07361c68cc8b14178e619bd5796b70eabd

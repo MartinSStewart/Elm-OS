@@ -1,0 +1,9 @@
+[package]
+name = "elmos-gpu"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+common = { path = "../common" }
+libc = "0.2"

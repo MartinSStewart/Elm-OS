@@ -26,6 +26,7 @@ type Security
     | Wpa
     | Enterprise
     | Wep
+    | Wpa3 -- WPA3 only: wpa_supplicant is built without the crypto it needs (see Makefile)
 
 
 type alias Network =
@@ -77,6 +78,9 @@ decodeNetworks =
 
                                 "wep" ->
                                     Wep
+
+                                "wpa3" ->
+                                    Wpa3
 
                                 _ ->
                                     Wpa

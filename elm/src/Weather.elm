@@ -5,18 +5,20 @@ module Weather exposing
     , defaultGeoUrl
     , defaultWeatherUrl
     , describe
+    , decodeForecast
+    , decodePlace
     , errorText
-    , fetchForecast
-    , fetchPlace
+    , forecastUrl
     , weekday
     )
 
 {-| The weather where this computer is: its rough location from its public IP address
 (geojs.io), then the forecast for there (open-meteo.com). Neither needs an API key.
-Both go over HTTPS with eco's elm/http, which uses libcurl and OpenSSL natively.
+Both go over HTTPS: Main asks the host for them with Effect.get, and the host fetches
+them with rustls (host/init/src/http.rs).
 -}
 
-import Http
+import Effect
 import Json.Decode as D
 
 
@@ -48,43 +50,16 @@ type alias Day =
     { date : String, code : Int, high : Float, low : Float }
 
 
-fetchPlace : String -> (Result Http.Error Place -> msg) -> Cmd msg
-fetchPlace url toMsg =
-    Http.get { url = url, expect = expectJson toMsg decodePlace }
-
-
-{-| Http.expectJson, without Json.Decode.errorToString: eco's native build of it
-segfaults (seen with eco 0.2.0-rc2 on an HTML body), which takes down /init.
--}
-expectJson : (Result Http.Error a -> msg) -> D.Decoder a -> Http.Expect msg
-expectJson toMsg decoder =
-    Http.expectString
-        (\result ->
-            toMsg
-                (Result.andThen
-                    (\body ->
-                        D.decodeString decoder body
-                            |> Result.mapError (\_ -> Http.BadBody "unexpected JSON")
-                    )
-                    result
-                )
-        )
-
-
-fetchForecast : String -> Place -> (Result Http.Error Forecast -> msg) -> Cmd msg
-fetchForecast url place toMsg =
-    Http.get
-        { url =
-            url
-                ++ "?latitude="
-                ++ String.fromFloat place.latitude
-                ++ "&longitude="
-                ++ String.fromFloat place.longitude
-                ++ "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
-                ++ "&daily=weather_code,temperature_2m_max,temperature_2m_min"
-                ++ "&timezone=auto&forecast_days=4"
-        , expect = expectJson toMsg decodeForecast
-        }
+forecastUrl : String -> Place -> String
+forecastUrl url place =
+    url
+        ++ "?latitude="
+        ++ String.fromFloat place.latitude
+        ++ "&longitude="
+        ++ String.fromFloat place.longitude
+        ++ "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
+        ++ "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+        ++ "&timezone=auto&forecast_days=4"
 
 
 {-| geojs gives the coordinates as strings.
@@ -241,23 +216,27 @@ describe code =
             "Weather code " ++ String.fromInt code
 
 
-errorText : Http.Error -> String
+{-| Why there is no weather: the request failed, the server said no, or its answer
+wasn't what we expected (Nothing).
+-}
+errorText : Result Effect.HttpError Int -> String
 errorText error =
     case error of
-        Http.BadUrl url ->
+        Err (Effect.BadUrl url) ->
             "Bad URL " ++ url
 
-        Http.Timeout ->
+        Err Effect.Timeout ->
             "The server took too long"
 
-        Http.NetworkError ->
+        Err (Effect.NetworkError _) ->
             "Couldn't reach the server"
 
-        Http.BadStatus status ->
-            "The server answered " ++ String.fromInt status
+        Ok status ->
+            if status >= 200 && status < 300 then
+                "Didn't understand the server's answer"
 
-        Http.BadBody _ ->
-            "Didn't understand the server's answer"
+            else
+                "The server answered " ++ String.fromInt status
 
 
 {-| "2026-11-06" to "Fri", by Sakamoto's method.
