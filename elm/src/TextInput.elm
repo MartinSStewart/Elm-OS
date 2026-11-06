@@ -14,8 +14,8 @@ module TextInput exposing
     )
 
 {-| town-collab's single-line text input (src/TextInput.elm in
-github.com/MartinSStewart/town-collab), ported to Elm OS: Coord is a plain (Int, Int),
-widths are plain Ints, it draws triangles for the render port in either font (Noto Sans
+github.com/MartinSStewart/town-collab), ported to Elm OS: it is laid out in UI pixels
+(Units.elm) and draws triangles for the render port in either font (Noto Sans
 is proportional, so the cursor goes between measured characters), Home and End move to
 the ends, text wider than the box scrolls to keep the cursor in view, and a password
 shows dots.
@@ -24,7 +24,9 @@ shows dots.
 import Color
 import Coord exposing (Coord)
 import Keyboard
+import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
+import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
 type alias Model =
@@ -374,11 +376,11 @@ deleteSelection state =
     }
 
 
-{-| How a text input looks: its font, its width in pixels, and whether it shows a dot
-for each character instead of the text (for passwords).
+{-| How a text input looks: its font, its width, and whether it shows a dot for each
+character instead of the text (for passwords).
 -}
 type alias Style =
-    { font : Sprite.Font, width : Int, masked : Bool }
+    { font : Sprite.Font, width : Quantity Int UiPixels, masked : Bool }
 
 
 shownText : Style -> String -> String
@@ -397,12 +399,12 @@ shownText style text =
         text
 
 
-{-| Where the cursor goes before each character and after the last, in pixels from the
-start of the text.
+{-| Where the cursor goes before each character and after the last, in UI pixels from
+the start of the text.
 -}
 carets : Style -> State -> List Int
 carets style state =
-    Sprite.caretPositions style.font (shownText style state.text)
+    Sprite.caretPositions style.font (shownText style state.text) |> List.map Quantity.unwrap
 
 
 caretX : List Int -> Int -> Int
@@ -412,10 +414,22 @@ caretX positions index =
 
 caretWidth : Style -> Int
 caretWidth style =
-    max 1 (Sprite.lineHeight style.font // 20)
+    max 1 (lineHeight style // 20)
 
 
-mouseDown : Style -> Coord -> Coord -> Model -> Model
+lineHeight : Style -> Int
+lineHeight style =
+    Sprite.lineHeight style.font |> Quantity.unwrap
+
+
+width : Style -> Int
+width style =
+    Quantity.unwrap style.width
+
+
+{-| The mouse went down at `mousePosition`, with the box at `position`.
+-}
+mouseDown : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDown style mousePosition position model =
     replaceState
         (\state ->
@@ -429,11 +443,11 @@ mouseDown style mousePosition position model =
 
 {-| The caret nearest the mouse.
 -}
-cursorPosition : Style -> Coord -> Coord -> State -> Int
+cursorPosition : Style -> Coord UiPixels -> Coord UiPixels -> State -> Int
 cursorPosition style mousePosition position state =
     let
         x =
-            Coord.x mousePosition - (Coord.x position + Coord.x padding + caretWidth style) + scroll style state
+            Coord.xRaw mousePosition - (Coord.xRaw position + padding + caretWidth style) + scroll style state
     in
     carets style state
         |> List.indexedMap Tuple.pair
@@ -449,7 +463,7 @@ cursorPosition style mousePosition position state =
         |> Tuple.first
 
 
-mouseDownMove : Style -> Coord -> Coord -> Model -> Model
+mouseDownMove : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDownMove style mousePosition position model =
     replaceState
         (\state ->
@@ -463,92 +477,107 @@ mouseDownMove style mousePosition position model =
         model
 
 
-padding : Coord
+{-| Between the border and the text, on every side, in UI pixels.
+-}
+padding : Int
 padding =
-    Coord.xy 4 4
+    4
 
 
-size : Style -> Coord
+size : Style -> Coord UiPixels
 size style =
-    ( style.width, Sprite.lineHeight style.font + Coord.y padding * 2 )
+    Coord.xy (width style) (lineHeight style + padding * 2)
 
 
 {-| The pixels between the box's padding that text shows in.
 -}
 innerWidth : Style -> Int
 innerWidth style =
-    style.width - 2 * Coord.x padding - 2 * caretWidth style
+    width style - 2 * padding - 2 * caretWidth style
 
 
-{-| How far the text is scrolled left, in pixels: 0 unless the cursor would be past the
-right edge, and then just enough to show it. (town-collab's boxes are wide enough not to
-need this.)
+{-| How far the text is scrolled left, in UI pixels: 0 unless the cursor would be past
+the right edge, and then just enough to show it. (town-collab's boxes are wide enough not
+to need this.)
 -}
 scroll : Style -> State -> Int
 scroll style state =
     max 0 (caretX (carets style state) state.cursorPosition - innerWidth style)
 
 
-view : Style -> Coord -> Bool -> Bool -> State -> List Triangle
-view style offset hasFocus isValid current =
+view : UiScale -> Style -> Coord UiPixels -> Bool -> Bool -> State -> List (Triangle DevicePixels)
+view scale style offset hasFocus isValid current =
     let
         positions =
             carets style current
 
         ( x, y ) =
-            offset
+            Coord.toTuple offset
 
         textLeft =
-            x + Coord.x padding + caretWidth style - scroll style current
+            x + padding + caretWidth style - scroll style current
 
         clip =
-            { left = x + Coord.x padding, right = x + style.width - Coord.x padding }
+            { left = x + padding, right = x + width style - padding }
 
-        lineHeight =
-            Sprite.lineHeight style.font
+        height =
+            lineHeight style
 
         selectionStart =
             textLeft + caretX positions (min current.cursorPosition (current.cursorPosition + current.cursorSize))
 
         selectionEnd =
             textLeft + caretX positions (max current.cursorPosition (current.cursorPosition + current.cursorSize))
-    in
-    Sprite.rectangle
-        (if not isValid then
-            Color.errorColor
 
-         else if hasFocus then
-            Color.highlightColor
+        ( boxWidth, boxHeight ) =
+            Coord.toTuple (size style)
 
-         else
-            Color.outlineColor
-        )
-        offset
-        (size style)
-        ++ Sprite.rectangle
-            (if hasFocus then
-                Color.highlightColor
+        box =
+            Sprite.rectangle
+                (if not isValid then
+                    Color.errorColor
 
-             else
-                Color.fillColor3
-            )
-            (offset |> Coord.plus padding)
-            (size style |> Coord.minus (Coord.scalar 2 padding))
-        ++ (if current.cursorSize == 0 || not hasFocus then
-                []
+                 else if hasFocus then
+                    Color.highlightColor
 
-            else
-                Sprite.rectangle
-                    (Color.rgb255 170 210 255)
-                    ( max clip.left selectionStart, y + Coord.y padding )
-                    ( min clip.right selectionEnd - max clip.left selectionStart, lineHeight )
-           )
-        ++ Sprite.clippedText Color.black style.font (Just clip) (shownText style current.text) ( textLeft, y + Coord.y padding )
-        ++ (if hasFocus then
+                 else
+                    Color.outlineColor
+                )
+                offset
+                (size style)
+                ++ Sprite.rectangle
+                    (if hasFocus then
+                        Color.highlightColor
+
+                     else
+                        Color.fillColor3
+                    )
+                    (Coord.xy (x + padding) (y + padding))
+                    (Coord.xy (boxWidth - 2 * padding) (boxHeight - 2 * padding))
+                ++ (if current.cursorSize == 0 || not hasFocus then
+                        []
+
+                    else
+                        Sprite.rectangle
+                            (Color.rgb255 170 210 255)
+                            (Coord.xy (max clip.left selectionStart) (y + padding))
+                            (Coord.xy (min clip.right selectionEnd - max clip.left selectionStart) height)
+                   )
+
+        caret =
+            if hasFocus then
                 Sprite.rectangle Color.black
-                    ( textLeft + caretX positions current.cursorPosition - caretWidth style, y + Coord.y padding )
-                    ( caretWidth style, lineHeight )
+                    (Coord.xy (textLeft + caretX positions current.cursorPosition - caretWidth style) (y + padding))
+                    (Coord.xy (caretWidth style) height)
 
             else
                 []
-           )
+    in
+    Sprite.toDevice scale box
+        ++ Sprite.clippedText scale
+            Color.black
+            style.font
+            (Just { left = Units.uiPixels clip.left, right = Units.uiPixels clip.right })
+            (shownText style current.text)
+            (Coord.xy textLeft (y + padding))
+        ++ Sprite.toDevice scale caret
