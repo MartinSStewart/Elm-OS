@@ -790,7 +790,7 @@ view model =
             model.mouse
 
 
-{-| Device pixels per UI pixel: 2 on screens at least 1600 pixels wide, otherwise 1.
+{-| Device pixels per UI pixel: 2 on screens at least 2000 pixels wide, otherwise 1.
 -}
 uiScale : Model -> UiScale
 uiScale model =

@@ -45,7 +45,7 @@ uiPixels =
     Quantity
 
 
-{-| 2 device pixels per UI pixel on screens at least 1600 pixels wide, otherwise 1.
+{-| 2 device pixels per UI pixel on screens at least 2000 pixels wide, otherwise 1.
 -}
 scaleFor : Quantity Int DevicePixels -> UiScale
 scaleFor (Quantity screenWidth) =

@@ -46,11 +46,15 @@ atlas = Image.new("L", (ATLAS_W, ATLAS_H), 0)
 
 def glyph_image(face, ch):
     """The glyph's coverage, where its top left is from the pen (on the baseline), and
-    its advance in 1/64 pixels (hinted, so whole pixels)."""
+    its advance in 1/64 pixels. The advance is the font's own, not the hinted one (which
+    is rounded to whole pixels): Elm lays text out at one size and draws it at that size
+    times the UI scale, and rounded advances would put the rounding errors, doubled,
+    between the glyphs at 2x."""
     face.load_char(ch, LOAD)
     g = face.glyph
     b = g.bitmap
-    left, top, advance = g.bitmap_left, -g.bitmap_top, g.advance.x
+    # linearHoriAdvance is in 1/65536 pixels.
+    left, top, advance = g.bitmap_left, -g.bitmap_top, round(g.linearHoriAdvance / 1024)
     if b.width == 0 or b.rows == 0:
         return None, left, top, advance
     rows = [bytes(b.buffer[y * b.pitch : y * b.pitch + b.width]) for y in range(b.rows)]
