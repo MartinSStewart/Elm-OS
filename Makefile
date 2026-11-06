@@ -121,8 +121,13 @@ $(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
 	@mkdir -p $(BUILD)
 	cd elm && $(ECO) make src/Main.elm --output=$(abspath $@)
 
-$(BUILD)/host.o: host/host.c host/atlas.h host/font.h $(BUILD)/kheaders/include/linux/input.h | check-deps
-	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include
+# The commit goes on Elm's about page. Rewritten only when it changes, like gpu-setting.
+$(BUILD)/commit: FORCE
+	@mkdir -p $(BUILD); c=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
+	  echo "$$c" | cmp -s - $@ || echo "$$c" > $@
+
+$(BUILD)/host.o: host/host.c host/atlas.h host/font.h $(BUILD)/commit $(BUILD)/kheaders/include/linux/input.h | check-deps
+	musl-gcc -O2 -Wall -DELMOS_COMMIT="\"$$(cat $(BUILD)/commit)\"" -c $< -o $@ -isystem $(BUILD)/kheaders/include
 
 $(BUILD)/net.o: host/net.c $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include

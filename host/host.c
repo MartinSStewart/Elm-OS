@@ -26,7 +26,9 @@
  *             {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
  *             {"t":"key","code":C,"down":true}     C: Linux KEY_* code
  *             {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
+ *             {"t":"system","kernel":K,"cpu":C,"commit":G}   for the about page
  *             wifi and network messages: see net.c
+ *   power -> "off" or "restart"
  *             {"t":"renderer","gpu":true,"name":"..."}   which renderer draws
  *             {"t":"stats","cores":N,"cpu":P,"cpuElm":P,"cpuHost":P,"cpuGpu":P,
  *              "memUsed":MB,"memTotal":MB,"gpuMs":MS,"elmMs":MS,"drawMs":MS}
@@ -62,6 +64,7 @@
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -71,6 +74,10 @@
 #include <linux/input.h>
 
 #include "atlas.h"
+
+#ifndef ELMOS_COMMIT
+#define ELMOS_COMMIT "unknown"
+#endif
 
 /* From eco's runtime (runtime/src/embed/eco_embed.h). */
 typedef void (*eco_port_callback)(const char* json_utf8, void* user);
@@ -639,6 +646,34 @@ static void power_off(void) {
     reboot(RB_POWER_OFF);
 }
 
+/* Elm's on-screen buttons: "off" or "restart". */
+static void on_power(const char* json, void* user) {
+    (void)user;
+    if (getpid() != 1) return;
+    int restart = strstr(json, "restart") != NULL;
+    logf_("%s, as Elm asked", restart ? "restarting" : "powering off");
+    sync();
+    reboot(restart ? RB_AUTOBOOT : RB_POWER_OFF);
+}
+
+/* For Elm's about page: the kernel, the CPU, and which commit this is. */
+static void send_system(void) {
+    struct utsname u;
+    char cpu[128] = "unknown", line[256];
+    uname(&u);
+    FILE* f = fopen("/proc/cpuinfo", "r");
+    while (f && fgets(line, sizeof line, f))
+        if (strncmp(line, "model name", 10) == 0 && strchr(line, ':')) {
+            snprintf(cpu, sizeof cpu, "%s", strchr(line, ':') + 2);
+            cpu[strcspn(cpu, "\n")] = 0;
+            break;
+        }
+    if (f) fclose(f);
+    for (char* p = cpu; *p; p++) if (*p == '"' || *p == '\\') *p = ' ';
+    send_input("{\"t\":\"system\",\"kernel\":\"%s %s\",\"cpu\":\"%s\",\"commit\":\"%s\"}",
+               u.sysname, u.release, cpu, ELMOS_COMMIT);
+}
+
 static void handle_event(Display* d, InputDev* dev, const struct input_event* ev, int* moved) {
     if (ev->type == EV_REL) {
         if (ev->code == REL_X) mouse_x += ev->value, *moved = 1;
@@ -916,6 +951,7 @@ static void* host_main(void* arg) {
     if (gpu_fd < 0 && d->back) cpu_cursor_init(d);
     cursor_move(d, mouse_x, mouse_y);
     send_renderer(gpu_fd >= 0, gpu_fd >= 0 ? gpu_name : "rasteriser in /init");
+    send_system();
     if (gpu_fd < 0) atlas_build(atlas);
     cpu_load();
     send_stats();
@@ -1034,6 +1070,7 @@ __attribute__((constructor)) static void host_init(void) {
     wake_fd = eventfd(0, EFD_CLOEXEC);
     eco_port_subscribe("render", on_render, NULL);
     eco_port_subscribe("cursor", on_cursor, NULL);
+    eco_port_subscribe("power", on_power, NULL);
     net_start(); /* wifi and DHCP: net.c */
     pthread_t t;
     pthread_create(&t, NULL, host_main, NULL);

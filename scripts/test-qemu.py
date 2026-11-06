@@ -254,6 +254,20 @@ def click(fx, fy):
     time.sleep(0.5)
 
 
+# The About button (top left) opens the about page in the middle of the screen; a
+# second click closes it.
+middle = (w // 2, h // 2 - 60 * s)
+before = pixel(screen(), *middle)
+click(30 * s / w, 20 * s / h)
+time.sleep(1)
+opened = pixel(screen(), *middle)
+click(30 * s / w, 20 * s / h)
+time.sleep(1)
+closed = pixel(screen(), *middle)
+print(f"about page: {before}, open {opened}, closed {closed}")
+if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
+    fail("the About button did not open and close the about page")
+
 if not usb:
     # The wifi panel (top right): refresh, pick the test network, type its password
     # and press Enter. Then the host joins it, gets an address by DHCP, and Elm

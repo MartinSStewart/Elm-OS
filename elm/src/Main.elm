@@ -49,6 +49,11 @@ port cursor : Float -> Cmd msg
 port wifi : List String -> Cmd msg
 
 
+{-| "off" powers the computer off, "restart" restarts it.
+-}
+port power : String -> Cmd msg
+
+
 
 -- INPUT
 
@@ -64,6 +69,11 @@ type Input
     | WifiScan (List Wifi.Network)
     | WifiStatus Wifi.Status
     | NetConfig { geoUrl : String, weatherUrl : String }
+    | System SystemInfo
+
+
+type alias SystemInfo =
+    { kernel : String, cpu : String, commit : String }
 
 
 type alias RendererInfo =
@@ -113,6 +123,10 @@ inputDecoder =
 
                     "wifiStatus" ->
                         D.map WifiStatus Wifi.statusDecoder
+
+                    "system" ->
+                        D.map3 SystemInfo (D.field "kernel" D.string) (D.field "cpu" D.string) (D.field "commit" D.string)
+                            |> D.map System
 
                     "netConfig" ->
                         D.map2 (\geo weather -> NetConfig { geoUrl = geo, weatherUrl = weather })
@@ -190,7 +204,15 @@ type alias Model =
     , weather : WeatherState
     , geoUrl : String
     , weatherUrl : String
+    , system : Maybe SystemInfo
+    , aboutOpen : Bool
+    , confirmPower : Maybe PowerAction
     }
+
+
+type PowerAction
+    = PowerOff
+    | Restart
 
 
 type WeatherState
@@ -218,6 +240,12 @@ type UiId
     | ConnectButton
     | DisconnectButton
     | WeatherButton
+    | AboutButton
+    | CloseAboutButton
+    | PowerOffButton
+    | RestartButton
+    | ConfirmPowerButton
+    | CancelPowerButton
 
 
 init : () -> ( Model, Cmd Msg )
@@ -244,6 +272,9 @@ init _ =
       , weather = NoWeather
       , geoUrl = Weather.defaultGeoUrl
       , weatherUrl = Weather.defaultWeatherUrl
+      , system = Nothing
+      , aboutOpen = False
+      , confirmPower = Nothing
       }
     , Cmd.none
     )
@@ -374,6 +405,9 @@ step event model =
             else
                 ( next, Cmd.none )
 
+        System info ->
+            ( { model | system = Just info }, Cmd.none )
+
         NetConfig urls ->
             ( { model
                 | geoUrl = nonEmpty urls.geoUrl Weather.defaultGeoUrl
@@ -444,6 +478,33 @@ click id model =
 
         WeatherButton ->
             fetchWeather { model | focus = Nothing }
+
+        AboutButton ->
+            ( { model | aboutOpen = not model.aboutOpen, focus = Nothing }, Cmd.none )
+
+        CloseAboutButton ->
+            ( { model | aboutOpen = False }, Cmd.none )
+
+        PowerOffButton ->
+            ( { model | confirmPower = Just PowerOff, focus = Nothing }, Cmd.none )
+
+        RestartButton ->
+            ( { model | confirmPower = Just Restart, focus = Nothing }, Cmd.none )
+
+        CancelPowerButton ->
+            ( { model | confirmPower = Nothing }, Cmd.none )
+
+        ConfirmPowerButton ->
+            ( { model | confirmPower = Nothing }
+            , power
+                (case model.confirmPower of
+                    Just Restart ->
+                        "restart"
+
+                    _ ->
+                        "off"
+                )
+            )
 
 
 connect : Model -> ( Model, Cmd Msg )
@@ -580,12 +641,25 @@ textScale model =
         1
 
 
-{-| Everything the UI framework draws: the debug panel in the bottom left corner, and
-the wifi panel in the top right.
+{-| Everything the UI framework draws: the debug panel in the bottom left corner, the
+wifi panel in the top right, the About and power buttons in the top left, and the about
+page in the middle when it is open.
 -}
 screenUi : Model -> Ui.Element UiId
 screenUi model =
-    Ui.el { padding = Ui.noPadding, inFront = [ overlay model, wifiPanel model ], borderAndFill = Ui.NoBorderOrFill } Ui.none
+    Ui.el
+        { padding = Ui.noPadding
+        , inFront =
+            [ overlay model, wifiPanel model, toolbar model ]
+                ++ (if model.aboutOpen then
+                        [ aboutPage model ]
+
+                    else
+                        []
+                   )
+        , borderAndFill = Ui.NoBorderOrFill
+        }
+        Ui.none
 
 
 {-| The debug panel, in the bottom left corner of the screen.
@@ -1291,3 +1365,135 @@ wrap width text =
             []
         |> List.reverse
         |> String.join "\n"
+
+
+
+-- TOOLBAR AND ABOUT PAGE
+
+
+toolbar : Model -> Ui.Element UiId
+toolbar model =
+    let
+        scale =
+            textScale model
+
+        t =
+            Ui.scaledText scale
+
+        small =
+            Ui.paddingXY (6 * scale) (3 * scale)
+
+        buttons =
+            case model.confirmPower of
+                Just action ->
+                    [ Ui.el
+                        { padding = small
+                        , inFront = []
+                        , borderAndFill = Ui.defaultElBorderAndFill
+                        }
+                        (t
+                            (case action of
+                                PowerOff ->
+                                    "Power off?"
+
+                                Restart ->
+                                    "Restart?"
+                            )
+                        )
+                    , -- Cancel first, where the button that asked was, so a double click is harmless.
+                      Ui.button { id = CancelPowerButton, padding = small } (t "Cancel")
+                    , Ui.customButton
+                        { id = ConfirmPowerButton
+                        , padding = small
+                        , inFront = []
+                        , borderAndFill =
+                            Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.rgb255 230 150 140 }
+                        , borderAndFillFocus = Ui.defaultButtonBorderAndFillFocus
+                        }
+                        (t "Yes")
+                    ]
+
+                Nothing ->
+                    [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
+                    , Ui.button { id = RestartButton, padding = small } (t "Restart")
+                    , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
+                    ]
+    in
+    Ui.topLeft { size = ( model.width, model.height ) }
+        (Ui.row { spacing = 6 * scale, padding = Ui.paddingXY (8 * scale) (8 * scale) } buttons)
+
+
+aboutPage : Model -> Ui.Element UiId
+aboutPage model =
+    let
+        scale =
+            textScale model
+
+        t =
+            Ui.scaledText scale
+
+        line label value =
+            t (String.padRight 10 ' ' label ++ value)
+
+        system =
+            model.system
+
+        field f =
+            Maybe.map f system |> Maybe.withDefault "?"
+
+        wifiText =
+            case model.wifiDevice of
+                Wifi.Card name ->
+                    case model.wifiStatus.state of
+                        Wifi.Connected ->
+                            name ++ ", connected to " ++ model.wifiStatus.ssid ++ " as " ++ model.wifiStatus.ip
+
+                        _ ->
+                            name ++ ", not connected"
+
+                Wifi.NoCard ->
+                    "no wifi card found"
+
+                Wifi.Unknown ->
+                    "?"
+    in
+    Ui.center { size = ( model.width, model.height ) }
+        (Ui.el
+            { padding = Ui.paddingXY (12 * scale) (10 * scale)
+            , inFront = []
+            , borderAndFill = Ui.BorderAndFill { borderWidth = 2 * scale, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+            }
+            (Ui.column { spacing = 4 * scale, padding = Ui.noPadding }
+                [ Ui.scaledText (2 * scale) "Elm OS"
+                , t "A Linux kernel that boots straight into one Elm program."
+                , t ""
+                , line "Version" (field .commit)
+                , line "Kernel" (field .kernel)
+                , line "CPU" (ellipsis 50 (field .cpu))
+                , line "Memory"
+                    (case model.stats of
+                        Just stats ->
+                            String.fromInt stats.memTotal ++ " MB"
+
+                        Nothing ->
+                            "?"
+                    )
+                , line "Graphics"
+                    (case model.renderer of
+                        Just r ->
+                            ellipsis 50 r.name
+
+                        Nothing ->
+                            "?"
+                    )
+                , line "Wifi" (ellipsis 50 wifiText)
+                , t ""
+                , t "The Elm program is compiled to native code by eco"
+                , t "(github.com/eco-lang/eco-compiler). The UI framework and"
+                , t "font are from town-collab. Weather: open-meteo.com,"
+                , t "location: geojs.io."
+                , t ""
+                , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY (6 * scale) (3 * scale) } (t "Close")
+                ]
+            )
+        )

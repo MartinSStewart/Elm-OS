@@ -31,6 +31,9 @@ geojs.io, then the forecast from open-meteo.com, neither needs a key) and shows 
 QEMU there is a simulated wifi network to join: **Elm OS test network**, password
 `elmos-wifi`, bridged to QEMU's own network, so it reaches the real internet.
 
+Buttons in the top-left corner open an about page (version, kernel, CPU, memory, graphics,
+wifi) and restart or power off the computer, after asking.
+
 ## Layout
 
 | Path | What it is |
@@ -198,6 +201,7 @@ input  <- {"t":"screen","w":1280,"h":800}
           {"t":"mouse","x":640,"y":400}          absolute pixels
           {"t":"button","b":0,"down":true}       0 left, 1 right, 2 middle
           {"t":"key","code":30,"down":true}      Linux KEY_* code ("repeat":true when held)
+          {"t":"system","kernel":"Linux 6.12.0","cpu":"...","commit":"983006b"}   for the about page
           {"t":"wifiDevice","name":"wlan0"}      or null: no wifi card
           {"t":"wifiScan","networks":[{"ssid":"Home","signal":-52,"security":"wpa"}]}
           {"t":"wifiStatus","state":"connected","ssid":"Home","ip":"192.168.1.20","error":""}
@@ -206,6 +210,7 @@ input  <- {"t":"screen","w":1280,"h":800}
           {"t":"stats","cores":2,"cpu":12.5,"cpuElm":20,"cpuHost":2,"cpuGpu":5,"memUsed":160,"memTotal":2000,"gpuMs":0.4,"elmMs":2.1,"drawMs":0.1}
                                                  twice a second; per-frame averages, -1 if unknown
 cursor -> 4294967295                             cursor fill colour, 0xRRGGBBAA
+power  -> "off" or "restart"
 wifi   -> ["scan"]  ["connect","Home","password"]  ["disconnect"]
 animationFrame <- 12345.678                      host's monotonic clock in ms: draw a frame now
 render -> [x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]
