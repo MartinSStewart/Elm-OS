@@ -49,7 +49,7 @@ uiPixels =
 -}
 scaleFor : Quantity Int DevicePixels -> UiScale
 scaleFor (Quantity screenWidth) =
-    if screenWidth >= 1600 then
+    if screenWidth >= 2000 then
         Quantity 2
 
     else
