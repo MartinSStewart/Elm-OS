@@ -10,10 +10,8 @@ module Color exposing
     , outlineColor
     , rgb
     , rgb255
-    , rgba255
     , toFloat
     , white
-    , withAlpha
     )
 
 {-| Colours, packed as 0xRRGGBBAA, which is how the render port carries them.
@@ -43,11 +41,6 @@ rgb255 r g b =
 rgb : Float -> Float -> Float -> Color
 rgb r g b =
     rgb255 (round (r * 255)) (round (g * 255)) (round (b * 255))
-
-
-withAlpha : Float -> Color -> Color
-withAlpha alpha (Color c) =
-    Color (c - modBy 256 c + clamp 0 255 (round (alpha * 255)))
 
 
 toFloat : Color -> Float

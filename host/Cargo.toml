@@ -1,0 +1,12 @@
+# The host side of Elm OS, in Rust:
+#   init/   linked into /init with the Elm program (a static library)
+#   gpu/    /usr/bin/elmos-gpu, the GPU renderer (dynamically linked, because Mesa is)
+#   common/ the texture atlas and the display (KMS) calls both use
+[workspace]
+members = ["common", "init", "gpu"]
+resolver = "2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+opt-level = 3

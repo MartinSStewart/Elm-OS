@@ -5,44 +5,31 @@ module Ui exposing
     , InputType(..)
     , Padding
     , RowColumn
-    , bottomCenter
+    , TextInputData
     , bottomLeft
-    , bottomRight
     , button
     , center
-    , centerHorizontally
-    , centerRight
-    , colorScaledText
     , colorText
     , column
     , customButton
-    , defaultButtonBorderAndFill
     , defaultButtonBorderAndFillFocus
-    , defaultButtonBorderAndFillHover
     , defaultElBorderAndFill
     , el
-    , elWithId
     , findInput
     , hover
-    , isHoveringOverInput
+    , leftAndRight
     , noPadding
+    , minWidth
     , none
-    , outlinedText
     , paddingXY
     , quads
     , row
-    , scaledText
     , selectableButton
-    , size
-    , tabBackward
-    , tabForward
-    , table
     , text
-    , topCenter
+    , textInput
     , topLeft
     , topRight
     , view
-    , visuallyEqual
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -54,14 +41,16 @@ fill, and the alignment helpers (`center`, `topRight`, ...) pad a child out to a
 given size. `view` turns the tree into triangles, and `hover` finds the elements
 with ids under a point.
 
-Left out for now: text inputs (they need town-collab's TextInput modules and a
-keyboard layout), underlined text and sprites from town-collab's texture.
+Text inputs come from town-collab's TextInput (TextInput.elm, with a US layout in
+Keyboard.elm). Left out for now: multiline text inputs, underlined text and sprites from
+town-collab's texture.
 
 -}
 
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Sprite exposing (Triangle)
+import TextInput
 
 
 type alias RowColumn =
@@ -82,11 +71,20 @@ type alias ButtonData id =
     }
 
 
+type alias TextInputData id =
+    { id : id
+    , style : TextInput.Style
+    , isValid : Bool
+    , state : TextInput.State
+    }
+
+
 type Element id
-    = Text
+    = TextInput (TextInputData id)
+    | Text
         { outline : Maybe Color
         , color : Color
-        , scale : Int
+        , font : Sprite.Font
         , text : String
         , cachedSize : Coord
         }
@@ -107,64 +105,11 @@ type Element id
 
 type BorderAndFill
     = NoBorderOrFill
-    | FillOnly Color
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
 
 
 type alias Padding =
     { topLeft : Coord, bottomRight : Coord }
-
-
-listsVisuallyEqual : List (Element id) -> List (Element id) -> Bool
-listsVisuallyEqual a b =
-    if List.length a == List.length b then
-        List.all identity (List.map2 visuallyEqual a b)
-
-    else
-        False
-
-
-visuallyEqual : Element id -> Element id -> Bool
-visuallyEqual a b =
-    case ( a, b ) of
-        ( Single aData aChild, Single bData bChild ) ->
-            (aData.padding == bData.padding)
-                && (aData.borderAndFill == bData.borderAndFill)
-                && listsVisuallyEqual aData.inFront bData.inFront
-                && visuallyEqual aChild bChild
-
-        ( Row aRow aChildren, Row bRow bChildren ) ->
-            (aRow.spacing == bRow.spacing)
-                && (aRow.padding == bRow.padding)
-                && listsVisuallyEqual aChildren bChildren
-
-        ( Column aColumn aChildren, Column bColumn bChildren ) ->
-            (aColumn.spacing == bColumn.spacing)
-                && (aColumn.padding == bColumn.padding)
-                && listsVisuallyEqual aChildren bChildren
-
-        ( Text aText, Text bText ) ->
-            (aText.text == bText.text)
-                && (aText.outline == bText.outline)
-                && (aText.color == bText.color)
-                && (aText.scale == bText.scale)
-
-        ( Button aButton aChild, Button bButton bChild ) ->
-            (aButton.padding == bButton.padding)
-                && (aButton.borderAndFill == bButton.borderAndFill)
-                && (aButton.borderAndFillFocus == bButton.borderAndFillFocus)
-                && (aButton.borderAndFillHover == bButton.borderAndFillHover)
-                && listsVisuallyEqual aButton.inFront bButton.inFront
-                && visuallyEqual aChild bChild
-
-        ( Quads aQuad, Quads bQuad ) ->
-            aQuad == bQuad
-
-        ( Empty, Empty ) ->
-            True
-
-        _ ->
-            False
 
 
 noPadding : Padding
@@ -181,45 +126,36 @@ paddingXY x y =
 -- TEXT
 
 
-defaultCharScale : Int
-defaultCharScale =
-    2
-
-
-textHelper : Maybe Color -> Color -> Int -> String -> Element id
-textHelper outline color scale text2 =
+textHelper : Maybe Color -> Color -> Sprite.Font -> String -> Element id
+textHelper outline color font text2 =
     Text
         { outline = outline
         , color = color
-        , scale = scale
+        , font = font
         , text = text2
-        , cachedSize = Sprite.textSize scale text2
+        , cachedSize = Sprite.textSize font text2
         }
 
 
-text : String -> Element id
-text =
-    textHelper Nothing Color.black defaultCharScale
+{-| Black text. '\n' starts a new line.
+-}
+text : Sprite.Font -> String -> Element id
+text font =
+    textHelper Nothing Color.black font
 
 
-scaledText : Int -> String -> Element id
-scaledText scale =
-    textHelper Nothing Color.black scale
+colorText : Color -> Sprite.Font -> String -> Element id
+colorText color font =
+    textHelper Nothing color font
 
 
-colorText : Color -> String -> Element id
-colorText color =
-    textHelper Nothing color defaultCharScale
+
+-- TEXT INPUTS
 
 
-colorScaledText : Color -> Int -> String -> Element id
-colorScaledText color scale =
-    textHelper Nothing color scale
-
-
-outlinedText : { outline : Color, color : Color, text : String } -> Element id
-outlinedText data =
-    textHelper (Just data.outline) data.color defaultCharScale data.text
+textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.State } -> Element id
+textInput =
+    TextInput
 
 
 
@@ -344,28 +280,6 @@ el data child =
         child
 
 
-elWithId :
-    { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill, id : id }
-    -> Element id
-    -> Element id
-elWithId data child =
-    Single
-        { padding = data.padding
-        , borderAndFill = data.borderAndFill
-        , inFront = data.inFront
-        , cachedSize = paddedSize data.padding child
-        , id = Just data.id
-        }
-        child
-
-
-table : List { header : Element id, row : data -> Element id } -> List data -> Element id
-table columns data =
-    row
-        { spacing = 24, padding = noPadding }
-        (List.map (\a -> column { spacing = 8, padding = noPadding } (a.header :: List.map a.row data)) columns)
-
-
 quads : { size : Coord, triangles : List Triangle } -> Element id
 quads =
     Quads
@@ -398,9 +312,18 @@ align fx fy ( sizeX, sizeY ) child =
         child
 
 
-centerHorizontally : { parentWidth : Int } -> Element id -> Element id
-centerHorizontally data child =
-    align 1 0 ( data.parentWidth, Coord.y (size child) ) child
+{-| A child at the left of a space at least `width` wide, for lining things up in columns.
+-}
+minWidth : Int -> Element id -> Element id
+minWidth width child =
+    align 0 0 ( max width (Coord.x (size child)), Coord.y (size child) ) child
+
+
+{-| Two children in a row at least `width` wide: one at the left, the other at the right.
+-}
+leftAndRight : Int -> Element id -> Element id -> Element id
+leftAndRight width left right =
+    row { spacing = 0, padding = noPadding } [ minWidth (width - Coord.x (size right)) left, right ]
 
 
 center : { size : Coord } -> Element id -> Element id
@@ -413,19 +336,9 @@ topLeft data =
     align 0 0 data.size
 
 
-topCenter : { size : Coord } -> Element id -> Element id
-topCenter data =
-    align 1 0 data.size
-
-
 topRight : { size : Coord } -> Element id -> Element id
 topRight data =
     align 2 0 data.size
-
-
-centerRight : { size : Coord } -> Element id -> Element id
-centerRight data =
-    align 2 1 data.size
 
 
 bottomLeft : { size : Coord } -> Element id -> Element id
@@ -433,19 +346,12 @@ bottomLeft data =
     align 0 2 data.size
 
 
-bottomCenter : { size : Coord } -> Element id -> Element id
-bottomCenter data =
-    align 1 2 data.size
-
-
-bottomRight : { size : Coord } -> Element id -> Element id
-bottomRight data =
-    align 2 2 data.size
-
-
 size : Element id -> Coord
 size element =
     case element of
+        TextInput data ->
+            TextInput.size data.style
+
         Text data ->
             data.cachedSize
 
@@ -535,21 +441,6 @@ hover point element =
     hoverHelper [] point Coord.origin element
 
 
-isHoveringOverInput : List ( id, { relativePositionToUi : Coord, ui : Element id } ) -> Bool
-isHoveringOverInput elements =
-    case elements of
-        ( _, { ui } ) :: _ ->
-            case ui of
-                Button _ _ ->
-                    True
-
-                _ ->
-                    False
-
-        [] ->
-            False
-
-
 contains : Coord -> Coord -> Coord -> Bool
 contains ( px, py ) ( x, y ) ( w, h ) =
     px >= x && py >= y && px < x + w && py < y + h
@@ -563,6 +454,13 @@ hoverHelper :
     -> List ( id, { relativePositionToUi : Coord, ui : Element id } )
 hoverHelper hovers point position element =
     case element of
+        TextInput data ->
+            if contains point position (TextInput.size data.style) then
+                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+
+            else
+                hovers
+
         Button data _ ->
             if contains point position data.cachedSize then
                 ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -603,6 +501,7 @@ hoverHelper hovers point position element =
 
 type InputType id
     = ButtonType { data : ButtonData id, position : Coord, size : Coord }
+    | TextInputType { position : Coord, size : Coord }
 
 
 findInput : id -> Element id -> Maybe (InputType id)
@@ -613,6 +512,13 @@ findInput id element =
 findInputHelper : id -> Coord -> Element id -> Maybe (InputType id)
 findInputHelper id position element =
     case element of
+        TextInput data ->
+            if data.id == id then
+                Just (TextInputType { position = position, size = TextInput.size data.style })
+
+            else
+                Nothing
+
         Button data _ ->
             if data.id == id then
                 Just (ButtonType { data = data, position = position, size = data.cachedSize })
@@ -653,61 +559,6 @@ findFirst f list =
                     findFirst f rest
 
 
-{-| The id of the next button after the given one, for the tab key.
--}
-tabForward : id -> Element id -> id
-tabForward id element =
-    tabStep (inputIds element) id
-
-
-tabBackward : id -> Element id -> id
-tabBackward id element =
-    tabStep (List.reverse (inputIds element)) id
-
-
-tabStep : List id -> id -> id
-tabStep ids id =
-    case ids of
-        first :: _ ->
-            nextAfter id first ids
-
-        [] ->
-            id
-
-
-nextAfter : id -> id -> List id -> id
-nextAfter id first ids =
-    case ids of
-        a :: b :: rest ->
-            if a == id then
-                b
-
-            else
-                nextAfter id first (b :: rest)
-
-        _ ->
-            first
-
-
-inputIds : Element id -> List id
-inputIds element =
-    case element of
-        Button data _ ->
-            [ data.id ]
-
-        Row _ children ->
-            List.concatMap inputIds children
-
-        Column _ children ->
-            List.concatMap inputIds children
-
-        Single data child ->
-            List.concatMap inputIds (child :: data.inFront)
-
-        _ ->
-            []
-
-
 
 -- DRAWING
 
@@ -723,13 +574,16 @@ view maybeHover focus element =
 viewList : Maybe id -> Maybe id -> Coord -> Element id -> List Triangle
 viewList maybeHover focus position element =
     case element of
+        TextInput data ->
+            TextInput.view data.style position (focus == Just data.id) data.isValid data.state
+
         Text data ->
             case data.outline of
                 Just outline ->
-                    Sprite.outlinedText outline data.color data.scale data.text position
+                    Sprite.outlinedText outline data.color data.font data.text position
 
                 Nothing ->
-                    Sprite.text data.color data.scale data.text position
+                    Sprite.text data.color data.font data.text position
 
         Button data child ->
             borderAndFillView position
@@ -778,9 +632,6 @@ borderAndFillView position borderAndFill size2 =
     case borderAndFill of
         NoBorderOrFill ->
             []
-
-        FillOnly color ->
-            Sprite.rectangle color position size2
 
         BorderAndFill { borderWidth, borderColor, fillColor } ->
             Sprite.rectangle borderColor position size2

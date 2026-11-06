@@ -3,202 +3,129 @@
 A minimal Linux kernel that boots straight into one Elm program.
 
 The Elm program is compiled to native code with [eco](https://github.com/eco-lang/eco-compiler)
-and linked with a small C host into a single static binary, which runs as `/init` (PID 1).
-The host reads keyboard and mouse input from evdev and sends it to Elm through an `input`
-port, and asks for a frame on an `animationFrame` port whenever the screen can show one.
-Elm answers with textured triangles on a `render` port, and the GPU draws them (OpenGL ES
-through Mesa), or the CPU when there is no usable GPU.
+and linked with a small Rust host into a single static binary that runs as `/init` (PID 1).
+The host passes keyboard, mouse, wifi and system events to Elm over a port, and Elm answers
+over one output port with effects: textured triangles that the GPU draws (OpenGL ES through Mesa), or the CPU when there
+is no usable GPU, wifi commands, HTTP requests, power off.
 
 The long-term plan is that every "app" is Elm code compiled into the OS, with permissions
 enforced by the type system. See the
 [architecture doc](https://claude.ai/artifact/LbMrwWbmizcvvRpoYC7dV9) for the design.
 
-## Status: milestone 1
+## What it does today
 
-It boots in QEMU. A triangle follows the mouse, it grows while a button is held, and any
-key changes its colour. A debug overlay in the bottom-left corner, drawn with
-[town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework and pixel font,
-shows the screen size, mouse position, which renderer draws, the time between frames
-(average and maximum), how long Elm, the host and the GPU take per frame, CPU load and
-memory. The triangles are drawn on the GPU: in QEMU that is a virtio GPU
-with virgl, which passes the guest's OpenGL through to your real graphics card. `make test`
-checks the CPU fallback headlessly, and `make test-gpu` checks the GPU path.
+- A triangle follows the mouse, grows while a button is held, and changes colour on any key.
+- A debug overlay (bottom left) shows frame timings, which renderer is drawing, CPU load and memory.
+- A wifi panel (top right) joins WPA2 personal (including WPA2/WPA3 mixed) or open networks, then shows the local weather.
+- Buttons (top left) open an about page and restart or power off the computer.
 
-## Layout
+The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`) drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
 
-| Path | What it is |
-| --- | --- |
-| `elm/src/Main.elm` | The Elm program (`Platform.worker` with `input`, `animationFrame` and `render` ports) and its debug overlay |
-| `elm/src/Ui.elm` | town-collab's UI framework: rows, columns, padded and bordered elements, text, buttons, hover |
-| `elm/src/Sprite.elm` | Turns text, rectangles and atlas sprites into textured triangles, and encodes them for `render` |
-| `host/atlas.h`, `host/font.h` | The texture atlas both renderers sample: town-collab's font plus a solid block (`tools/make-font.py` makes `font.h`) |
-| `host/host.c` | C host: mounts `/dev`, `/proc` and `/sys`, reads evdev, starts the GPU renderer, or draws on the CPU into a DRM dumb buffer |
-| `host/gpu.c` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS, fed triangles by the host |
-| `tools/fetch-mesa.py` | Downloads Mesa and its libraries (musl builds) from Alpine Linux |
-| `tools/copy-libs.sh` | Copies the renderer's shared libraries and Mesa's drivers into the initramfs |
-| `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig`, for QEMU and real PCs |
-| `Makefile` | Builds the kernel, `build/init` and `build/initramfs.cpio` |
-| `scripts/run-qemu.sh` | Boots it in a QEMU window |
-| `scripts/test-qemu.py` | Boots it headless, sends mouse and key events through QMP, checks the screen |
-| `scripts/make-usb-image.sh` | Builds the USB stick image (GPT, one EFI system partition) without root |
-| `scripts/write-usb.sh` | Writes the image to a USB stick, after checking it is one and asking |
-| `tools/elm-package-mirror.py` | Stand-in package server for sandboxes that cannot reach package.elm-lang.org |
-
-## Build and run
+## Build and run in QEMU
 
 You need Linux on x86_64 with:
 
 - eco v0.2.0-rc2 or newer: the `x86_64-linux-musl` bundle from the
-  [eco releases](https://github.com/eco-lang/eco-compiler/releases), with its `bin/` on your `PATH`.
-  It's a pre-release, so it isn't the release GitHub labels "Latest".
-- `musl-gcc` (`musl-tools`), the kernel build tools (`flex bison bc libelf-dev libssl-dev rsync`),
-  `cpio`, `python3`, `readelf` (`binutils`) and `qemu-system-x86_64`
-- for the GPU in QEMU: QEMU's OpenGL module (`qemu-system-modules-opengl` on Debian, Ubuntu and Mint)
-- network access to `dl-cdn.alpinelinux.org` on the first build, for Mesa (about 110 MB of packages)
+  [eco releases](https://github.com/eco-lang/eco-compiler/releases) (a pre-release), with its `bin/` on your `PATH`
+- Rust (via [rustup](https://rustup.rs)) with the musl target: `rustup target add x86_64-unknown-linux-musl`
+- `musl-gcc`, the kernel build tools, `curl`, `sha256sum`, `cpio`, `python3`, `readelf` and `qemu-system-x86_64`
+  (plus `qemu-system-modules-opengl` for the GPU in QEMU)
+- network access on the first build: `git.kernel.org`, `dl-cdn.alpinelinux.org` (Mesa, libnl),
+  `w1.fi` (`wpa_supplicant` and `hostapd` sources) and crates.io
 
-`make` checks for these first and prints an `apt install` line for anything missing.
-Run `make check-deps` to check without building.
-
-```sh
-make              # clones Linux v6.12 into ./linux the first time, then builds everything
-make run          # QEMU window with the GPU (virgl); close it to quit
-make run-cpu      # QEMU window without 3D, so Elm OS draws on the CPU
-make test         # headless boot test of the CPU fallback, saves build/screenshot.png
-make test-gpu     # the same test drawn on the GPU (needs a host GPU for QEMU's egl-headless)
-make GPU=0        # leave Mesa out: CPU rendering only, 9 MB initramfs instead of 58 MB
-make usb          # a USB stick image for real PCs, see below
-```
-
-Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree.
-
-## Boot it on a real PC from a USB stick
-
-`make usb` builds `build/elmos-usb.img`, a UEFI-bootable image of about 38 MB. The kernel
-is its own EFI program (`EFI/BOOT/BOOTX64.EFI`) with the initramfs built in, so there is no
-bootloader. Elm OS runs entirely from RAM. The kernel has no NVMe, SATA or USB storage
-drivers, so it cannot read or write the computer's disk (or the stick, once it has booted).
-
-It has drivers for Intel graphics (i915, with Intel's firmware from Alpine Linux), the
-firmware's own framebuffer as a fallback, ACPI, USB keyboards and mice, the built-in PS/2
-keyboard, and touchpads on I2C (the usual setup on Intel laptops since about 2015) or PS/2.
-It was written for an Intel Tiger Lake laptop (Core i5-1135G7, Iris Xe). The CPU must be
-Haswell or newer (see Known limits).
-
-### 1. Build the image
+`make` checks for these first and prints an `apt install` line for anything missing
+(`make check-deps` checks without building).
 
 ```sh
-make usb          # the first time also builds a second kernel, so it takes a few minutes
-make test-usb     # optional: boots the image in QEMU on UEFI firmware (needs `ovmf`) and checks it
-make run-usb      # optional: the same in a window
+make              # clones the pinned Linux 6.12 stable tag into ./linux, then builds everything
+make run          # QEMU window, drawn on the GPU (virgl)
+make run-cpu      # QEMU window, drawn on the CPU
+make test         # headless boot test, saves build/screenshot.png
+make test-gpu     # the same test on the GPU
+make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 
-`make usb` needs `sfdisk`, `mkfs.vfat` and `mtools` (`sudo apt install fdisk dosfstools mtools`)
-and downloads Intel's GPU firmware (10 MB) the first time.
+Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
+wifi network to join: **Elm OS test network**, password `elmos-wifi`.
 
-### 2. Write it to a USB stick
+## Staying up to date
 
-**This erases the whole stick.** Any stick of 128 MB or more works.
+Nothing updates by itself: the kernel tag and the `wpa_supplicant`/`hostapd` release are
+pinned in `versions.mk`, Alpine packages are cached in `build/apk-cache`, and Rust crates
+(rustls and its CA list, `webpki-roots`, included) are pinned in `host/Cargo.lock`.
+`make refresh` moves all of them to the newest versions (newest 6.12.x kernel, newest hostap
+release with its checksum, fresh Alpine index, `cargo update`); the next `make` rebuilds what
+changed. `make` warns when the last refresh was more than 30 days ago. Commit `versions.mk`
+and `host/Cargo.lock` after a refresh that still passes `make test`.
 
-1. Plug in the stick.
-2. Run `make usb-write`. It lists the USB disks it can see, for example
-   `sdb  14.6G SanDisk_Ultra  usb  1`. If you aren't sure which one is the stick, unplug it,
-   run `make usb-write` again, and see which line disappears.
-3. Run `make usb-write DEV=/dev/sdb`, with your stick's name. The script refuses anything
-   that isn't a whole USB disk, and anything holding the running system. It shows the
-   stick's size, model and partitions, and only continues if you type the name (`sdb`) back.
-   It then unmounts the stick and writes it with `sudo dd`, so it asks for your password.
+Run `make review` (elm-review, needs Node.js) before committing Elm changes;
+`make review-fix` applies automatic fixes.
 
-### 3. Boot the laptop from it
+## Boot a real PC from a USB stick
 
-1. **Secure Boot must be off**, because the kernel isn't signed. Enter the firmware setup
-   (press F2, Del, F1 or F10 while it starts, depending on the maker), find Secure Boot,
-   usually under Security or Boot, and disable it. A Linux install with Secure Boot off
-   still boots normally. If the laptop has Windows with BitLocker, have its recovery key
-   ready first, because changing Secure Boot can make BitLocker ask for it.
-2. Plug in the stick, power the laptop on, and press the one-time boot menu key straight away:
-   F12 on Dell, Lenovo and Acer, F9 on HP, Esc or F8 on ASUS, F7 on MSI. Pick the USB stick
-   (an entry that starts with `UEFI`). This doesn't change the laptop's normal boot order.
-3. You'll see a few kernel messages, then the triangle. Move the pointer with the touchpad
-   or a USB mouse, tap or click to grow the triangle, and press any key to change its colour.
-   The debug overlay in the bottom-left corner says which renderer is drawing (a green
-   square for the GPU, orange for the CPU fallback) and how fast frames come.
-4. Press the power button to power off. Unplug the stick and the laptop boots its own system again.
+`make usb` builds `build/elmos-usb.img`, a UEFI image of about 38 MB. The kernel is its own
+EFI program with the initramfs built in, so there is no bootloader, and Elm OS runs entirely
+from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat` and `mtools`.
+`make test-usb` boots the image in QEMU under UEFI (needs `ovmf`) as a check.
 
-If the screen stays black or shows an error, a photo of the screen helps. You can bake
-other kernel options into the stick with `USB_CMDLINE`, for example more messages and no GPU:
+1. **Write the stick (this erases it).** Run `make usb-write` to list USB disks, then
+   `make usb-write DEV=/dev/sdX`. The script refuses anything that isn't a whole USB disk and
+   asks you to confirm the name before writing with `sudo dd`.
+2. **Turn Secure Boot off** in the firmware setup, because the kernel isn't signed. If the
+   machine uses BitLocker, have its recovery key ready first.
+3. **Boot from the stick** with the one-time boot menu (F12 on Dell, Lenovo and Acer, F9 on HP,
+   Esc or F8 on ASUS) and pick the `UEFI` USB entry. Press the power button to power off.
 
-```sh
-make usb USB_CMDLINE="console=tty0 loglevel=7 ELMOS_RENDERER=cpu"
-make usb USB_CMDLINE="console=tty0 loglevel=7 i915.modeset=0"   # firmware framebuffer only
-```
+Hardware support: Intel graphics (i915), with the firmware framebuffer as a fallback; USB and
+PS/2 keyboards and mice; I2C and PS/2 touchpads; Intel wifi (AX201 firmware included, others via
+`WIFI_FIRMWARE` in the `Makefile`). The CPU must be Haswell or newer. Tested on an Intel
+Tiger Lake laptop. Extra kernel options can be baked in with `USB_CMDLINE`, for example
+`make usb USB_CMDLINE="console=tty0 loglevel=7 ELMOS_RENDERER=cpu"`.
 
 ## How it fits together
 
-- eco's own `main` runs the Elm program. `host.c` has a constructor that runs first. It
-  subscribes to `render` and starts a host thread, using the port functions in eco's runtime
-  (`eco_port_send`, `eco_port_subscribe`).
-- The link line in the `Makefile` is eco's own static musl link line with `host.o` added.
-- Mesa's drivers are shared libraries and `/init` is static, so `/init` starts
-  `/usr/bin/elmos-gpu`, a small dynamically linked program, and pipes each frame to it
-  (a count, then 13 numbers per triangle). The renderer owns the display and answers
-  `ok W H RENDERER` once it is up, then `f GPU_NS` each time a frame reaches the screen. If it can't start, finds only Mesa's software driver,
-  or dies later, `/init` draws on the CPU instead. Mesa comes prebuilt from Alpine Linux,
-  which uses musl like the rest of Elm OS.
-- Elm draws only when the host asks on `animationFrame`. The host asks again as soon as
-  the GPU renderer reports its page flip, so frames follow the display's refresh; on the
-  CPU it asks 60 times a second at most. If Elm or the GPU goes quiet for a second it asks
-  anyway. `ELMOS_FRAMES_IN_FLIGHT=2` on the kernel command line pipelines frames instead
-  (fewer missed vsyncs, one more refresh of lag).
-- The mouse cursor goes on the display's cursor plane when it has one, and the host moves
-  it on every mouse event without waiting for a frame, so it doesn't lag (in QEMU it
-  becomes your desktop's own cursor). Elm sets its colour on the `cursor` port, and still
-  draws its own copy, orange, so you can see how far frames trail the mouse. Without a
-  cursor plane (or with `ELMOS_CURSOR=software`) Elm's copy is the cursor, in white.
-- Every triangle samples one 256 x 256 texture atlas (`host/atlas.h`) and multiplies the
-  sample by its colour. The atlas holds coverage only: glyphs, and a solid block for flat
-  colours. The host builds it into both renderers, so Elm only needs to know the layout
-  (`elm/src/Sprite.elm`).
-- An idle eco program exits, so `Main.elm` keeps a long `Time.every` subscription to keep the
-  event loop alive. When the Elm program exits, the host reboots the machine, because PID 1
-  must not exit.
+| Path | What it is |
+| --- | --- |
+| `elm/src/` | The Elm program (`Main.elm`), UI framework, sprite encoding, wifi panel and weather |
+| `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
+| `host/init/` | Rust host, linked into `/init`: mounts `/dev`, `/proc` and `/sys`, reads evdev, runs effects, CPU renderer, HTTP |
+| `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
+| `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
+| `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
+| `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
+| `versions.mk` | Pinned kernel and hostap versions, updated by `make refresh` |
+| `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig` |
+| `scripts/`, `tools/` | QEMU run and test scripts, USB image tools, Mesa and firmware fetchers |
 
-Port payloads are JSON:
-
-```text
-input  <- {"t":"screen","w":1280,"h":800}
-          {"t":"mouse","x":640,"y":400}          absolute pixels
-          {"t":"button","b":0,"down":true}       0 left, 1 right, 2 middle
-          {"t":"key","code":30,"down":true}      Linux KEY_* code
-          {"t":"renderer","gpu":true,"name":"Mesa Intel(R) Xe Graphics (TGL GT2)","hardwareCursor":true}
-          {"t":"stats","cores":2,"cpu":12.5,"cpuElm":20,"cpuHost":2,"cpuGpu":5,"memUsed":160,"memTotal":2000,"gpuMs":0.4,"elmMs":2.1,"drawMs":0.1}
-                                                 twice a second; per-frame averages, -1 if unknown
-cursor -> 4294967295                             cursor fill colour, 0xRRGGBBAA
-animationFrame <- 12345.678                      host's monotonic clock in ms: draw a frame now
-render -> [x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]
-                                                 13 numbers per triangle: screen and atlas
-                                                 pixels per corner, colour as 0xRRGGBBAA
-```
+- The host is a Rust static library that hooks into eco's runtime with a constructor that
+  runs before eco's `main`, using `eco_port_send` and `eco_port_subscribe`. The `Makefile`
+  links it using eco's own static musl link line.
+- Elm uses no effect packages besides `Time`: `Effect.toHost` carries a list of `Effect`s
+  (render, cursor colour, wifi scan/connect/disconnect, power, HTTP) as JSON, and everything
+  comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
+  certificates against Mozilla's CA list compiled in from `webpki-roots`, so there is no
+  OpenSSL, libcurl or CA bundle in the image. eco's runtime still references libcurl, so the
+  host provides stubs that fail cleanly.
+- Mesa's drivers are shared libraries and `/init` is static, so `/init` pipes each frame to
+  `elmos-gpu`, a small dynamically linked program. If that fails or finds only a software
+  driver, `/init` draws on the CPU instead. Mesa comes prebuilt from Alpine Linux.
+- Elm draws only when the host sends a `frame` message, which follows the display's refresh.
+  Each frame is a flat list of 13 numbers per triangle (three corners of screen and atlas
+  coordinates, plus a colour), all sampling one texture atlas (`host/common/src/atlas.rs`).
+- Port payloads are JSON; see `elm/src/Effect.elm` and the decoders in `elm/src/Main.elm`.
+- `wpa_supplicant` is built from w1.fi's source with its internal crypto instead of OpenSSL.
+  That crypto has no elliptic curves, so WPA3-only (SAE) networks can't be joined; WPA2 and
+  WPA2/WPA3 mixed networks work, with management frame protection when the router offers it.
+- An idle eco program exits, so `Main.elm` keeps a `Time.every` subscription alive. If Elm
+  does exit, the host reboots, because PID 1 must not exit.
 
 ## Known limits
 
-- eco targets x86-64-v3 (AVX2), so QEMU needs `-cpu max` (or KVM), and real hardware must be
-  Haswell or newer.
-- Mesa makes the initramfs about 58 MB, nearly all of it libgallium (41 MB), which holds
-  every Gallium driver Alpine builds. Alpine's Mesa also links LLVM (178 MB), which our
-  drivers (iris, virgl) never call, so the image carries a small stub in its place
-  (`tools/llvm-stub.sh`). Building Mesa ourselves with only iris and virgl would shrink
-  libgallium a lot more.
-- Real hardware: tested on one Intel Tiger Lake laptop, plus QEMU (UEFI firmware, USB keyboard and tablet).
-  Only Intel graphics has a GPU driver; other GPUs fall back to the firmware's framebuffer
-  and the CPU renderer. AMD would need amdgpu and its firmware. Touchpads have tap to
-  click (two-finger tap for right click) but no scrolling yet. Laptops whose keyboard or touchpad sits behind
-  an embedded controller driver the kernel config lacks will need more drivers.
-- Set `ELMOS_RENDERER=cpu` on the kernel command line to skip the GPU, or `ELMOS_RENDERER=gpu`
-  to use Mesa's software driver (softpipe; llvmpipe isn't in the image) rather than the host's own rasteriser.
-- JSON per frame works for the debug overlay (several hundred triangles), but costs Elm time to
-  encode and the host time to parse; a real GUI will want a binary path (eco's ports can't
-  carry `Bytes` yet).
-- "GPU time" is how long the GPU takes to draw a frame (`GL_EXT_disjoint_timer_query`, or
-  the time to `glFinish` without it), not the GPU's overall load: Mesa has no portable way to
-  read that, and i915's busyness counters need the kernel's perf events.
-- The UI framework leaves out town-collab's text inputs, underlined text and its sprite sheet.
+- eco targets x86-64-v3 (AVX2): QEMU needs `-cpu max` or KVM, and hardware must be Haswell+.
+- Only Intel graphics gets a GPU driver; other GPUs fall back to the CPU renderer.
+- Wifi: Intel cards only, IPv4 only, no WPA3-only networks, no 802.1X or captive portals, US keyboard layout, and
+  nothing is remembered across reboots.
+- Frames are sent as JSON because eco's ports can't carry `Bytes` yet, which costs time on
+  large scenes.
+- Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and
+  virgl drivers would shrink it a lot.

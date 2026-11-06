@@ -39,9 +39,23 @@ case "$mode" in
     need nm binutils
     need strings binutils
     need join coreutils
+    need sha256sum coreutils
+    need curl curl
     if command -v cc >/dev/null 2>&1; then
       need_header gelf.h libelf-dev
+      # The kernel's build tools (not Elm OS itself) use OpenSSL's headers.
       need_header openssl/ssl.h libssl-dev
+    fi
+    # The host (host/) is Rust, built for musl like eco's output.
+    if ! command -v "${CARGO:-cargo}" >/dev/null 2>&1; then
+      echo "Missing: Rust. Install it with rustup (https://rustup.rs), then run"
+      echo "  rustup target add x86_64-unknown-linux-musl"
+      eco_missing=1
+    elif command -v rustup >/dev/null 2>&1 &&
+         ! rustup target list --installed 2>/dev/null | grep -qx x86_64-unknown-linux-musl; then
+      echo "Missing: Rust's musl target. Add it with"
+      echo "  rustup target add x86_64-unknown-linux-musl"
+      eco_missing=1
     fi
     if ! command -v "${ECO:-eco}" >/dev/null 2>&1; then
       echo "Missing: eco. Download the x86_64-linux-musl bundle from"

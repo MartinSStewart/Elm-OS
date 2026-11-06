@@ -6,6 +6,13 @@
 # with your real graphics card. QEMU_GPU=0 gives it a plain framebuffer instead,
 # and Elm OS falls back to drawing on the CPU.
 #
+# The screen is 1920 x 1080, like a typical laptop; QEMU_RES=1280x800 (or any
+# WIDTHxHEIGHT) changes it. `make run QEMU_RES=...` works too.
+#
+# The guest gets two simulated wifi radios (mac80211_hwsim) and QEMU's user-mode
+# network; Elm OS runs a test access point on one radio, bridged to that network
+# ("Elm OS test network", password elmos-wifi), and shows the other to Elm.
+#
 # --usb boots build/elmos-usb.img instead, the way a PC boots the USB stick: UEFI
 # firmware (OVMF), the image as a USB disk, USB keyboard and mouse, and only the
 # firmware's framebuffer for a display. The image is opened read-only.
@@ -28,16 +35,19 @@ if [ "$1" = --usb ]; then
     -device usb-kbd -device usb-tablet -vga std \
     -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot "$@"
 fi
+RES="${QEMU_RES:-1920x1080}"
+XRES="xres=${RES%x*},yres=${RES#*x}"
 if [ "${QEMU_GPU:-1}" = 1 ]; then
-  GPU="-device virtio-gpu-gl-pci"
+  GPU="-device virtio-gpu-gl-pci,$XRES"
   # SDL rather than GTK: QEMU's GTK window stays black with virgl on NVIDIA's driver.
   DISPLAY_OPT="${QEMU_DISPLAY:-sdl,gl=on}"
 else
-  GPU="-device virtio-gpu-pci"
+  GPU="-device virtio-gpu-pci,$XRES"
   DISPLAY_OPT="${QEMU_DISPLAY:-gtk}"
 fi
 exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
-  -kernel build/bzImage -initrd build/initramfs.cpio \
+  -kernel build/bzImage -initrd build/initramfs-qemu.cpio \
+  -nic user,model=virtio-net-pci \
   -append "console=ttyS0 quiet" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
   -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"

@@ -6,6 +6,9 @@
 #
 #   usage: tools/copy-libs.sh ALPINE_ROOT DEST_ROOT BINARY...
 #
+# MESA=0 leaves Mesa's drivers out: just the loader and the binaries' libraries
+# (for wpa_supplicant and hostapd).
+#
 # A library found in $STUB_DIR is taken from there instead of from Alpine, and
 # its own dependencies are not followed (see tools/llvm-stub.sh).
 set -eu
@@ -31,8 +34,10 @@ find_lib() {
 
 copy lib/ld-musl-x86_64.so.1
 todo=""
-for f in usr/lib/dri/libdril_dri.so usr/lib/gbm/dri_gbm.so; do copy "$f"; todo="$todo $src/$f"; done
-for f in "$src"/usr/lib/dri/*_dri.so; do copy "usr/lib/dri/$(basename "$f")"; done
+if [ "${MESA:-1}" != 0 ]; then
+    for f in usr/lib/dri/libdril_dri.so usr/lib/gbm/dri_gbm.so; do copy "$f"; todo="$todo $src/$f"; done
+    for f in "$src"/usr/lib/dri/*_dri.so; do copy "usr/lib/dri/$(basename "$f")"; done
+fi
 todo="$todo $*"
 seen=" "
 while [ -n "$todo" ]; do
