@@ -158,6 +158,17 @@ if not near(here, RED):
 if near(there, RED):
     fail("the triangle is not only under the mouse")
 
+# The debug overlay (elm/src/Main.elm) sits in the bottom left corner: a light panel
+# with dark text, drawn from the texture atlas's font.
+s = 2 if w >= 1600 else 1
+panel = pixel(shot, 11 * s, h - 11 * s)
+print(f"overlay panel {panel}")
+if not near(panel, (220, 210, 199)):
+    fail(f"expected the debug overlay's panel in the bottom left corner, got {panel}")
+dark = sum(1 for x in range(14 * s, 200 * s) for y in range(h - 40 * s, h - 14 * s) if max(pixel(shot, x, y)) < 60)
+if dark < 20:
+    fail(f"the debug overlay has no text ({dark} dark pixels)")
+
 move(0.75, 0.25)
 if not near(pixel(screen(), 3 * w // 4, h // 4 + 10), RED):
     fail("the triangle did not follow the mouse")

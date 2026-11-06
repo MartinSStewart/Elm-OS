@@ -117,7 +117,7 @@ $(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
 	@mkdir -p $(BUILD)
 	cd elm && $(ECO) make src/Main.elm --output=$(abspath $@)
 
-$(BUILD)/host.o: host/host.c $(BUILD)/kheaders/include/linux/input.h | check-deps
+$(BUILD)/host.o: host/host.c host/atlas.h host/font.h $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -c $< -o $@ -isystem $(BUILD)/kheaders/include
 
 $(BUILD)/init: $(BUILD)/host.o $(BUILD)/elm.o
@@ -144,7 +144,7 @@ $(ALPINE)/.done: tools/fetch-mesa.py
 	python3 -I tools/fetch-mesa.py $(ALPINE)/root
 	touch $@
 
-$(BUILD)/elmos-gpu: host/gpu.c $(ALPINE)/.done $(BUILD)/kheaders/include/linux/input.h | check-deps
+$(BUILD)/elmos-gpu: host/gpu.c host/atlas.h host/font.h $(ALPINE)/.done $(BUILD)/kheaders/include/linux/input.h | check-deps
 	musl-gcc -O2 -Wall -DEGL_NO_X11 -c $< -o $(BUILD)/gpu.o \
 	  -I$(ALPINE)/root/usr/include -I$(ALPINE)/root/usr/include/libdrm -isystem $(BUILD)/kheaders/include
 	musl-gcc -o $@ $(BUILD)/gpu.o -L$(ALPINE)/root/usr/lib -Wl,--allow-shlib-undefined -lEGL -lGLESv2 -lgbm -ldrm
