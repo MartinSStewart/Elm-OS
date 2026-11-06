@@ -45,7 +45,11 @@ type Input
 
 
 type alias SystemStats =
-    { cpu : Float
+    { cores : Int
+    , cpu : Float
+    , cpuElm : Float
+    , cpuHost : Float
+    , cpuGpu : Float
     , memUsed : Int
     , memTotal : Int
     , gpuMs : Maybe Float
@@ -78,13 +82,19 @@ inputDecoder =
                             (D.field "name" D.string)
 
                     "stats" ->
-                        D.map6 SystemStats
+                        D.map8 SystemStats
+                            (D.field "cores" D.int)
                             (D.field "cpu" D.float)
+                            (D.field "cpuElm" D.float)
+                            (D.field "cpuHost" D.float)
+                            (D.field "cpuGpu" D.float)
                             (D.field "memUsed" D.int)
                             (D.field "memTotal" D.int)
                             (D.field "gpuMs" milliseconds)
-                            (D.field "elmMs" milliseconds)
-                            (D.field "drawMs" milliseconds)
+                            |> D.andThen
+                                (\toStats ->
+                                    D.map2 toStats (D.field "elmMs" milliseconds) (D.field "drawMs" milliseconds)
+                                )
                             |> D.map Stats
 
                     _ ->
@@ -346,7 +356,21 @@ overlay model =
                          else
                             "n/a (drawing on the CPU)"
                         )
-                    , line "CPU" (fixed 0 stats.cpu ++ "%")
+                    , line "CPU"
+                        (fixed 0 stats.cpu
+                            ++ "% of "
+                            ++ String.fromInt stats.cores
+                            ++ " cores"
+                        )
+                    , line "1 core"
+                        ("Elm "
+                            ++ fixed 0 stats.cpuElm
+                            ++ "%, host "
+                            ++ fixed 0 stats.cpuHost
+                            ++ "%, elmos-gpu "
+                            ++ fixed 0 stats.cpuGpu
+                            ++ "%"
+                        )
                     , line "Memory" (String.fromInt stats.memUsed ++ " / " ++ String.fromInt stats.memTotal ++ " MB")
                     ]
 

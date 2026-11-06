@@ -26,7 +26,11 @@
  *             {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
  *             {"t":"key","code":C,"down":true}     C: Linux KEY_* code
  *             {"t":"renderer","gpu":true,"name":"..."}   which renderer draws
- *             {"t":"stats","cpu":P,"memUsed":MB,"memTotal":MB,"gpuMs":MS,"elmMs":MS,"drawMs":MS}
+ *             {"t":"stats","cores":N,"cpu":P,"cpuElm":P,"cpuHost":P,"cpuGpu":P,
+ *              "memUsed":MB,"memTotal":MB,"gpuMs":MS,"elmMs":MS,"drawMs":MS}
+ *                                                 cpu: all cores; cpuElm/Host/Gpu: % of one
+ *                                                 core used by the Elm program's threads, the
+ *                                                 host thread, and elmos-gpu
  *                                                 every 0.5 s, averages per frame (-1 if
  *                                                 unknown): GPU time, how long Elm took
  *                                                 to answer a frame, and how long /init
@@ -698,6 +702,61 @@ static double cpu_load(void) {
     return load;
 }
 
+/* CPU ticks (user + system) a /proc/.../stat file reports. */
+static long long proc_ticks(const char* path) {
+    char buf[512];
+    FILE* f = fopen(path, "r");
+    if (!f) return -1;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    char* p = strrchr(buf, ')'); /* the name can hold spaces */
+    unsigned long long ut, st;
+    if (!p || sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &ut, &st) != 2) return -1;
+    return ut + st;
+}
+
+static pid_t host_tid;
+
+/* Where the CPU time goes, in percent of one core since the last call: the Elm
+ * program (every thread of /init but ours), this host thread, and elmos-gpu. */
+static void cpu_split(double* elm, double* host, double* gpu) {
+    static long long last[3];
+    static double last_t;
+    long long now_ticks[3] = {0, 0, 0};
+    DIR* dir = opendir("/proc/self/task");
+    struct dirent* e;
+    while (dir && (e = readdir(dir))) {
+        if (e->d_name[0] == '.') continue;
+        char path[300];
+        snprintf(path, sizeof path, "/proc/self/task/%s/stat", e->d_name);
+        long long t = proc_ticks(path);
+        if (t < 0) continue;
+        now_ticks[atoi(e->d_name) == host_tid ? 1 : 0] += t;
+        if (debug) {
+            char cpath[300], comm[32] = "?";
+            snprintf(cpath, sizeof cpath, "/proc/self/task/%s/comm", e->d_name);
+            FILE* f = fopen(cpath, "r");
+            if (f) { if (fgets(comm, sizeof comm, f)) comm[strcspn(comm, "\n")] = 0; fclose(f); }
+            logf_("task %s (%s): %lld ticks", e->d_name, comm, t);
+        }
+    }
+    if (dir) closedir(dir);
+    if (gpu_pid > 0) {
+        char path[64];
+        snprintf(path, sizeof path, "/proc/%d/stat", gpu_pid);
+        long long t = proc_ticks(path);
+        if (t > 0) now_ticks[2] = t;
+    }
+    double t = now(), hz = sysconf(_SC_CLK_TCK), span = t - last_t;
+    double* out[3] = {elm, host, gpu};
+    for (int i = 0; i < 3; i++) {
+        *out[i] = last_t && span > 0 && now_ticks[i] >= last[i] ? 100.0 * (now_ticks[i] - last[i]) / hz / span : 0;
+        last[i] = now_ticks[i];
+    }
+    last_t = t;
+}
+
 static void send_stats(void) {
     long total_kb = 0, avail_kb = 0;
     FILE* f = fopen("/proc/meminfo", "r");
@@ -714,9 +773,11 @@ static void send_stats(void) {
     double draw_ms = draw_count ? draw_sum / draw_count * 1000 : -1;
     gpu_ns_sum = elm_sum = draw_sum = 0;
     gpu_ns_count = elm_count = draw_count = 0;
-    send_input("{\"t\":\"stats\",\"cpu\":%.1f,\"memUsed\":%ld,\"memTotal\":%ld,\"gpuMs\":%.3f,"
+    double elm_cpu, host_cpu, gpu_cpu;
+    cpu_split(&elm_cpu, &host_cpu, &gpu_cpu);
+    send_input("{\"t\":\"stats\",\"cores\":%ld,\"cpuElm\":%.1f,\"cpuHost\":%.1f,\"cpuGpu\":%.1f,\"cpu\":%.1f,\"memUsed\":%ld,\"memTotal\":%ld,\"gpuMs\":%.3f,"
                "\"elmMs\":%.3f,\"drawMs\":%.3f}",
-               cpu_load(), (total_kb - avail_kb) / 1024, total_kb / 1024, gpu_ms, elm_ms, draw_ms);
+               sysconf(_SC_NPROCESSORS_ONLN), elm_cpu, host_cpu, gpu_cpu, cpu_load(), (total_kb - avail_kb) / 1024, total_kb / 1024, gpu_ms, elm_ms, draw_ms);
 }
 
 /* ---------------------------------------------------------------- host thread */
@@ -725,6 +786,7 @@ static void* host_main(void* arg) {
     (void)arg;
     static Display display;
     Display* d = &display;
+    host_tid = gettid();
     if (start_gpu(d) < 0 && open_display(d) < 0) { logf_("no display; input only"); d->w = 640; d->h = 480; }
 
     /* Ports are registered once Elm starts; retry until it accepts. */
