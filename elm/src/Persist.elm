@@ -1,13 +1,14 @@
 module Persist exposing
-    ( Config
+    ( Codecs
+    , Config
     , Model
     , Msg(..)
     , appModel
     , crc32
     , frame
     , init
+    , program
     , restore
-    , subscriptions
     , unframe
     , update
     )
@@ -29,7 +30,7 @@ writes files; what goes in them is decided here.
     or a virtual disk in QEMU) and says where with `{"t":"dataDisk","path":P}`
     (P is null without one, and then nothing is saved).
   - `log` holds one entry per Msg, and `snapshot` one entry, the Model. Each entry
-    is a line: its length in bytes, its CRC-32, and the JSON (Codec.elm), so
+    is a line: its length in bytes, its CRC-32, and the JSON (written by the code tools/wire generates), so
     `42 89abcdef [17,[1,...]]`. A power cut while writing leaves the last entry
     short or wrong, and it, and anything after it, is ignored.
   - A log entry is `[n, msg]`, numbered from the snapshot's `n` on. The snapshot is
@@ -37,7 +38,7 @@ writes files; what goes in them is decided here.
     atomic), and the log is emptied after it, so if the power goes in between, the log's
     entries that the snapshot already has are skipped by their numbers.
   - A snapshot is `[shape, n, model]`, where shape is a hash of the Model's and the
-    Msg's types (Codec.shape). A build whose types differ starts afresh rather than
+    Msg's types (`Codecs.shape`). A build whose types differ starts afresh rather than
     misread them.
   - A snapshot is taken at start (once the log is replayed), when the log reaches
     `snapshotAfterBytes`, and before powering off or restarting.
@@ -54,7 +55,6 @@ screen, the network and anything else that belonged to the last one is forgotten
 
 import Array exposing (Array)
 import Bitwise
-import Codec exposing (Codec)
 import Effect exposing (Effect)
 import Json.Decode as D
 import Json.Encode as E
@@ -70,9 +70,31 @@ type alias Config model msg =
     , resume : model -> model
     , fromHost : D.Value -> msg
     , subscriptions : model -> Sub msg
-    , modelCodec : Codec model
-    , msgCodec : Codec msg
     }
+
+
+{-| How the Model and the Msgs are written down. tools/wire writes these (as the
+`codecs` of build/wire/src/ElmOs.elm) from the types themselves; `shape` describes
+the types, so a build whose types differ doesn't misread what an older one saved.
+-}
+type alias Codecs model msg =
+    { encodeModel : model -> E.Value
+    , modelDecoder : D.Decoder model
+    , encodeMsg : msg -> E.Value
+    , msgDecoder : D.Decoder msg
+    , shape : String
+    }
+
+
+{-| The program: `config`'s, with its Model kept on the data disk.
+-}
+program : Config model msg -> Codecs model msg -> Program () (Model model msg) (Msg msg)
+program config codecs =
+    Platform.worker
+        { init = \_ -> init |> Tuple.mapSecond Effect.toCmd
+        , update = \msg model -> update config codecs msg model |> Tuple.mapSecond Effect.toCmd
+        , subscriptions = subscriptions config
+        }
 
 
 type Model model msg
@@ -172,11 +194,11 @@ readId =
     "persist"
 
 
-update : Config model msg -> Msg msg -> Model model msg -> ( Model model msg, List Effect )
-update config msg model =
+update : Config model msg -> Codecs model msg -> Msg msg -> Model model msg -> ( Model model msg, List Effect )
+update config codecs msg model =
     case ( msg, model ) of
         ( AppMsg appMsg, Running app saving ) ->
-            live config appMsg app saving
+            live config codecs appMsg app saving
 
         ( AppMsg appMsg, WaitingForDisk early ) ->
             ( WaitingForDisk (appMsg :: early), [] )
@@ -190,20 +212,20 @@ update config msg model =
             )
 
         ( DataDisk Nothing, WaitingForDisk early ) ->
-            runEarly config early config.init NotSaving
+            runEarly config codecs early config.init NotSaving
 
         ( DataFiles snapshot log, ReadingDisk dir early ) ->
             let
                 restored =
-                    restore config { snapshot = snapshot, log = log }
+                    restore config codecs { snapshot = snapshot, log = log }
 
                 saving =
                     { dir = dir, next = restored.next, logBytes = 0 }
             in
             -- The snapshot has the Msgs that waited, so they needn't be logged.
-            case runEarly config early (config.resume restored.model) NotSaving of
+            case runEarly config codecs early (config.resume restored.model) NotSaving of
                 ( Running app _, effects ) ->
-                    ( Running app (Saving saving), snapshotEffects config app saving ++ effects )
+                    ( Running app (Saving saving), snapshotEffects codecs app saving ++ effects )
 
                 other ->
                     other
@@ -212,13 +234,13 @@ update config msg model =
             ( model, [] )
 
 
-runEarly : Config model msg -> List msg -> model -> Saving -> ( Model model msg, List Effect )
-runEarly config early app saving =
+runEarly : Config model msg -> Codecs model msg -> List msg -> model -> Saving -> ( Model model msg, List Effect )
+runEarly config codecs early app saving =
     List.foldr
         (\appMsg ( state, effects ) ->
             case state of
                 Running a s ->
-                    live config appMsg a s |> Tuple.mapSecond (\more -> effects ++ more)
+                    live config codecs appMsg a s |> Tuple.mapSecond (\more -> effects ++ more)
 
                 _ ->
                     ( state, effects )
@@ -227,8 +249,8 @@ runEarly config early app saving =
         early
 
 
-live : Config model msg -> msg -> model -> Saving -> ( Model model msg, List Effect )
-live config msg app saving =
+live : Config model msg -> Codecs model msg -> msg -> model -> Saving -> ( Model model msg, List Effect )
+live config codecs msg app saving =
     let
         ( next, effects ) =
             config.update msg app
@@ -243,14 +265,14 @@ live config msg app saving =
         Saving s ->
             let
                 entry =
-                    frame (E.encode 0 (E.list identity [ E.int s.next, Codec.encode config.msgCodec msg ]))
+                    frame (E.encode 0 (E.list identity [ E.int s.next, codecs.encodeMsg msg ]))
 
                 logged =
                     { s | next = s.next + 1, logBytes = s.logBytes + utf8Length entry }
             in
             if logged.logBytes >= snapshotAfterBytes || List.any isPower effects then
                 -- The snapshot has this Msg in it, so it needn't be logged too.
-                ( Running next (Saving { logged | logBytes = 0 }), snapshotEffects config next logged ++ effects ++ drawn )
+                ( Running next (Saving { logged | logBytes = 0 }), snapshotEffects codecs next logged ++ effects ++ drawn )
 
             else
                 ( Running next (Saving logged)
@@ -268,11 +290,11 @@ isPower effect =
             False
 
 
-snapshotEffects : Config model msg -> model -> { a | dir : String, next : Int } -> List Effect
-snapshotEffects config app { dir, next } =
+snapshotEffects : Codecs model msg -> model -> { a | dir : String, next : Int } -> List Effect
+snapshotEffects codecs app { dir, next } =
     [ Effect.WriteFile
         { path = dir ++ "/snapshot"
-        , text = frame (E.encode 0 (E.list identity [ E.string (shapeHash config), E.int next, Codec.encode config.modelCodec app ]))
+        , text = frame (E.encode 0 (E.list identity [ E.string (shapeHash codecs), E.int next, codecs.encodeModel app ]))
         }
     , Effect.WriteFile { path = dir ++ "/log", text = "" }
     ]
@@ -280,9 +302,9 @@ snapshotEffects config app { dir, next } =
 
 {-| Changes whenever the Model's or the Msg's type does (or this file's format).
 -}
-shapeHash : Config model msg -> String
-shapeHash config =
-    hex8 (crc32 ("elmos-persist-1 " ++ Codec.shape config.modelCodec ++ " " ++ Codec.shape config.msgCodec))
+shapeHash : Codecs model msg -> String
+shapeHash codecs =
+    hex8 (crc32 ("elmos-persist-2 " ++ codecs.shape))
 
 
 
@@ -293,22 +315,22 @@ shapeHash config =
 Starts from `init` when there is no snapshot, or it can't be read. Replays the log
 until its first entry that is missing, cut short, or doesn't decode.
 -}
-restore : Config model msg -> { snapshot : Maybe String, log : Maybe String } -> { model : model, next : Int, replayed : Int }
-restore config files =
-    case Maybe.map (readSnapshot config) files.snapshot of
+restore : Config model msg -> Codecs model msg -> { snapshot : Maybe String, log : Maybe String } -> { model : model, next : Int, replayed : Int }
+restore config codecs files =
+    case Maybe.map (readSnapshot codecs) files.snapshot of
         Just (Just ( app, next )) ->
             let
                 entries =
                     Maybe.map unframe files.log |> Maybe.withDefault []
             in
-            replay config entries { model = app, next = next, replayed = 0 }
+            replay config codecs entries { model = app, next = next, replayed = 0 }
 
         _ ->
             { model = config.init, next = 0, replayed = 0 }
 
 
-readSnapshot : Config model msg -> String -> Maybe ( model, Int )
-readSnapshot config text =
+readSnapshot : Codecs model msg -> String -> Maybe ( model, Int )
+readSnapshot codecs text =
     case unframe text of
         [ payload ] ->
             D.decodeString
@@ -321,8 +343,8 @@ readSnapshot config text =
                 |> Result.toMaybe
                 |> Maybe.andThen
                     (\( hash, next, json ) ->
-                        if hash == shapeHash config then
-                            Codec.decodeValue config.modelCodec json |> Maybe.map (\app -> ( app, next ))
+                        if hash == shapeHash codecs then
+                            D.decodeValue codecs.modelDecoder json |> Result.toMaybe |> Maybe.map (\app -> ( app, next ))
 
                         else
                             Nothing
@@ -332,21 +354,21 @@ readSnapshot config text =
             Nothing
 
 
-replay : Config model msg -> List String -> { model : model, next : Int, replayed : Int } -> { model : model, next : Int, replayed : Int }
-replay config entries state =
+replay : Config model msg -> Codecs model msg -> List String -> { model : model, next : Int, replayed : Int } -> { model : model, next : Int, replayed : Int }
+replay config codecs entries state =
     case entries of
         [] ->
             state
 
         payload :: rest ->
-            case D.decodeString (D.map2 Tuple.pair (D.index 0 D.int) (D.index 1 (Codec.decoder config.msgCodec))) payload of
+            case D.decodeString (D.map2 Tuple.pair (D.index 0 D.int) (D.index 1 codecs.msgDecoder)) payload of
                 Ok ( n, msg ) ->
                     if n < state.next then
                         -- Already in the snapshot: the power went before the log was emptied.
-                        replay config rest state
+                        replay config codecs rest state
 
                     else if n == state.next then
-                        replay config
+                        replay config codecs
                             rest
                             { model = Tuple.first (config.update msg state.model)
                             , next = n + 1

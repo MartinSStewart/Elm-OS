@@ -57,7 +57,8 @@ config =
     , NoMissingTypeExpose.rule
     , NoSimpleLetBody.rule
     , NoUnused.Dependencies.rule
-    , NoUnused.Exports.rule
+    -- Persist.program is used by build/wire/src/ElmOs.elm, which tools/wire writes.
+    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm" ]
     , NoUnused.Modules.rule
     , NoUnused.Parameters.rule
     , ReviewPipelineStyles.rule

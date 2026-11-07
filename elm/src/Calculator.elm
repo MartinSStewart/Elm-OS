@@ -1,7 +1,5 @@
 module Calculator exposing
-    ( codec
-    , uiIdCodec
-    , Entry(..)
+    ( Entry(..)
     , Key(..)
     , Model
     , Operator(..)
@@ -27,7 +25,6 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 
 -}
 
-import Codec exposing (Codec)
 import Color
 import Coord exposing (Coord)
 import Keyboard
@@ -35,7 +32,6 @@ import Quantity
 import Sprite exposing (Font(..), FontSize(..))
 import Ui exposing (Element)
 import Units exposing (UiPixels)
-
 
 
 -- MODEL
@@ -89,7 +85,6 @@ init =
 maxDigits : Int
 maxDigits =
     12
-
 
 
 -- UPDATE
@@ -300,7 +295,6 @@ apply operator a b =
         Just result
 
 
-
 -- SHOWING NUMBERS
 
 
@@ -471,7 +465,6 @@ trimZeros text =
         text
 
 
-
 -- KEYBOARD
 
 
@@ -533,7 +526,6 @@ fromKeyboard key =
 
         _ ->
             Nothing
-
 
 
 -- VIEW
@@ -685,113 +677,3 @@ isPendingOperator model key =
 
         _ ->
             False
-
-
--- CODECS (for Persist.elm)
-
-
-codec : Codec Model
-codec =
-    Codec.record Model
-        |> Codec.field
-            .entry
-            (Codec.custom
-                (\typed shown error it ->
-                    case it of
-                        Typed text ->
-                            typed text
-
-                        Shown number ->
-                            shown number
-
-                        Error ->
-                            error
-                )
-                |> Codec.variant1 Typed Codec.string
-                |> Codec.variant1 Shown Codec.float
-                |> Codec.variant0 Error
-                |> Codec.buildCustom
-            )
-        |> Codec.field .pending (Codec.maybe (Codec.tuple Codec.float operatorCodec))
-        |> Codec.field .repeat (Codec.maybe (Codec.tuple operatorCodec Codec.float))
-        |> Codec.buildRecord
-
-
-operatorCodec : Codec Operator
-operatorCodec =
-    Codec.custom
-        (\add subtract multiply divide it ->
-            case it of
-                Add ->
-                    add
-
-                Subtract ->
-                    subtract
-
-                Multiply ->
-                    multiply
-
-                Divide ->
-                    divide
-        )
-        |> Codec.variant0 Add
-        |> Codec.variant0 Subtract
-        |> Codec.variant0 Multiply
-        |> Codec.variant0 Divide
-        |> Codec.buildCustom
-
-
-uiIdCodec : Codec UiId
-uiIdCodec =
-    Codec.custom
-        (\keyButton closeButton panel it ->
-            case it of
-                KeyButton key ->
-                    keyButton key
-
-                CloseButton ->
-                    closeButton
-
-                Panel ->
-                    panel
-        )
-        |> Codec.variant1 KeyButton keyCodec
-        |> Codec.variant0 CloseButton
-        |> Codec.variant0 Panel
-        |> Codec.buildCustom
-
-
-keyCodec : Codec Key
-keyCodec =
-    Codec.custom
-        (\digit point operator equals negation backspace clear it ->
-            case it of
-                Digit d ->
-                    digit d
-
-                Point ->
-                    point
-
-                Operator o ->
-                    operator o
-
-                Equals ->
-                    equals
-
-                Negate ->
-                    negation
-
-                Backspace ->
-                    backspace
-
-                Clear ->
-                    clear
-        )
-        |> Codec.variant1 Digit Codec.int
-        |> Codec.variant0 Point
-        |> Codec.variant1 Operator operatorCodec
-        |> Codec.variant0 Equals
-        |> Codec.variant0 Negate
-        |> Codec.variant0 Backspace
-        |> Codec.variant0 Clear
-        |> Codec.buildCustom

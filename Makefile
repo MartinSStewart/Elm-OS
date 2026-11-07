@@ -13,6 +13,7 @@
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
+#   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
 #                   the same commit gives the same bytes on any machine (make docker TARGET=all)
@@ -55,7 +56,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE atlas review review-fix review-tests elm-tests all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE atlas review review-fix review-tests elm-tests test-wire all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -178,9 +179,53 @@ $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/s
 
 # ---- the /init binary: the host (Rust, host/init) + Elm program, one static executable
 
-$(BUILD)/elm.o: elm/elm.json $(wildcard elm/src/*.elm) | check-deps
+# The Elm program is compiled from build/wire, a copy of elm/ with encoders and
+# decoders for the Model and Msg added by tools/wire (for Persist.elm), and the
+# program's entry module, ElmOs.elm. Errors still name src/<Module>.elm and the
+# original line numbers.
+$(BUILD)/elm.o: $(BUILD)/wire/.done | check-deps
+	cd $(BUILD)/wire && $(ECO) make src/ElmOs.elm --output=$(abspath $@)
+
+WIRE_FLAGS := --runtime tools/wire/Wire.elm --entry ElmOs \
+              --config Main.persistConfig --model Main.Model --msg Main.Msg
+
+$(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(wildcard elm/src/*.elm $(wildcard elm/src/*/*.elm))
+	@mkdir -p $(BUILD)/wire
+	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
+	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS)
+	touch $@
+
+# tools/wire is an Elm program too (eco/system and elm-syntax). eco 0.2 crashes linking
+# it (`eco make --output=<exe>`), so it's compiled to an object and linked here, the
+# way /init is, plus the TLS libraries eco/system needs.
+$(BUILD)/wire-tool.o: tools/wire/elm.json $(wildcard tools/wire/src/*.elm) | check-deps
 	@mkdir -p $(BUILD)
-	cd elm && $(ECO) make src/Main.elm --output=$(abspath $@)
+	cd tools/wire && $(ECO) make src/Main.elm --output=$(abspath $@)
+
+# tools/wire's own test: a program whose Model has every kind of type it handles
+# (tools/wire/test), whose generated code must compile and read back what it writes.
+test-wire: $(BUILD)/wire-tool | check-deps
+	rm -rf $(BUILD)/wire-test && mkdir -p $(BUILD)/wire-test/in
+	cp -r elm/src/. tools/wire/test/src/. $(BUILD)/wire-test/in/ && rm $(BUILD)/wire-test/in/Main.elm
+	cp -r elm/elm.json tools/wire/test/tests $(BUILD)/wire-test/
+	$(BUILD)/wire-tool --src $(BUILD)/wire-test/in --out $(BUILD)/wire-test/src --runtime tools/wire/Wire.elm \
+	  --entry ElmOs --config App.config --model App.Model --msg App.Msg
+	cd $(BUILD)/wire-test && $(ECO) make src/ElmOs.elm --output=/dev/null && \
+	  npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+
+$(BUILD)/wire-tool: $(BUILD)/wire-tool.o
+	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
+	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
+	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
+	  $< \
+	  --start-group \
+	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
+	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
+	    $(PROJECT_LIBS_REST) \
+	  --end-group \
+	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libcurl.a $(RT)/libssl.a $(RT)/libcrypto.a \
+	  $(RT)/libzip.a $(RT)/libz.a $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
+	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
 
 # The commit goes on Elm's about page. Rewritten only when it changes, like gpu-setting.
 # SOURCE_DATE_EPOCH, so what stamps it in (the kernels, the cpio archives) is rebuilt
@@ -427,8 +472,10 @@ review-tests:
 	cd elm/review && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
 
 # Unit tests of the Elm program's pure logic (elm/tests), run in node with elm-test.
-elm-tests:
-	cd elm && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+# They run on the build/wire copy, so they can use the generated encoders and decoders.
+elm-tests: $(BUILD)/wire/.done
+	rm -rf $(BUILD)/wire/tests && cp -r elm/tests $(BUILD)/wire/tests
+	cd $(BUILD)/wire && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.

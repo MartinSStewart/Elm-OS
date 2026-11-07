@@ -48,6 +48,7 @@ make run-cpu      # QEMU window, drawn on the CPU
 make test         # headless boot test, saves build/screenshot.png
 make test-gpu     # the same test on the GPU
 make test-persist # power cuts and a restart: the Model must come back
+make test-wire    # the encoder/decoder generator (tools/wire) on every kind of type
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 
@@ -124,7 +125,8 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | --- | --- |
 | `elm/src/` | The Elm program (`Main.elm`), UI framework, sprite encoding, wifi panel and weather |
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
-| `elm/src/Persist.elm`, `Codec.elm` | Saving the Model: Msg log, snapshots, replay at start |
+| `elm/src/Persist.elm` | Saving the Model: Msg log, snapshots, replay at start |
+| `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build |
 | `host/init/` | Rust host, linked into `/init`: mounts `/dev`, `/proc` and `/sys`, reads evdev, runs effects, CPU renderer, HTTP |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
@@ -172,15 +174,38 @@ host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying
   (a USB stick appears a second or two after boot; `ELMOS_DATA_WAIT` on the kernel command line
   changes that), mounts it at `/data` and tells Elm. Without one, nothing is saved.
 - **Files:** `/data/snapshot` and `/data/log`. Each entry is a line: its length in bytes, its
-  CRC-32, and JSON (`elm/src/Codec.elm`), so a write cut short by a power cut is recognised and
+  CRC-32, and JSON (see below), so a write cut short by a power cut is recognised and
   ignored, along with anything after it. Log entries are numbered, so entries the snapshot already
   has are skipped if the power goes between writing the snapshot and emptying the log.
 - **Writes:** the host only appends to and replaces files in `/data`, in the order Elm asks.
   A snapshot goes to a new file, which is fsynced and renamed over the old one. Appends are
   fsynced within a second (a USB stick is slow to fsync and wears), so a power cut loses at most
   the last second.
-- **Changing types:** the snapshot carries a hash of the Model's and Msg's types (their codecs'
-  shape). A build with different types starts afresh rather than misreading the old data.
+- **Changing types:** the snapshot carries a hash of the Model's and Msg's types. A build with
+  different types starts afresh rather than misreading the old data.
+
+### Encoders and decoders (tools/wire)
+
+Nobody writes the code that turns the Model and Msgs into JSON and back: `tools/wire` writes it
+from the types before each build, the way Lamdera's Wire does. It is an Elm program (elm-syntax
+to read the source, eco's `eco/system` for files), compiled natively with eco.
+
+- `make` runs it on `elm/src` and compiles `build/wire` instead: a copy of `elm/` in which each
+  module that defines a type the Model or Msg is made of gets `w3_encode_T` and `w3_decode_T` at
+  its end, and exposes them. Being in the module, they can see the variants of an opaque type.
+  The copy only ever adds to a line or replaces a blank one, so eco's errors name
+  `src/Main.elm` and the line numbers of the real file. The generated code is readable: look at
+  the end of any module in `build/wire/src`.
+- It also writes `build/wire/src/ElmOs.elm`, the program's `main`: `Persist.program
+  Main.persistConfig` with the codecs, and a description of every type they cover (its hash
+  goes in the snapshot).
+- It handles records, custom types, tuples, type variables, recursive types, `Int`, `Float`
+  (NaN and infinities too), `String`, `Char`, `Bool`, `Order`, `List`, `Array`, `Set`, `Dict`,
+  `Maybe`, `Result`, elm-units' `Quantity`, `Time.Posix` and `Json.Encode.Value`. It stops the
+  build, saying which field, for a function, an extensible record or another package's type.
+  Type variables that are only labels (a `Quantity`'s units) don't need to be saveable.
+- `make test-wire` checks it on a program with all of those (`tools/wire/test`): the generated
+  code must compile and read back what it writes. `make elm-tests` also runs on `build/wire`.
 
 ## Known limits
 
@@ -191,8 +216,9 @@ host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying
 - Networking is IPv4 only. Wifi: Intel cards only, no WPA3-only networks, no 802.1X or captive portals, US keyboard layout, and
   wifi passwords aren't remembered across reboots.
 - Saving: the whole Model is rewritten at each snapshot, so it suits a small Model (the text
-  editor's undo history, up to 500 copies of the text, is in it too). The codecs make `/init`
-  about 2.5 MB bigger, because eco compiles a copy of the generic codec code for each type.
+  editor's undo history, up to 500 copies of the text, is in it too). A change to the Model's
+  or Msg's types loses what was saved; tools/wire could write migrations later, as Lamdera does.
+  The encoders and decoders make `/init` about 0.8 MB bigger.
 - Frames are sent as JSON because eco's ports can't carry `Bytes` yet, which costs time on
   large scenes.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and

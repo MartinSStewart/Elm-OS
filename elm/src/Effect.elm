@@ -5,7 +5,6 @@ port module Effect exposing
     , PowerAction(..)
     , fromHost
     , get
-    , httpErrorCodec
     , toCmd
     )
 
@@ -21,7 +20,6 @@ wifi, HTTP responses. Main.elm decodes those.
 
 -}
 
-import Codec exposing (Codec)
 import Color exposing (Color)
 import Json.Decode as D
 import Json.Encode as E
@@ -88,26 +86,6 @@ type HttpError
     = BadUrl String
     | Timeout
     | NetworkError String
-
-
-httpErrorCodec : Codec HttpError
-httpErrorCodec =
-    Codec.custom
-        (\badUrl timeout networkError value ->
-            case value of
-                BadUrl url ->
-                    badUrl url
-
-                Timeout ->
-                    timeout
-
-                NetworkError message ->
-                    networkError message
-        )
-        |> Codec.variant1 BadUrl Codec.string
-        |> Codec.variant0 Timeout
-        |> Codec.variant1 NetworkError Codec.string
-        |> Codec.buildCustom
 
 
 get : String -> String -> Effect

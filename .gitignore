@@ -6,3 +6,5 @@ tools/data/
 elm/review/elm-stuff/
 /build-docker/
 host/target/
+tools/wire/eco-stuff/
+tools/wire/elm-stuff/

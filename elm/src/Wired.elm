@@ -1,6 +1,5 @@
 module Wired exposing
-    ( linkCodec
-    , Link
+    ( Link
     , State(..)
     , decodeLinks
     , isConnected
@@ -11,7 +10,6 @@ about the computer's Ethernet cards. There is nothing to choose or type: plug in
 cable and the host gets an address.
 -}
 
-import Codec exposing (Codec)
 import Json.Decode as D
 
 
@@ -57,36 +55,3 @@ decodeLinks =
                 (D.field "ip" D.string)
             )
         )
-
-
-{-| For Persist.elm.
--}
-linkCodec : Codec Link
-linkCodec =
-    Codec.record Link
-        |> Codec.field .name Codec.string
-        |> Codec.field
-            .state
-            (Codec.custom
-                (\noCable dhcp connected failed value ->
-                    case value of
-                        NoCable ->
-                            noCable
-
-                        Dhcp ->
-                            dhcp
-
-                        Connected ->
-                            connected
-
-                        Failed ->
-                            failed
-                )
-                |> Codec.variant0 NoCable
-                |> Codec.variant0 Dhcp
-                |> Codec.variant0 Connected
-                |> Codec.variant0 Failed
-                |> Codec.buildCustom
-            )
-        |> Codec.field .ip Codec.string
-        |> Codec.buildRecord

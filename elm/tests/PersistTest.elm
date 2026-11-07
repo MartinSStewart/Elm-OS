@@ -1,6 +1,6 @@
 module PersistTest exposing (suite)
 
-import Codec
+import ElmOs
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import Expect
@@ -70,7 +70,7 @@ boot disk messages =
         step msg ( model, d ) =
             let
                 ( next, effects ) =
-                    Persist.update Main.persistConfig msg model
+                    Persist.update Main.persistConfig ElmOs.codecs msg model
             in
             ( next, applyEffects effects d )
 
@@ -93,7 +93,7 @@ direct messages =
 
 restored : Disk -> Main.Model
 restored disk =
-    (Persist.restore Main.persistConfig { snapshot = Dict.get "/data/snapshot" disk, log = Dict.get "/data/log" disk }).model
+    (Persist.restore Main.persistConfig ElmOs.codecs { snapshot = Dict.get "/data/snapshot" disk, log = Dict.get "/data/log" disk }).model
 
 
 suite : Test
@@ -123,15 +123,15 @@ suite =
                 Persist.unframe (Persist.frame "[1,2]" ++ String.replace "3" "5" (Persist.frame "[3,4]") ++ Persist.frame "[5,6]")
                     |> Expect.equal [ "[1,2]" ]
             )
-        , test "the Model's codec reads back what it wrote"
+        , test "the generated codec reads back the Model it wrote"
             (\_ ->
                 let
                     model =
                         direct session
                 in
-                Codec.encode Main.persistConfig.modelCodec model
-                    |> Codec.decodeValue Main.persistConfig.modelCodec
-                    |> Expect.equal (Just model)
+                ElmOs.codecs.encodeModel model
+                    |> D.decodeValue ElmOs.codecs.modelDecoder
+                    |> Expect.equal (Ok model)
             )
         , test "restoring gives the Model as it was"
             (\_ ->

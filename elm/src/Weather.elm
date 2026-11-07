@@ -1,7 +1,5 @@
 module Weather exposing
-    ( forecastCodec
-    , placeCodec
-    , Day
+    ( Day
     , Forecast
     , Place
     , defaultGeoUrl
@@ -20,7 +18,6 @@ Both go over HTTPS: Main asks the host for them with Effect.get, and the host fe
 them with rustls (host/init/src/http.rs).
 -}
 
-import Codec exposing (Codec)
 import Effect
 import Json.Decode as D
 
@@ -272,37 +269,3 @@ weekday date =
 
         _ ->
             date
-
-
--- CODECS (for Persist.elm)
-
-
-placeCodec : Codec Place
-placeCodec =
-    Codec.record Place
-        |> Codec.field .latitude Codec.float
-        |> Codec.field .longitude Codec.float
-        |> Codec.field .name Codec.string
-        |> Codec.buildRecord
-
-
-forecastCodec : Codec Forecast
-forecastCodec =
-    Codec.record Forecast
-        |> Codec.field .temperature Codec.float
-        |> Codec.field .humidity Codec.float
-        |> Codec.field .wind Codec.float
-        |> Codec.field .code Codec.int
-        |> Codec.field .time Codec.string
-        |> Codec.field
-            .days
-            (Codec.list
-                (Codec.record Day
-                    |> Codec.field .date Codec.string
-                    |> Codec.field .code Codec.int
-                    |> Codec.field .high Codec.float
-                    |> Codec.field .low Codec.float
-                    |> Codec.buildRecord
-                )
-            )
-        |> Codec.buildRecord

@@ -1,7 +1,5 @@
 module BootInfo exposing
-    ( codec
-    , inputCodec
-    , Input(..)
+    ( Input(..)
     , Model
     , batteryText
     , bootRows
@@ -42,7 +40,6 @@ and says when the first frame was on screen; working out what they mean is here.
 
 -}
 
-import Codec exposing (Codec)
 import Array exposing (Array)
 import Dict exposing (Dict)
 import Effect exposing (Effect)
@@ -344,7 +341,6 @@ update input model =
             ( { model | boot = Just times }, [] )
 
 
-
 -- GPT (scripts/make-usb-image.sh: 512-byte sectors, partition 1 an EFI system
 -- partition named "Elm OS", then the "Elm OS data" partition, which changes as
 -- Elm OS saves things, so the hash is of the image up to the end of partition 1)
@@ -422,7 +418,6 @@ littleEndian : Array Int -> Int -> Int -> Int
 littleEndian bytes from count =
     List.range 0 (count - 1)
         |> List.foldr (\i acc -> acc * 256 + byteAt bytes (from + i)) 0
-
 
 
 -- BATTERY
@@ -547,7 +542,6 @@ battery files =
         else
             Nothing
     }
-
 
 
 -- WHAT THE OVERLAY SHOWS
@@ -745,100 +739,3 @@ bootRows seconds model =
 
         Nothing ->
             [ ( "Boot", "waiting for the first frame" ) ]
-
-
--- CODECS (for Persist.elm)
-
-
-codec : Codec Model
-codec =
-    Codec.record Model
-        |> Codec.field .image imageCodec
-        |> Codec.field .seconds Codec.int
-        |> Codec.field .gptDisks (Codec.list Codec.string)
-        |> Codec.field
-            .battery
-            (Codec.record Battery
-                |> Codec.field .batteries Codec.int
-                |> Codec.field .percent (Codec.maybe Codec.float)
-                |> Codec.field .status Codec.string
-                |> Codec.field .minutes (Codec.maybe Codec.float)
-                |> Codec.buildRecord
-                |> Codec.maybe
-            )
-        |> Codec.field .cpufreqPolicies (Codec.list Codec.string)
-        |> Codec.field
-            .clock
-            (Codec.record Clock
-                |> Codec.field .minMhz Codec.float
-                |> Codec.field .maxMhz Codec.float
-                |> Codec.field .limitMhz Codec.float
-                |> Codec.field .governor Codec.string
-                |> Codec.field .hint Codec.string
-                |> Codec.buildRecord
-                |> Codec.maybe
-            )
-        |> Codec.field .boot (Codec.maybe bootTimesCodec)
-        |> Codec.field .firmwareMs (Codec.maybe Codec.float)
-        |> Codec.buildRecord
-
-
-imageCodec : Codec Image
-imageCodec =
-    Codec.custom
-        (\hashing lookingForStick hashed noImage value ->
-            case value of
-                Hashing path ->
-                    hashing path
-
-                LookingForStick ->
-                    lookingForStick
-
-                Hashed what hash ->
-                    hashed what hash
-
-                NoImage ->
-                    noImage
-        )
-        |> Codec.variant1 Hashing Codec.string
-        |> Codec.variant0 LookingForStick
-        |> Codec.variant2 Hashed Codec.string Codec.string
-        |> Codec.variant0 NoImage
-        |> Codec.buildCustom
-
-
-bootTimesCodec : Codec BootTimes
-bootTimesCodec =
-    Codec.record BootTimes
-        |> Codec.field .initMs Codec.float
-        |> Codec.field .elmMs Codec.float
-        |> Codec.field .frameMs Codec.float
-        |> Codec.buildRecord
-
-
-inputCodec : Codec Input
-inputCodec =
-    Codec.custom
-        (\dir files bytes sha256 boot value ->
-            case value of
-                Dir path entries ->
-                    dir path entries
-
-                Files id contents ->
-                    files id contents
-
-                Bytes path offset hex ->
-                    bytes path offset hex
-
-                Sha256 path hex ->
-                    sha256 path hex
-
-                Boot times ->
-                    boot times
-        )
-        |> Codec.variant2 Dir Codec.string (Codec.maybe (Codec.list Codec.string))
-        |> Codec.variant2 Files Codec.string (Codec.list (Codec.tuple Codec.string (Codec.maybe Codec.string)))
-        |> Codec.variant3 Bytes Codec.string Codec.int (Codec.maybe Codec.string)
-        |> Codec.variant2 Sha256 Codec.string (Codec.maybe Codec.string)
-        |> Codec.variant1 Boot bootTimesCodec
-        |> Codec.buildCustom
