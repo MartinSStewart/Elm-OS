@@ -16,9 +16,11 @@ module Ui exposing
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , el
+    , elWithId
     , findInput
     , hover
     , leftAndRight
+    , map
     , minWidth
     , noPadding
     , none
@@ -301,6 +303,70 @@ el data child =
         , id = Nothing
         }
         child
+
+
+{-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
+click on `id`. For windows, so clicking one gives it the keyboard.
+-}
+elWithId : id -> { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId id data child =
+    Single
+        { padding = data.padding
+        , borderAndFill = data.borderAndFill
+        , inFront = data.inFront
+        , cachedSize = paddedSize data.padding child
+        , id = Just id
+        }
+        child
+
+
+{-| Change the ids, so a module's UI can sit in a bigger one with its own id type.
+-}
+map : (a -> b) -> Element a -> Element b
+map f element =
+    case element of
+        TextInput data ->
+            TextInput { id = f data.id, style = data.style, isValid = data.isValid, state = data.state }
+
+        TextInputMultiline data ->
+            TextInputMultiline { id = f data.id, style = data.style, scroll = data.scroll, state = data.state }
+
+        Text data ->
+            Text data
+
+        Button data child ->
+            Button
+                { id = f data.id
+                , padding = data.padding
+                , borderAndFill = data.borderAndFill
+                , borderAndFillFocus = data.borderAndFillFocus
+                , borderAndFillHover = data.borderAndFillHover
+                , cachedSize = data.cachedSize
+                , inFront = List.map (map f) data.inFront
+                }
+                (map f child)
+
+        Row data children ->
+            Row data (List.map (map f) children)
+
+        Column data children ->
+            Column data (List.map (map f) children)
+
+        Single data child ->
+            Single
+                { padding = data.padding
+                , borderAndFill = data.borderAndFill
+                , inFront = List.map (map f) data.inFront
+                , cachedSize = data.cachedSize
+                , id = Maybe.map f data.id
+                }
+                (map f child)
+
+        Quads data ->
+            Quads data
+
+        Empty ->
+            Empty
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id

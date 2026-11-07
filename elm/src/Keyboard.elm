@@ -119,6 +119,30 @@ lookup code =
         pick (code - 44) "zxcvbnm,./" "ZXCVBNM<>?"
 
     else
+        keypad code
+
+
+{-| The number pad, as if Num Lock is on (Elm OS doesn't track Num Lock yet).
+-}
+keypad : Int -> Maybe ( Char, Char )
+keypad code =
+    let
+        same char =
+            Just ( char, char )
+    in
+    if code >= 71 && code <= 83 then
+        charAt (code - 71) "789-456+1230." |> Maybe.andThen same
+
+    else if code == 55 then
+        same '*'
+
+    else if code == 98 then
+        same '/'
+
+    else if code == 117 then
+        same '='
+
+    else
         Nothing
 
 

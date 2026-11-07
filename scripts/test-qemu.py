@@ -278,6 +278,31 @@ print(f"about page: {before}, open {opened}, closed {closed}")
 if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
     fail("the About button did not open and close the about page")
 
+# The Calculator button (after About) opens the calculator under the toolbar, with the
+# keyboard going to it: 6 * 7 on the number pad, then Enter. The triangle stays green,
+# because the keys went to the calculator.
+calc_title = (12 * s, 49 * s)
+click(110 * s / w, 20 * s / h)
+time.sleep(1)
+for key in ["kp_6", "kp_multiply", "kp_7", "ret"]:
+    cmd("send-key", keys=[{"type": "qcode", "data": key}])
+    time.sleep(0.3)
+time.sleep(1)
+shot = screen()
+save_png(shot, f"{ROOT}/build/calculator.png")
+digits = sum(1 for x in range(18 * s, 210 * s) for y in range(84 * s, 140 * s) if max(pixel(shot, x, y)) < 60)
+print(f"calculator: panel {pixel(shot, *calc_title)}, {digits} dark pixels in its display, triangle {pixel(shot, mx, my)}")
+if not near(pixel(shot, *calc_title), (220, 210, 199), tol=10):
+    fail("the Calculator button did not open the calculator (build/calculator.png)")
+if digits < 20:
+    fail(f"the calculator's display is empty ({digits} dark pixels; build/calculator.png)")
+if not near(pixel(shot, mx, my), GREEN):
+    fail("keys typed into the calculator changed the triangle's colour")
+click(110 * s / w, 20 * s / h)
+time.sleep(1)
+if near(pixel(screen(), *calc_title), (220, 210, 199), tol=10):
+    fail("a second click on the Calculator button did not close the calculator")
+
 if usb:
     # No wifi card, so the panel (top right) is just the wired card: its name, then
     # "Connected, 10.0.2.15" in green once DHCP over the cable has worked.

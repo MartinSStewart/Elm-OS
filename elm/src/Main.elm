@@ -2,8 +2,9 @@ module Main exposing (main)
 
 {-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
 "Next colour" button), a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
-and a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
-password, join it), and the weather once either is connected.
+a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
+password, join it), and the weather once either is connected, and a calculator
+(Calculator.elm) that opens from the toolbar.
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
 including {"t":"frame"} whenever the screen is ready for a frame. `update` answers with a
@@ -232,6 +233,8 @@ type alias Model =
     , system : Maybe SystemInfo
     , bootInfo : BootInfo.Model
     , aboutOpen : Bool
+    , calculator : Calculator.Model
+    , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
     , editor : TextInputMultiline.Model
     , editorOpen : Bool
@@ -270,6 +273,7 @@ type UiId
     | WeatherButton
     | AboutButton
     | CloseAboutButton
+    | CalculatorButton
     | PowerOffButton
     | RestartButton
     | ConfirmPowerButton
@@ -277,6 +281,7 @@ type UiId
     | CalculatorUiId Calculator.UiId
     | EditorButton
     | EditorInput
+    | EditorWindow
     | CloseEditorButton
 
 
@@ -310,6 +315,8 @@ init _ =
       , system = Nothing
       , bootInfo = BootInfo.init
       , aboutOpen = False
+      , calculator = Calculator.init
+      , calculatorOpen = False
       , confirmPower = Nothing
       , editor = TextInputMultiline.init
       , editorOpen = False
@@ -459,6 +466,18 @@ step event model =
 
             else if model.focus == Just EditorInput then
                 ( editorKey (Keyboard.fromCode model.shift code) model, [] )
+
+            else if calculatorFocused model then
+                case ( model.ctrl, Calculator.fromKeyboard (Keyboard.fromCode model.shift code) ) of
+                    ( False, Just key ) ->
+                        if repeat && key /= Calculator.Backspace then
+                            ( model, [] )
+
+                        else
+                            ( { model | calculator = Calculator.press key model.calculator }, [] )
+
+                    _ ->
+                        ( model, [] )
 
             else if repeat then
                 ( model, [] )
@@ -653,11 +672,22 @@ click id model =
         EditorInput ->
             ( { model | focus = Just EditorInput }, [] )
 
+        EditorWindow ->
+            -- A click on the window around the text still types into it.
+            ( { model | focus = Just EditorInput }, [] )
+
         CloseEditorButton ->
             ( { model | editorOpen = False, focus = Nothing }, [] )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
+
+        CalculatorButton ->
+            if model.calculatorOpen then
+                ( closeCalculator model, [] )
+
+            else
+                ( { model | calculatorOpen = True, focus = Just (CalculatorUiId Calculator.Panel) }, [] )
 
         PowerOffButton ->
             ( { model | confirmPower = Just PowerOff, focus = Nothing }, [] )
@@ -681,8 +711,44 @@ click id model =
               ]
             )
 
-        CalculatorUiId uiId ->
-            ( model, [] )
+        CalculatorUiId Calculator.CloseButton ->
+            ( closeCalculator model, [] )
+
+        CalculatorUiId (Calculator.KeyButton key) ->
+            ( { model
+                | calculator = Calculator.press key model.calculator
+                , focus = Just (CalculatorUiId Calculator.Panel)
+              }
+            , []
+            )
+
+        CalculatorUiId Calculator.Panel ->
+            ( { model | focus = Just (CalculatorUiId Calculator.Panel) }, [] )
+
+
+{-| Keys go to the calculator after a click on it, until a click somewhere else.
+-}
+calculatorFocused : Model -> Bool
+calculatorFocused model =
+    case model.focus of
+        Just (CalculatorUiId _) ->
+            model.calculatorOpen
+
+        _ ->
+            False
+
+
+closeCalculator : Model -> Model
+closeCalculator model =
+    { model
+        | calculatorOpen = False
+        , focus =
+            if calculatorFocused model then
+                Nothing
+
+            else
+                model.focus
+    }
 
 
 connect : Model -> ( Model, List Effect )
@@ -924,8 +990,8 @@ headingFont =
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
-wifi panel in the top right, the About and power buttons in the top left, and the about
-page in the middle when it is open.
+wifi panel in the top right, the toolbar in the top left with the calculator under it
+when it is open, and the text editor or the about page in the middle when one is open.
 -}
 screenUi : Model -> Ui.Element UiId
 screenUi model =
@@ -935,6 +1001,12 @@ screenUi model =
             [ overlay model, networkPanel model, toolbar model ]
                 ++ (if model.editorOpen then
                         [ editorWindow model ]
+
+                    else
+                        []
+                   )
+                ++ (if model.calculatorOpen then
+                        [ calculatorWindow model ]
 
                     else
                         []
@@ -1740,6 +1812,7 @@ toolbar model =
 
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
+                    , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
@@ -1747,6 +1820,27 @@ toolbar model =
     in
     Ui.topLeft { size = uiSize model }
         (Ui.row { spacing = 6, padding = Ui.paddingXY 8 8 } buttons)
+
+
+{-| The calculator, under the toolbar.
+-}
+calculatorWindow : Model -> Ui.Element UiId
+calculatorWindow model =
+    Ui.topLeft { size = uiSize model }
+        (Ui.el
+            { padding = { topLeft = Coord.xy 8 (toolbarHeight + 8), bottomRight = Coord.origin }
+            , inFront = []
+            , borderAndFill = Ui.NoBorderOrFill
+            }
+            (Calculator.view (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
+        )
+
+
+{-| The toolbar's buttons and the gap above them, in UI pixels.
+-}
+toolbarHeight : Int
+toolbarHeight =
+    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodyFont)
 
 
 aboutPage : Model -> Ui.Element UiId
@@ -1909,7 +2003,7 @@ editorWindow model =
                    )
     in
     Ui.center { size = uiSize model }
-        (Ui.el
+        (Ui.elWithId EditorWindow
             { padding = Ui.paddingXY 8 8
             , inFront = []
             , borderAndFill = Ui.defaultElBorderAndFill
