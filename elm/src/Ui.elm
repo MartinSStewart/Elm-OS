@@ -6,6 +6,7 @@ module Ui exposing
     , Padding
     , RowColumn
     , TextInputData
+    , TextInputMultilineData
     , bottomLeft
     , button
     , center
@@ -27,6 +28,7 @@ module Ui exposing
     , selectableButton
     , text
     , textInput
+    , textInputMultiline
     , topLeft
     , topRight
     , view
@@ -46,8 +48,8 @@ with the screen's UI scale. Spacing, padding and border widths are plain Ints of
 pixels; sizes and widths are Quantities.
 
 Text inputs come from town-collab's TextInput (TextInput.elm, with a US layout in
-Keyboard.elm). Left out for now: multiline text inputs, underlined text and sprites from
-town-collab's texture.
+Keyboard.elm), and multiline ones for the text editor from TextInputMultiline.elm. Left out
+for now: underlined text and sprites from town-collab's texture.
 
 -}
 
@@ -56,6 +58,7 @@ import Coord exposing (Coord)
 import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
 import TextInput
+import TextInputMultiline
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
@@ -85,8 +88,17 @@ type alias TextInputData id =
     }
 
 
+type alias TextInputMultilineData id =
+    { id : id
+    , style : TextInputMultiline.Style
+    , scroll : Int
+    , state : TextInput.State
+    }
+
+
 type Element id
     = TextInput (TextInputData id)
+    | TextInputMultiline (TextInputMultilineData id)
     | Text
         { color : Color
         , font : Sprite.Font
@@ -160,6 +172,13 @@ colorText color font =
 textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.State } -> Element id
 textInput =
     TextInput
+
+
+{-| A text box with many lines, showing `style.lines` of them from line `scroll`.
+-}
+textInputMultiline : { id : id, style : TextInputMultiline.Style, scroll : Int, state : TextInput.State } -> Element id
+textInputMultiline =
+    TextInputMultiline
 
 
 
@@ -359,6 +378,9 @@ size element =
         TextInput data ->
             TextInput.size data.style
 
+        TextInputMultiline data ->
+            TextInputMultiline.size data.style
+
         Text data ->
             data.cachedSize
 
@@ -482,6 +504,13 @@ hoverHelper hovers point position element =
             else
                 hovers
 
+        TextInputMultiline data ->
+            if contains point position (TextInputMultiline.size data.style) then
+                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+
+            else
+                hovers
+
         Button data _ ->
             if contains point position data.cachedSize then
                 ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -536,6 +565,13 @@ findInputHelper id position element =
         TextInput data ->
             if data.id == id then
                 Just (TextInputType { position = position, size = TextInput.size data.style })
+
+            else
+                Nothing
+
+        TextInputMultiline data ->
+            if data.id == id then
+                Just (TextInputType { position = position, size = TextInputMultiline.size data.style })
 
             else
                 Nothing
@@ -598,6 +634,9 @@ viewList scale maybeHover focus position element =
     case element of
         TextInput data ->
             TextInput.view scale data.style position (focus == Just data.id) data.isValid data.state
+
+        TextInputMultiline data ->
+            TextInputMultiline.view scale data.style position (focus == Just data.id) data.scroll data.state
 
         Text data ->
             Sprite.text scale data.color data.font data.text position

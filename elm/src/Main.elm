@@ -21,6 +21,7 @@ import Keyboard
 import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
 import TextInput
+import TextInputMultiline
 import Time
 import Ui
 import Units exposing (DevicePixels, UiPixels, UiScale)
@@ -40,6 +41,7 @@ type Input
     | HttpResponse String (Result Effect.HttpError { status : Int, body : String })
     | Mouse Int Int
     | Button Int Bool
+    | Wheel Int -- clicks, positive is up
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
@@ -118,6 +120,9 @@ decodeInput =
 
                     "button" ->
                         D.map2 Button (D.field "b" D.int) (D.field "down" D.bool)
+
+                    "wheel" ->
+                        D.map Wheel (D.field "dy" D.int)
 
                     "key" ->
                         D.map3 Key
@@ -211,7 +216,7 @@ type alias Model =
     , shift : Bool
     , ctrl : Bool
     , clipboard : String
-    , selectingText : Bool -- the mouse went down in the password box and is still down
+    , selectingText : Bool -- the mouse went down in the focused text box and is still down
     , focus : Maybe UiId
     , wifiDevice : Wifi.Device
     , networks : List Wifi.Network
@@ -228,6 +233,8 @@ type alias Model =
     , bootInfo : BootInfo.Model
     , aboutOpen : Bool
     , confirmPower : Maybe PowerAction
+    , editor : TextInputMultiline.Model
+    , editorOpen : Bool
     }
 
 
@@ -268,6 +275,9 @@ type UiId
     | ConfirmPowerButton
     | CancelPowerButton
     | CalculatorUiId Calculator.UiId
+    | EditorButton
+    | EditorInput
+    | CloseEditorButton
 
 
 init : () -> ( Model, List Effect )
@@ -301,6 +311,8 @@ init _ =
       , bootInfo = BootInfo.init
       , aboutOpen = False
       , confirmPower = Nothing
+      , editor = TextInputMultiline.init
+      , editorOpen = False
       }
     , []
     )
@@ -380,20 +392,17 @@ step event model =
                 moved =
                     { model | mouse = Coord.xy x y }
             in
-            if model.selectingText then
-                case Ui.findInput PasswordInput (screenUi model) of
-                    Just (Ui.TextInputType { position }) ->
-                        ( { moved
-                            | password = TextInput.mouseDownMove (passwordStyle model) (uiMouse moved) position model.password
-                          }
-                        , []
-                        )
+            case ( model.selectingText, model.focus ) of
+                ( True, Just focus ) ->
+                    case Ui.findInput focus (screenUi model) of
+                        Just (Ui.TextInputType { position }) ->
+                            ( dragSelect focus position moved, [] )
 
-                    _ ->
-                        ( moved, [] )
+                        _ ->
+                            ( moved, [] )
 
-            else
-                ( moved, [] )
+                _ ->
+                    ( moved, [] )
 
         Button 0 True ->
             case Ui.hover (uiMouse model) (screenUi model) of
@@ -402,6 +411,15 @@ step event model =
                         | focus = Just PasswordInput
                         , selectingText = True
                         , password = TextInput.mouseDown (passwordStyle model) (uiMouse model) relativePositionToUi model.password
+                      }
+                    , []
+                    )
+
+                ( EditorInput, { relativePositionToUi } ) :: _ ->
+                    ( { model
+                        | focus = Just EditorInput
+                        , selectingText = True
+                        , editor = TextInputMultiline.mouseDown (editorStyle model) (uiMouse model) relativePositionToUi model.editor
                       }
                     , []
                     )
@@ -418,6 +436,14 @@ step event model =
         Button _ down ->
             ( { model | pressed = down }, [] )
 
+        Wheel clicks ->
+            case Ui.hover (uiMouse model) (screenUi model) of
+                ( EditorInput, _ ) :: _ ->
+                    ( { model | editor = TextInputMultiline.wheel (editorStyle model) clicks model.editor }, [] )
+
+                _ ->
+                    ( model, [] )
+
         Key code down repeat ->
             if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
@@ -430,6 +456,9 @@ step event model =
 
             else if model.focus == Just PasswordInput then
                 typeKey (Keyboard.fromCode model.shift code) model
+
+            else if model.focus == Just EditorInput then
+                ( editorKey (Keyboard.fromCode model.shift code) model, [] )
 
             else if repeat then
                 ( model, [] )
@@ -605,7 +634,27 @@ click id model =
             fetchWeather { model | focus = Nothing }
 
         AboutButton ->
-            ( { model | aboutOpen = not model.aboutOpen, focus = Nothing }, [] )
+            ( { model | aboutOpen = not model.aboutOpen, editorOpen = False, focus = Nothing }, [] )
+
+        EditorButton ->
+            ( { model
+                | editorOpen = not model.editorOpen
+                , aboutOpen = False
+                , focus =
+                    if model.editorOpen then
+                        Nothing
+
+                    else
+                        Just EditorInput
+              }
+            , []
+            )
+
+        EditorInput ->
+            ( { model | focus = Just EditorInput }, [] )
+
+        CloseEditorButton ->
+            ( { model | editorOpen = False, focus = Nothing }, [] )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
@@ -701,6 +750,50 @@ typeKey key model =
               }
             , []
             )
+
+
+{-| The mouse moved with its button down after going down in the text box `focus`, at
+`position` on the screen: select from there to the mouse.
+-}
+dragSelect : UiId -> Coord UiPixels -> Model -> Model
+dragSelect focus position model =
+    case focus of
+        PasswordInput ->
+            { model | password = TextInput.mouseDownMove (passwordStyle model) (uiMouse model) position model.password }
+
+        EditorInput ->
+            { model | editor = TextInputMultiline.mouseDownMove (editorStyle model) (uiMouse model) position model.editor }
+
+        _ ->
+            model
+
+
+{-| A key for the text editor. Its copies go in the same clipboard as the password box's.
+-}
+editorKey : Keyboard.Key -> Model -> Model
+editorKey key model =
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Escape ) ->
+            { model | focus = Nothing }
+
+        ( True, Keyboard.Character "v" ) ->
+            { model | editor = TextInputMultiline.paste (editorStyle model) model.clipboard model.editor }
+
+        _ ->
+            let
+                ( editor, outMsg ) =
+                    TextInputMultiline.keyMsg (editorStyle model) model.ctrl model.shift key model.editor
+            in
+            { model
+                | editor = editor
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+            }
 
 
 {-| WPA passphrases have at most 63 characters.
@@ -840,6 +933,12 @@ screenUi model =
         { padding = Ui.noPadding
         , inFront =
             [ overlay model, networkPanel model, toolbar model ]
+                ++ (if model.editorOpen then
+                        [ editorWindow model ]
+
+                    else
+                        []
+                   )
                 ++ (if model.aboutOpen then
                         [ aboutPage model ]
 
@@ -1641,6 +1740,7 @@ toolbar model =
 
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
+                    , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
                     ]
@@ -1750,6 +1850,83 @@ aboutPage model =
                     )
                 , t ""
                 , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
+                ]
+            )
+        )
+
+
+
+-- TEXT EDITOR
+
+
+{-| The text box: up to 40 em wide and 24 lines tall, smaller on a small screen.
+-}
+editorStyle : Model -> TextInputMultiline.Style
+editorStyle model =
+    let
+        ( screenWidth, screenHeight ) =
+            Coord.toTuple (uiSize model)
+    in
+    { font = bodyFont
+    , width = Quantity.min (em 40) (Units.uiPixels (screenWidth - 40))
+    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodyFont))
+    }
+
+
+{-| The text editor's window: a title and a close button, the text, and where the cursor is.
+The text stays when the window closes, until Elm OS restarts.
+-}
+editorWindow : Model -> Ui.Element UiId
+editorWindow model =
+    let
+        t =
+            Ui.text bodyFont
+
+        style =
+            editorStyle model
+
+        state =
+            model.editor.input.current
+
+        ( line, column ) =
+            TextInputMultiline.lineAndColumn state.text state.cursorPosition
+
+        lineCount =
+            List.length (String.split "\n" state.text)
+
+        status =
+            "Line "
+                ++ String.fromInt (line + 1)
+                ++ " of "
+                ++ String.fromInt lineCount
+                ++ ", column "
+                ++ String.fromInt (column + 1)
+                ++ (if state.cursorSize == 0 then
+                        ""
+
+                    else
+                        ", " ++ String.fromInt (abs state.cursorSize) ++ " selected"
+                   )
+    in
+    Ui.center { size = uiSize model }
+        (Ui.el
+            { padding = Ui.paddingXY 8 8
+            , inFront = []
+            , borderAndFill = Ui.defaultElBorderAndFill
+            }
+            (Ui.column { spacing = 6, padding = Ui.noPadding }
+                [ Ui.leftAndRight style.width
+                    (Ui.text headingFont "Text editor")
+                    (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+                , Ui.textInputMultiline
+                    { id = EditorInput
+                    , style = style
+                    , scroll = model.editor.scroll
+                    , state = state
+                    }
+                , Ui.leftAndRight style.width
+                    (t status)
+                    (Ui.colorText Color.outlineColor bodyFont "Ctrl+Z undo, Ctrl+Y redo")
                 ]
             )
         )

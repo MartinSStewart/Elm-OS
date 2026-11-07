@@ -20,6 +20,8 @@ type Key
     | ArrowDown
     | Home
     | End
+    | PageUp
+    | PageDown
     | Other
 
 
@@ -61,6 +63,9 @@ fromCode shift code =
         103 ->
             ArrowUp
 
+        104 ->
+            PageUp
+
         105 ->
             ArrowLeft
 
@@ -72,6 +77,9 @@ fromCode shift code =
 
         108 ->
             ArrowDown
+
+        109 ->
+            PageDown
 
         111 ->
             Delete

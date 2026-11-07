@@ -9,6 +9,7 @@
 //! Sends Elm:
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
 //!   {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
+//!   {"t":"wheel","dy":N}                 scroll wheel clicks, positive away from you (up)
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
 
@@ -26,6 +27,7 @@ const EV_REL: u16 = 2;
 const EV_ABS: u16 = 3;
 const REL_X: u16 = 0;
 const REL_Y: u16 = 1;
+const REL_WHEEL: u16 = 8;
 const ABS_X: u16 = 0;
 const ABS_Y: u16 = 1;
 const KEY_POWER: u16 = 116;
@@ -294,6 +296,9 @@ impl Inputs {
                 if ev.code == REL_Y {
                     self.mouse_y += ev.value;
                     *moved = true;
+                }
+                if ev.code == REL_WHEEL && ev.value != 0 {
+                    eco::send(&json!({"t": "wheel", "dy": ev.value}));
                 }
             }
             EV_ABS if touchpad => {

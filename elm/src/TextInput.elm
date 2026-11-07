@@ -7,8 +7,13 @@ module TextInput exposing
     , keyMsg
     , mouseDown
     , mouseDownMove
+    , deleteSelection
+    , insertText
     , paste
+    , pushState
     , replaceState
+    , selectionMax
+    , selectionMin
     , size
     , view
     )
