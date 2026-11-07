@@ -31,7 +31,7 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
-use crate::{eco, http, net, raster};
+use crate::{eco, http, net, persist, raster};
 
 /// Elm draws only when asked.
 ///
@@ -230,6 +230,8 @@ impl Host {
                 }
                 Effect::Sha256 { path, length } => files::request(Request::Sha256 { path, length }),
                 Effect::WriteSys { path, text } => files::write_sys(path, text),
+                Effect::AppendFile { path, text } => persist::append_file(path, text),
+                Effect::WriteFile { path, text } => persist::write_file(path, text),
             }
         }
         if cursor_dirty {

@@ -1,5 +1,7 @@
 module BootInfo exposing
-    ( Input(..)
+    ( codec
+    , inputCodec
+    , Input(..)
     , Model
     , batteryText
     , bootRows
@@ -21,8 +23,10 @@ and says when the first frame was on screen; working out what they mean is here.
     initramfs it was handed in /sys/firmware/initrd (run-qemu.sh passes
     `retain_initrd`), which is build/initramfs-qemu.cpio. On a USB stick there is no
     initrd: we look for a disk that starts with Elm OS's GPT (scripts/make-usb-image.sh)
-    and hash the image on it, as long as the GPT says it is, which is
-    build/elmos-usb.img (and what `make docker` prints).
+    and hash the image on it up to the end of its first partition, the one it boots
+    from. That leaves out the data partition after it, which changes as Elm OS saves
+    things (Persist.elm). `make usb` writes that hash to build/elmos-usb.img.sha256
+    (and `make docker` prints it).
   - Battery: every battery in /sys/class/power_supply that powers the computer (not
     a mouse's), added up.
   - Clock: the CPU cores' clock speeds (cpufreq), and how the kernel picks them: the
@@ -38,6 +42,7 @@ and says when the first frame was on screen; working out what they mean is here.
 
 -}
 
+import Codec exposing (Codec)
 import Array exposing (Array)
 import Dict exposing (Dict)
 import Effect exposing (Effect)
@@ -47,7 +52,7 @@ import Json.Decode as D
 type alias Model =
     { image : Image
     , seconds : Int -- since start
-    , imageLengths : Dict String Int -- disks with Elm OS's GPT header: the image's length in bytes
+    , gptDisks : List String -- disks with a GPT header, whose first partition we are reading
     , battery : Maybe Battery
     , cpufreqPolicies : List String -- e.g. "policy0", one per core
     , clock : Maybe Clock
@@ -147,7 +152,7 @@ init : Model
 init =
     { image = Hashing initrd
     , seconds = 0
-    , imageLengths = Dict.empty
+    , gptDisks = []
     , battery = Nothing
     , cpufreqPolicies = []
     , clock = Nothing
@@ -282,7 +287,7 @@ update input model =
             else if offset == 512 then
                 case gptHeader (bytesFromHex hex) of
                     Just header ->
-                        ( { model | imageLengths = Dict.insert path ((header.backupLba + 1) * 512) model.imageLengths }
+                        ( { model | gptDisks = path :: model.gptDisks }
                         , [ Effect.ReadBytes { path = path, offset = header.entriesLba * 512, length = 128 } ]
                         )
 
@@ -290,15 +295,11 @@ update input model =
                         ( model, [] )
 
             else
-                case Dict.get path model.imageLengths of
-                    Just length ->
-                        if isElmOsPartition (bytesFromHex hex) then
-                            ( { model | image = Hashing path }, [ Effect.Sha256 { path = path, length = Just length } ] )
+                case ( List.member path model.gptDisks, elmOsPartitionEnd (bytesFromHex hex) ) of
+                    ( True, Just length ) ->
+                        ( { model | image = Hashing path }, [ Effect.Sha256 { path = path, length = Just length } ] )
 
-                        else
-                            ( model, [] )
-
-                    Nothing ->
+                    _ ->
                         ( model, [] )
 
         Bytes _ _ Nothing ->
@@ -345,20 +346,24 @@ update input model =
 
 
 -- GPT (scripts/make-usb-image.sh: 512-byte sectors, partition 1 an EFI system
--- partition named "Elm OS", the backup header in the image's last sector)
+-- partition named "Elm OS", then the "Elm OS data" partition, which changes as
+-- Elm OS saves things, so the hash is of the image up to the end of partition 1)
 
 
-gptHeader : Array Int -> Maybe { backupLba : Int, entriesLba : Int }
+gptHeader : Array Int -> Maybe { entriesLba : Int }
 gptHeader bytes =
     if List.map Char.toCode (String.toList "EFI PART") == List.map (byteAt bytes) (List.range 0 7) then
-        Just { backupLba = littleEndian bytes 32 8, entriesLba = littleEndian bytes 72 8 }
+        Just { entriesLba = littleEndian bytes 72 8 }
 
     else
         Nothing
 
 
-isElmOsPartition : Array Int -> Bool
-isElmOsPartition entry =
+{-| If the GPT partition entry is Elm OS's EFI system partition, where it ends: the
+length of the image from the start of the disk to its last byte.
+-}
+elmOsPartitionEnd : Array Int -> Maybe Int
+elmOsPartitionEnd entry =
     let
         -- C12A7328-F81F-11D2-BA4B-00A0C93EC93B, as GPT stores it
         espType =
@@ -380,7 +385,11 @@ isElmOsPartition entry =
                 |> List.map Char.fromCode
                 |> String.fromList
     in
-    List.map (byteAt entry) (List.range 0 15) == espType && name == "Elm OS"
+    if List.map (byteAt entry) (List.range 0 15) == espType && name == "Elm OS" then
+        Just ((littleEndian entry 40 8 + 1) * 512)
+
+    else
+        Nothing
 
 
 bytesFromHex : String -> Array Int
@@ -736,3 +745,100 @@ bootRows seconds model =
 
         Nothing ->
             [ ( "Boot", "waiting for the first frame" ) ]
+
+
+-- CODECS (for Persist.elm)
+
+
+codec : Codec Model
+codec =
+    Codec.record Model
+        |> Codec.field .image imageCodec
+        |> Codec.field .seconds Codec.int
+        |> Codec.field .gptDisks (Codec.list Codec.string)
+        |> Codec.field
+            .battery
+            (Codec.record Battery
+                |> Codec.field .batteries Codec.int
+                |> Codec.field .percent (Codec.maybe Codec.float)
+                |> Codec.field .status Codec.string
+                |> Codec.field .minutes (Codec.maybe Codec.float)
+                |> Codec.buildRecord
+                |> Codec.maybe
+            )
+        |> Codec.field .cpufreqPolicies (Codec.list Codec.string)
+        |> Codec.field
+            .clock
+            (Codec.record Clock
+                |> Codec.field .minMhz Codec.float
+                |> Codec.field .maxMhz Codec.float
+                |> Codec.field .limitMhz Codec.float
+                |> Codec.field .governor Codec.string
+                |> Codec.field .hint Codec.string
+                |> Codec.buildRecord
+                |> Codec.maybe
+            )
+        |> Codec.field .boot (Codec.maybe bootTimesCodec)
+        |> Codec.field .firmwareMs (Codec.maybe Codec.float)
+        |> Codec.buildRecord
+
+
+imageCodec : Codec Image
+imageCodec =
+    Codec.custom
+        (\hashing lookingForStick hashed noImage value ->
+            case value of
+                Hashing path ->
+                    hashing path
+
+                LookingForStick ->
+                    lookingForStick
+
+                Hashed what hash ->
+                    hashed what hash
+
+                NoImage ->
+                    noImage
+        )
+        |> Codec.variant1 Hashing Codec.string
+        |> Codec.variant0 LookingForStick
+        |> Codec.variant2 Hashed Codec.string Codec.string
+        |> Codec.variant0 NoImage
+        |> Codec.buildCustom
+
+
+bootTimesCodec : Codec BootTimes
+bootTimesCodec =
+    Codec.record BootTimes
+        |> Codec.field .initMs Codec.float
+        |> Codec.field .elmMs Codec.float
+        |> Codec.field .frameMs Codec.float
+        |> Codec.buildRecord
+
+
+inputCodec : Codec Input
+inputCodec =
+    Codec.custom
+        (\dir files bytes sha256 boot value ->
+            case value of
+                Dir path entries ->
+                    dir path entries
+
+                Files id contents ->
+                    files id contents
+
+                Bytes path offset hex ->
+                    bytes path offset hex
+
+                Sha256 path hex ->
+                    sha256 path hex
+
+                Boot times ->
+                    boot times
+        )
+        |> Codec.variant2 Dir Codec.string (Codec.maybe (Codec.list Codec.string))
+        |> Codec.variant2 Files Codec.string (Codec.list (Codec.tuple Codec.string (Codec.maybe Codec.string)))
+        |> Codec.variant3 Bytes Codec.string Codec.int (Codec.maybe Codec.string)
+        |> Codec.variant2 Sha256 Codec.string (Codec.maybe Codec.string)
+        |> Codec.variant1 Boot bootTimesCodec
+        |> Codec.buildCustom

@@ -1,4 +1,4 @@
-module Main exposing (main)
+module Main exposing (Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, main, persistConfig)
 
 {-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
 "Next colour" button), a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
@@ -14,11 +14,13 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 
 import BootInfo
 import Calculator
+import Codec exposing (Codec)
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Json.Decode as D
 import Keyboard
+import Persist
 import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
 import TextInput
@@ -285,44 +287,42 @@ type UiId
     | CloseEditorButton
 
 
-init : () -> ( Model, List Effect )
-init _ =
-    ( { screenSize = Coord.xy 640 480
-      , mouse = Coord.xy 320 240
-      , colorIndex = 0
-      , pressed = False
-      , renderer = Nothing
-      , stats = Nothing
-      , lastFrame = Nothing
-      , frameIntervals = []
-      , frames = 0
-      , shift = False
-      , ctrl = False
-      , clipboard = ""
-      , selectingText = False
-      , focus = Nothing
-      , wifiDevice = Wifi.Unknown
-      , networks = []
-      , scanning = True
-      , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
-      , wired = []
-      , selected = Nothing
-      , password = TextInput.init
-      , showPassword = False
-      , weather = NoWeather
-      , geoUrl = Weather.defaultGeoUrl
-      , weatherUrl = Weather.defaultWeatherUrl
-      , system = Nothing
-      , bootInfo = BootInfo.init
-      , aboutOpen = False
-      , calculator = Calculator.init
-      , calculatorOpen = False
-      , confirmPower = Nothing
-      , editor = TextInputMultiline.init
-      , editorOpen = False
-      }
-    , []
-    )
+init : Model
+init =
+    { screenSize = Coord.xy 640 480
+    , mouse = Coord.xy 320 240
+    , colorIndex = 0
+    , pressed = False
+    , renderer = Nothing
+    , stats = Nothing
+    , lastFrame = Nothing
+    , frameIntervals = []
+    , frames = 0
+    , shift = False
+    , ctrl = False
+    , clipboard = ""
+    , selectingText = False
+    , focus = Nothing
+    , wifiDevice = Wifi.Unknown
+    , networks = []
+    , scanning = True
+    , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
+    , wired = []
+    , selected = Nothing
+    , password = TextInput.init
+    , showPassword = False
+    , weather = NoWeather
+    , geoUrl = Weather.defaultGeoUrl
+    , weatherUrl = Weather.defaultWeatherUrl
+    , system = Nothing
+    , bootInfo = BootInfo.init
+    , aboutOpen = False
+    , calculator = Calculator.init
+    , calculatorOpen = False
+    , confirmPower = Nothing
+    , editor = TextInputMultiline.init
+    , editorOpen = False
+    }
 
 
 {-| How many frame intervals the average and maximum are over.
@@ -379,7 +379,8 @@ step event model =
                                     model.frameIntervals
                     }
             in
-            ( next, [ Effect.Render (view next) ] )
+            -- Drawn by `draw`, which replaying the log skips.
+            ( next, [] )
 
         HttpResponse id result ->
             let
@@ -1244,21 +1245,390 @@ fixed decimals value =
         sign ++ whole ++ "." ++ String.padLeft decimals '0' (String.fromInt (modBy factor n))
 
 
-main : Program () Model Msg
+main : Program () (Persist.Model Model Msg) (Persist.Msg Msg)
 main =
     Platform.worker
-        { init = \flags -> init flags |> Tuple.mapSecond Effect.toCmd
-        , update = \msg model -> update msg model |> Tuple.mapSecond Effect.toCmd
-        , subscriptions =
-            \_ ->
-                Sub.batch
-                    [ Effect.fromHost (\json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput)
-
-                    -- An idle eco program exits; a timer keeps the event loop alive. It
-                    -- also paces BootInfo's battery checks and USB stick search.
-                    , Time.every 1000 (\_ -> Tick)
-                    ]
+        { init = \_ -> Persist.init |> Tuple.mapSecond Effect.toCmd
+        , update = \msg model -> Persist.update persistConfig msg model |> Tuple.mapSecond Effect.toCmd
+        , subscriptions = Persist.subscriptions persistConfig
         }
+
+
+{-| The Model is kept on the data disk and comes back after a restart (Persist.elm).
+-}
+persistConfig : Persist.Config Model Msg
+persistConfig =
+    { init = init
+    , update = update
+    , draw = draw
+    , resume = resume
+    , fromHost = \json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput
+
+    -- An idle eco program exits; a timer keeps the event loop alive. It also paces
+    -- BootInfo's battery checks and USB stick search.
+    , subscriptions = \_ -> Time.every 1000 (\_ -> Tick)
+    , modelCodec = modelCodec
+    , msgCodec = msgCodec
+    }
+
+
+{-| Drawing a frame takes a while, so it isn't part of `update`: replaying the saved Msgs
+after a restart only needs the Model.
+-}
+draw : Msg -> Model -> List Effect
+draw msg model =
+    case msg of
+        GotInput (Ok (Frame _)) ->
+            [ Effect.Render (view model) ]
+
+        _ ->
+            []
+
+
+{-| After a restart, the Model as it was (Persist.elm) becomes this boot's: what the
+user did stays (which windows are open, what is in them, the clipboard, the colour),
+and what the last boot's hardware and network said is forgotten, because the host
+says it again.
+-}
+resume : Model -> Model
+resume saved =
+    { init
+        | colorIndex = saved.colorIndex
+        , clipboard = saved.clipboard
+        , focus =
+            case saved.focus of
+                Just EditorInput ->
+                    saved.focus
+
+                Just EditorWindow ->
+                    saved.focus
+
+                Just (CalculatorUiId _) ->
+                    saved.focus
+
+                _ ->
+                    Nothing
+        , aboutOpen = saved.aboutOpen
+        , calculator = saved.calculator
+        , calculatorOpen = saved.calculatorOpen
+        , editor = saved.editor
+        , editorOpen = saved.editorOpen
+    }
+
+
+
+-- CODECS (for Persist.elm)
+
+
+modelCodec : Codec Model
+modelCodec =
+    Codec.record Model
+        |> Codec.field .screenSize coordCodec
+        |> Codec.field .mouse coordCodec
+        |> Codec.field .colorIndex Codec.int
+        |> Codec.field .pressed Codec.bool
+        |> Codec.field .renderer (Codec.maybe rendererCodec)
+        |> Codec.field .stats (Codec.maybe statsCodec)
+        |> Codec.field .lastFrame (Codec.maybe Codec.float)
+        |> Codec.field .frameIntervals (Codec.list Codec.float)
+        |> Codec.field .frames Codec.int
+        |> Codec.field .shift Codec.bool
+        |> Codec.field .ctrl Codec.bool
+        |> Codec.field .clipboard Codec.string
+        |> Codec.field .selectingText Codec.bool
+        |> Codec.field .focus (Codec.maybe uiIdCodec)
+        |> Codec.field .wifiDevice Wifi.deviceCodec
+        |> Codec.field .networks (Codec.list Wifi.networkCodec)
+        |> Codec.field .scanning Codec.bool
+        |> Codec.field .wifiStatus Wifi.statusCodec
+        |> Codec.field .wired (Codec.list Wired.linkCodec)
+        |> Codec.field .selected (Codec.maybe Wifi.networkCodec)
+        |> Codec.field .password TextInput.codec
+        |> Codec.field .showPassword Codec.bool
+        |> Codec.field .weather weatherCodec
+        |> Codec.field .geoUrl Codec.string
+        |> Codec.field .weatherUrl Codec.string
+        |> Codec.field .system (Codec.maybe systemCodec)
+        |> Codec.field .bootInfo BootInfo.codec
+        |> Codec.field .aboutOpen Codec.bool
+        |> Codec.field .calculator Calculator.codec
+        |> Codec.field .calculatorOpen Codec.bool
+        |> Codec.field .confirmPower (Codec.maybe powerActionCodec)
+        |> Codec.field .editor TextInputMultiline.codec
+        |> Codec.field .editorOpen Codec.bool
+        |> Codec.buildRecord
+
+
+coordCodec : Codec (Coord units)
+coordCodec =
+    Codec.tuple Codec.quantity Codec.quantity
+
+
+rendererCodec : Codec RendererInfo
+rendererCodec =
+    Codec.record RendererInfo
+        |> Codec.field .gpu Codec.bool
+        |> Codec.field .name Codec.string
+        |> Codec.field .hardwareCursor Codec.bool
+        |> Codec.buildRecord
+
+
+statsCodec : Codec SystemStats
+statsCodec =
+    Codec.record SystemStats
+        |> Codec.field .cores Codec.int
+        |> Codec.field .cpu Codec.float
+        |> Codec.field .cpuElm Codec.float
+        |> Codec.field .cpuHost Codec.float
+        |> Codec.field .cpuGpu Codec.float
+        |> Codec.field .memUsed Codec.int
+        |> Codec.field .memTotal Codec.int
+        |> Codec.field .gpuMs (Codec.maybe Codec.float)
+        |> Codec.field .elmMs (Codec.maybe Codec.float)
+        |> Codec.field .drawMs (Codec.maybe Codec.float)
+        |> Codec.buildRecord
+
+
+systemCodec : Codec SystemInfo
+systemCodec =
+    Codec.record SystemInfo
+        |> Codec.field .kernel Codec.string
+        |> Codec.field .cpu Codec.string
+        |> Codec.field .commit Codec.string
+        |> Codec.buildRecord
+
+
+powerActionCodec : Codec PowerAction
+powerActionCodec =
+    Codec.custom
+        (\powerOff restart value ->
+            case value of
+                PowerOff ->
+                    powerOff
+
+                Restart ->
+                    restart
+        )
+        |> Codec.variant0 PowerOff
+        |> Codec.variant0 Restart
+        |> Codec.buildCustom
+
+
+weatherCodec : Codec WeatherState
+weatherCodec =
+    Codec.custom
+        (\noWeather findingPlace loadingForecast gotWeather weatherFailed value ->
+            case value of
+                NoWeather ->
+                    noWeather
+
+                FindingPlace ->
+                    findingPlace
+
+                LoadingForecast place ->
+                    loadingForecast place
+
+                GotWeather place forecast ->
+                    gotWeather place forecast
+
+                WeatherFailed error ->
+                    weatherFailed error
+        )
+        |> Codec.variant0 NoWeather
+        |> Codec.variant0 FindingPlace
+        |> Codec.variant1 LoadingForecast Weather.placeCodec
+        |> Codec.variant2 GotWeather Weather.placeCodec Weather.forecastCodec
+        |> Codec.variant1 WeatherFailed Codec.string
+        |> Codec.buildCustom
+
+
+uiIdCodec : Codec UiId
+uiIdCodec =
+    Codec.custom
+        (\nextColorButton refresh network password showPassword connectButton disconnect weather about closeAbout calculator powerOff restart confirmPower cancelPower calculatorUi editor editorInput editorWindowId closeEditor value ->
+            case value of
+                NextColorButton ->
+                    nextColorButton
+
+                RefreshButton ->
+                    refresh
+
+                NetworkButton ssid ->
+                    network ssid
+
+                PasswordInput ->
+                    password
+
+                ShowPasswordButton ->
+                    showPassword
+
+                ConnectButton ->
+                    connectButton
+
+                DisconnectButton ->
+                    disconnect
+
+                WeatherButton ->
+                    weather
+
+                AboutButton ->
+                    about
+
+                CloseAboutButton ->
+                    closeAbout
+
+                CalculatorButton ->
+                    calculator
+
+                PowerOffButton ->
+                    powerOff
+
+                RestartButton ->
+                    restart
+
+                ConfirmPowerButton ->
+                    confirmPower
+
+                CancelPowerButton ->
+                    cancelPower
+
+                CalculatorUiId id ->
+                    calculatorUi id
+
+                EditorButton ->
+                    editor
+
+                EditorInput ->
+                    editorInput
+
+                EditorWindow ->
+                    editorWindowId
+
+                CloseEditorButton ->
+                    closeEditor
+        )
+        |> Codec.variant0 NextColorButton
+        |> Codec.variant0 RefreshButton
+        |> Codec.variant1 NetworkButton Codec.string
+        |> Codec.variant0 PasswordInput
+        |> Codec.variant0 ShowPasswordButton
+        |> Codec.variant0 ConnectButton
+        |> Codec.variant0 DisconnectButton
+        |> Codec.variant0 WeatherButton
+        |> Codec.variant0 AboutButton
+        |> Codec.variant0 CloseAboutButton
+        |> Codec.variant0 CalculatorButton
+        |> Codec.variant0 PowerOffButton
+        |> Codec.variant0 RestartButton
+        |> Codec.variant0 ConfirmPowerButton
+        |> Codec.variant0 CancelPowerButton
+        |> Codec.variant1 CalculatorUiId Calculator.uiIdCodec
+        |> Codec.variant0 EditorButton
+        |> Codec.variant0 EditorInput
+        |> Codec.variant0 EditorWindow
+        |> Codec.variant0 CloseEditorButton
+        |> Codec.buildCustom
+
+
+msgCodec : Codec Msg
+msgCodec =
+    Codec.custom
+        (\gotInput tick value ->
+            case value of
+                GotInput input ->
+                    gotInput input
+
+                Tick ->
+                    tick
+        )
+        |> Codec.variant1 GotInput (Codec.result Codec.string inputCodec)
+        |> Codec.variant0 Tick
+        |> Codec.buildCustom
+
+
+inputCodec : Codec Input
+inputCodec =
+    Codec.custom
+        (\screen frame httpResponse mouse button wheel key renderer stats wifiDevice wifiScan wifiStatus wiredLinks netConfig system bootInfo value ->
+            case value of
+                Screen w h ->
+                    screen w h
+
+                Frame time ->
+                    frame time
+
+                HttpResponse id response ->
+                    httpResponse id response
+
+                Mouse x y ->
+                    mouse x y
+
+                Button b down ->
+                    button b down
+
+                Wheel clicks ->
+                    wheel clicks
+
+                Key code down repeat ->
+                    key code down repeat
+
+                Renderer info ->
+                    renderer info
+
+                Stats info ->
+                    stats info
+
+                WifiDevice device ->
+                    wifiDevice device
+
+                WifiScan networks ->
+                    wifiScan networks
+
+                WifiStatus status ->
+                    wifiStatus status
+
+                WiredLinks links ->
+                    wiredLinks links
+
+                NetConfig urls ->
+                    netConfig urls
+
+                System info ->
+                    system info
+
+                BootInfo bootInput ->
+                    bootInfo bootInput
+        )
+        |> Codec.variant2 Screen Codec.int Codec.int
+        |> Codec.variant1 Frame Codec.float
+        |> Codec.variant2 HttpResponse
+            Codec.string
+            (Codec.result Effect.httpErrorCodec
+                (Codec.record (\status body -> { status = status, body = body })
+                    |> Codec.field .status Codec.int
+                    |> Codec.field .body Codec.string
+                    |> Codec.buildRecord
+                )
+            )
+        |> Codec.variant2 Mouse Codec.int Codec.int
+        |> Codec.variant2 Button Codec.int Codec.bool
+        |> Codec.variant1 Wheel Codec.int
+        |> Codec.variant3 Key Codec.int Codec.bool Codec.bool
+        |> Codec.variant1 Renderer rendererCodec
+        |> Codec.variant1 Stats statsCodec
+        |> Codec.variant1 WifiDevice Wifi.deviceCodec
+        |> Codec.variant1 WifiScan (Codec.list Wifi.networkCodec)
+        |> Codec.variant1 WifiStatus Wifi.statusCodec
+        |> Codec.variant1 WiredLinks (Codec.list Wired.linkCodec)
+        |> Codec.variant1 NetConfig
+            (Codec.record (\geoUrl weatherUrl -> { geoUrl = geoUrl, weatherUrl = weatherUrl })
+                |> Codec.field .geoUrl Codec.string
+                |> Codec.field .weatherUrl Codec.string
+                |> Codec.buildRecord
+            )
+        |> Codec.variant1 System systemCodec
+        |> Codec.variant1 BootInfo BootInfo.inputCodec
+        |> Codec.buildCustom
 
 
 

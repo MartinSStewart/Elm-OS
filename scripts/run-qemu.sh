@@ -13,6 +13,11 @@
 # network; Elm OS runs a test access point on one radio, bridged to that network
 # ("Elm OS test network", password elmos-wifi), and shows the other to Elm.
 #
+# build/data-qemu.img is its data disk (make run makes it), where Elm OS keeps its
+# Model, so what you did comes back next time (elm/src/Persist.elm). Delete it to
+# start afresh. The USB image has its own data partition, but --usb opens the image
+# read-only, so there nothing is kept from one run to the next.
+#
 # retain_initrd keeps the initramfs readable (/sys/firmware/initrd), so the debug
 # overlay can show its SHA-256, to compare with `sha256sum build/initramfs-qemu.cpio`.
 #
@@ -52,6 +57,7 @@ fi
 exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
   -kernel build/bzImage -initrd build/initramfs-qemu.cpio \
   -nic user,model=virtio-net-pci \
+  -drive if=virtio,format=raw,file=build/data-qemu.img \
   -append "console=ttyS0 quiet retain_initrd" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
   -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"

@@ -6,7 +6,8 @@
 //!
 //!   - the host thread (host.rs): the display, input devices, frames and stats,
 //!   - the networking thread (net/): wifi through wpa_supplicant, and DHCP,
-//!   - one short-lived thread per HTTP request Elm makes (http.rs).
+//!   - one short-lived thread per HTTP request Elm makes (http.rs),
+//!   - the persist thread (persist.rs): mounts the data disk and writes Elm's files on it.
 //!
 //! Everything goes between Elm and the host as JSON on two ports, because that is
 //! what eco's port API carries:
@@ -16,7 +17,7 @@
 //!   fromHost host -> Elm: one message at a time, {"t": KIND, ...}. See
 //!            elm/src/Main.elm's decoder, and where each is sent: host.rs (screen,
 //!            frame, input, renderer, stats, system, boot), files.rs (dir, files, bytes,
-//!            sha256), net/ (wifi*, netConfig) and
+//!            sha256), persist.rs (dataDisk), net/ (wifi*, netConfig) and
 //!            http.rs (httpResponse, httpError).
 
 macro_rules! log {
@@ -35,6 +36,7 @@ mod http;
 mod input;
 mod net;
 mod no_curl;
+mod persist;
 mod raster;
 mod stats;
 mod sys;
@@ -70,6 +72,7 @@ pub extern "C" fn elmos_host_init() {
     // SAFETY: ignoring a signal.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
     effects::start();
+    persist::start();
     net::start();
     std::thread::Builder::new()
         .name("host".into())

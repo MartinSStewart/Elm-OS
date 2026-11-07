@@ -5,6 +5,7 @@ port module Effect exposing
     , PowerAction(..)
     , fromHost
     , get
+    , httpErrorCodec
     , toCmd
     )
 
@@ -20,6 +21,7 @@ wifi, HTTP responses. Main.elm decodes those.
 
 -}
 
+import Codec exposing (Codec)
 import Color exposing (Color)
 import Json.Decode as D
 import Json.Encode as E
@@ -54,6 +56,14 @@ type Effect
       -- Writing a kernel setting in /sys (anything else is refused). No answer: read
       -- the file again to see whether it took.
     | WriteSys { path : String, text : String }
+      -- Saving files on the data disk (Persist.elm, host/init/src/persist.rs). Only
+      -- under the directory the host said it mounted it at. No answer.
+      -- AppendFile adds the text to the end of the file (creating it); the host
+      -- makes it durable within a second, and before powering off or restarting.
+      -- WriteFile replaces the file at once, atomically: after a power cut it has
+      -- either its old text or the new.
+    | AppendFile { path : String, text : String }
+    | WriteFile { path : String, text : String }
 
 
 type PowerAction
@@ -78,6 +88,26 @@ type HttpError
     = BadUrl String
     | Timeout
     | NetworkError String
+
+
+httpErrorCodec : Codec HttpError
+httpErrorCodec =
+    Codec.custom
+        (\badUrl timeout networkError value ->
+            case value of
+                BadUrl url ->
+                    badUrl url
+
+                Timeout ->
+                    timeout
+
+                NetworkError message ->
+                    networkError message
+        )
+        |> Codec.variant1 BadUrl Codec.string
+        |> Codec.variant0 Timeout
+        |> Codec.variant1 NetworkError Codec.string
+        |> Codec.buildCustom
 
 
 get : String -> String -> Effect
@@ -161,3 +191,9 @@ encode effect =
 
         WriteSys { path, text } ->
             E.object [ ( "t", E.string "writeSys" ), ( "path", E.string path ), ( "text", E.string text ) ]
+
+        AppendFile { path, text } ->
+            E.object [ ( "t", E.string "appendFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
+
+        WriteFile { path, text } ->
+            E.object [ ( "t", E.string "writeFile" ), ( "path", E.string path ), ( "text", E.string text ) ]

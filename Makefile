@@ -5,6 +5,7 @@
 #   make test       boot headless, inject input, check a screenshot (CPU fallback)
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
+#   make test-persist  boot twice with a power cut between: the Model must come back
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
@@ -18,6 +19,10 @@
 #
 # `make run` and `make test` also give the guest a simulated wifi network to join
 # ("Elm OS test network", password elmos-wifi): see host/init/src/net/mod.rs.
+#
+# `make run` gives it a data disk too, build/data-qemu.img, where Elm OS saves its
+# state (elm/src/Persist.elm), so it comes back the next time. Delete the file to
+# start afresh. The tests use their own empty copy.
 #
 # Needs (`make check-deps` checks them): eco (https://github.com/eco-lang/eco-compiler/releases, the
 # x86_64-linux-musl bundle), musl-gcc, a C toolchain for the kernel, cpio,
@@ -51,7 +56,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE atlas review review-fix review-tests elm-tests all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -77,7 +82,8 @@ docker:
 	  -e HOME=/elmos/build-docker/home -e CARGO_HOME=/elmos/build-docker/home/.cargo \
 	  -v $(CURDIR):/elmos -w /elmos $(DOCKER_RUN_FLAGS) elmos-build \
 	  make BUILD=build-docker $(TARGET)
-	@[ ! -f build-docker/elmos-usb.img ] || sha256sum build-docker/elmos-usb.img
+	@[ ! -f build-docker/elmos-usb.img ] || { sha256sum build-docker/elmos-usb.img; \
+	  echo "$$(cat build-docker/elmos-usb.img.sha256)  up to the data partition (the debug overlay's hash)"; }
 
 # Fail early, with install hints, if a tool is missing. These are order-only
 # prerequisites below, so they run first but never force a rebuild.
@@ -366,7 +372,7 @@ $(BUILD)/initramfs-usb.cpio: $(BUILD)/console.cpio $(BUILD)/initramfs.cpio $(BUI
 
 usb: $(BUILD)/elmos-usb.img
 
-$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh | check-usb-deps
+$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps
 	scripts/make-usb-image.sh $< $@
 
 check-usb-deps:
@@ -385,17 +391,29 @@ test-usb: $(BUILD)/elmos-usb.img | check-run-deps
 
 # ---- running
 
-run: all | check-run-deps
+# The data disk for QEMU. Made once: it holds what Elm OS saved, so it isn't rebuilt
+# when the script changes. Delete it to start afresh.
+$(BUILD)/data-qemu.img: | check-usb-deps
+	scripts/make-data-image.sh $@
+
+# An empty one for the tests, which copy it.
+$(BUILD)/data-empty.img: scripts/make-data-image.sh scripts/make-data-fs.sh | check-usb-deps
+	scripts/make-data-image.sh $@
+
+run: all $(BUILD)/data-qemu.img | check-run-deps
 	scripts/run-qemu.sh
 
-run-cpu: all | check-run-deps
+run-cpu: all $(BUILD)/data-qemu.img | check-run-deps
 	QEMU_GPU=0 scripts/run-qemu.sh
 
-test: all | check-run-deps
+test: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-qemu.py
 
-test-gpu: all | check-run-deps
+test-gpu: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-qemu.py --gpu
+
+test-persist: all $(BUILD)/data-empty.img | check-run-deps
+	python3 scripts/test-persist.py
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 

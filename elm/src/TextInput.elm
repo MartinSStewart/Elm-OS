@@ -1,5 +1,6 @@
 module TextInput exposing
-    ( Model
+    ( codec
+    , Model
     , OutMsg(..)
     , State
     , Style
@@ -26,6 +27,7 @@ the ends, text wider than the box scrolls to keep the cursor in view, and a pass
 shows dots.
 -}
 
+import Codec exposing (Codec)
 import Color
 import Coord exposing (Coord)
 import Keyboard
@@ -586,3 +588,22 @@ view scale style offset hasFocus isValid current =
             (shownText style current.text)
             (Coord.xy textLeft (y + padding))
         ++ Sprite.toDevice scale caret
+
+
+{-| For Persist.elm.
+-}
+codec : Codec Model
+codec =
+    let
+        state =
+            Codec.record State
+                |> Codec.field .cursorPosition Codec.int
+                |> Codec.field .cursorSize Codec.int
+                |> Codec.field .text Codec.string
+                |> Codec.buildRecord
+    in
+    Codec.record Model
+        |> Codec.field .current state
+        |> Codec.field .undoHistory (Codec.list state)
+        |> Codec.field .redoHistory (Codec.list state)
+        |> Codec.buildRecord

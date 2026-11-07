@@ -26,7 +26,7 @@ RUN echo "Acquire::Retries \"10\";" > /etc/apt/apt.conf.d/80retries && \
     apt-get update --snapshot "$SNAPSHOT" && \
     apt-get install -y --no-install-recommends --snapshot "$SNAPSHOT" \
       make gcc libc6-dev musl-tools flex bison bc rsync cpio perl python3 binutils \
-      coreutils curl git libelf-dev libssl-dev xz-utils fdisk dosfstools mtools && \
+      coreutils curl git libelf-dev libssl-dev xz-utils fdisk dosfstools mtools e2fsprogs && \
     rm -rf /var/lib/apt/lists/* && \
     git config --system --add safe.directory '*'
 

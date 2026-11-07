@@ -87,6 +87,7 @@ case "$mode" in
     need mkfs.vfat dosfstools
     need mcopy mtools
     need mmd mtools
+    need mkfs.ext4 e2fsprogs
     ;;
   *)
     echo "usage: $0 [build|run|usb]" >&2

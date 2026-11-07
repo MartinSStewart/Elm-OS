@@ -19,7 +19,10 @@ enforced by the type system. See the
   memory, the SHA-256 of the build that booted, the battery, and how long the boot took
   (from the kernel starting to the first frame, plus the firmware's time on real PCs).
 - A network panel (top right) shows wired Ethernet (plug in a cable and it gets an address) and joins wifi networks (WPA2 personal, including WPA2/WPA3 mixed, or open), then shows the local weather.
-- Buttons (top left) open an about page and restart or power off the computer.
+- Buttons (top left) open an about page, a calculator and a text editor, and restart or power
+  off the computer.
+- What you did survives a restart or a power cut: open windows, the editor's text, the
+  calculator, the clipboard. See "Saving the Model" below.
 
 The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`) drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
 
@@ -44,11 +47,13 @@ make run          # QEMU window, drawn on the GPU (virgl)
 make run-cpu      # QEMU window, drawn on the CPU
 make test         # headless boot test, saves build/screenshot.png
 make test-gpu     # the same test on the GPU
+make test-persist # power cuts and a restart: the Model must come back
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
-wifi network to join: **Elm OS test network**, password `elmos-wifi`.
+wifi network to join: **Elm OS test network**, password `elmos-wifi`. `make run` keeps what Elm
+OS saves in `build/data-qemu.img`; delete it to start afresh.
 
 ## Staying up to date
 
@@ -79,8 +84,9 @@ SHA-256), leaving the image in `build-docker/elmos-usb.img` and printing its SHA
 machines building the same commit with `make docker` should print the same hash.
 
 The debug overlay shows the start of that hash for the build that booted: on a USB stick, the
-SHA-256 of the Elm OS image on the stick, which matches `sha256sum build/elmos-usb.img` (or
-what `make docker` printed). In QEMU (`make run`) it is the initramfs's, matching
+SHA-256 of the image up to the end of its boot partition, leaving out the data partition, which
+changes as Elm OS saves things. `make usb` writes it to `build/elmos-usb.img.sha256` (and
+`make docker` prints it). In QEMU (`make run`) it is the initramfs's, matching
 `sha256sum build/initramfs-qemu.cpio`; the kernel isn't covered there.
 
 Run `make review` (elm-review, needs Node.js) before committing Elm changes;
@@ -88,9 +94,11 @@ Run `make review` (elm-review, needs Node.js) before committing Elm changes;
 
 ## Boot a real PC from a USB stick
 
-`make usb` builds `build/elmos-usb.img`, a UEFI image of about 38 MB. The kernel is its own
+`make usb` builds `build/elmos-usb.img`, a UEFI image of about 70 MB: the boot partition, then
+a 32 MB ext4 partition named "Elm OS data" where Elm OS saves its state. The kernel is its own
 EFI program with the initramfs built in, so there is no bootloader, and Elm OS runs entirely
-from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat` and `mtools`.
+from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat`, `mtools` and
+`mkfs.ext4`. Writing the image again erases what was saved on the stick.
 `make test-usb` boots the image in QEMU under UEFI (needs `ovmf`) as a check.
 
 1. **Write the stick (this erases it).** Run `make usb-write` to list USB disks, then
@@ -116,8 +124,10 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | --- | --- |
 | `elm/src/` | The Elm program (`Main.elm`), UI framework, sprite encoding, wifi panel and weather |
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
+| `elm/src/Persist.elm`, `Codec.elm` | Saving the Model: Msg log, snapshots, replay at start |
 | `host/init/` | Rust host, linked into `/init`: mounts `/dev`, `/proc` and `/sys`, reads evdev, runs effects, CPU renderer, HTTP |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
+| `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
 | `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
 | `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
@@ -147,6 +157,31 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 - An idle eco program exits, so `Main.elm` keeps a `Time.every` subscription alive. If Elm
   does exit, the host reboots, because PID 1 must not exit.
 
+### Saving the Model
+
+`elm/src/Persist.elm` wraps the program so its Model survives restarts and power cuts. Every Msg
+is appended to a log on the data disk, and now and then (at start, when the log reaches
+256 KB, and before powering off or restarting) the whole Model is written as a snapshot, which
+empties the log. At start the snapshot is loaded and the log replayed through `update`, then
+`Main.resume` drops what belonged to the last boot (screen, network, stats) and keeps what the
+user did. This works because `update` is deterministic: time, input and every answer from the
+host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying is quick.
+
+- **Where:** the GPT partition named "Elm OS data" (ext4): the second partition on the USB stick,
+  and `build/data-qemu.img` in QEMU. `host/init/src/persist.rs` waits up to 5 s for it at start
+  (a USB stick appears a second or two after boot; `ELMOS_DATA_WAIT` on the kernel command line
+  changes that), mounts it at `/data` and tells Elm. Without one, nothing is saved.
+- **Files:** `/data/snapshot` and `/data/log`. Each entry is a line: its length in bytes, its
+  CRC-32, and JSON (`elm/src/Codec.elm`), so a write cut short by a power cut is recognised and
+  ignored, along with anything after it. Log entries are numbered, so entries the snapshot already
+  has are skipped if the power goes between writing the snapshot and emptying the log.
+- **Writes:** the host only appends to and replaces files in `/data`, in the order Elm asks.
+  A snapshot goes to a new file, which is fsynced and renamed over the old one. Appends are
+  fsynced within a second (a USB stick is slow to fsync and wears), so a power cut loses at most
+  the last second.
+- **Changing types:** the snapshot carries a hash of the Model's and Msg's types (their codecs'
+  shape). A build with different types starts afresh rather than misreading the old data.
+
 ## Known limits
 
 - eco targets x86-64-v3 (AVX2): QEMU needs `-cpu max` or KVM, and hardware must be Haswell+.
@@ -154,7 +189,10 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   the CPU renderer. nouveau can't raise an NVIDIA card's clocks, so it runs at its slow boot
   clocks (plenty for this UI); RTX 30 and newer cards draw on the CPU (their firmware is tens of MB).
 - Networking is IPv4 only. Wifi: Intel cards only, no WPA3-only networks, no 802.1X or captive portals, US keyboard layout, and
-  nothing is remembered across reboots.
+  wifi passwords aren't remembered across reboots.
+- Saving: the whole Model is rewritten at each snapshot, so it suits a small Model (the text
+  editor's undo history, up to 500 copies of the text, is in it too). The codecs make `/init`
+  about 2.5 MB bigger, because eco compiles a copy of the generic codec code for each type.
 - Frames are sent as JSON because eco's ports can't carry `Bytes` yet, which costs time on
   large scenes.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and

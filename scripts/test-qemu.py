@@ -13,7 +13,7 @@ is a desktop without wifi: a wired Intel e1000e card, which must get an address.
 --gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
 QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
 """
-import hashlib, http.server, json, os, socket, struct, subprocess, sys, tempfile, threading, time, zlib
+import hashlib, http.server, json, os, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -65,8 +65,11 @@ if usb:
             # Like a desktop: wired Ethernet (Intel, the e1000e driver), and no wifi.
             "-nic", "user,model=e1000e"]
 else:
+    # An empty data disk, so the test starts from Elm OS's first boot (and checks it saves).
+    data_disk = os.path.join(tmp, "data.img")
+    shutil.copy(f"{ROOT}/build/data-empty.img", data_disk)
     boot = ["-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
-            "-nic", "user,model=virtio-net-pci",
+            "-nic", "user,model=virtio-net-pci", "-drive", f"if=virtio,format=raw,file={data_disk}",
             # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
             # puts it on the cursor plane, which screendumps leave out.
             "-append", "console=ttyS0 retain_initrd" + ("" if gpu else " ELMOS_CURSOR=software")
@@ -117,6 +120,8 @@ if not usb:
     if f"sha256 /sys/firmware/initrd {want}" not in open(serial_path, errors="replace").read():
         fail(f"expected the boot image hash {want}")
     print("boot image hash matches build/initramfs-qemu.cpio")
+    wait_for("[persist] mounted /dev/vda1 at /data", timeout=30)
+    print("mounted the data disk")
 else:
     hw_cursor = None  # unknown: on the stick the log goes to the screen
 for _ in range(100):  # QEMU makes the socket a moment after it starts

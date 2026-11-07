@@ -1,5 +1,6 @@
 module TextInputMultiline exposing
-    ( Model
+    ( codec
+    , Model
     , Style
     , init
     , keyMsg
@@ -25,6 +26,7 @@ TextInput's. Lines don't wrap: the box scrolls sideways to keep the cursor in vi
 
 -}
 
+import Codec exposing (Codec)
 import Color
 import Coord exposing (Coord)
 import Keyboard
@@ -621,3 +623,13 @@ view scale style offset hasFocus scroll state =
             )
             visible
         ++ Sprite.toDevice scale (caret ++ scrollBar)
+
+
+{-| For Persist.elm.
+-}
+codec : Codec Model
+codec =
+    Codec.record Model
+        |> Codec.field .input TextInput.codec
+        |> Codec.field .scroll Codec.int
+        |> Codec.buildRecord

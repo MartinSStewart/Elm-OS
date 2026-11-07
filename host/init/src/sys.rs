@@ -24,11 +24,13 @@ pub fn mount_kernel_filesystems() {
     }
 }
 
-/// Restarts, or powers off. Only as PID 1: anywhere else this would be someone's computer.
+/// Restarts, or powers off, once Elm's files are on the data disk. Only as PID 1:
+/// anywhere else this would be someone's computer.
 pub fn reboot(power_off: bool) {
     if !is_pid1() {
         return;
     }
+    crate::persist::shutdown();
     // SAFETY: plain system calls.
     unsafe {
         libc::sync();

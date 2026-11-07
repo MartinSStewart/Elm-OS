@@ -13,6 +13,8 @@
 //!   {"t":"listDir",...}  {"t":"readFiles",...}  {"t":"readBytes",...}  {"t":"sha256",...}
 //!        reading files and devices, answered on fromHost (see files.rs)
 //!   {"t":"writeSys","path":P,"text":T}   writes a kernel setting under /sys (files.rs)
+//!   {"t":"appendFile","path":P,"text":T}  {"t":"writeFile","path":P,"text":T}
+//!        saving files on the data disk (persist.rs)
 //!
 //! eco calls us on Elm's thread, so the callback only queues the JSON and wakes the
 //! host thread, which parses it and acts (host.rs).
@@ -37,6 +39,8 @@ pub enum Effect {
     ReadBytes { path: String, offset: u64, length: usize },
     Sha256 { path: String, length: Option<u64> },
     WriteSys { path: String, text: String },
+    AppendFile { path: String, text: String },
+    WriteFile { path: String, text: String },
 }
 
 struct Inbox {
