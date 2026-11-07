@@ -52,9 +52,10 @@ case "$mode" in
       echo "  rustup target add x86_64-unknown-linux-musl"
       eco_missing=1
     elif command -v rustup >/dev/null 2>&1 &&
-         ! rustup target list --installed 2>/dev/null | grep -qx x86_64-unknown-linux-musl; then
-      echo "Missing: Rust's musl target. Add it with"
-      echo "  rustup target add x86_64-unknown-linux-musl"
+         ! (cd "$(dirname "$0")/../host" && rustup target list --installed 2>/dev/null) | grep -qx x86_64-unknown-linux-musl; then
+      # host/rust-toolchain.toml pins a Rust version, which may not be your default.
+      echo "Missing: Rust's musl target for the Rust version host/ uses. Add it with"
+      echo "  (cd host && rustup target add x86_64-unknown-linux-musl)"
       eco_missing=1
     fi
     if ! command -v "${ECO:-eco}" >/dev/null 2>&1; then
