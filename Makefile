@@ -14,6 +14,9 @@
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
 #   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
+#   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
+#   make check      the tests that don't boot anything: review, review-tests, elm-tests,
+#                   test-wire, protocol-tests (CI runs these, then test and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
 #                   the same commit gives the same bytes on any machine (make docker TARGET=all)
@@ -56,7 +59,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE atlas review review-fix review-tests elm-tests test-wire all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE atlas review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -147,6 +150,7 @@ $(KOUT)/.config: kernel/elmos.config $(BUILD)/kernel-version | $(KERNEL_SRC)/.el
 	$(KMAKE) O=$(abspath $(KOUT)) tinyconfig
 	cd $(KOUT) && $(abspath $(KERNEL_SRC))/scripts/kconfig/merge_config.sh -m -O . .config $(abspath kernel/elmos.config)
 	$(KMAKE) O=$(abspath $(KOUT)) olddefconfig
+	tools/check-kernel-config.sh $@ kernel/elmos.config || { mv $@ $@.rejected; exit 1; }
 
 $(BUILD)/bzImage: $(KOUT)/.config $(BUILD)/source-date
 	$(KMAKE) O=$(abspath $(KOUT)) bzImage
@@ -172,6 +176,7 @@ $(KOUT_USB)/.config: kernel/elmos.config $(BUILD)/usb.config $(BUILD)/kernel-ver
 	cd $(KOUT_USB) && $(abspath $(KERNEL_SRC))/scripts/kconfig/merge_config.sh -m -O . .config \
 	  $(abspath kernel/elmos.config) $(abspath $(BUILD)/usb.config)
 	$(KMAKE) O=$(abspath $(KOUT_USB)) olddefconfig
+	tools/check-kernel-config.sh $@ kernel/elmos.config $(BUILD)/usb.config || { mv $@ $@.rejected; exit 1; }
 
 $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/source-date
 	$(KMAKE) O=$(abspath $(KOUT_USB)) bzImage
@@ -475,7 +480,16 @@ review-tests:
 # They run on the build/wire copy, so they can use the generated encoders and decoders.
 elm-tests: $(BUILD)/wire/.done
 	rm -rf $(BUILD)/wire/tests && cp -r elm/tests $(BUILD)/wire/tests
+	python3 -I tools/protocol-examples.py host/protocol/examples.json $(BUILD)/wire/tests/ProtocolExamples.elm
 	cd $(BUILD)/wire && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+
+# The host's side of the messages between Elm and the host, against the examples in
+# host/protocol/examples.json (elm/tests/ProtocolTest.elm checks the Elm side). Runs on
+# the build machine, not musl: the protocol crate has nothing of eco's.
+protocol-tests:
+	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p protocol --target-dir $(abspath $(BUILD)/cargo-tools)
+
+check: review review-tests elm-tests test-wire protocol-tests
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.

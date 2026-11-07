@@ -7,25 +7,13 @@
 //!   -> {"t":"httpResponse","id":ID,"status":N,"body":B}   any status, 404 included
 //!   -> {"t":"httpError","id":ID,"error":"badUrl"|"timeout"|"network","message":M}
 
-use serde::Deserialize;
-use serde_json::json;
+use protocol::{HttpFailure, ToElm};
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::eco;
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct Request {
-    id: String,
-    method: String,
-    url: String,
-    #[serde(default)]
-    headers: Vec<(String, String)>,
-    #[serde(default)]
-    body: String,
-    timeout_ms: Option<f64>,
-}
+pub use protocol::HttpRequest as Request;
 
 /// Responses bigger than this fail rather than fill the memory.
 const MAX_BODY: u64 = 16 << 20;
@@ -97,16 +85,16 @@ pub fn request(req: Request) {
                         status,
                         body.len()
                     );
-                    json!({"t": "httpResponse", "id": req.id, "status": status, "body": body})
+                    ToElm::HttpResponse { id: req.id.clone(), status, body }
                 }
                 Err(f) => {
                     let (error, message) = match f {
-                        Failure::BadUrl(m) => ("badUrl", m),
-                        Failure::Timeout => ("timeout", "the server took too long".to_owned()),
-                        Failure::Network(m) => ("network", m),
+                        Failure::BadUrl(m) => (HttpFailure::BadUrl, m),
+                        Failure::Timeout => (HttpFailure::Timeout, "the server took too long".to_owned()),
+                        Failure::Network(m) => (HttpFailure::Network, m),
                     };
-                    log!("http", "{} {} failed: {} {}", req.method, req.url, error, message);
-                    json!({"t": "httpError", "id": req.id, "error": error, "message": message})
+                    log!("http", "{} {} failed: {:?} {}", req.method, req.url, error, message);
+                    ToElm::HttpError { id: req.id.clone(), error, message }
                 }
             };
             eco::send(&msg);

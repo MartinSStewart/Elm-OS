@@ -1,5 +1,6 @@
 //! wpa_supplicant's control interface: text commands over a Unix datagram socket.
 
+use protocol::Security;
 use std::os::unix::net::UnixDatagram;
 use std::time::Duration;
 
@@ -74,7 +75,7 @@ pub fn unescape_ssid(s: &str) -> Vec<u8> {
 pub struct Network {
     pub ssid: Vec<u8>,
     pub signal: i32,
-    pub security: &'static str,
+    pub security: Security,
 }
 
 /// SCAN_RESULTS: one network per SSID, strongest first.
@@ -92,17 +93,17 @@ pub fn scan_results(reply: &str) -> Vec<Network> {
             ssid: unescape_ssid(ssid),
             signal: f[2].parse().unwrap_or(-100),
             security: if flags.contains("EAP") {
-                "enterprise"
+                Security::Enterprise
             } else if flags.contains("SAE") && !flags.contains("PSK") {
                 // WPA3 only: our wpa_supplicant has no SAE (built without OpenSSL).
                 // WPA2/WPA3 mixed networks also offer PSK, and work.
-                "wpa3"
+                Security::Wpa3
             } else if flags.contains("WPA") || flags.contains("RSN") {
-                "wpa"
+                Security::Wpa
             } else if flags.contains("WEP") {
-                "wep"
+                Security::Wep
             } else {
-                "open"
+                Security::Open
             },
         };
         if let Some(n) = nets.iter_mut().find(|n| n.ssid == net.ssid) {

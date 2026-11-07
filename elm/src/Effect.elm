@@ -3,6 +3,7 @@ port module Effect exposing
     , HttpError(..)
     , HttpRequest
     , PowerAction(..)
+    , encode
     , fromHost
     , get
     , toCmd
@@ -17,6 +18,10 @@ out on one port, `toHost`, as a JSON list; host/init/src/effects.rs reads them.
 
 The host answers and reports on one port too, `fromHost`: input events, frames,
 wifi, HTTP responses. Main.elm decodes those.
+
+The host's side of both is in host/protocol, as Rust types, with an example of every
+message (host/protocol/examples.json). elm/tests/ProtocolTest.elm checks these encoders
+and the decoders against the same examples, so the two sides can't drift apart.
 
 -}
 
@@ -62,6 +67,9 @@ type Effect
       -- either its old text or the new.
     | AppendFile { path : String, text : String }
     | WriteFile { path : String, text : String }
+      -- A line for the host's log (the serial console), such as why a message from the
+      -- host couldn't be read.
+    | Log String
 
 
 type PowerAction
@@ -175,3 +183,6 @@ encode effect =
 
         WriteFile { path, text } ->
             E.object [ ( "t", E.string "writeFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
+
+        Log text ->
+            E.object [ ( "t", E.string "log" ), ( "text", E.string text ) ]

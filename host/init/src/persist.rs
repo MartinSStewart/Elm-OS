@@ -26,7 +26,7 @@
 //! written until the next boot, so what is on the disk stays a consistent earlier
 //! state rather than, say, a log emptied after its snapshot failed.
 
-use serde_json::json;
+use protocol::ToElm;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -63,7 +63,7 @@ pub fn start() {
                 *queue().lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                 rx
             });
-            eco::send(&json!({"t": "dataDisk", "path": mounted.then_some(MOUNT_POINT)}));
+            eco::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()) });
             if let Some(rx) = rx {
                 Writer::default().run(rx);
             }
@@ -260,6 +260,10 @@ impl Writer {
             if let Err(err) = f.sync_data() {
                 log!("persist", "fsync {}: {err}; not writing to the data disk again until the next boot", path.display());
                 self.failed = true;
+            } else if crate::sys::debug() {
+                // scripts/test-persist.py reads this: everything up to here survives a power cut.
+                let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
+                log!("persist", "synced {} ({bytes} bytes)", path.display());
             }
         }
         self.sync_due = None;

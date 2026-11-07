@@ -49,8 +49,16 @@ make test         # headless boot test, saves build/screenshot.png
 make test-gpu     # the same test on the GPU
 make test-persist # power cuts and a restart: the Model must come back
 make test-wire    # the encoder/decoder generator (tools/wire) on every kind of type
+make check        # every test that doesn't boot: elm-review, Elm unit tests, test-wire, protocol
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
+
+CI (`.github/workflows/boot-test.yml`) runs `make`, `make check`, `make test` and
+`make test-persist` on every push.
+
+The kernel is `make tinyconfig` plus `kernel/elmos.config`. The build fails if any option
+there didn't make it into the kernel's config (its dependencies are off, or a newer kernel
+renamed it), rather than leaving a driver out without saying so.
 
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
 wifi network to join: **Elm OS test network**, password `elmos-wifi`. `make run` keeps what Elm
@@ -132,6 +140,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
 | `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
+| `host/protocol/` | Every message between Elm and the host as Rust types, with an example of each (`examples.json`) that both sides are tested against |
 | `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
 | `versions.mk` | Pinned kernel and hostap versions, updated by `make refresh` |
 | `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig` |
@@ -146,6 +155,10 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   certificates against Mozilla's CA list compiled in from `webpki-roots`, so there is no
   OpenSSL, libcurl or CA bundle in the image. eco's runtime still references libcurl, so the
   host provides stubs that fail cleanly.
+- Both sides of those messages are written by hand, so `host/protocol/examples.json` has
+  an example of every one, in both directions. `cargo test -p protocol` checks the host reads
+  and writes exactly those, and `elm/tests/ProtocolTest.elm` that Elm does. A host message
+  Elm can't read is logged (`[elm] couldn't read a message from the host: ...`) and dropped.
 - Mesa's drivers are shared libraries and `/init` is static, so `/init` pipes each frame to
   `elmos-gpu`, a small dynamically linked program. If that fails or finds only a software
   driver, `/init` draws on the CPU instead. Mesa comes prebuilt from Alpine Linux.

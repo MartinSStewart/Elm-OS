@@ -15,33 +15,18 @@
 //!   {"t":"writeSys","path":P,"text":T}   writes a kernel setting under /sys (files.rs)
 //!   {"t":"appendFile","path":P,"text":T}  {"t":"writeFile","path":P,"text":T}
 //!        saving files on the data disk (persist.rs)
+//!   {"t":"log","text":T}   a line for the log, such as a message from the host Elm couldn't read
+//!
+//! The types are in host/protocol, with an example of each message that both sides are
+//! tested against.
 //!
 //! eco calls us on Elm's thread, so the callback only queues the JSON and wakes the
 //! host thread, which parses it and acts (host.rs).
 
-use serde::Deserialize;
 use std::sync::{Mutex, OnceLock};
 
 use crate::sys::Waker;
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "t", rename_all = "camelCase")]
-pub enum Effect {
-    Render { tris: Vec<f64> },
-    Cursor { rgba: f64 },
-    WifiScan,
-    WifiConnect { ssid: String, password: String },
-    WifiDisconnect,
-    Power { action: String },
-    Http(crate::http::Request),
-    ListDir { path: String },
-    ReadFiles { id: String, paths: Vec<String> },
-    ReadBytes { path: String, offset: u64, length: usize },
-    Sha256 { path: String, length: Option<u64> },
-    WriteSys { path: String, text: String },
-    AppendFile { path: String, text: String },
-    WriteFile { path: String, text: String },
-}
+pub use protocol::Effect;
 
 struct Inbox {
     queue: Mutex<Vec<String>>,
@@ -60,7 +45,8 @@ pub fn start() {
     inbox();
     crate::eco::subscribe(c"toHost", |json| {
         if crate::sys::debug() {
-            log!("host", "toHost {}", json);
+            // Not all of it: every frame sends thousands of numbers.
+            log!("host", "toHost {:.300}", json);
         }
         inbox()
             .queue
@@ -82,8 +68,15 @@ pub fn take() -> Vec<Effect> {
     let batches = std::mem::take(&mut *inbox().queue.lock().unwrap_or_else(|e| e.into_inner()));
     let mut effects = Vec::new();
     for json in batches {
-        match serde_json::from_str::<Vec<Effect>>(&json) {
-            Ok(list) => effects.extend(list),
+        match protocol::read_effects(&json) {
+            Ok(list) => {
+                for effect in list {
+                    match effect {
+                        Ok(effect) => effects.push(effect),
+                        Err(e) => log!("host", "couldn't read Elm's effect ({e})"),
+                    }
+                }
+            }
             Err(e) => log!("host", "couldn't read Elm's effects ({e}): {:.200}", json),
         }
     }

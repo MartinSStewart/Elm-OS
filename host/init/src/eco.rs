@@ -23,8 +23,8 @@ pub fn try_send(json: &str) -> bool {
 }
 
 /// Sends one message on `fromHost`, waiting up to 5 seconds for Elm to start.
-pub fn send(msg: &serde_json::Value) {
-    let json = msg.to_string();
+pub fn send(msg: &protocol::ToElm) {
+    let json = msg.to_json();
     for _ in 0..5000 {
         if try_send(&json) {
             if crate::sys::debug() && !json.starts_with("{\"t\":\"frame\"") {

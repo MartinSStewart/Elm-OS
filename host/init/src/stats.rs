@@ -8,7 +8,7 @@
 //! GPU time, how long Elm took to answer a frame, and how long /init took to draw it
 //! (CPU) or pass it on (GPU).
 
-use serde_json::json;
+use protocol::ToElm;
 
 use crate::sys;
 
@@ -133,12 +133,18 @@ impl Stats {
         let cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
         let round = |x: f64| (x * 10.0).round() / 10.0;
         let ms = |x: f64| (x * 1000.0).round() / 1000.0;
-        eco::send(&json!({
-            "t": "stats", "cores": cores,
-            "cpuElm": round(elm_cpu), "cpuHost": round(host_cpu), "cpuGpu": round(gpu_cpu), "cpu": round(self.cpu_load()),
-            "memUsed": (total_kb - avail_kb) / 1024, "memTotal": total_kb / 1024,
-            "gpuMs": ms(gpu_ms), "elmMs": ms(elm_ms), "drawMs": ms(draw_ms),
-        }));
+        eco::send(&ToElm::Stats {
+            cores: cores as i64,
+            cpu: round(self.cpu_load()),
+            cpu_elm: round(elm_cpu),
+            cpu_host: round(host_cpu),
+            cpu_gpu: round(gpu_cpu),
+            mem_used: (total_kb - avail_kb) / 1024,
+            mem_total: total_kb / 1024,
+            gpu_ms: ms(gpu_ms),
+            elm_ms: ms(elm_ms),
+            draw_ms: ms(draw_ms),
+        });
     }
 }
 

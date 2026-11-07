@@ -2,8 +2,8 @@
 host/init/src/persist.rs), in QEMU, on a copy of build/data-empty.img.
 
   1. Boot, open the text editor and type "hello", open the calculator and work out
-     6 * 7. Wait two seconds (the log is fsynced within one), then kill QEMU: a power
-     cut. Check every entry on the disk has the right length and CRC-32 (so Elm's
+     6 * 7. Once the screen shows it, wait for the host to say it has fsynced the log,
+     then kill QEMU: a power cut. Check every entry on the disk has the right length and CRC-32 (so Elm's
      CRC-32, compiled by eco, matches zlib's).
   2. Add half an entry to the end of the log, as a write cut short by the power would
      leave it. Boot: the screen must show the editor and calculator as they were, and
@@ -13,11 +13,19 @@ host/init/src/persist.rs), in QEMU, on a copy of build/data-empty.img.
      before the restart, so the log is empty afterwards.
   4. Power cuts at random moments while typing, a few times over: every boot must
      come back, with the editor's text one of the texts it had, never something else,
-     and with everything typed more than a second and a half before the cut.
+     and the log on the disk must have everything the host said it had fsynced.
+
+The kernel's console messages are turned down (loglevel=4): the host's log lines and
+the kernel's share the serial port, and a kernel line could land in the middle of one
+the test waits for.
+
+The host says when it has fsynced the log ("[persist] synced /data/log (N bytes)",
+with ELMOS_DEBUG=1), so the test waits for that rather than for a time: QEMU without
+KVM can take seconds to get round to a key press.
 
     python3 scripts/test-persist.py      (make test-persist)
 """
-import json, os, random, shutil, socket, struct, subprocess, sys, tempfile, time, zlib
+import json, os, random, re, shutil, socket, struct, subprocess, sys, tempfile, time, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -63,7 +71,7 @@ def boot():
         ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
          "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
          "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "none",
-         "-append", "console=ttyS0 ELMOS_CURSOR=software ELMOS_DEBUG=1",
+         "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1",
          "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
          "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
          "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
@@ -90,6 +98,26 @@ def cmd(name, **args):
             if "error" in r:
                 fail(f"QMP {name}: {r['error']}")
             return r["return"]
+
+
+def wait_for_syncs(count=2, timeout=60):
+    """Waits until the host has fsynced the log `count` times from now. Everything Elm
+    wrote before now is on the disk after the first, unless the writing thread was
+    behind; the second makes sure."""
+    start = len(serial())
+    end = time.time() + timeout
+    while serial()[start:].count("[persist] synced /data/log") < count:
+        if time.time() > end:
+            fail("the host didn't say it fsynced the log")
+        if qemu.poll() is not None:
+            fail("QEMU exited while waiting for the log to be fsynced")
+        time.sleep(0.2)
+
+
+def synced_log_bytes():
+    """How long the host last said the log was when it fsynced it, or emptied it."""
+    found = re.findall(r"\[persist\] (?:synced|wrote) /data/log \((\d+) bytes\)", serial())
+    return int(found[-1]) if found else 0
 
 
 def power_cut():
@@ -225,6 +253,8 @@ CALC = (18 * s, 84 * s, 210 * s, 140 * s)  # the calculator's display
 EDITOR = (w // 2 - 200 * s, h // 2 - 100 * s, w // 2 + 200 * s, h // 2 + 100 * s)
 if region(typed, *CALC) == region(before, *CALC) or region(typed, *EDITOR) == region(before, *EDITOR):
     fail("typing changed nothing on screen (build/persist-before.png)")
+# The screen shows it, so Elm has handled the keys and asked for them to be logged.
+wait_for_syncs()
 power_cut()
 print("power cut after typing")
 
@@ -249,6 +279,7 @@ if region(restored, *CALC) != region(typed, *CALC):
 if region(restored, *EDITOR) != region(typed, *EDITOR):
     fail("the text editor didn't come back (build/persist-before.png, persist-after.png)")
 print("after the power cut, the editor and calculator are back as they were")
+wait_for("[persist] wrote /data/snapshot")
 power_cut()
 snap = snapshot_text()
 if editor_text(snap) != "hello":
@@ -295,21 +326,22 @@ for round in range(int(os.environ.get("ROUNDS", 3))):
     cmd("send-key", keys=[{"type": "qcode", "data": "end"}])
     durable = texts[-1]
     text = texts[-1]
-    typed_at = []
     for ch in "".join(random.choice("abcdefgh ") for _ in range(random.randint(3, 12))):
         type_text(ch, pause=random.uniform(0.05, 0.5))
         text += ch
         texts.append(text)
-        typed_at.append((time.time(), text))
     time.sleep(random.uniform(0, 1.5))
-    cut = time.time()
     power_cut()
-    durable = max([t for at, t in typed_at if at < cut - 1.5] + [durable], key=len)
+    synced = synced_log_bytes()
+    on_disk = disk_file("log") or b""
+    if len(on_disk) < synced:
+        fail(f"the host said it had fsynced {synced} bytes of the log, but the disk has {len(on_disk)}")
+    entries(on_disk[:synced], "log")  # and what it fsynced is whole
     boot()
-    time.sleep(2)
+    wait_for("[persist] wrote /data/snapshot")  # the one taken at start, once the log is replayed
     power_cut()
     got = editor_text(snapshot_text())
-    print(f"round {round + 1}: typed {text!r}, after the power cut {got!r}")
+    print(f"round {round + 1}: typed {text!r}, after the power cut {got!r} ({synced} bytes of the log were fsynced)")
     if got not in texts or len(got) < len(durable):
         fail(f"expected one of the texts it had, at least {durable!r}")
     texts = texts[:texts.index(got) + 1]

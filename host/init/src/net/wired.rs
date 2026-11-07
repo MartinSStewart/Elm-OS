@@ -11,7 +11,7 @@
 //!   {"t":"wired","links":[{"name":"eth0","state":"noCable"|"dhcp"|"connected"|"failed","ip":"a.b.c.d"}, ...]}
 //! "links" is empty on a computer without a wired card.
 
-use serde_json::json;
+use protocol::{ToElm, WiredLink, WiredState};
 use std::time::Duration;
 
 use super::{dhcp, iface};
@@ -42,15 +42,15 @@ fn send(links: &[Link]) {
         .iter()
         .map(|l| {
             let state = match l.state {
-                State::NoCable => "noCable",
-                State::Dhcp => "dhcp",
-                State::Connected => "connected",
-                State::Failed => "failed",
+                State::NoCable => WiredState::NoCable,
+                State::Dhcp => WiredState::Dhcp,
+                State::Connected => WiredState::Connected,
+                State::Failed => WiredState::Failed,
             };
-            json!({"name": l.name, "state": state, "ip": l.ip})
+            WiredLink { name: l.name.clone(), state, ip: l.ip.clone() }
         })
         .collect();
-    eco::send(&json!({"t": "wired", "links": links}));
+    eco::send(&ToElm::Wired { links });
 }
 
 /// Gets (or renews) an address on `link`. Blocks for up to about 20 seconds.

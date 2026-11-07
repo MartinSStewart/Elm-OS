@@ -1,5 +1,9 @@
 module BootInfo exposing
-    ( Input(..)
+    ( Battery
+    , BootTimes
+    , Clock
+    , Image
+    , Input(..)
     , Model
     , batteryText
     , bootRows
@@ -309,7 +313,7 @@ update input model =
                         |> List.filter (\( path, _ ) -> String.endsWith name path)
                         |> List.filterMap Tuple.second
                         |> List.head
-                        |> Maybe.andThen (String.trim >> String.toFloat)
+                        |> Maybe.andThen (\line -> String.toFloat (String.trim line))
             in
             -- The kernel starts at the end of ExitBootServices, which the EFI stub
             -- calls just before it runs.
@@ -444,7 +448,7 @@ battery files =
                     case ( value, List.reverse (String.split "/" path) ) of
                         ( Just v, attr :: name :: _ ) ->
                             Dict.update name
-                                (Maybe.withDefault Dict.empty >> Dict.insert attr (String.trim v) >> Just)
+                                (\attrs -> Just (Dict.insert attr (String.trim v) (Maybe.withDefault Dict.empty attrs)))
                                 acc
 
                         _ ->
@@ -505,7 +509,7 @@ battery files =
 
         status =
             batteries
-                |> List.map (Dict.get "status" >> Maybe.withDefault "")
+                |> List.map (\supply -> Dict.get "status" supply |> Maybe.withDefault "")
                 |> List.foldl
                     (\s best ->
                         if rank s > rank best then

@@ -72,7 +72,7 @@ else:
             "-nic", "user,model=virtio-net-pci", "-drive", f"if=virtio,format=raw,file={data_disk}",
             # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
             # puts it on the cursor plane, which screendumps leave out.
-            "-append", "console=ttyS0 retain_initrd" + ("" if gpu else " ELMOS_CURSOR=software")
+            "-append", "console=ttyS0 loglevel=4 retain_initrd" + ("" if gpu else " ELMOS_CURSOR=software")
             + f" ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci"]
 qemu = subprocess.Popen(

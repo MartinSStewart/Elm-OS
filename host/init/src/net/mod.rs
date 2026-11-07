@@ -36,7 +36,7 @@ mod iface;
 mod wired;
 mod wpa;
 
-use serde_json::json;
+use protocol::{ToElm, WifiNetwork, WifiState};
 use std::net::Ipv4Addr;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixDatagram;
@@ -98,13 +98,13 @@ enum State {
 }
 
 impl State {
-    fn name(self) -> &'static str {
+    fn name(self) -> WifiState {
         match self {
-            State::Idle => "idle",
-            State::Connecting => "connecting",
-            State::Dhcp => "dhcp",
-            State::Connected => "connected",
-            State::Failed => "failed",
+            State::Idle => WifiState::Idle,
+            State::Connecting => WifiState::Connecting,
+            State::Dhcp => WifiState::Dhcp,
+            State::Connected => WifiState::Connected,
+            State::Failed => WifiState::Failed,
         }
     }
 }
@@ -136,9 +136,12 @@ impl Net {
             (Some(l), State::Connected) => l.ip.map(|i| i.to_string()).unwrap_or_default(),
             _ => String::new(),
         };
-        eco::send(
-            &json!({"t": "wifiStatus", "state": self.state.name(), "ssid": self.want_ssid, "ip": ip, "error": self.error}),
-        );
+        eco::send(&ToElm::WifiStatus {
+            state: self.state.name(),
+            ssid: self.want_ssid.clone(),
+            ip,
+            error: self.error.clone(),
+        });
     }
 
     fn set_state(&mut self, s: State, error: &str) {
@@ -150,9 +153,9 @@ impl Net {
     fn send_scan_results(&self) {
         let nets: Vec<_> = wpa::scan_results(&self.wpa("SCAN_RESULTS"))
             .into_iter()
-            .map(|n| json!({"ssid": String::from_utf8_lossy(&n.ssid), "signal": n.signal, "security": n.security}))
+            .map(|n| WifiNetwork { ssid: String::from_utf8_lossy(&n.ssid).into_owned(), signal: n.signal, security: n.security })
             .collect();
-        eco::send(&json!({"t": "wifiScan", "networks": nets}));
+        eco::send(&ToElm::WifiScan { networks: nets });
     }
 
     fn scan(&mut self) {
@@ -330,7 +333,7 @@ fn check_dns() {
 }
 
 fn send_device(iface: Option<&str>) {
-    eco::send(&json!({"t": "wifiDevice", "name": iface}));
+    eco::send(&ToElm::WifiDevice { name: iface.map(str::to_owned) });
 }
 
 fn send_config() {
@@ -339,7 +342,7 @@ fn send_config() {
     if geo.is_none() && weather.is_none() {
         return;
     }
-    eco::send(&json!({"t": "netConfig", "geoUrl": geo.unwrap_or_default(), "weatherUrl": weather.unwrap_or_default()}));
+    eco::send(&ToElm::NetConfig { geo_url: geo.unwrap_or_default(), weather_url: weather.unwrap_or_default() });
 }
 
 /// Bridges QEMU's Ethernet card with the simulated access point and starts hostapd on

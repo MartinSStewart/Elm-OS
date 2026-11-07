@@ -13,7 +13,7 @@
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
 
-use serde_json::json;
+use protocol::ToElm;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::AsRawFd;
@@ -159,7 +159,7 @@ impl Device {
 }
 
 fn send_button(b: i32, down: bool) {
-    eco::send(&json!({"t": "button", "b": b, "down": down}));
+    eco::send(&ToElm::Button { b, down });
 }
 
 pub struct Inputs {
@@ -298,7 +298,7 @@ impl Inputs {
                     *moved = true;
                 }
                 if ev.code == REL_WHEEL && ev.value != 0 {
-                    eco::send(&json!({"t": "wheel", "dy": ev.value}));
+                    eco::send(&ToElm::Wheel { dy: ev.value });
                 }
             }
             EV_ABS if touchpad => {
@@ -322,7 +322,7 @@ impl Inputs {
             EV_KEY if ev.value == 2 => {
                 // autorepeat: for typing
                 if ev.code < BTN_MISC && ev.code != KEY_POWER {
-                    eco::send(&json!({"t": "key", "code": ev.code, "down": true, "repeat": true}));
+                    eco::send(&ToElm::Key { code: ev.code, down: true, repeat: true });
                 }
             }
             EV_KEY => {
@@ -384,7 +384,7 @@ impl Inputs {
                         sys::reboot(true);
                     }
                 } else if ev.code < BTN_MISC {
-                    eco::send(&json!({"t": "key", "code": ev.code, "down": down}));
+                    eco::send(&ToElm::Key { code: ev.code, down, repeat: false });
                 }
             }
             _ => {}

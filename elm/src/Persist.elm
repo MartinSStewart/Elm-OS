@@ -6,6 +6,7 @@ module Persist exposing
     , appModel
     , crc32
     , frame
+    , fromHost
     , init
     , program
     , restore
@@ -142,15 +143,7 @@ init =
 subscriptions : Config model msg -> Model model msg -> Sub (Msg msg)
 subscriptions config model =
     Sub.batch
-        [ Effect.fromHost
-            (\json ->
-                case D.decodeValue hostMessage json of
-                    Ok msg ->
-                        msg
-
-                    Err _ ->
-                        AppMsg (config.fromHost json)
-            )
+        [ Effect.fromHost (fromHost config)
         , case model of
             Running app _ ->
                 Sub.map AppMsg (config.subscriptions app)
@@ -158,6 +151,18 @@ subscriptions config model =
             _ ->
                 Sub.map AppMsg (config.subscriptions config.init)
         ]
+
+
+{-| A message from the host: ours (the data disk and its files), or the program's.
+-}
+fromHost : Config model msg -> D.Value -> Msg msg
+fromHost config json =
+    case D.decodeValue hostMessage json of
+        Ok msg ->
+            msg
+
+        Err _ ->
+            AppMsg (config.fromHost json)
 
 
 {-| The host's messages that are for us rather than the program.

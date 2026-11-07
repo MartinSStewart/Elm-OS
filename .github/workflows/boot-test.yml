@@ -1,12 +1,14 @@
-name: Boot test
+name: Tests
 
+# Every push, on every branch (work happens on feature branches, not only in pull
+# requests), and by hand from the Actions tab.
 on:
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
-  boot:
+  test:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -14,7 +16,14 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools qemu-system-x86 cpio flex bison bc libelf-dev libssl-dev rsync
+          sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils cpio flex bison bc \
+            libelf-dev libssl-dev rsync e2fsprogs dosfstools mtools fdisk procps
+          # The runner's KVM, so QEMU isn't emulating the CPU (the tests use it if they can).
+          sudo chmod 666 /dev/kvm || true
+
+      - name: Install Rust's musl target
+        # host/rust-toolchain.toml picks the Rust version; add the target to that one.
+        run: cd host && rustup target add x86_64-unknown-linux-musl
 
       - name: Install eco
         run: |
@@ -22,23 +31,30 @@ jobs:
           sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
           echo /opt/eco/bin >> "$GITHUB_PATH"
 
-      - name: Cache kernel tree
+      - name: Cache the kernel tree
         uses: actions/cache@v4
         with:
           path: linux
-          key: linux-v6.12-${{ hashFiles('kernel/elmos.config') }}
+          # versions.mk pins the kernel version, so a new kernel gets a new cache.
+          key: linux-${{ hashFiles('versions.mk') }}
 
       - name: Build
         run: |
           make kernel-src
           make
 
+      - name: Tests that don't boot (review, Elm, tools/wire, host protocol)
+        run: make check
+
       - name: Boot in QEMU and check the screen
         run: make test
+
+      - name: Power cuts and restarts keep the Model
+        run: make test-persist
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: screenshot
-          path: build/screenshot.png
+          name: screenshots
+          path: build/*.png
           if-no-files-found: ignore

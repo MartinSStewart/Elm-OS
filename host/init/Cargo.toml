@@ -10,9 +10,8 @@ path = "src/lib.rs"
 
 [dependencies]
 common = { path = "../common" }
+protocol = { path = "../protocol" }
 libc = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 # HTTPS for Elm's requests: rustls (with ring for the crypto) and Mozilla's CA list
 # compiled in (webpki-roots), so no OpenSSL and no certificate files. `make refresh`
 # updates these with `cargo update`.

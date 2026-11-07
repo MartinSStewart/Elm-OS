@@ -14,7 +14,7 @@
 //!   -> {"t":"sha256","path":P,"hex":HEX}   of the first N bytes (all of P if null);
 //!      null if P is shorter or can't be read
 
-use serde_json::{json, Value};
+use protocol::ToElm;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::io::AsRawFd;
@@ -56,7 +56,7 @@ pub fn request(req: Request) {
         .expect("start a files thread");
 }
 
-fn answer(req: Request) -> Value {
+fn answer(req: Request) -> ToElm {
     match req {
         Request::ListDir { path } => {
             let entries = std::fs::read_dir(&path).ok().map(|dir| {
@@ -65,17 +65,17 @@ fn answer(req: Request) -> Value {
                 names.sort();
                 names
             });
-            json!({"t": "dir", "path": path, "entries": entries})
+            ToElm::Dir { path, entries }
         }
         Request::ReadFiles { id, paths } => {
-            let files: Vec<Value> = paths
+            let files = paths
                 .into_iter()
                 .map(|p| {
                     let text = std::fs::read(&p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
-                    json!([p, text])
+                    (p, text)
                 })
                 .collect();
-            json!({"t": "files", "id": id, "files": files})
+            ToElm::Files { id, files }
         }
         Request::ReadBytes { path, offset, length } => {
             let read = || -> Option<String> {
@@ -85,7 +85,7 @@ fn answer(req: Request) -> Value {
                 f.read_exact(&mut buf).ok()?;
                 Some(hex(&buf))
             };
-            json!({"t": "bytes", "path": path, "offset": offset, "hex": read()})
+            ToElm::Bytes { hex: read(), path, offset }
         }
         Request::Sha256 { path, length } => {
             let sha = File::open(&path).ok().and_then(|f| sha256(f, length));
@@ -93,7 +93,7 @@ fn answer(req: Request) -> Value {
                 Some(h) => log!("files", "sha256 {} {}", path, h),
                 None => log!("files", "sha256 {}: can't read it", path),
             }
-            json!({"t": "sha256", "path": path, "hex": sha})
+            ToElm::Sha256 { path, hex: sha }
         }
     }
 }

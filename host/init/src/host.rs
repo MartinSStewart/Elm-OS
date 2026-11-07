@@ -21,7 +21,7 @@
 //!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
 use common::atlas::{self, Tri};
-use serde_json::json;
+use protocol::{PowerAction, ToElm};
 use std::time::Duration;
 
 use crate::display::CpuDisplay;
@@ -103,7 +103,7 @@ impl Host {
             Renderer::Gpu(g) => (true, g.name.as_str()),
             _ => (false, "rasteriser in /init"),
         };
-        eco::send(&json!({"t": "renderer", "gpu": gpu, "name": name, "hardwareCursor": self.hw_cursor}));
+        eco::send(&ToElm::Renderer { gpu, name: name.to_owned(), hardware_cursor: self.hw_cursor });
     }
 
     fn gpu_pid(&self) -> Option<u32> {
@@ -144,7 +144,7 @@ impl Host {
     fn ask_for_frame(&mut self) {
         self.asked_at = now();
         let ms = (self.asked_at * 1e6).round() / 1000.0;
-        eco::send(&json!({"t": "frame", "time": ms}));
+        eco::send(&ToElm::Frame { time: ms });
         self.awaiting_render = true;
         self.cpu_next_at = None;
     }
@@ -212,7 +212,7 @@ impl Host {
                 Effect::WifiConnect { ssid, password } => net::command(net::Command::Connect { ssid, password }),
                 Effect::WifiDisconnect => net::command(net::Command::Disconnect),
                 Effect::Power { action } => {
-                    let restart = action == "restart";
+                    let restart = action == PowerAction::Restart;
                     if sys::is_pid1() {
                         log!(
                             "host",
@@ -232,6 +232,7 @@ impl Host {
                 Effect::WriteSys { path, text } => files::write_sys(path, text),
                 Effect::AppendFile { path, text } => persist::append_file(path, text),
                 Effect::WriteFile { path, text } => persist::write_file(path, text),
+                Effect::Log { text } => log!("elm", "{}", text),
             }
         }
         if cursor_dirty {
@@ -256,7 +257,7 @@ fn send_boot_times(elm_at: f64) {
     let (init, frame) = (crate::init_started_at(), now());
     log!("boot", "first frame {frame:.2} s after the kernel started (/init {init:.2} s, Elm {elm_at:.2} s)");
     let ms = |s: f64| (s * 1000.0).round();
-    eco::send(&json!({"t": "boot", "initMs": ms(init), "elmMs": ms(elm_at), "frameMs": ms(frame)}));
+    eco::send(&ToElm::Boot { init_ms: ms(init), elm_ms: ms(elm_at), frame_ms: ms(frame) });
 }
 
 /// For Elm's about page: the kernel, the CPU, and which commit this is.
@@ -277,12 +278,11 @@ fn send_system() {
                 .map(|(_, v)| v.trim().to_owned())
         })
         .unwrap_or_else(|| "unknown".into());
-    eco::send(&json!({
-        "t": "system",
-        "kernel": format!("{} {}", field(&u.sysname), field(&u.release)),
-        "cpu": cpu,
-        "commit": option_env!("ELMOS_COMMIT").unwrap_or("unknown"),
-    }));
+    eco::send(&ToElm::System {
+        kernel: format!("{} {}", field(&u.sysname), field(&u.release)),
+        cpu,
+        commit: option_env!("ELMOS_COMMIT").unwrap_or("unknown").to_owned(),
+    });
 }
 
 pub fn run() {
@@ -328,7 +328,7 @@ pub fn run() {
     host.cursor_redraw();
 
     // Ports are registered once Elm starts; retry until it accepts.
-    let screen = json!({"t": "screen", "w": host.w, "h": host.h}).to_string();
+    let screen = ToElm::Screen { w: host.w, h: host.h }.to_json();
     while !eco::try_send(&screen) {
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -417,7 +417,7 @@ pub fn run() {
         }
         if moved {
             host.cursor_move();
-            eco::send(&json!({"t": "mouse", "x": host.inputs.mouse_x, "y": host.inputs.mouse_y}));
+            eco::send(&ToElm::Mouse { x: host.inputs.mouse_x, y: host.inputs.mouse_y });
         }
     }
 }
