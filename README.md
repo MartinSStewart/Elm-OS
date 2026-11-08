@@ -266,6 +266,28 @@ first, so a failing build isn't retried). Fetching new builds from CI comes late
 only be switched away from if it knows `switching`: those from before this change don't.
 `make test-switch` checks a switch, and going back from a build that fails.
 
+### Published builds and the `deployed` branch
+
+CI (`.github/workflows/boot-test.yml`) builds and tests every push. For each commit on `main`
+that passes, it publishes a release, `build-<first 12 digits of the commit>`, with the Elm
+program (`elm`) and `manifest.json` (`make release`, `tools/release.sh`):
+
+    {"commit": ..., "hostVersion": ..., "modelVersion": 2, "elmSha256": ...}
+
+and then moves the `deployed` branch to that commit (only forwards: a slower run for an older
+commit leaves it alone). Computers running Elm OS will follow `deployed` (not built yet): when
+it moves, download the release's `elm` and switch to it. `main` itself is never held back,
+since there are no pull requests; `deployed` is what has passed.
+
+`hostVersion` is a SHA-256 of everything on the computer's side of Elm OS (the host, kernel
+options, pinned versions; `tools/host-version.sh`), also in the initramfs as
+`/etc/elmos/host-version`. A computer can only switch to a build with its own host version;
+a commit that changes the host needs the USB stick flashed again.
+
+To roll back a bad build, move `deployed` back yourself:
+`git push --force origin <good commit>:deployed`. The next commit on `main` that passes moves it
+forwards again.
+
 ### Encoders and decoders (tools/wire)
 
 Nobody writes the code that turns the Model and Msgs into JSON and back: `tools/wire` writes it

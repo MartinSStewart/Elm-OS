@@ -21,9 +21,12 @@
 //!            sha256), persist.rs (dataDisk), net/ (wifi*, netConfig) and
 //!            http.rs (httpResponse, httpError).
 
+/// One line on stderr (the serial console), written with one write, so that a line
+/// another process (the Elm program, wpa_supplicant) writes meanwhile can't land in
+/// the middle of it: the tests look for whole lines.
 macro_rules! log {
     ($tag:literal, $($arg:tt)*) => {
-        eprintln!(concat!("[", $tag, "] {}"), format_args!($($arg)*))
+        $crate::sys::log_line(&format!(concat!("[", $tag, "] {}\n"), format_args!($($arg)*)))
     };
 }
 

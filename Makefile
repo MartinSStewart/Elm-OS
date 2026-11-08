@@ -87,7 +87,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE eco atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch measure-frames
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch release measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -294,7 +294,16 @@ $(BUILD)/commit: FORCE
 	@mkdir -p $(BUILD); c=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
 	  echo "$$c" | cmp -s - $@ || echo "$$c" > $@
 
-# The host is Rust (host/): a static library linked into /init, and elmos-gpu.
+# Which Elm program builds this host can switch to (tools/host-version.sh).
+$(BUILD)/host-version: FORCE
+	@mkdir -p $(BUILD); v=$$(tools/host-version.sh); echo "$$v" | cmp -s - $@ || echo "$$v" > $@
+
+# What CI publishes for each commit on main (tools/release.sh): the Elm program and
+# its manifest, in build/release.
+release: $(BUILD)/elm $(BUILD)/host-version
+	tools/release.sh
+
+# The host is Rust (host/): /init, and elmos-gpu.
 # Both build for musl and x86-64-v3 (AVX2), like eco's output. ring (rustls's
 # crypto) has some C and
 # assembly, which cargo compiles with musl-gcc.
@@ -413,12 +422,13 @@ $(BUILD)/eco-setting: FORCE
 	@mkdir -p $(BUILD); s="$(ECO_BIN) $$($(ECO) --version)"; \
 	  echo "$$s" | cmp -s - $@ || { rm -rf $(BUILD)/wire/eco-stuff $(BUILD)/wire-test/eco-stuff tools/wire/eco-stuff elm/eco-stuff; echo "$$s" > $@; }
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos
 	cp $(BUILD)/init $(BUILD)/rootfs/init
 	mkdir -p $(BUILD)/rootfs/usr/lib/elmos
 	cp $(BUILD)/elm $(BUILD)/rootfs/usr/lib/elmos/elm
 	cp $(BUILD)/commit $(BUILD)/rootfs/etc/elmos/commit
+	cp $(BUILD)/host-version $(BUILD)/rootfs/etc/elmos/host-version
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/

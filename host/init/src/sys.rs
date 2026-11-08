@@ -107,3 +107,16 @@ pub fn until(due: f64) -> Duration {
 pub fn since(t: Instant) -> f64 {
     t.elapsed().as_secs_f64()
 }
+
+/// Writes a whole line to stderr in one write(2) (see `log!`).
+pub fn log_line(line: &str) {
+    let mut rest = line.as_bytes();
+    while !rest.is_empty() {
+        // SAFETY: writes from a valid buffer.
+        let n = unsafe { libc::write(2, rest.as_ptr() as *const libc::c_void, rest.len()) };
+        if n <= 0 {
+            return;
+        }
+        rest = &rest[n as usize..];
+    }
+}

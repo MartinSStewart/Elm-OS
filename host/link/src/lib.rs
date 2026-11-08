@@ -27,10 +27,16 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+/// One line on stderr in one write, so it can't be split by the host's lines.
 macro_rules! log {
     ($($arg:tt)*) => {
-        eprintln!("[elm] {}", format_args!($($arg)*))
+        $crate::log_line(&format!("[elm] {}\n", format_args!($($arg)*)))
     };
+}
+
+pub(crate) fn log_line(line: &str) {
+    // SAFETY: writes from a valid buffer; a short write only cuts the line.
+    unsafe { libc::write(2, line.as_ptr() as *const c_void, line.len()) };
 }
 pub(crate) use log;
 
