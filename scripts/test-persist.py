@@ -304,7 +304,10 @@ while True:
         save_png(shot, f"{ROOT}/build/screenshot.png")
         fail("no Yes button after Restart (build/screenshot.png)")
     time.sleep(1)
-click(yes[len(yes) // 2], 22 * s)
+try:
+    click(yes[len(yes) // 2], 22 * s)
+except OSError:
+    pass  # with KVM, Elm can restart (and QEMU exit) before the button comes back up
 try:
     qemu.wait(timeout=30)
 except subprocess.TimeoutExpired:
