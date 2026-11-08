@@ -19,9 +19,11 @@
 #   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
 #   make migration  after changing the Model's types: freeze them as the next version
 #                   (elm/src/Evergreen/V<n>) and write the migration to fill in (Evergreen/Migrate)
+#   make check-migration  fail if the Model's types changed with no migration (make check,
+#                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
-#   make check      the tests that don't boot anything: review, review-tests, elm-tests,
-#                   test-wire, protocol-tests (CI runs these, then test and test-persist)
+#   make check      the tests that don't boot anything: check-migration, review, review-tests,
+#                   elm-tests, test-wire, protocol-tests (CI runs these, then test and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make eco        install the eco versions.mk pins (any make does) and print where it is
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
@@ -87,7 +89,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-update release measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -237,7 +239,7 @@ WIRE_FLAGS := --runtime tools/wire/Wire.elm --entry ElmOs \
 $(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(shell find elm/src -name "*.elm")
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
-	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS)
+	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes
 	touch $@
 
 # Every commit that changes the types the Model is made of adds a version of them:
@@ -247,6 +249,15 @@ $(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(shell
 # both; the migration says `Unimplemented` wherever it needs someone to fill it in.
 migration: $(BUILD)/wire-tool
 	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes
+
+# Until then, `make` (and so `make run` and `make test`) still builds, with a warning: a
+# draft build, whose Model is called version n + 1 and is read from version n's as it
+# is (starting afresh if that fails). `make run` boots it on a copy of the data disk,
+# build/data-draft.img, so build/data-qemu.img never holds a Model of types no commit
+# has. What's committed, released or put on a USB stick must have its migration:
+# `make check` (so CI), `make release` and `make usb` run this, which fails without one.
+check-migration: $(BUILD)/wire-tool
+	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire-check/src $(WIRE_FLAGS)
 
 # tools/wire is an Elm program too (eco/system and elm-syntax). eco 0.2 crashes linking
 # it (`eco make --output=<exe>`), so it's compiled to an object and linked here, the
@@ -308,7 +319,7 @@ $(BUILD)/model-version: FORCE
 
 # What CI publishes for each commit on main (tools/release.sh): the Elm program and
 # its manifest, in build/release.
-release: $(BUILD)/elm $(BUILD)/host-version
+release: $(BUILD)/elm $(BUILD)/host-version | check-migration
 	tools/release.sh
 
 # The host is Rust (host/): /init, and elmos-gpu.
@@ -512,7 +523,7 @@ $(BUILD)/initramfs-usb.cpio: $(BUILD)/console.cpio $(BUILD)/initramfs.cpio $(BUI
 
 usb: $(BUILD)/elmos-usb.img
 
-$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps
+$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
 	scripts/make-usb-image.sh $< $@
 
 check-usb-deps:
@@ -540,11 +551,17 @@ $(BUILD)/data-qemu.img: | check-usb-deps
 $(BUILD)/data-empty.img: scripts/make-data-image.sh scripts/make-data-fs.sh | check-usb-deps
 	scripts/make-data-image.sh $@
 
+# A draft build (see check-migration) gets a fresh copy of the data disk each time.
+RUN_DATA = if grep -q elmos-draft-build $(BUILD)/wire/src/ElmOs.elm; then \
+             echo "Draft build (no migration yet): booting on a copy of the data disk, $(BUILD)/data-draft.img"; \
+             cp --sparse=always $(BUILD)/data-qemu.img $(BUILD)/data-draft.img; \
+             export QEMU_DATA=$(BUILD)/data-draft.img; fi
+
 run: all $(BUILD)/data-qemu.img | check-run-deps
-	scripts/run-qemu.sh
+	$(RUN_DATA); scripts/run-qemu.sh
 
 run-cpu: all $(BUILD)/data-qemu.img | check-run-deps
-	QEMU_GPU=0 scripts/run-qemu.sh
+	$(RUN_DATA); QEMU_GPU=0 scripts/run-qemu.sh
 
 test: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-qemu.py
@@ -594,7 +611,7 @@ protocol-tests:
 
 # One after the other: they share npx's and eco's caches.
 check:
-	$(MAKE) -j1 review review-tests elm-tests test-wire protocol-tests
+	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.

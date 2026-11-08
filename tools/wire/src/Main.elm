@@ -38,6 +38,7 @@ type alias Flags =
     , runtime : String
     , options : Generate.Options
 
+    -- `--draft yes` (in options): build even if the Model's types changed with no migration.
     -- `--freeze yes`: freeze the Model's types as a new version instead (`make migration`).
     , freeze : Bool
     }
@@ -73,8 +74,16 @@ run env =
                                 Err problems ->
                                     Task.succeed problems
 
-                                Ok outputs ->
-                                    writeAll f.out ({ path = "Wire.elm", source = runtime } :: outputs)
+                                Ok { files, warnings } ->
+                                    writeAll f.out ({ path = "Wire.elm", source = runtime } :: files)
+                                        |> Task.andThen
+                                            (\_ ->
+                                                if List.isEmpty warnings then
+                                                    Task.succeed ()
+
+                                                else
+                                                    Stream.logLine (String.join "\n" (List.map (\w -> "wire: WARNING: " ++ w) warnings)) env.stderr
+                                            )
                                         |> Task.map (\_ -> [])
                     )
                 |> Task.onError (\e -> Task.succeed [ FileSystem.errorToString e ])
@@ -124,7 +133,7 @@ flags args =
                                     { src = src
                                     , out = out
                                     , runtime = runtime
-                                    , options = { entry = entry, config = config, model = model, msg = msg }
+                                    , options = { entry = entry, config = config, model = model, msg = msg, draft = Dict.get "draft" d == Just "yes" }
                                     , freeze = Dict.get "freeze" d == Just "yes"
                                     }
                                 )

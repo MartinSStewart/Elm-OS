@@ -229,14 +229,20 @@ host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying
 Every commit that changes the types the Model is made of adds a version of them, as Lamdera's
 Evergreen does, so a Model saved by an older build is migrated rather than lost:
 
-1. Change the types, and build: `make` stops and lists what changed since the newest version.
+1. Change the types, and build: `make` warns and lists what changed since the newest version.
+   Until the migration is written it's a *draft build*, for trying the change out: its Model is
+   called version n+1 and is read from version n's snapshot as it is (afresh if that fails), and
+   `make run` boots it on a copy of the data disk (`build/data-draft.img`, copied anew each run),
+   so `build/data-qemu.img` never holds a Model no commit describes. `make check-migration`, which
+   `make check` (so CI), `make release` and `make usb` run, refuses a draft.
 2. `make migration` freezes the types as version n+1 (`elm/src/Evergreen/V<n+1>/`, copies of
    the types only; never edit them) and writes `elm/src/Evergreen/Migrate/V<n+1>.elm`, a function
    from version n's Model to version n+1's. It writes all it can (fields and variants that are
    still there, through Lists, Dicts, Maybes and the like); where it can't (a new field, a variant
    that's gone, a type that changed) it writes `Unimplemented`, which doesn't compile.
 3. Replace each `Unimplemented`, build, and commit the change, the frozen types and the
-   migration together.
+   migration together. Run `make check-migration` (or `make check`) before committing: a commit
+   without its migration fails CI, so `deployed` doesn't move to it.
 
 A build reads a snapshot of any earlier version by running the migrations one after another.
 Old versions cost the Elm program a little (version 1's codecs are about 50 KB). `make test-wire`

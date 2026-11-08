@@ -47,6 +47,10 @@ type alias Options =
     , config : String
     , model : String
     , msg : String
+
+    -- Build even when the Model's types have changed since the newest frozen version
+    -- (`make run`, `make test`): see `draftVersion`.
+    , draft : Bool
     }
 
 
@@ -138,7 +142,9 @@ defaultImports =
     ]
 
 
-generate : Options -> List SourceFile -> Result (List String) (List SourceFile)
+{-| The files to write, and the warnings to show (a draft build's).
+-}
+generate : Options -> List SourceFile -> Result (List String) { files : List SourceFile, warnings : List String }
 generate options files =
     withModules options files generateWith
 
@@ -183,7 +189,7 @@ withModules options files next =
                 Err [ "--model, --msg and --config must each be Module.name" ]
 
 
-generateWith : Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) (List SourceFile)
+generateWith : Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) { files : List SourceFile, warnings : List String }
 generateWith options modules modelKey msgKey configKey =
     let
         defs =
@@ -229,11 +235,11 @@ generateWith options modules modelKey msgKey configKey =
         Err (List.reverse reachErrors)
 
     else
-        case versionErrors modules defs used modelKey versions of
-            (_ :: _) as problems ->
+        case versionCheck options modules defs used modelKey versions of
+            Err problems ->
                 Err problems
 
-            [] ->
+            Ok warnings ->
                 let
                     reachedDefs =
                         reached |> Set.toList |> List.filterMap (\key -> Dict.get key defs)
@@ -265,19 +271,33 @@ generateWith options modules modelKey msgKey configKey =
                                             { path = m.path, source = m.source }
                                 )
 
+                    modelShape =
+                        rootShape defs used identity modelKey
+
+                    frozenShapes =
+                        List.map (\k -> ( k, rootShape defs used (unfreeze k) (frozenKey k modelKey) )) versions
+
                     shapes =
-                        { model = rootShape defs used identity modelKey
+                        { model = modelShape
                         , msg = rootShape defs used identity msgKey
-                        , versions = List.map (\k -> ( k, rootShape defs used (unfreeze k) (frozenKey k modelKey) )) versions
+                        , versions =
+                            if List.isEmpty warnings then
+                                frozenShapes
+
+                            else
+                                frozenShapes ++ [ ( draftVersion versions, modelShape ) ]
+                        , draft = not (List.isEmpty warnings)
                         }
                 in
                 Ok
-                    (outputs
-                        ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
-                             , source = entryModule options configKey modelKey msgKey shapes
-                             }
-                           ]
-                    )
+                    { files =
+                        outputs
+                            ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
+                                 , source = entryModule options configKey modelKey msgKey shapes
+                                 }
+                               ]
+                    , warnings = warnings
+                    }
 
 
 allDefs : Dict String Module -> Dict Key Def
@@ -1260,6 +1280,9 @@ type alias Shapes =
     { model : String
     , msg : String
     , versions : List ( Int, String )
+
+    -- A draft build: the last of `versions` is the current types, not frozen.
+    , draft : Bool
     }
 
 
@@ -1272,11 +1295,13 @@ entryModule options configKey modelKey msgKey shapes =
         msgType =
             keyName msgKey
 
+        latest =
+            List.map Tuple.first shapes.versions |> List.maximum |> Maybe.withDefault 0
+
+        -- The versions in elm/src/Evergreen (a draft build's own isn't).
         versions =
             List.map Tuple.first shapes.versions
-
-        latest =
-            List.maximum versions |> Maybe.withDefault 0
+                |> List.filter (\k -> not shapes.draft || k /= latest)
 
         frozenModel k =
             keyName (frozenKey k modelKey)
@@ -1294,12 +1319,21 @@ entryModule options configKey modelKey msgKey shapes =
                 |> List.map (\i -> "import " ++ i)
 
         migrateCase k =
-            [ "        " ++ String.fromInt (k - 1) ++ " ->"
-            , "            Json.Decode.decodeValue " ++ frozenModule (k - 1) ++ ".w3_decode_" ++ Tuple.second modelKey ++ " json"
-            , "                |> Result.toMaybe"
-            , "                |> Maybe.map (\\old -> " ++ frozenModule k ++ ".w3_encode_" ++ Tuple.second modelKey ++ " (" ++ migrationModule k ++ ".model old))"
-            , ""
-            ]
+            if shapes.draft && k == latest then
+                [ "        " ++ String.fromInt (k - 1) ++ " ->"
+                , "            -- A draft build: there's no migration yet, so the Model is read as it is,"
+                , "            -- and starts afresh if that fails. See the warning `make` showed."
+                , "            Just json"
+                , ""
+                ]
+
+            else
+                [ "        " ++ String.fromInt (k - 1) ++ " ->"
+                , "            Json.Decode.decodeValue " ++ frozenModule (k - 1) ++ ".w3_decode_" ++ Tuple.second modelKey ++ " json"
+                , "                |> Result.toMaybe"
+                , "                |> Maybe.map (\\old -> " ++ frozenModule k ++ ".w3_encode_" ++ Tuple.second modelKey ++ " (" ++ migrationModule k ++ ".model old))"
+                , ""
+                ]
 
         shapeCase ( k, s ) =
             [ "        " ++ String.fromInt k ++ " ->"
@@ -1312,9 +1346,21 @@ entryModule options configKey modelKey msgKey shapes =
          , ""
          , "{-| Written by tools/wire: the program, with the codecs Persist.elm saves the Model with,"
          , "and the migrations from the Model of each earlier version (elm/src/Evergreen)."
-         , "-}"
-         , ""
          ]
+            ++ (if shapes.draft then
+                    [ ""
+                    , "elmos-draft-build: the Model's types have changed since version " ++ String.fromInt (latest - 1) ++ ", and there's no"
+                    , "migration yet, so they are called version " ++ String.fromInt latest ++ " here. Only for trying things out:"
+                    , "`make run` gives it a copy of the data disk, and CI, `make check`, `make release` and"
+                    , "`make usb` refuse to build it."
+                    ]
+
+                else
+                    []
+               )
+            ++ [ "-}"
+               , ""
+               ]
             ++ imports
             ++ [ ""
                , ""
@@ -1354,7 +1400,7 @@ entryModule options configKey modelKey msgKey shapes =
                , "migrate from json ="
                , "    case from of"
                ]
-            ++ List.concatMap migrateCase (List.filter (\k -> k > 1) versions)
+            ++ List.concatMap migrateCase (List.filter (\k -> k > 1) (List.map Tuple.first shapes.versions))
             ++ [ "        _ ->"
                , "            Nothing"
                , ""
@@ -1433,8 +1479,43 @@ isFrozen moduleName =
     String.startsWith "Evergreen." moduleName
 
 
-versionErrors : Dict String Module -> Dict Key Def -> Dict Key (List Bool) -> Key -> List Int -> List String
-versionErrors modules defs used modelKey versions =
+{-| Err when the build must stop; otherwise the warnings to show (a draft build's).
+The types having changed since the newest version stops it unless `options.draft`.
+-}
+versionCheck : Options -> Dict String Module -> Dict Key Def -> Dict Key (List Bool) -> Key -> List Int -> Result (List String) (List String)
+versionCheck options modules defs used modelKey versions =
+    case ( versionErrors modules versions, List.maximum versions ) of
+        ( [], Just latest ) ->
+            case changeErrors defs used modelKey latest of
+                [] ->
+                    Ok []
+
+                changes ->
+                    if options.draft then
+                        Ok
+                            (changes
+                                ++ [ "building it anyway, as a draft (version "
+                                        ++ String.fromInt (draftVersion versions)
+                                        ++ ", with no migration), to try out: `make run` boots it on a copy of the data disk. Before committing, make the migration: CI, `make check`, `make release` and `make usb` refuse to build without one."
+                                   ]
+                            )
+
+                    else
+                        Err changes
+
+        ( problems, _ ) ->
+            Err problems
+
+
+{-| The version a draft build's Model is: the one after the newest frozen one.
+-}
+draftVersion : List Int -> Int
+draftVersion versions =
+    (List.maximum versions |> Maybe.withDefault 0) + 1
+
+
+versionErrors : Dict String Module -> List Int -> List String
+versionErrors modules versions =
     case List.reverse versions of
         [] ->
             [ "the Model's types have no frozen version yet. Run `make migration` to freeze them as version 1 (elm/src/Evergreen/V1)." ]
@@ -1453,7 +1534,7 @@ versionErrors modules defs used modelKey versions =
                         |> List.filter (\k -> not (Dict.member (migrationModule k) modules))
                         |> List.map (\k -> "there's no migration to version " ++ String.fromInt k ++ ": " ++ migrationModule k ++ " (elm/src/Evergreen/Migrate/V" ++ String.fromInt k ++ ".elm) is missing.")
             in
-            gaps ++ missingMigrations ++ changeErrors defs used modelKey latest
+            gaps ++ missingMigrations
 
 
 {-| When the current types aren't those of the newest version: what changed.

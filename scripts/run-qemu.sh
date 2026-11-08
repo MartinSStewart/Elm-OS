@@ -15,7 +15,8 @@
 #
 # build/data-qemu.img is its data disk (make run makes it), where Elm OS keeps its
 # Model, so what you did comes back next time (elm/src/Persist.elm). Delete it to
-# start afresh. The USB image has its own data partition, but --usb opens the image
+# start afresh. QEMU_DATA=<file> uses another (make run does, for a draft build:
+# see check-migration in the Makefile). The USB image has its own data partition, but --usb opens the image
 # read-only, so there nothing is kept from one run to the next.
 #
 # retain_initrd keeps the initramfs readable (/sys/firmware/initrd), so the debug
@@ -57,7 +58,7 @@ fi
 exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
   -kernel build/bzImage -initrd build/initramfs-qemu.cpio \
   -nic user,model=virtio-net-pci \
-  -drive if=virtio,format=raw,file=build/data-qemu.img \
+  -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" \
   -append "console=ttyS0 quiet retain_initrd" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
   -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"
