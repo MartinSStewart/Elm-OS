@@ -271,8 +271,7 @@ type Msg
 
 
 type UiId
-    = NextColorButton
-    | RefreshButton
+    = RefreshButton
     | NetworkButton String
     | PasswordInput
     | ShowPasswordButton
@@ -386,35 +385,35 @@ step event model =
                                     model.frameIntervals
                     }
             in
-            -- Drawn by `draw`, which replaying the log skips.
-            ( next, [] )
+            ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
             let
-                next =
+                model2 : Model
+                model2 =
                     gotHttp id result model
             in
-            case next.weather of
+            case model2.weather of
                 LoadingForecast place ->
                     case model.weather of
                         FindingPlace ->
                             -- Now that we know where we are, ask for the forecast there.
-                            ( next, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
+                            ( model2, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
 
                         _ ->
-                            ( next, [] )
+                            ( model2, [] )
 
                 NoWeather ->
-                    ( next, [] )
+                    ( model2, [] )
 
                 FindingPlace ->
-                    ( next, [] )
+                    ( model2, [] )
 
                 GotWeather _ _ ->
-                    ( next, [] )
+                    ( model2, [] )
 
                 WeatherFailed _ ->
-                    ( next, [] )
+                    ( model2, [] )
 
         Mouse x y ->
             let
@@ -504,11 +503,8 @@ step event model =
                     _ ->
                         ( model, [] )
 
-            else if repeat then
-                ( model, [] )
-
             else
-                ( nextColor model, [] )
+                ( model, [] )
 
         Renderer renderer ->
             ( { model | renderer = Just renderer }, [] )
@@ -646,9 +642,6 @@ gotHttp id result model =
 click : UiId -> Model -> ( Model, List Effect )
 click id model =
     case id of
-        NextColorButton ->
-            ( nextColor { model | focus = Nothing }, [] )
-
         RefreshButton ->
             ( { model | scanning = True, focus = Nothing }, [ Effect.WifiScan ] )
 
@@ -877,9 +870,6 @@ dragSelect focus position model =
         EditorInput ->
             { model | editor = TextInputMultiline.mouseDownMove (editorStyle model) (uiMouse model) position model.editor }
 
-        NextColorButton ->
-            model
-
         RefreshButton ->
             model
 
@@ -998,21 +988,6 @@ cursorColor model =
         Color.white
 
 
-nextColor : Model -> Model
-nextColor model =
-    { model | colorIndex = modBy (List.length palette) (model.colorIndex + 1) }
-
-
-palette : List Color
-palette =
-    [ Color.rgb 0.12 0.14 0.2
-    , Color.rgb 0.3 0.8 0.45
-    , Color.rgb 0.3 0.55 0.95
-    , Color.rgb 0.95 0.8 0.25
-    , Color.rgb 0.95 0.35 0.3
-    ]
-
-
 
 -- VIEW
 
@@ -1020,20 +995,13 @@ palette =
 view : Model -> List (Triangle DevicePixels)
 view model =
     let
-        color =
-            palette |> List.drop model.colorIndex |> List.head |> Maybe.withDefault Color.white
-
-        ( w, h ) =
-            Coord.toTuple model.screenSize |> Tuple.mapBoth toFloat toFloat
-
         ui =
             screenUi model
 
         hovered =
             Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
-    Sprite.triangle color ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
-        :: Ui.view (uiScale model) hovered model.focus ui
+    Ui.view (uiScale model) hovered model.focus ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however
@@ -1253,9 +1221,6 @@ overlay model =
                                 :: line "Battery" (BootInfo.batteryText model.bootInfo)
                                 :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
                            )
-                        ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY 6 3 }
-                                (Ui.text mono "Next colour")
-                           ]
                     )
                 )
             )
@@ -1357,8 +1322,6 @@ persistConfig : Persist.Config Model Msg
 persistConfig =
     { init = init
     , update = update
-    , draw = draw
-    , resume = resume
     , fromHost = \json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput
 
     -- An idle eco program exits; a timer keeps the event loop alive. It also paces
@@ -1384,101 +1347,6 @@ httpAnswered msg =
 
         Tick ->
             Nothing
-
-
-{-| Drawing a frame takes a while, so it isn't part of `update`: replaying the saved Msgs
-after a restart only needs the Model.
--}
-draw : Msg -> Model -> List Effect
-draw msg model =
-    case msg of
-        GotInput (Ok (Frame _)) ->
-            [ Effect.Render (view model) ]
-
-        _ ->
-            []
-
-
-{-| After a restart, the Model as it was (Persist.elm) becomes this boot's: what the
-user did stays (which windows are open, what is in them, the clipboard, the colour),
-and what the last boot's hardware and network said is forgotten, because the host
-says it again.
--}
-resume : Model -> Model
-resume saved =
-    { init
-        | colorIndex = saved.colorIndex
-        , clipboard = saved.clipboard
-        , focus =
-            case saved.focus of
-                Just EditorInput ->
-                    saved.focus
-
-                Just EditorWindow ->
-                    saved.focus
-
-                Just (CalculatorUiId _) ->
-                    saved.focus
-
-                Just NextColorButton ->
-                    Nothing
-
-                Just RefreshButton ->
-                    Nothing
-
-                Just (NetworkButton _) ->
-                    Nothing
-
-                Just PasswordInput ->
-                    Nothing
-
-                Just ShowPasswordButton ->
-                    Nothing
-
-                Just ConnectButton ->
-                    Nothing
-
-                Just DisconnectButton ->
-                    Nothing
-
-                Just WeatherButton ->
-                    Nothing
-
-                Just AboutButton ->
-                    Nothing
-
-                Just CloseAboutButton ->
-                    Nothing
-
-                Just CalculatorButton ->
-                    Nothing
-
-                Just PowerOffButton ->
-                    Nothing
-
-                Just RestartButton ->
-                    Nothing
-
-                Just ConfirmPowerButton ->
-                    Nothing
-
-                Just CancelPowerButton ->
-                    Nothing
-
-                Just EditorButton ->
-                    Nothing
-
-                Just CloseEditorButton ->
-                    Nothing
-
-                Nothing ->
-                    Nothing
-        , aboutOpen = saved.aboutOpen
-        , calculator = saved.calculator
-        , calculatorOpen = saved.calculatorOpen
-        , editor = saved.editor
-        , editorOpen = saved.editorOpen
-    }
 
 
 
@@ -2199,14 +2067,6 @@ aboutPage model =
                             ++ "Text is in Noto Sans (SIL Open Font License). "
                             ++ "Weather: open-meteo.com, location: geojs.io."
                         )
-                    )
-                , Ui.row { spacing = 12, padding = Ui.noPadding }
-                    (List.map (\( style, name ) -> Ui.text (Sprite.Sans style Sprite.Small) name)
-                        [ ( Sprite.Regular, "Regular" )
-                        , ( Sprite.Bold, "Bold" )
-                        , ( Sprite.Italic, "Italic" )
-                        , ( Sprite.BoldItalic, "Bold Italic" )
-                        ]
                     )
                 , t ""
                 , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")

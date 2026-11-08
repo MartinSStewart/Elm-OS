@@ -1,8 +1,8 @@
 port module Effect exposing
     ( Effect(..)
+    , Encoded(..)
     , HttpError(..)
     , HttpRequest
-    , Encoded(..)
     , PowerAction(..)
     , encode
     , fromHost
@@ -48,7 +48,7 @@ port fromHost : (D.Value -> msg) -> Sub msg
 
 
 type Effect
-    = Render (List (Triangle DevicePixels))
+    = Render (() -> List (Triangle DevicePixels))
       -- The mouse cursor's fill colour and the UI scale. The host draws the cursor on
       -- the display's cursor plane and moves it as the mouse moves, without waiting
       -- for a frame. The scale sets the cursor's size and how fast the mouse moves it,
@@ -166,7 +166,7 @@ encode : Effect -> Encoded
 encode effect =
     case effect of
         Render triangles ->
-            OnRender (renderBytes triangles)
+            OnRender (renderBytes (triangles ()))
 
         SetCursor { color, scale } ->
             E.object
