@@ -250,6 +250,18 @@ impl Inputs {
         }
     }
 
+    /// The pointer's position goes to Elm once a whole read is done (host.rs), but a
+    /// button pressed in the same read must come after the motion before it, or the
+    /// click lands where the pointer was. This happens when the system is slow to read
+    /// its input, as in QEMU without KVM, and on a quick move-and-click.
+    fn send_motion_first(&mut self, moved: bool, w: u32, h: u32) {
+        if moved {
+            self.mouse_x = self.mouse_x.clamp(0, w as i32 - 1);
+            self.mouse_y = self.mouse_y.clamp(0, h as i32 - 1);
+            eco::send(&ToElm::Mouse { x: self.mouse_x, y: self.mouse_y });
+        }
+    }
+
     /// Reads device `i` (index into fds()). Returns whether the pointer moved.
     pub fn read(&mut self, i: usize, w: u32, h: u32) -> bool {
         let mut moved = false;
@@ -417,6 +429,7 @@ impl Inputs {
                             && event_time - dev.touch_start < 0.25
                         {
                             self.tap_button = if dev.fingers >= 2 { 1 } else { 0 }; // two-finger tap: right click
+                            self.send_motion_first(*moved, w, h);
                             send_button(self.tap_button, true);
                             self.tap_release_at = Some(sys::now() + 0.15);
                         }
@@ -437,6 +450,7 @@ impl Inputs {
                     if touchpad {
                         dev.tap_clicked = true;
                     }
+                    self.send_motion_first(*moved, w, h);
                     send_button(
                         match ev.code {
                             BTN_LEFT => 0,
