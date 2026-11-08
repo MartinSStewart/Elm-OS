@@ -283,7 +283,11 @@ fn send_system() {
     eco::send(&ToElm::System {
         kernel: format!("{} {}", field(&u.sysname), field(&u.release)),
         cpu,
-        commit: option_env!("ELMOS_COMMIT").unwrap_or("unknown").to_owned(),
+        // Written into the initramfs by the Makefile rather than compiled in, so a new
+        // commit (or an uncommitted change) doesn't rebuild the Rust.
+        commit: std::fs::read_to_string("/etc/elmos/commit")
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_else(|_| "unknown".into()),
     });
 }
 

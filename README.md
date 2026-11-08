@@ -81,10 +81,12 @@ checkout of an older commit can't download its pinned version any more and the b
 ## Reproducible builds
 
 Every build of a commit gives the same bytes on the same machine: timestamps come from the
-commit's date (`SOURCE_DATE_EPOCH`), the kernel's build user and host are fixed, the cpio
+commit's date (`SOURCE_DATE_EPOCH`; the kernel's from `REFRESHED` in `versions.mk`, so a new
+commit doesn't recompile it), the kernel's build user and host are fixed, the cpio
 archives have fixed owners, modes and inode numbers, the USB image's FAT and GPT IDs come from
 the kernel's hash, and paths to the checkout don't end up in the output. If the commit has
-uncommitted changes, `/init` records it as `-dirty`, so commit before comparing builds.
+uncommitted changes, the initramfs records it as `-dirty` (in `/etc/elmos/commit`), so commit
+before comparing builds.
 
 Across machines the compilers have to match too (gcc for the kernel and wpa_supplicant, Rust,
 eco). `make docker` builds inside a pinned environment (`tools/build-env/Dockerfile`: Ubuntu

@@ -43,6 +43,11 @@ KERNEL_SRC ?= linux
 # Linux's stable releases (6.12.1 onwards) are only in the stable tree, not Linus's.
 KERNEL_GIT ?= https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 JOBS       ?= $(shell nproc)
+# Build in parallel unless told otherwise (make -j1), so the Rust and the Elm compile at
+# the same time. The kernel's make and wpa_supplicant's share these jobs.
+ifeq ($(filter -j%,$(MAKEFLAGS)),)
+MAKEFLAGS  += -j$(JOBS)
+endif
 BUILD      ?= build
 GPU        ?= 1
 ALPINE     := $(BUILD)/alpine
@@ -108,8 +113,12 @@ check-run-deps:
 KOUT     := $(BUILD)/kernel
 KOUT_USB := $(BUILD)/kernel-usb
 # The kernel otherwise stamps in the build's time, user, host and a build counter.
-KMAKE     = $(MAKE) -C $(KERNEL_SRC) -j$(JOBS) KBUILD_BUILD_USER=elmos KBUILD_BUILD_HOST=elmos \
-            KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP='$(shell date -u -d @$(SOURCE_DATE_EPOCH) '+%a %b %e %H:%M:%S UTC %Y')'
+# Its time is when `make refresh` last ran (REFRESHED in versions.mk), not the commit's:
+# a new timestamp recompiles a good part of the kernel (about 30 s), and every commit
+# would otherwise bring one. It is still the same for every build of a commit.
+KERNEL_EPOCH := $(REFRESHED)
+KMAKE     = SOURCE_DATE_EPOCH=$(KERNEL_EPOCH) $(MAKE) -C $(KERNEL_SRC) KBUILD_BUILD_USER=elmos KBUILD_BUILD_HOST=elmos \
+            KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP='$(shell date -u -d @$(KERNEL_EPOCH) '+%a %b %e %H:%M:%S UTC %Y')'
 # The kernel command line on the USB stick: messages on the screen (the last console=),
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
@@ -152,11 +161,12 @@ $(KOUT)/.config: kernel/elmos.config $(BUILD)/kernel-version | $(KERNEL_SRC)/.el
 	$(KMAKE) O=$(abspath $(KOUT)) olddefconfig
 	tools/check-kernel-config.sh $@ kernel/elmos.config || { mv $@ $@.rejected; exit 1; }
 
-$(BUILD)/bzImage: $(KOUT)/.config $(BUILD)/source-date
+$(BUILD)/bzImage: $(KOUT)/.config $(BUILD)/kernel-date
 	$(KMAKE) O=$(abspath $(KOUT)) bzImage
 	cp $(KOUT)/arch/x86/boot/bzImage $@
 
-$(BUILD)/kheaders/include/linux/input.h: $(KOUT)/.config
+# After bzImage, not beside it: two makes at once in one kernel output directory collide.
+$(BUILD)/kheaders/include/linux/input.h: $(KOUT)/.config | $(BUILD)/bzImage
 	$(KMAKE) O=$(abspath $(KOUT)) headers_install INSTALL_HDR_PATH=$(abspath $(BUILD)/kheaders)
 
 # The USB kernel: the same config plus the built-in initramfs and command line.
@@ -178,7 +188,7 @@ $(KOUT_USB)/.config: kernel/elmos.config $(BUILD)/usb.config $(BUILD)/kernel-ver
 	$(KMAKE) O=$(abspath $(KOUT_USB)) olddefconfig
 	tools/check-kernel-config.sh $@ kernel/elmos.config $(BUILD)/usb.config || { mv $@ $@.rejected; exit 1; }
 
-$(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/source-date
+$(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/kernel-date
 	$(KMAKE) O=$(abspath $(KOUT_USB)) bzImage
 	cp $(KOUT_USB)/arch/x86/boot/bzImage $@
 
@@ -232,11 +242,16 @@ $(BUILD)/wire-tool: $(BUILD)/wire-tool.o
 	  $(RT)/libzip.a $(RT)/libz.a $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
 	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
 
-# The commit goes on Elm's about page. Rewritten only when it changes, like gpu-setting.
-# SOURCE_DATE_EPOCH, so what stamps it in (the kernels, the cpio archives) is rebuilt
-# when it changes, not only when their other inputs do.
+# SOURCE_DATE_EPOCH and the kernels' timestamp, so what stamps them in (the cpio
+# archives, the kernels) is rebuilt when they change, not only when their other inputs
+# do. Rewritten only when they change, like gpu-setting.
 $(BUILD)/source-date: FORCE
 	@mkdir -p $(BUILD); echo $(SOURCE_DATE_EPOCH) | cmp -s - $@ || echo $(SOURCE_DATE_EPOCH) > $@
+
+$(BUILD)/kernel-date: FORCE
+	@mkdir -p $(BUILD); echo $(KERNEL_EPOCH) | cmp -s - $@ || echo $(KERNEL_EPOCH) > $@
+
+# The commit goes on Elm's about page, read from /etc/elmos/commit in the initramfs.
 
 $(BUILD)/commit: FORCE
 	@mkdir -p $(BUILD); c=$$(git describe --always --dirty 2>/dev/null || echo unknown); \
@@ -257,9 +272,8 @@ CARGO_BUILD  = cd host && CC_x86_64_unknown_linux_musl=musl-gcc \
   CFLAGS_x86_64_unknown_linux_musl='-ffile-prefix-map=$(abspath .)=/elmos -ffile-prefix-map=$(CARGO_HOME_DIR)=/cargo' \
   $(CARGO) build --release --locked --target $(RUST_TARGET)
 
-$(BUILD)/libelmos_host.a: $(HOST_SRC) $(BUILD)/commit | check-deps
+$(BUILD)/libelmos_host.a: $(HOST_SRC) | check-deps
 	$(CARGO_BUILD) -p elmos-host --target-dir $(abspath $(BUILD)/cargo-init) \
-	  --config 'env.ELMOS_COMMIT="$(shell cat $(BUILD)/commit)"' \
 	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-cpu=x86-64-v3",$(RUST_REMAP)]'
 	cp $(BUILD)/cargo-init/$(RUST_TARGET)/release/libelmos_host.a $@
 
@@ -345,9 +359,10 @@ $(BUILD)/gpu-setting: FORCE
 	@mkdir -p $(BUILD); echo $(GPU) | cmp -s - $@ || echo $(GPU) > $@
 FORCE:
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date
-	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit
+	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos
 	cp $(BUILD)/init $(BUILD)/rootfs/init
+	cp $(BUILD)/commit $(BUILD)/rootfs/etc/elmos/commit
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
@@ -489,7 +504,9 @@ elm-tests: $(BUILD)/wire/.done
 protocol-tests:
 	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p protocol --target-dir $(abspath $(BUILD)/cargo-tools)
 
-check: review review-tests elm-tests test-wire protocol-tests
+# One after the other: they share npx's and eco's caches.
+check:
+	$(MAKE) -j1 review review-tests elm-tests test-wire protocol-tests
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.
