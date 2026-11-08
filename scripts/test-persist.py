@@ -27,6 +27,8 @@ KVM can take seconds to get round to a key press.
 """
 import json, os, random, re, shutil, socket, struct, subprocess, sys, tempfile, time, zlib
 
+import toolbar
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
 disk = os.path.join(tmp, "data.img")
@@ -158,6 +160,17 @@ def click(x, y):
     time.sleep(1)
 
 
+def press(name):
+    """Clicks a toolbar button by its label (scripts/toolbar.py finds it on screen)."""
+    shot = screen()
+    try:
+        x, y = toolbar.buttons(shot, s)[name]
+    except RuntimeError as e:
+        save_png(shot, f"{ROOT}/build/screenshot.png")
+        fail(f"{e} (build/screenshot.png)")
+    click(x, y)
+
+
 QCODES = {" ": "spc", "-": "minus", ".": "dot"}
 
 
@@ -252,9 +265,9 @@ before = screen()
 
 # ---- 1. type, then a power cut
 
-click(212 * s, 22 * s)  # Text editor
+press("Text editor")
 type_text("hello")
-click(110 * s, 22 * s)  # Calculator
+press("Calculator")
 for key in ["kp_6", "kp_multiply", "kp_7", "kp_enter"]:
     cmd("send-key", keys=[{"type": "qcode", "data": key}])
     time.sleep(0.3)
@@ -306,7 +319,7 @@ boot()
 click(w // 2, h // 2)  # focus the editor again (the power cut left the calculator focused)
 cmd("send-key", keys=[{"type": "qcode", "data": "end"}])
 type_text(" world")
-click(298 * s, 22 * s)  # Restart
+press("Restart")
 end = time.time() + 15
 while True:
     shot = screen()

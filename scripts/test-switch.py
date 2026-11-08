@@ -19,6 +19,8 @@ than a migration (make test-wire checks those).
 """
 import json, os, shutil, socket, stat, subprocess, sys, tempfile, time
 
+import toolbar
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
 disk = os.path.join(tmp, "data.img")
@@ -126,6 +128,16 @@ def click(x, y):
     time.sleep(1)
 
 
+def press(name):
+    """Clicks a toolbar button by its label (scripts/toolbar.py finds it on screen)."""
+    shot = screen()
+    try:
+        x, y = toolbar.buttons(shot, s)[name]
+    except RuntimeError as e:
+        fail(str(e))
+    click(x, y)
+
+
 def region(shot, x0, y0, x1, y1):
     w, _, px = shot
     return b"".join(px[(y * w + x0) * 3:(y * w + x1) * 3] for y in range(y0, y1))
@@ -177,7 +189,7 @@ boot()
 SIZE = screen()
 w, h, _ = SIZE
 s = 2 if w >= 2000 else 1
-click(212 * s, 22 * s)  # Text editor
+press("Text editor")
 for ch in "hello":
     cmd("send-key", keys=[{"type": "qcode", "data": ch}])
     time.sleep(0.15)
