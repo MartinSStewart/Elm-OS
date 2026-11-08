@@ -34,11 +34,14 @@ import TextInput
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
-{-| The text and its history, and the first line in view.
+{-| The text and its history, the first line in view, and while Up, Down, Page Up and
+Page Down are moving the cursor, how far along the line (in UI pixels) it was before
+the first of them, so passing through a shorter line doesn't lose the column.
 -}
 type alias Model =
     { input : TextInput.Model
     , scroll : Int
+    , goalX : Maybe Int
     }
 
 
@@ -50,7 +53,7 @@ type alias Style =
 
 init : Model
 init =
-    { input = TextInput.init, scroll = 0 }
+    { input = TextInput.init, scroll = 0, goalX = Nothing }
 
 
 {-| How many undo steps are kept. Every key that changes the text is one, and each holds
@@ -247,7 +250,7 @@ keyMsg style ctrl shift key model =
             lineAndColumn state.text state.cursorPosition
 
         x =
-            cursorX style state
+            Maybe.withDefault (cursorX style state) model.goalX
 
         move position =
             ( { model | input = TextInput.replaceState (moveTo shift position) model.input }, TextInput.NoOutMsg )
@@ -264,6 +267,10 @@ keyMsg style ctrl shift key model =
 
             else
                 indexAtX style ls target x
+
+        -- Up and Down keep aiming for the same column; every other key forgets it.
+        moveVertically position =
+            move position |> Tuple.mapFirst (\moved -> { moved | goalX = Just x })
 
         page =
             max 1 (style.lines - 1)
@@ -283,16 +290,16 @@ keyMsg style ctrl shift key model =
             edit (TextInput.insertText "    ")
 
         ( False, Keyboard.ArrowUp ) ->
-            move (toLine (line - 1))
+            moveVertically (toLine (line - 1))
 
         ( False, Keyboard.ArrowDown ) ->
-            move (toLine (line + 1))
+            moveVertically (toLine (line + 1))
 
         ( False, Keyboard.PageUp ) ->
-            move (toLine (line - page))
+            moveVertically (toLine (line - page))
 
         ( False, Keyboard.PageDown ) ->
-            move (toLine (line + page))
+            moveVertically (toLine (line + page))
 
         ( False, Keyboard.Home ) ->
             move (lineStart ls line)
@@ -326,11 +333,38 @@ keyMsg style ctrl shift key model =
             ( { model | input = limitHistory input }, outMsg )
     )
         |> Tuple.mapFirst (scrollToCursor style)
+        |> Tuple.mapFirst
+            (\next ->
+                if isVertical key && not ctrl then
+                    next
+
+                else
+                    { next | goalX = Nothing }
+            )
+
+
+isVertical : Keyboard.Key -> Bool
+isVertical key =
+    case key of
+        Keyboard.ArrowUp ->
+            True
+
+        Keyboard.ArrowDown ->
+            True
+
+        Keyboard.PageUp ->
+            True
+
+        Keyboard.PageDown ->
+            True
+
+        _ ->
+            False
 
 
 paste : Style -> String -> Model -> Model
 paste style text model =
-    { model | input = TextInput.paste text model.input |> limitHistory } |> scrollToCursor style
+    { model | input = TextInput.paste text model.input |> limitHistory, goalX = Nothing } |> scrollToCursor style
 
 
 {-| Scroll the smallest amount that shows the cursor's line, and no further than the text.
@@ -411,7 +445,10 @@ indexAt style mousePosition position model =
 
 mouseDown : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDown style mousePosition position model =
-    { model | input = TextInput.replaceState (moveTo False (indexAt style mousePosition position model)) model.input }
+    { model
+        | input = TextInput.replaceState (moveTo False (indexAt style mousePosition position model)) model.input
+        , goalX = Nothing
+    }
 
 
 {-| The mouse moved with its button down: select from where it went down to here,
@@ -419,7 +456,10 @@ scrolling if it is above or below the box.
 -}
 mouseDownMove : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDownMove style mousePosition position model =
-    { model | input = TextInput.replaceState (moveTo True (indexAt style mousePosition position model)) model.input }
+    { model
+        | input = TextInput.replaceState (moveTo True (indexAt style mousePosition position model)) model.input
+        , goalX = Nothing
+    }
         |> scrollToCursor style
 
 
