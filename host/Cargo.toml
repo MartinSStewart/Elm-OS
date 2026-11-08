@@ -1,10 +1,11 @@
 # The host side of Elm OS, in Rust:
-#   init/   linked into /init with the Elm program (a static library)
+#   init/   /init (PID 1): starts, supervises and talks to the Elm program
+#   link/   linked into the Elm program (a static library): its ports over the socket to /init
 #   gpu/    /usr/bin/elmos-gpu, the GPU renderer (dynamically linked, because Mesa is)
 #   common/ the texture atlas and the display (KMS) calls both use
 #   protocol/ the messages between Elm and the host, and their tests (cargo test -p protocol)
 [workspace]
-members = ["common", "protocol", "init", "gpu"]
+members = ["common", "protocol", "init", "link", "gpu"]
 resolver = "2"
 
 [profile.release]

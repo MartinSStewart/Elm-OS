@@ -3,8 +3,9 @@
 A minimal Linux kernel that boots straight into one Elm program.
 
 The Elm program is compiled to native code with [eco](https://github.com/eco-lang/eco-compiler)
-and linked with a small Rust host into a single static binary that runs as `/init` (PID 1).
-The host passes keyboard, mouse, wifi and system events to Elm over a port, and Elm answers
+and runs as its own process, `/usr/lib/elmos/elm`, under a small Rust host that runs as `/init`
+(PID 1). The host starts the Elm program and starts it again if it exits or crashes, keeping the
+screen, network, data disk and pending requests in the meantime. The host passes keyboard, mouse, wifi and system events to Elm over a port, and Elm answers
 over one output port with effects: textured triangles that the GPU draws (OpenGL ES through Mesa), or the CPU when there
 is no usable GPU, wifi commands, HTTP requests, power off.
 
@@ -141,7 +142,8 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `elm/src/Persist.elm` | Saving the Model: Msg log, snapshots, replay at start |
 | `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
 | `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
-| `host/init/` | Rust host, linked into `/init`: mounts `/dev`, `/proc` and `/sys`, reads evdev, runs effects, CPU renderer, HTTP |
+| `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU renderer, HTTP |
+| `host/link/` | Linked into the Elm program: carries its ports over the socket to `/init` |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
@@ -152,10 +154,17 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `kernel/elmos.config` | Kernel options merged on top of `make tinyconfig` |
 | `scripts/`, `tools/` | QEMU run and test scripts, USB image tools, Mesa and firmware fetchers |
 
-- The host is a Rust static library that hooks into eco's runtime with a constructor that
-  runs before eco's `main`, using `eco_port_send`, `eco_port_subscribe` and
-  `eco_port_subscribe_bytes`. The `Makefile`
-  links it using eco's own static musl link line.
+- The host (`/init`) and the Elm program are separate static programs that talk over a Unix
+  socket (`host/protocol/src/link.rs`). The Elm program links `host/link`, a small Rust library
+  that hooks into eco's runtime with a constructor that runs before eco's `main` and forwards its
+  ports (`eco_port_send`, `eco_port_subscribe`, `eco_port_subscribe_bytes`) over the socket. The
+  `Makefile` links it using eco's own static musl link line.
+- When the Elm program exits or crashes, `/init` starts it again (after 0.1 s, doubling up to
+  10 s while it keeps failing). The new program gets the newest screen, renderer, wifi, data disk
+  and mouse state first, then the events that waited (keys, HTTP answers). Frames, stats and
+  answers to the old program's file reads are dropped. The data disk message lists the HTTP
+  requests the host is still answering, so `Persist.elm` doesn't report them as interrupted.
+  This is the base for switching to a newer build of the Elm program without restarting.
 - Elm uses no effect packages besides `Time`: `Effect.toHost` carries a list of `Effect`s
   (cursor colour, wifi scan/connect/disconnect, power, HTTP, files) as JSON, `Effect.render`
   carries each frame's scene as bytes, and everything comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
@@ -268,8 +277,7 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   editor's undo history, up to 500 copies of the text, is in it too). Msgs logged since the
   last snapshot are lost when the Msg type or the Model's version changes, since only the Model
   is migrated (a restart or power-off takes a snapshot first, so only a power cut loses any).
-  The encoders and decoders make `/init` about 0.8 MB bigger.
-- Frames are sent as JSON because eco's ports can't carry `Bytes` yet, which costs time on
-  large scenes.
+  The encoders and decoders make the Elm program about 0.8 MB bigger.
+- A hung (rather than crashed) Elm program isn't detected or restarted yet.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and
   virgl drivers would shrink it a lot.

@@ -24,7 +24,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 
-use crate::eco;
+use crate::elm;
 use crate::sys;
 
 const EV_SYN: u16 = 0;
@@ -175,7 +175,7 @@ impl Device {
 }
 
 fn send_button(b: i32, down: bool) {
-    eco::send(&ToElm::Button { b, down });
+    elm::send(&ToElm::Button { b, down });
 }
 
 pub struct Inputs {
@@ -258,7 +258,7 @@ impl Inputs {
         if moved {
             self.mouse_x = self.mouse_x.clamp(0, w as i32 - 1);
             self.mouse_y = self.mouse_y.clamp(0, h as i32 - 1);
-            eco::send(&ToElm::Mouse { x: self.mouse_x, y: self.mouse_y });
+            elm::send(&ToElm::Mouse { x: self.mouse_x, y: self.mouse_y });
         }
     }
 
@@ -377,7 +377,7 @@ impl Inputs {
                     dev.rel_y += ev.value;
                 }
                 if ev.code == REL_WHEEL && ev.value != 0 {
-                    eco::send(&ToElm::Wheel { dy: ev.value });
+                    elm::send(&ToElm::Wheel { dy: ev.value });
                 }
             }
             EV_ABS if touchpad => {
@@ -401,7 +401,7 @@ impl Inputs {
             EV_KEY if ev.value == 2 => {
                 // autorepeat: for typing
                 if ev.code < BTN_MISC && ev.code != KEY_POWER {
-                    eco::send(&ToElm::Key { code: ev.code, down: true, repeat: true });
+                    elm::send(&ToElm::Key { code: ev.code, down: true, repeat: true });
                 }
             }
             EV_KEY => {
@@ -465,7 +465,7 @@ impl Inputs {
                         sys::reboot(true);
                     }
                 } else if ev.code < BTN_MISC {
-                    eco::send(&ToElm::Key { code: ev.code, down, repeat: false });
+                    elm::send(&ToElm::Key { code: ev.code, down, repeat: false });
                 }
             }
             _ => {}

@@ -18,9 +18,9 @@
 //! The types are in host/protocol, with an example of each message that both sides are
 //! tested against.
 //!
-//! eco calls us on Elm's thread, so the callbacks only queue what Elm sent and wake the
-//! host thread, which reads it and acts (host.rs). A scene is copied out of Elm's
-//! value as it is read, because eco lends the bytes only for the call.
+//! The Elm program runs as a process of its own (elm.rs): the thread reading its
+//! socket queues what it sent and wakes the host thread, which reads it and acts
+//! (host.rs).
 
 use std::sync::{Mutex, OnceLock};
 
@@ -32,12 +32,16 @@ pub use protocol::Effect;
 enum Sent {
     Json(String),
     Scene(Vec<Tri>),
+    Connected(u64),
 }
 
 /// What Elm sent, in order.
 pub enum FromElm {
     Effect(Effect),
     Render(Vec<Tri>),
+    /// A new Elm program (this number, see elm::answer) has started: what follows is
+    /// from it.
+    Connected(u64),
 }
 
 struct Inbox {
@@ -58,21 +62,30 @@ fn inbox() -> &'static Inbox {
     })
 }
 
-pub fn start() {
-    inbox();
-    crate::eco::subscribe(c"toHost", |json| {
-        if crate::sys::debug() {
-            // Not all of it: every frame sends thousands of numbers.
-            log!("host", "toHost {:.300}", json);
+/// What the Elm program sent: a message from its socket (protocol::link).
+pub fn from_elm(kind: u8, payload: Vec<u8>) {
+    match kind {
+        protocol::link::TO_HOST => {
+            let json = String::from_utf8_lossy(&payload).into_owned();
+            if crate::sys::debug() {
+                // Not all of it: every frame sends thousands of numbers.
+                log!("host", "toHost {:.300}", json);
+            }
+            push(Sent::Json(json));
         }
-        push(Sent::Json(json.to_owned()));
-    });
-    crate::eco::subscribe_bytes(c"render", |bytes| match protocol::read_render(bytes) {
-        Some(tris) => push(Sent::Scene(
-            tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
-        )),
-        None => log!("host", "couldn't read Elm's scene: {} bytes", bytes.len()),
-    });
+        protocol::link::RENDER => match protocol::read_render(&payload) {
+            Some(tris) => push(Sent::Scene(
+                tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
+            )),
+            None => log!("host", "couldn't read Elm's scene: {} bytes", payload.len()),
+        },
+        kind => log!("host", "a message of kind {kind} from Elm"),
+    }
+}
+
+/// A new Elm program has started (elm.rs).
+pub fn connected(program: u64) {
+    push(Sent::Connected(program));
 }
 
 /// The fd the host thread polls: readable when Elm has sent something.
@@ -89,6 +102,10 @@ pub fn take() -> Vec<FromElm> {
         let json = match sent {
             Sent::Scene(tris) => {
                 effects.push(FromElm::Render(tris));
+                continue;
+            }
+            Sent::Connected(program) => {
+                effects.push(FromElm::Connected(program));
                 continue;
             }
             Sent::Json(json) => json,

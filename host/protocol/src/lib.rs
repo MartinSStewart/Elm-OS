@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod link;
+
 /// A triangle of the scene Elm draws: x, y, u, v of each corner (screen pixels, then
 /// texture atlas pixels: see common/src/atlas.rs) and the colour, 0xRRGGBBAA.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -138,8 +140,14 @@ pub enum ToElm {
     Wired { links: Vec<WiredLink> },
     /// Only when set on the kernel command line, for the tests.
     NetConfig { geo_url: String, weather_url: String },
-    /// Where the data disk is mounted, or null without one.
-    DataDisk { path: Option<String> },
+    /// Where the data disk is mounted, or null without one. Sent again to each Elm
+    /// program the host starts (elm.rs), with the ids of the HTTP requests an earlier
+    /// one made that the host is still working on, or has an answer for that it will
+    /// deliver next: those weren't cut off (Persist.elm).
+    DataDisk {
+        path: Option<String>,
+        http_in_flight: Vec<String>,
+    },
     /// Any status, 404 included.
     HttpResponse { id: String, status: u16, body: String },
     HttpError { id: String, error: HttpFailure, message: String },

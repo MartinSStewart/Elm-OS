@@ -44,7 +44,7 @@ use std::process::{Child, Command as Process};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::eco;
+use crate::elm;
 use crate::sys::{self, now, Waker};
 
 const WPA_SUPPLICANT: &str = "/usr/sbin/wpa_supplicant";
@@ -136,7 +136,7 @@ impl Net {
             (Some(l), State::Connected) => l.ip.map(|i| i.to_string()).unwrap_or_default(),
             _ => String::new(),
         };
-        eco::send(&ToElm::WifiStatus {
+        elm::send(&ToElm::WifiStatus {
             state: self.state.name(),
             ssid: self.want_ssid.clone(),
             ip,
@@ -155,7 +155,7 @@ impl Net {
             .into_iter()
             .map(|n| WifiNetwork { ssid: String::from_utf8_lossy(&n.ssid).into_owned(), signal: n.signal, security: n.security })
             .collect();
-        eco::send(&ToElm::WifiScan { networks: nets });
+        elm::send(&ToElm::WifiScan { networks: nets });
     }
 
     fn scan(&mut self) {
@@ -333,7 +333,7 @@ fn check_dns() {
 }
 
 fn send_device(iface: Option<&str>) {
-    eco::send(&ToElm::WifiDevice { name: iface.map(str::to_owned) });
+    elm::send(&ToElm::WifiDevice { name: iface.map(str::to_owned) });
 }
 
 fn send_config() {
@@ -342,7 +342,7 @@ fn send_config() {
     if geo.is_none() && weather.is_none() {
         return;
     }
-    eco::send(&ToElm::NetConfig { geo_url: geo.unwrap_or_default(), weather_url: weather.unwrap_or_default() });
+    elm::send(&ToElm::NetConfig { geo_url: geo.unwrap_or_default(), weather_url: weather.unwrap_or_default() });
 }
 
 /// Bridges QEMU's Ethernet card with the simulated access point and starts hostapd on

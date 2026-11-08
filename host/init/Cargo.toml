@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[lib]
-crate-type = ["staticlib"]
-path = "src/lib.rs"
+# /init: the host, PID 1. It runs the Elm program (host/link) as a child process.
+[[bin]]
+name = "elmos-init"
+path = "src/main.rs"
 
 [dependencies]
 common = { path = "../common" }

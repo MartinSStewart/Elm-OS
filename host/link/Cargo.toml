@@ -1,0 +1,14 @@
+[package]
+name = "elmos-link"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Linked into the Elm program (build/elm), which the host (/init) starts as a separate
+# process: it carries Elm's ports over the socket the host gives it. See src/lib.rs.
+[lib]
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"

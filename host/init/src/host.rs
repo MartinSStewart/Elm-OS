@@ -15,14 +15,13 @@
 //! ELMOS_RENDERER=gpu to use Mesa even when it only has a software driver.
 //!
 //! Also sends Elm:
-//!   {"t":"screen","w":W,"h":H}                     first, once
+//!   {"t":"screen","w":W,"h":H}                     first, to each Elm program (elm.rs)
 //!   {"t":"renderer","gpu":true,"name":"...","hardwareCursor":true}   which renderer draws
 //!   {"t":"system","kernel":K,"cpu":C,"commit":G}   for the about page
 //!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
 use common::atlas::{self, Tri};
 use protocol::{PowerAction, ToElm};
-use std::time::Duration;
 
 use crate::display::CpuDisplay;
 use crate::effects::{self, Effect, FromElm};
@@ -31,7 +30,7 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
-use crate::{eco, http, net, persist, raster};
+use crate::{elm, http, net, persist, raster};
 
 /// Elm draws only when asked.
 ///
@@ -69,8 +68,10 @@ struct Host {
     gpu_progress_at: f64,
     stats: Stats,
     inputs: Inputs,
-    /// When Elm took its first message, until the first frame is on screen.
+    /// When the first Elm program started, until its first frame is on screen.
     elm_started_at: Option<f64>,
+    /// The Elm program the effects being run came from (elm::answer).
+    program: u64,
 }
 
 impl Host {
@@ -103,7 +104,7 @@ impl Host {
             Renderer::Gpu(g) => (true, g.name.as_str()),
             _ => (false, "rasteriser in /init"),
         };
-        eco::send(&ToElm::Renderer { gpu, name: name.to_owned(), hardware_cursor: self.hw_cursor });
+        elm::send(&ToElm::Renderer { gpu, name: name.to_owned(), hardware_cursor: self.hw_cursor });
     }
 
     fn gpu_pid(&self) -> Option<u32> {
@@ -144,7 +145,7 @@ impl Host {
     fn ask_for_frame(&mut self) {
         self.asked_at = now();
         let ms = (self.asked_at * 1e6).round() / 1000.0;
-        eco::send(&ToElm::Frame { time: ms });
+        elm::send(&ToElm::Frame { time: ms });
         self.awaiting_render = true;
         self.cpu_next_at = None;
     }
@@ -206,6 +207,19 @@ impl Host {
                     scene = Some(tris); // only the newest gets drawn
                     continue;
                 }
+                FromElm::Connected(program) => {
+                    self.program = program;
+                    if self.elm_started_at.is_none() && program == 1 {
+                        self.elm_started_at = Some(now());
+                    }
+                    // Whatever the last program was asked for, the new one draws
+                    // next. elm.rs has already queued what it needs to know first.
+                    self.awaiting_render = false;
+                    if self.in_flight < self.max_in_flight {
+                        self.ask_for_frame();
+                    }
+                    continue;
+                }
                 FromElm::Effect(effect) => effect,
             };
             match effect {
@@ -230,12 +244,12 @@ impl Host {
                     }
                 }
                 Effect::Http(req) => http::request(req),
-                Effect::ListDir { path } => files::request(Request::ListDir { path }),
-                Effect::ReadFiles { id, paths } => files::request(Request::ReadFiles { id, paths }),
+                Effect::ListDir { path } => files::request(self.program, Request::ListDir { path }),
+                Effect::ReadFiles { id, paths } => files::request(self.program, Request::ReadFiles { id, paths }),
                 Effect::ReadBytes { path, offset, length } => {
-                    files::request(Request::ReadBytes { path, offset, length })
+                    files::request(self.program, Request::ReadBytes { path, offset, length })
                 }
-                Effect::Sha256 { path, length } => files::request(Request::Sha256 { path, length }),
+                Effect::Sha256 { path, length } => files::request(self.program, Request::Sha256 { path, length }),
                 Effect::WriteSys { path, text } => files::write_sys(path, text),
                 Effect::AppendFile { path, text } => persist::append_file(path, text),
                 Effect::WriteFile { path, text } => persist::write_file(path, text),
@@ -264,7 +278,7 @@ fn send_boot_times(elm_at: f64) {
     let (init, frame) = (crate::init_started_at(), now());
     log!("boot", "first frame {frame:.2} s after the kernel started (/init {init:.2} s, Elm {elm_at:.2} s)");
     let ms = |s: f64| (s * 1000.0).round();
-    eco::send(&ToElm::Boot { init_ms: ms(init), elm_ms: ms(elm_at), frame_ms: ms(frame) });
+    elm::send(&ToElm::Boot { init_ms: ms(init), elm_ms: ms(elm_at), frame_ms: ms(frame) });
 }
 
 /// For Elm's about page: the kernel, the CPU, and which commit this is.
@@ -285,7 +299,7 @@ fn send_system() {
                 .map(|(_, v)| v.trim().to_owned())
         })
         .unwrap_or_else(|| "unknown".into());
-    eco::send(&ToElm::System {
+    elm::send(&ToElm::System {
         kernel: format!("{} {}", field(&u.sysname), field(&u.release)),
         cpu,
         // Written into the initramfs by the Makefile rather than compiled in, so a new
@@ -296,7 +310,7 @@ fn send_system() {
     });
 }
 
-pub fn run() {
+pub fn run() -> ! {
     let software_cursor = std::env::var("ELMOS_CURSOR").as_deref() == Ok("software");
     let mut host = Host {
         renderer: Renderer::Nothing,
@@ -324,6 +338,7 @@ pub fn run() {
         stats: Stats::default(),
         inputs: Inputs::new(0, 0),
         elm_started_at: None,
+        program: 0,
     };
     // The cursor's size depends on the screen's, which we only know once a renderer is
     // up; both renderers draw the cursor themselves at start, so fix it up after.
@@ -339,12 +354,8 @@ pub fn run() {
     host.cursor_scale = if host.w >= 2000 { 2 } else { 1 };
     host.cursor_redraw();
 
-    // Ports are registered once Elm starts; retry until it accepts.
-    let screen = ToElm::Screen { w: host.w, h: host.h }.to_json();
-    while !eco::try_send(&screen) {
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    host.elm_started_at = Some(now());
+    // Each Elm program gets the screen first (elm.rs keeps it for the next one).
+    elm::send(&ToElm::Screen { w: host.w, h: host.h });
     host.inputs = Inputs::new(host.w, host.h);
     host.inputs.scale = host.cursor_scale as f64;
     host.inputs.scan();
@@ -354,7 +365,8 @@ pub fn run() {
     host.stats = Stats::new();
     host.stats.send(host.gpu_pid());
     let mut last_stats = now();
-    host.ask_for_frame();
+    // The first frame is asked for once the Elm program has started (FromElm::Connected).
+    elm::start();
     let mut last_scan = now();
 
     loop {
@@ -430,7 +442,7 @@ pub fn run() {
         }
         if moved {
             host.cursor_move();
-            eco::send(&ToElm::Mouse { x: host.inputs.mouse_x, y: host.inputs.mouse_y });
+            elm::send(&ToElm::Mouse { x: host.inputs.mouse_x, y: host.inputs.mouse_y });
         }
     }
 }

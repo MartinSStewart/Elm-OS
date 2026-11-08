@@ -30,7 +30,7 @@ writes files; what goes in them is decided here.
 
   - The disk: the host mounts the partition named "Elm OS data" (on the USB stick,
     or a virtual disk in QEMU) and says where with `{"t":"dataDisk","path":P}`
-    (P is null without one, and then nothing is saved).
+    (P is null without one, and then nothing is saved), with `"httpInFlight"`.
   - `log` holds one entry per Msg, and `snapshot` one entry, the Model. Each entry
     is a line: its length in bytes, its CRC-32, and the JSON (written by the code tools/wire generates), so
     `42 89abcdef [17,[1,...]]`. A power cut while writing leaves the last entry
@@ -48,7 +48,10 @@ writes files; what goes in them is decided here.
     `pending` is the ids of the HTTP requests not yet answered.
   - An HTTP request doesn't outlive the host, so after a restart or a power cut
     each request still waiting gets `httpInterrupted` as its answer, before
-    anything else happens (see `trackRequests`).
+    anything else happens (see `trackRequests`). The host can also start this
+    program again without restarting itself (when it crashed, say; host/init/src/elm.rs):
+    then the requests it is still answering are listed in `httpInFlight`, and
+    their answers come as usual.
   - A snapshot is taken at start (once the log is replayed), when the log reaches
     `snapshotAfterBytes`, and before powering off or restarting.
 
@@ -126,7 +129,8 @@ program config codecs =
 type Model model msg
     = -- Until the host says whether there is a disk. The Msgs that came meanwhile, newest first.
       WaitingForDisk (List msg)
-    | ReadingDisk String (List msg)
+    | -- The disk, and the HTTP requests the host is still answering (see DataDisk).
+      ReadingDisk { dir : String, httpInFlight : List String } (List msg)
     | -- The ids of the HTTP requests that haven't been answered yet, oldest first.
       Running model Saving (List String)
 
@@ -137,7 +141,9 @@ type Saving
 
 
 type Msg msg
-    = DataDisk (Maybe String)
+    = -- The disk, if there is one, and the ids of the HTTP requests an earlier run of
+      -- this program made that the host is still answering: those weren't cut off.
+      DataDisk (Maybe String) (List String)
     | DataFiles (Maybe String) (Maybe String)
     | AppMsg msg
 
@@ -206,7 +212,9 @@ hostMessage =
             (\t ->
                 case t of
                     "dataDisk" ->
-                        D.map DataDisk (D.field "path" (D.nullable D.string))
+                        D.map2 DataDisk
+                            (D.field "path" (D.nullable D.string))
+                            (D.oneOf [ D.field "httpInFlight" (D.list D.string), D.succeed [] ])
 
                     "files" ->
                         D.field "id" D.string
@@ -242,15 +250,15 @@ update config codecs msg model =
                 WaitingForDisk early ->
                     ( WaitingForDisk (appMsg :: early), [] )
 
-                ReadingDisk dir early ->
-                    ( ReadingDisk dir (appMsg :: early), [] )
+                ReadingDisk disk early ->
+                    ( ReadingDisk disk (appMsg :: early), [] )
 
-        DataDisk maybeDir ->
+        DataDisk maybeDir httpInFlight ->
             case model of
                 WaitingForDisk early ->
                     case maybeDir of
                         Just dir ->
-                            ( ReadingDisk dir early
+                            ( ReadingDisk { dir = dir, httpInFlight = httpInFlight } early
                             , [ Effect.ReadFiles { id = readId, paths = [ dir ++ "/snapshot", dir ++ "/log" ] } ]
                             )
 
@@ -265,7 +273,7 @@ update config codecs msg model =
 
         DataFiles snapshot log ->
             case model of
-                ReadingDisk dir early ->
+                ReadingDisk { dir, httpInFlight } early ->
                     let
                         restored =
                             restore config codecs { snapshot = snapshot, log = log }
@@ -283,10 +291,15 @@ update config codecs msg model =
 
                         notes =
                             List.map (\note -> Effect.Log ("persist: " ++ note)) restored.notes
+
+                        -- The host is still answering these: an earlier run of this
+                        -- program made them, and the host started this one meanwhile.
+                        interrupted =
+                            List.filter (\id -> not (List.member id httpInFlight)) restored.pending
                     in
                     -- Requests that were cut off are answered first, then the Msgs
                     -- that waited. The snapshot has them all, so they needn't be logged.
-                    case runEarly config codecs (early ++ List.reverse (List.map config.httpInterrupted restored.pending)) (config.resume restored.model) NotSaving restored.pending of
+                    case runEarly config codecs (early ++ List.reverse (List.map config.httpInterrupted interrupted)) (config.resume restored.model) NotSaving restored.pending of
                         ( Running app _ pending, effects ) ->
                             ( Running app (Saving saving) pending, notes ++ kept ++ snapshotEffects codecs app pending saving ++ effects )
 

@@ -65,7 +65,15 @@ applyEffects effects disk =
 {-| Boots with this disk, then runs these host messages. The Model and the disk after.
 -}
 boot : Disk -> List String -> ( Maybe Main.Model, Disk )
-boot disk messages =
+boot =
+    bootWith []
+
+
+{-| `boot`, when the host started the program again (it crashed, say) while it was
+still answering these HTTP requests of the last run.
+-}
+bootWith : List String -> Disk -> List String -> ( Maybe Main.Model, Disk )
+bootWith httpInFlight disk messages =
     let
         step msg ( model, d ) =
             let
@@ -78,7 +86,7 @@ boot disk messages =
             Persist.init
     in
     ( start, disk )
-        |> step (Persist.DataDisk (Just "/data"))
+        |> step (Persist.DataDisk (Just "/data") httpInFlight)
         |> step (Persist.DataFiles (Dict.get "/data/snapshot" disk) (Dict.get "/data/log" disk))
         |> (\state -> List.foldl (\json -> step (Persist.AppMsg (hostMsg json))) state messages)
         |> Tuple.mapFirst Persist.appModel
@@ -224,5 +232,22 @@ suite =
                         boot disk []
                 in
                 ( pending disk, pending rebooted ) |> Expect.equal ( [ "geo" ], [] )
+            )
+        , test "a request the host is still answering when it starts the program again is left waiting"
+            (\_ ->
+                let
+                    ( _, disk ) =
+                        boot Dict.empty session
+
+                    pending d =
+                        (Persist.restore Main.persistConfig ElmOs.codecs { snapshot = Dict.get "/data/snapshot" d, log = Dict.get "/data/log" d }).pending
+
+                    ( _, restarted ) =
+                        bootWith [ "geo" ] disk []
+
+                    ( _, answered ) =
+                        bootWith [ "geo" ] disk [ "{\"t\":\"httpError\",\"id\":\"geo\",\"error\":\"network\",\"message\":\"no route\"}" ]
+                in
+                ( pending restarted, pending answered ) |> Expect.equal ( [ "geo" ], [] )
             )
         ]

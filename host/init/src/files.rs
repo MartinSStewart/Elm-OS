@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::io::AsRawFd;
 
-use crate::eco;
+use crate::elm;
 
 pub enum Request {
     ListDir { path: String },
@@ -49,10 +49,11 @@ pub fn write_sys(path: String, text: String) {
         .expect("start a files thread");
 }
 
-pub fn request(req: Request) {
+/// Answers `req` to Elm program number `program` (elm::answer), if it's still running.
+pub fn request(program: u64, req: Request) {
     std::thread::Builder::new()
         .name("files".into())
-        .spawn(move || eco::send(&answer(req)))
+        .spawn(move || elm::answer(program, &answer(req)))
         .expect("start a files thread");
 }
 

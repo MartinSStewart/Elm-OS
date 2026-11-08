@@ -79,7 +79,7 @@ export SOURCE_DATE_EPOCH
 
 
 # eco's own link line for a static musl executable (captured from
-# `eco make --output=<exe>`), with the Rust host library (libelmos_host.a) added before the Elm object.
+# `eco make --output=<exe>`), with the Elm program's link to the host (libelmos_link.a) added.
 PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel_Bitwise \
                       ElmKernel_Char ElmKernel_String ElmKernel_List
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
@@ -299,7 +299,7 @@ $(BUILD)/commit: FORCE
 # assembly, which cargo compiles with musl-gcc.
 CARGO       ?= cargo
 RUST_TARGET := x86_64-unknown-linux-musl
-HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/init host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
+HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
 # Paths to this checkout and to cargo's crate sources end up in panic messages and in
 # ring's C code; map them to fixed names so the output doesn't depend on where they are.
 CARGO_HOME_DIR := $(or $(CARGO_HOME),$(HOME)/.cargo)
@@ -308,18 +308,26 @@ CARGO_BUILD  = cd host && CC_x86_64_unknown_linux_musl=musl-gcc \
   CFLAGS_x86_64_unknown_linux_musl='-ffile-prefix-map=$(abspath .)=/elmos -ffile-prefix-map=$(CARGO_HOME_DIR)=/cargo' \
   $(CARGO) build --release --locked --target $(RUST_TARGET)
 
-$(BUILD)/libelmos_host.a: $(HOST_SRC) | check-deps
+# /init, the host: a static Rust program (musl), PID 1. It runs the Elm program,
+# build/elm, as a process of its own (host/init/src/elm.rs).
+$(BUILD)/init: $(HOST_SRC) | check-deps
 	$(CARGO_BUILD) -p elmos-host --target-dir $(abspath $(BUILD)/cargo-init) \
 	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-cpu=x86-64-v3",$(RUST_REMAP)]'
-	cp $(BUILD)/cargo-init/$(RUST_TARGET)/release/libelmos_host.a $@
+	strip -o $@ $(BUILD)/cargo-init/$(RUST_TARGET)/release/elmos-init
 
-# eco's own link line for a static musl executable, with the host's library added
-# (-u keeps its constructor, which nothing else refers to). eco's runtime still refers
-# to libcurl for elm/http, which we don't use: host/init/src/no_curl.rs stands in for
+$(BUILD)/libelmos_link.a: $(HOST_SRC) | check-deps
+	$(CARGO_BUILD) -p elmos-link --target-dir $(abspath $(BUILD)/cargo-link) \
+	  --config 'target.$(RUST_TARGET).rustflags=["-Ctarget-cpu=x86-64-v3",$(RUST_REMAP)]'
+	cp $(BUILD)/cargo-link/$(RUST_TARGET)/release/libelmos_link.a $@
+
+# The Elm program, /usr/lib/elmos/elm: eco's own link line for a static musl
+# executable, with the Elm program's end of its link to the host added (host/link;
+# -u keeps its constructor, which nothing else refers to). eco's runtime still refers
+# to libcurl for elm/http, which we don't use: host/link/src/no_curl.rs stands in for
 # it, so neither libcurl nor OpenSSL is linked.
-$(BUILD)/init: $(BUILD)/libelmos_host.a $(BUILD)/elm.o
+$(BUILD)/elm: $(BUILD)/libelmos_link.a $(BUILD)/elm.o
 	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
-	  -u elmos_host_init \
+	  -u elmos_link_init \
 	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
 	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
 	  $(BUILD)/elm.o \
@@ -327,7 +335,7 @@ $(BUILD)/init: $(BUILD)/libelmos_host.a $(BUILD)/elm.o
 	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
 	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
 	    $(PROJECT_LIBS_REST) \
-	    $(BUILD)/libelmos_host.a \
+	    $(BUILD)/libelmos_link.a \
 	  --end-group \
 	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libzip.a $(RT)/libz.a \
 	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
@@ -390,7 +398,7 @@ $(BUILD)/wpa_supplicant $(BUILD)/hostapd: $(BUILD)/%: $(BUILD)/src/%-$(HOSTAP_VE
 	  $(MAKE) -C $(BUILD)/hostap-$*/$* $*
 	strip -o $@ $(BUILD)/hostap-$*/$*/$*
 
-INITRAMFS_DEPS := $(BUILD)/init $(BUILD)/wpa_supplicant $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
+INITRAMFS_DEPS := $(BUILD)/init $(BUILD)/elm $(BUILD)/wpa_supplicant $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
 
 # Rebuild the initramfs when GPU= changes.
 $(BUILD)/gpu-setting: FORCE
@@ -407,6 +415,8 @@ $(BUILD)/eco-setting: FORCE
 $(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos
 	cp $(BUILD)/init $(BUILD)/rootfs/init
+	mkdir -p $(BUILD)/rootfs/usr/lib/elmos
+	cp $(BUILD)/elm $(BUILD)/rootfs/usr/lib/elmos/elm
 	cp $(BUILD)/commit $(BUILD)/rootfs/etc/elmos/commit
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin

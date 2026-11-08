@@ -2,8 +2,8 @@
 //!
 //! eco's runtime carries elm/http's native implementation (HttpService, on libcurl and
 //! OpenSSL), and links it in even when the program doesn't use elm/http. Elm OS
-//! doesn't: Elm asks the host for HTTP as an effect (http.rs, rustls). So /init links
-//! these instead of libcurl, which keeps libcurl and OpenSSL out of it altogether.
+//! doesn't: Elm asks the host for HTTP as an effect (http.rs, rustls). So the Elm program
+//! links these instead of libcurl, which keeps libcurl and OpenSSL out of it altogether.
 //! If anything did call them, every request would fail cleanly: no handle, and
 //! CURLE_FAILED_INIT.
 
@@ -23,10 +23,7 @@ pub extern "C" fn curl_global_cleanup() {}
 
 #[no_mangle]
 pub extern "C" fn curl_easy_init() -> *mut c_void {
-    log!(
-        "host",
-        "elm/http isn't available: Elm OS does HTTP in the host (Effect.Http)"
-    );
+    crate::log!("elm/http isn't available: Elm OS does HTTP in the host (Effect.Http)");
     std::ptr::null_mut()
 }
 

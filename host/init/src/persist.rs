@@ -36,7 +36,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::eco;
+use crate::elm;
 
 const PARTITION_NAME: &str = "Elm OS data";
 const MOUNT_POINT: &str = "/data";
@@ -63,7 +63,8 @@ pub fn start() {
                 *queue().lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                 rx
             });
-            eco::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()) });
+            // elm.rs fills in the HTTP requests in flight for each program it sends this to.
+            elm::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()), http_in_flight: Vec::new() });
             if let Some(rx) = rx {
                 Writer::default().run(rx);
             }

@@ -3,8 +3,8 @@
 //!   {"t":"stats","cores":N,"cpu":P,"cpuElm":P,"cpuHost":P,"cpuGpu":P,
 //!    "memUsed":MB,"memTotal":MB,"gpuMs":MS,"elmMs":MS,"drawMs":MS}
 //!
-//! cpu: all cores; cpuElm/Host/Gpu: % of one core used by the Elm program's threads,
-//! the host thread, and elmos-gpu. The times are averages per frame (-1 if unknown):
+//! cpu: all cores; cpuElm/Host/Gpu: % of one core used by the Elm program's process,
+//! the host's (/init, all its threads), and elmos-gpu's. The times are averages per frame (-1 if unknown):
 //! GPU time, how long Elm took to answer a frame, and how long /init took to draw it
 //! (CPU) or pass it on (GPU).
 
@@ -21,7 +21,6 @@ pub struct Stats {
     last_total: u64,
     last_ticks: [i64; 3],
     last_t: f64,
-    host_tid: i32,
 }
 
 /// CPU ticks (user + system) a /proc/.../stat file reports.
@@ -45,11 +44,7 @@ fn average(v: &mut Vec<f64>, scale: f64) -> f64 {
 
 impl Stats {
     pub fn new() -> Stats {
-        // SAFETY: plain system call.
-        let mut s = Stats {
-            host_tid: unsafe { libc::gettid() },
-            ..Default::default()
-        };
+        let mut s = Stats::default();
         s.cpu_load();
         s
     }
@@ -82,19 +77,14 @@ impl Stats {
     }
 
     /// Where the CPU time goes, in percent of one core since the last call: the Elm
-    /// program (every thread of /init but ours), this host thread, and elmos-gpu.
+    /// program, the host (/init), and elmos-gpu. A process that has just started counts
+    /// from zero.
     fn cpu_split(&mut self, gpu_pid: Option<u32>) -> [f64; 3] {
         let mut ticks = [0i64; 3];
-        if let Ok(dir) = std::fs::read_dir("/proc/self/task") {
-            for e in dir.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if let Some(t) = proc_ticks(&format!("/proc/self/task/{name}/stat")) {
-                    ticks[if name.parse::<i32>() == Ok(self.host_tid) { 1 } else { 0 }] += t;
-                }
+        for (i, pid) in [elm::pid(), Some(std::process::id()), gpu_pid].into_iter().enumerate() {
+            if let Some(t) = pid.and_then(|p| proc_ticks(&format!("/proc/{p}/stat"))) {
+                ticks[i] = t;
             }
-        }
-        if let Some(t) = gpu_pid.and_then(|p| proc_ticks(&format!("/proc/{p}/stat"))) {
-            ticks[2] = t;
         }
         let t = sys::now();
         // SAFETY: plain system call.
@@ -151,8 +141,8 @@ impl Stats {
         if std::env::var_os("ELMOS_STATS").is_some() {
             log!("stats", "frames={} {}", frames, stats.to_json());
         }
-        eco::send(&stats);
+        elm::send(&stats);
     }
 }
 
-use crate::eco;
+use crate::elm;

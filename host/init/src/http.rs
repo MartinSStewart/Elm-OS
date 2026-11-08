@@ -11,7 +11,7 @@ use protocol::{HttpFailure, ToElm};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::eco;
+use crate::elm;
 
 pub use protocol::HttpRequest as Request;
 
@@ -72,6 +72,7 @@ fn run(req: &Request) -> Result<(u16, String), Failure> {
 }
 
 pub fn request(req: Request) {
+    elm::http_started(&req.id);
     std::thread::Builder::new()
         .name("http".into())
         .spawn(move || {
@@ -97,7 +98,7 @@ pub fn request(req: Request) {
                     ToElm::HttpError { id: req.id.clone(), error, message }
                 }
             };
-            eco::send(&msg);
+            elm::send(&msg);
         })
         .ok();
 }

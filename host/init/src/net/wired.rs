@@ -15,7 +15,7 @@ use protocol::{ToElm, WiredLink, WiredState};
 use std::time::Duration;
 
 use super::{dhcp, iface};
-use crate::eco;
+use crate::elm;
 use crate::sys::now;
 
 /// Below wifi's (super::WIFI_METRIC), so the cable wins.
@@ -50,7 +50,7 @@ fn send(links: &[Link]) {
             WiredLink { name: l.name.clone(), state, ip: l.ip.clone() }
         })
         .collect();
-    eco::send(&ToElm::Wired { links });
+    elm::send(&ToElm::Wired { links });
 }
 
 /// Gets (or renews) an address on `link`. Blocks for up to about 20 seconds.
