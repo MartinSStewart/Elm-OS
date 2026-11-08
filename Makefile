@@ -239,8 +239,26 @@ WIRE_FLAGS := --runtime tools/wire/Wire.elm --entry ElmOs \
 $(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(shell find elm/src -name "*.elm")
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
-	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes
+	$(call WIRE,$(BUILD)/wire,--src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes)
 	touch $@
+
+# Runs tools/wire with the flags $(2), writing into the directory $(1). When it fails,
+# it still writes the program with placeholder codecs, so this compiles that: often
+# what wire couldn't make sense of is a mistake the compiler explains far better (with
+# the file and line), so its errors come first, then wire's.
+define WIRE
+	@echo "$(BUILD)/wire-tool $(2)"
+	@if $(BUILD)/wire-tool $(2) 2> $(1)/wire-errors; then cat $(1)/wire-errors >&2; else \
+	  echo "wire failed: compiling with placeholder codecs to see what eco says" >&2; \
+	  if (cd $(1) && $(ECO) make src/ElmOs.elm --output=/dev/null > eco-output 2>&1); then \
+	    echo "eco is happy with the code, so it's something only tools/wire can't handle:" >&2; \
+	  else \
+	    cat $(1)/eco-output >&2; \
+	    echo "" >&2; echo "Fix eco's errors above first; they probably cause wire's:" >&2; \
+	  fi; \
+	  cat $(1)/wire-errors >&2; exit 1; \
+	fi
+endef
 
 # Every commit that changes the types the Model is made of adds a version of them:
 # a frozen copy in elm/src/Evergreen/V<n>, and the migration from version n - 1 in

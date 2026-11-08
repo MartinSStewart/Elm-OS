@@ -1,4 +1,4 @@
-module Generate exposing (Options, SourceFile, freeze, generate)
+module Generate exposing (Options, SourceFile, freeze, generate, placeholder)
 
 {-| Writes encoders and decoders for the types the Model and the Msg are made of,
 in the style of Lamdera's Wire: each module that defines such a type `T` gets
@@ -151,6 +151,64 @@ defaultImports =
 generate : Options -> List SourceFile -> Result (List String) { files : List SourceFile, warnings : List String }
 generate options files =
     withModules options files generateWith
+
+
+{-| What to write when `generate` fails: the source files as they are, and an entry
+module whose codecs do nothing. So the compiler can still be run on it, and give its
+own errors, which are often the cause of wire's (a type it couldn't find, say) and
+say exactly where the problem is. It mustn't be run: its Model can't be saved.
+-}
+placeholder : Options -> List SourceFile -> List SourceFile
+placeholder options files =
+    let
+        modulePart full =
+            Maybe.map Tuple.first (splitName full) |> Maybe.withDefault full
+
+        imports =
+            [ modulePart options.config, modulePart options.model, modulePart options.msg, "Json.Decode", "Json.Encode", "Persist" ]
+                |> Set.fromList
+                |> Set.toList
+                |> List.map (\i -> "import " ++ i)
+
+        failing =
+            "Json.Decode.fail \"tools/wire failed: this build has placeholder codecs\""
+    in
+    files
+        ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
+             , source =
+                String.join "\n"
+                    ([ "module " ++ options.entry ++ " exposing (codecs, main)"
+                     , ""
+                     , "{-| Written by tools/wire when it failed, so the compiler's errors can be seen:"
+                     , "the codecs are placeholders, and this mustn't be run."
+                     , "-}"
+                     , ""
+                     ]
+                        ++ imports
+                        ++ [ ""
+                           , ""
+                           , "main : Program () (Persist.Model " ++ options.model ++ " " ++ options.msg ++ ") (Persist.Msg " ++ options.msg ++ ")"
+                           , "main ="
+                           , "    Persist.program " ++ options.config ++ " codecs"
+                           , ""
+                           , ""
+                           , "codecs : Persist.Codecs " ++ options.model ++ " " ++ options.msg
+                           , "codecs ="
+                           , "    { encodeModel = \\_ -> Json.Encode.null"
+                           , "    , modelDecoder = " ++ failing
+                           , "    , encodeMsg = \\_ -> Json.Encode.null"
+                           , "    , msgDecoder = " ++ failing
+                           , "    , version = 0"
+                           , "    , modelShape = \"\""
+                           , "    , msgShape = \"\""
+                           , "    , versionShape = \\_ -> Nothing"
+                           , "    , migrate = \\_ _ -> Nothing"
+                           , "    }"
+                           , ""
+                           ]
+                    )
+             }
+           ]
 
 
 {-| Parses the files, and gives `next` the modules and the Model's, Msg's and

@@ -72,7 +72,10 @@ run env =
                         else
                             case Generate.generate f.options sources of
                                 Err problems ->
-                                    Task.succeed problems
+                                    -- Still write something the compiler can check (see
+                                    -- Generate.placeholder), as its errors are often better.
+                                    writeAll f.out ({ path = "Wire.elm", source = runtime } :: Generate.placeholder f.options sources)
+                                        |> Task.map (\_ -> problems)
 
                                 Ok { files, warnings } ->
                                     writeAll f.out ({ path = "Wire.elm", source = runtime } :: files)
