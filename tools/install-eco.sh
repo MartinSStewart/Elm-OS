@@ -11,11 +11,29 @@
 set -eu
 ver=$1 sha=$2 dir=$3
 
+# DIR/elmos-bin/eco runs DIR/bin/eco with HOME=DIR/home. eco keeps its package cache
+# in ~/.eco/0.2.0 for every 0.2.0 build (nightlies, rc2, rc3...), and their cached
+# typed-artifacts.dat files don't read in each other ("Corrupt File ... binary decode
+# failed"). So this eco gets a package cache of its own, and other ecos keep theirs.
+write_wrapper() {
+    mkdir -p "$1/elmos-bin" "$1/home"
+    cat > "$1/elmos-bin/eco" <<'EOF'
+#!/bin/sh
+# eco for Elm OS, with its own package cache (see tools/install-eco.sh).
+d=$(dirname "$(readlink -f "$0")")/..
+HOME=$(cd "$d/home" && pwd) exec "$d/bin/eco" "$@"
+EOF
+    chmod +x "$1/elmos-bin/eco"
+}
+
 # eco --version says 0.2.0~rc3 for the tag v0.2.0-rc3.
 want=$(printf %s "$ver" | tr - '~')
 if [ -x "$dir/bin/eco" ]; then
     have=$("$dir/bin/eco" --version 2>/dev/null || true)
-    [ "$have" = "$want" ] && exit 0
+    if [ "$have" = "$want" ]; then
+        [ -x "$dir/elmos-bin/eco" ] || write_wrapper "$dir"
+        exit 0
+    fi
     echo "eco in $dir says it's '$have', not $want: installing it again." >&2
 fi
 
@@ -43,6 +61,8 @@ if [ "$have" != "$want" ]; then
     echo "The downloaded eco says it's '$have', not $want." >&2
     exit 1
 fi
+
+write_wrapper "$tmp/eco"
 
 # Swap it in whole, so a cut-off install never looks like a finished one.
 rm -rf "$dir"

@@ -29,7 +29,10 @@ jobs:
         # make installs the eco versions.mk pins (tools/install-eco.sh) into ~/.cache/elm-os.
         uses: actions/cache@v4
         with:
-          path: ~/.cache/elm-os
+          # Not its package cache (home/), which is cached on its own below.
+          path: |
+            ~/.cache/elm-os
+            !~/.cache/elm-os/*/home
           key: eco-${{ hashFiles('versions.mk', 'tools/install-eco.sh') }}
 
       - name: Install eco
@@ -41,7 +44,8 @@ jobs:
         # kept, and a change to any elm.json starts from it.
         uses: actions/cache@v4
         with:
-          path: ~/.eco/0.2.0/packages
+          # The pinned eco's own package cache (see tools/install-eco.sh).
+          path: ~/.cache/elm-os/eco-*/home/.eco/0.2.0/packages
           key: eco-packages-${{ hashFiles('elm/elm.json', 'elm/review/elm.json', 'tools/wire/elm.json') }}
           restore-keys: eco-packages-
 

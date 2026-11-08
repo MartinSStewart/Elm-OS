@@ -43,8 +43,10 @@ include versions.mk
 # elm-test). `make ECO=/path/to/eco` uses another eco instead and installs nothing.
 ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)
 ifeq ($(origin ECO),undefined)
-ECO        := $(ECO_DIR)/bin/eco
-export PATH := $(ECO_DIR)/bin:$(PATH)
+# elmos-bin/eco runs bin/eco with a package cache of its own (ECO_DIR/home/.eco), not
+# ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
+ECO        := $(ECO_DIR)/elmos-bin/eco
+export PATH := $(ECO_DIR)/elmos-bin:$(PATH)
 # Not for the goals that don't need eco.
 ifneq ($(filter-out clean refresh check-fresh check-run-deps usb-write docker,$(or $(MAKECMDGOALS),all)),)
 $(shell tools/install-eco.sh $(ECO_VER) $(ECO_SHA256) $(ECO_DIR))
