@@ -15,7 +15,7 @@ import BootInfo
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
-import CurrentEvents
+import CurrentEvents exposing (NewsState(..))
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import HostMessage
@@ -1182,9 +1182,10 @@ screenUi model =
                         []
                    )
                 ++ (if model.newsOpen then
-                        Ui.topRight
+                        [ Ui.topRight
                             { size = uiSize model }
                             (CurrentEvents.newsPage model.news)
+                        ]
 
                     else
                         []
