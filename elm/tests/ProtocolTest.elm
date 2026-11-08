@@ -178,13 +178,13 @@ suite =
             )
         , test "the Effects sent as JSON go in one message, before each Render's"
             (\_ ->
-                Effect.messages [ Effect.WifiScan, Effect.Render [], Effect.Log "a", Effect.Render [] ]
+                Effect.messages [ Effect.WifiScan, Effect.Render (\() -> []), Effect.Log "a", Effect.Render (\() -> []) ]
                     |> List.map (\message -> Maybe.map Tuple.first (split message))
                     |> Expect.equal [ Just 1, Just 2, Just 2 ]
             )
         , test "a Render is sent as bytes, as in the example"
             (\_ ->
-                case List.map split (Effect.messages [ Effect.Render [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ] ]) of
+                case List.map split (Effect.messages [ Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]) ]) of
                     [ Just ( 2, payload ) ] ->
                         Expect.equal (Just ProtocolExamples.render) (hex payload)
 
