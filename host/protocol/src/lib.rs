@@ -19,8 +19,9 @@ pub enum Effect {
     /// common/src/atlas.rs), and the colour as 0xRRGGBBAA, for each of the 3 corners
     /// x, y, u, v, then the colour.
     Render { tris: Vec<f64> },
-    /// The mouse cursor's fill colour, 0xRRGGBBAA.
-    Cursor { rgba: f64 },
+    /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
+    /// sets the cursor's size and how far mouse motion moves it.
+    Cursor { rgba: f64, scale: u32 },
     WifiScan,
     WifiConnect { ssid: String, password: String },
     WifiDisconnect,

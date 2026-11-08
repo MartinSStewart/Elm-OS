@@ -3,6 +3,11 @@
 //! and then.
 //!
 //! Mice move the pointer by relative motion, tablets (QEMU's) by absolute position.
+//! Mouse motion is scaled by the UI scale (Elm sends it with the cursor colour), so the
+//! same hand movement crosses the same amount of UI on a 1x and a 2x screen, and
+//! accelerated like libinput's default for mice: slow movements stay precise, fast ones
+//! go further. This is done here rather than in Elm because the cursor plane is moved
+//! straight from these numbers, without waiting for Elm or a frame.
 //! A touchpad reports absolute finger positions too, but it should feel like a
 //! mouse: the pointer moves by how far the finger moves, and a quick tap clicks.
 //!
@@ -22,6 +27,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use crate::eco;
 use crate::sys;
 
+const EV_SYN: u16 = 0;
+const SYN_REPORT: u16 = 0;
 const EV_KEY: u16 = 1;
 const EV_REL: u16 = 2;
 const EV_ABS: u16 = 3;
@@ -91,6 +98,11 @@ struct Device {
     touch_start: f64,
     frac_x: f64,
     frac_y: f64,
+    // mouse state: motion since the last SYN_REPORT, and how fast the mouse was moving
+    rel_x: i32,
+    rel_y: i32,
+    last_motion: f64,
+    velocity: f64, // counts per millisecond
 }
 
 fn test_bit(bits: &[u8], bit: usize) -> bool {
@@ -154,6 +166,10 @@ impl Device {
             touch_start: 0.0,
             frac_x: 0.0,
             frac_y: 0.0,
+            rel_x: 0,
+            rel_y: 0,
+            last_motion: 0.0,
+            velocity: 0.0,
         })
     }
 }
@@ -169,6 +185,27 @@ pub struct Inputs {
     /// When to release a tap's click, if one is pending.
     pub tap_release_at: Option<f64>,
     tap_button: i32,
+    /// The UI scale: device pixels per mouse count, before acceleration.
+    pub scale: f64,
+    // what's left of the pointer's motion after rounding to whole pixels
+    frac_x: f64,
+    frac_y: f64,
+}
+
+/// How much faster than the mouse's own counts the pointer moves, at a speed in counts
+/// per millisecond: libinput's "adaptive" profile for mice at its default speed setting
+/// (filter-linear.c), assuming 1000 dpi like libinput does without a hardware database.
+/// Below 0.07 counts/ms (crawling) it slows down for precision, up to 0.4 it's 1:1,
+/// then it rises to 2x at about 1.3 counts/ms (a brisk flick).
+pub fn acceleration(velocity: f64) -> f64 {
+    let factor = if velocity < 0.07 {
+        10.0 * velocity + 0.3
+    } else if velocity < 0.4 {
+        1.0
+    } else {
+        1.1 * (velocity - 0.4) + 1.0
+    };
+    factor.min(2.0)
 }
 
 impl Inputs {
@@ -181,6 +218,9 @@ impl Inputs {
             mouse_y: h as i32 / 2,
             tap_release_at: None,
             tap_button: 0,
+            scale: 1.0,
+            frac_x: 0.0,
+            frac_y: 0.0,
         }
     }
 
@@ -288,14 +328,41 @@ impl Inputs {
         let event_time = ev.sec as f64 + ev.usec as f64 / 1e6;
         let (touchpad, has_abs) = (self.devices[i].touchpad, self.devices[i].has_abs);
         match ev.type_ {
-            EV_REL => {
-                if ev.code == REL_X {
-                    self.mouse_x += ev.value;
+            EV_SYN if ev.code == SYN_REPORT => {
+                let dev = &mut self.devices[i];
+                if dev.rel_x != 0 || dev.rel_y != 0 {
+                    let (dx, dy) = (dev.rel_x as f64, dev.rel_y as f64);
+                    dev.rel_x = 0;
+                    dev.rel_y = 0;
+                    // Velocity over the time since the last motion, averaged with the
+                    // one before so one late report doesn't jerk the pointer. After a
+                    // pause (more than 50 ms) the mouse starts again from rest.
+                    let dt_ms = ((event_time - dev.last_motion) * 1000.0).clamp(1.0, 50.0);
+                    let now_velocity = dx.hypot(dy) / dt_ms;
+                    let velocity = if dt_ms >= 50.0 {
+                        now_velocity
+                    } else {
+                        (now_velocity + dev.velocity) / 2.0
+                    };
+                    dev.velocity = now_velocity;
+                    dev.last_motion = event_time;
+                    let factor = acceleration(velocity) * self.scale;
+                    let (x, y) = (dx * factor + self.frac_x, dy * factor + self.frac_y);
+                    let (whole_x, whole_y) = (x.trunc(), y.trunc());
+                    self.frac_x = x - whole_x;
+                    self.frac_y = y - whole_y;
+                    self.mouse_x += whole_x as i32;
+                    self.mouse_y += whole_y as i32;
                     *moved = true;
                 }
+            }
+            EV_REL => {
+                let dev = &mut self.devices[i];
+                if ev.code == REL_X {
+                    dev.rel_x += ev.value;
+                }
                 if ev.code == REL_Y {
-                    self.mouse_y += ev.value;
-                    *moved = true;
+                    dev.rel_y += ev.value;
                 }
                 if ev.code == REL_WHEEL && ev.value != 0 {
                     eco::send(&ToElm::Wheel { dy: ev.value });

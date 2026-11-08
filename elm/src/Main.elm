@@ -363,8 +363,8 @@ update msg model =
                             step event model
                     in
                     ( next
-                    , if cursorColor next /= cursorColor model || isRenderer event then
-                        cmd ++ [ Effect.SetCursorColor (cursorColor next) ]
+                    , if cursorColor next /= cursorColor model || uiScale next /= uiScale model || isRenderer event then
+                        cmd ++ [ Effect.SetCursor { color = cursorColor next, scale = uiScale next } ]
 
                       else
                         cmd

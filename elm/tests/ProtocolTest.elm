@@ -15,8 +15,10 @@ import Json.Encode as E
 import Main
 import Persist
 import ProtocolExamples
+import Quantity
 import Sprite
 import Test exposing (Test, describe, test)
+import Units
 
 
 {-| Each Effect, in the order of examples.json's toHost.
@@ -24,7 +26,7 @@ import Test exposing (Test, describe, test)
 effects : List Effect
 effects =
     [ Effect.Render [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]
-    , Effect.SetCursorColor (Color.rgb255 255 0 0)
+    , Effect.SetCursor { color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
     , Effect.WifiScan
     , Effect.WifiConnect { ssid = "Home", password = "secret" }
     , Effect.WifiDisconnect

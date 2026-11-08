@@ -2,7 +2,7 @@
   "comment": "One example of every message between Elm and the host (src/lib.rs). cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) the Elm side. toHost is in the same order as ProtocolTest.effects.",
   "toHost": [
     {"t": "render", "tris": [0, 0, 252, 252, 10, 0, 252, 252, 0, 10, 252, 252, 4294967295]},
-    {"t": "cursor", "rgba": 4278190335},
+    {"t": "cursor", "rgba": 4278190335, "scale": 2},
     {"t": "wifiScan"},
     {"t": "wifiConnect", "ssid": "Home", "password": "secret"},
     {"t": "wifiDisconnect"},

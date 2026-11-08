@@ -234,7 +234,7 @@ def editor_text(snap):
 boot()
 SIZE = screen()
 w, h, _ = SIZE
-s = 2 if w >= 1600 else 1
+s = 2 if w >= 2000 else 1
 before = screen()
 
 # ---- 1. type, then a power cut

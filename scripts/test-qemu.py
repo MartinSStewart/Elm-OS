@@ -61,7 +61,7 @@ if usb:
     boot = ["-machine", "q35", "-bios", ovmf,
             "-drive", f"if=none,id=stick,format=raw,file={ROOT}/build/elmos-usb.img,snapshot=on",
             "-device", "qemu-xhci", "-device", "usb-storage,drive=stick,bootindex=0",
-            "-device", "usb-kbd", "-device", "usb-tablet", "-vga", "std", "-display", "none",
+            "-device", "usb-kbd", "-device", "usb-tablet", "-device", "usb-mouse", "-vga", "std", "-display", "none",
             # Like a desktop: wired Ethernet (Intel, the e1000e driver), and no wifi.
             "-nic", "user,model=e1000e"]
 else:
@@ -74,7 +74,7 @@ else:
             # puts it on the cursor plane, which screendumps leave out.
             "-append", "console=ttyS0 loglevel=4 retain_initrd" + ("" if gpu else " ELMOS_CURSOR=software")
             + f" ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
-            "-device", "virtio-tablet-pci"]
+            "-device", "virtio-tablet-pci", "-device", "virtio-mouse-pci"]
 qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
      "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
@@ -208,8 +208,8 @@ move(0.25, 0.25)
 shot = screen()
 w, h, _ = shot
 # The mouse cursor: a white arrow with a black outline, its tip at the pointer, drawn
-# from the texture atlas at 1 screen pixel per atlas pixel (2 on screens 1600 wide or more).
-s = 2 if w >= 1600 else 1
+# from the texture atlas at 1 screen pixel per atlas pixel (2 at the 2x UI scale, Units.scaleFor).
+s = 2 if w >= 2000 else 1
 WHITE = (255, 255, 255)
 def cursor_at(shot, fx, fy):
     x, y = int(fx * w), int(fy * h)
@@ -241,6 +241,15 @@ if dark < 20:
 move(0.75, 0.25)
 if not all(near(c, fill) for c in cursor_at(screen(), 0.75, 0.25)):
     fail("the cursor did not follow the mouse")
+
+# A mouse (relative motion, like the desktop's) moves the pointer by its counts, times
+# the UI scale, times libinput-style acceleration: one quick 100-count report after a
+# rest is fast (2 counts/ms or more), so it goes the full 2x, 200 UI pixels.
+move(0.25, 0.25)
+cmd("input-send-event", events=[{"type": "rel", "data": {"axis": "x", "value": 100}}])
+time.sleep(1)
+if not all(near(c, fill) for c in cursor_at(screen(), 0.25 + 200 * s / w, 0.25)):
+    fail("a 100-count mouse flick didn't move the cursor 200 UI pixels")
 
 # A key press changes the colour of the big triangle at the bottom.
 mx, my = int(0.95 * w), int(0.98 * h)  # clear of the overlay, even on a 640 px screen

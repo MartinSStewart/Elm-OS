@@ -519,7 +519,7 @@ fn main() {
             die("setting the display mode failed");
         }
 
-        let cursor = CursorPlane::new(gbm, card.clone(), out.crtc, if w >= 1600 { 2 } else { 1 });
+        let cursor = CursorPlane::new(gbm, card.clone(), out.crtc, if w >= 2000 { 2 } else { 1 }); // until Elm sends its UI scale
         let hw_cursor = cursor.is_some();
         if let Some(c) = cursor {
             std::thread::spawn(move || c.run());

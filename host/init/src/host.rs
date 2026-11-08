@@ -204,8 +204,10 @@ impl Host {
         for effect in effects::take() {
             match effect {
                 Effect::Render { tris } => scene = Some(tris), // only the newest gets drawn
-                Effect::Cursor { rgba } => {
+                Effect::Cursor { rgba, scale } => {
                     self.cursor_fill = rgba.clamp(0.0, 4294967295.0) as u32;
+                    self.cursor_scale = scale.clamp(1, 4) as usize;
+                    self.inputs.scale = self.cursor_scale as f64;
                     cursor_dirty = true;
                 }
                 Effect::WifiScan => net::command(net::Command::Scan),
@@ -324,7 +326,8 @@ pub fn run() {
     } else if !host.open_cpu() {
         log!("host", "no display; input only");
     }
-    host.cursor_scale = if host.w >= 1600 { 2 } else { 1 };
+    // A guess until Elm sends its UI scale (Units.scaleFor) with the cursor colour.
+    host.cursor_scale = if host.w >= 2000 { 2 } else { 1 };
     host.cursor_redraw();
 
     // Ports are registered once Elm starts; retry until it accepts.
@@ -334,6 +337,7 @@ pub fn run() {
     }
     host.elm_started_at = Some(now());
     host.inputs = Inputs::new(host.w, host.h);
+    host.inputs.scale = host.cursor_scale as f64;
     host.inputs.scan();
     host.cursor_move();
     host.send_renderer();

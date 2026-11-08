@@ -29,7 +29,7 @@ import Color exposing (Color)
 import Json.Decode as D
 import Json.Encode as E
 import Sprite exposing (Triangle)
-import Units exposing (DevicePixels)
+import Units exposing (DevicePixels, UiScale)
 
 
 port toHost : E.Value -> Cmd msg
@@ -40,9 +40,11 @@ port fromHost : (D.Value -> msg) -> Sub msg
 
 type Effect
     = Render (List (Triangle DevicePixels))
-      -- The mouse cursor's fill colour. The host draws the cursor on the display's
-      -- cursor plane and moves it as the mouse moves, without waiting for a frame.
-    | SetCursorColor Color
+      -- The mouse cursor's fill colour and the UI scale. The host draws the cursor on
+      -- the display's cursor plane and moves it as the mouse moves, without waiting
+      -- for a frame. The scale sets the cursor's size and how fast the mouse moves it,
+      -- so moving the mouse the same distance crosses the same amount of UI at 1x and 2x.
+    | SetCursor { color : Color, scale : UiScale }
     | WifiScan
     | WifiConnect { ssid : String, password : String }
     | WifiDisconnect
@@ -116,8 +118,12 @@ encode effect =
         Render triangles ->
             E.object [ ( "t", E.string "render" ), ( "tris", E.list E.float (Sprite.encode triangles) ) ]
 
-        SetCursorColor color ->
-            E.object [ ( "t", E.string "cursor" ), ( "rgba", E.float (Color.toFloat color) ) ]
+        SetCursor { color, scale } ->
+            E.object
+                [ ( "t", E.string "cursor" )
+                , ( "rgba", E.float (Color.toFloat color) )
+                , ( "scale", E.int (Units.scaleInt scale) )
+                ]
 
         WifiScan ->
             E.object [ ( "t", E.string "wifiScan" ) ]
