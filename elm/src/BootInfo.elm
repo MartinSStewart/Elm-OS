@@ -563,7 +563,10 @@ buildText model =
         NoImage ->
             "no boot image found to hash"
 
-        _ ->
+        Hashing _ ->
+            "hashing the boot image..."
+
+        LookingForStick ->
             "hashing the boot image..."
 
 

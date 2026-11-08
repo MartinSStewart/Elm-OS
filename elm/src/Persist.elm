@@ -131,7 +131,10 @@ appModel model =
         Running app _ ->
             Just app
 
-        _ ->
+        WaitingForDisk _ ->
+            Nothing
+
+        ReadingDisk _ _ ->
             Nothing
 
 
@@ -148,7 +151,10 @@ subscriptions config model =
             Running app _ ->
                 Sub.map AppMsg (config.subscriptions app)
 
-            _ ->
+            WaitingForDisk _ ->
+                Sub.map AppMsg (config.subscriptions config.init)
+
+            ReadingDisk _ _ ->
                 Sub.map AppMsg (config.subscriptions config.init)
         ]
 
@@ -201,43 +207,62 @@ readId =
 
 update : Config model msg -> Codecs model msg -> Msg msg -> Model model msg -> ( Model model msg, List Effect )
 update config codecs msg model =
-    case ( msg, model ) of
-        ( AppMsg appMsg, Running app saving ) ->
-            live config codecs appMsg app saving
+    case msg of
+        AppMsg appMsg ->
+            case model of
+                Running app saving ->
+                    live config codecs appMsg app saving
 
-        ( AppMsg appMsg, WaitingForDisk early ) ->
-            ( WaitingForDisk (appMsg :: early), [] )
+                WaitingForDisk early ->
+                    ( WaitingForDisk (appMsg :: early), [] )
 
-        ( AppMsg appMsg, ReadingDisk dir early ) ->
-            ( ReadingDisk dir (appMsg :: early), [] )
+                ReadingDisk dir early ->
+                    ( ReadingDisk dir (appMsg :: early), [] )
 
-        ( DataDisk (Just dir), WaitingForDisk early ) ->
-            ( ReadingDisk dir early
-            , [ Effect.ReadFiles { id = readId, paths = [ dir ++ "/snapshot", dir ++ "/log" ] } ]
-            )
+        DataDisk maybeDir ->
+            case model of
+                WaitingForDisk early ->
+                    case maybeDir of
+                        Just dir ->
+                            ( ReadingDisk dir early
+                            , [ Effect.ReadFiles { id = readId, paths = [ dir ++ "/snapshot", dir ++ "/log" ] } ]
+                            )
 
-        ( DataDisk Nothing, WaitingForDisk early ) ->
-            runEarly config codecs early config.init NotSaving
+                        Nothing ->
+                            runEarly config codecs early config.init NotSaving
 
-        ( DataFiles snapshot log, ReadingDisk dir early ) ->
-            let
-                restored =
-                    restore config codecs { snapshot = snapshot, log = log }
+                ReadingDisk _ _ ->
+                    ( model, [] )
 
-                saving =
-                    { dir = dir, next = restored.next, logBytes = 0 }
-            in
-            -- The snapshot has the Msgs that waited, so they needn't be logged.
-            case runEarly config codecs early (config.resume restored.model) NotSaving of
-                ( Running app _, effects ) ->
-                    ( Running app (Saving saving), snapshotEffects codecs app saving ++ effects )
+                Running _ _ ->
+                    ( model, [] )
 
-                other ->
-                    other
+        DataFiles snapshot log ->
+            case model of
+                ReadingDisk dir early ->
+                    let
+                        restored =
+                            restore config codecs { snapshot = snapshot, log = log }
 
-        _ ->
-            ( model, [] )
+                        saving =
+                            { dir = dir, next = restored.next, logBytes = 0 }
+                    in
+                    -- The snapshot has the Msgs that waited, so they needn't be logged.
+                    case runEarly config codecs early (config.resume restored.model) NotSaving of
+                        ( Running app _, effects ) ->
+                            ( Running app (Saving saving), snapshotEffects codecs app saving ++ effects )
 
+                        ( WaitingForDisk _, _ ) as other ->
+                            other
+
+                        ( ReadingDisk _ _, _ ) as other ->
+                            other
+
+                WaitingForDisk _ ->
+                    ( model, [] )
+
+                Running _ _ ->
+                    ( model, [] )
 
 runEarly : Config model msg -> Codecs model msg -> List msg -> model -> Saving -> ( Model model msg, List Effect )
 runEarly config codecs early app saving =
@@ -247,7 +272,10 @@ runEarly config codecs early app saving =
                 Running a s ->
                     live config codecs appMsg a s |> Tuple.mapSecond (\more -> effects ++ more)
 
-                _ ->
+                WaitingForDisk _ ->
+                    ( state, effects )
+
+                ReadingDisk _ _ ->
                     ( state, effects )
         )
         ( Running app saving, [] )

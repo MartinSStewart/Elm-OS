@@ -611,7 +611,13 @@ hoverHelper hovers point position element =
             in
             List.foldr (\inFront acc -> hoverHelper acc point position inFront) hovers3 data.inFront
 
-        _ ->
+        Text _ ->
+            hovers
+
+        Quads _ ->
+            hovers
+
+        Empty ->
             hovers
 
 
@@ -663,7 +669,13 @@ findInputHelper id position element =
                 Nothing ->
                     findInputHelper id (Coord.plus data.padding.topLeft position) child
 
-        _ ->
+        Text _ ->
+            Nothing
+
+        Quads _ ->
+            Nothing
+
+        Empty ->
             Nothing
 
 

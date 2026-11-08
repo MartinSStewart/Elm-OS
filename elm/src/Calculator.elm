@@ -111,56 +111,52 @@ press key model =
                             else
                                 Typed (text ++ ".")
 
-                        _ ->
+                        Shown _ ->
+                            Typed "0."
+
+                        Error ->
                             Typed "0."
                 , pending = whenNotError model
                 , repeat = Nothing
             }
 
         Operator operator ->
-            case ( model.entry, model.pending ) of
-                ( Error, _ ) ->
+            case model.entry of
+                Error ->
                     model
 
-                ( Shown first, Just _ ) ->
-                    -- Pressed one operator after another: the last one counts.
-                    { model | pending = Just ( first, operator ), repeat = Nothing }
-
-                ( Typed _, Just ( first, previous ) ) ->
-                    case apply previous first (value model.entry) of
-                        Just result ->
-                            { model | entry = Shown result, pending = Just ( result, operator ), repeat = Nothing }
+                Shown first ->
+                    case model.pending of
+                        Just _ ->
+                            -- Pressed one operator after another: the last one counts.
+                            { model | pending = Just ( first, operator ), repeat = Nothing }
 
                         Nothing ->
-                            { model | entry = Error, pending = Nothing, repeat = Nothing }
+                            startOperation operator model
 
-                ( _, Nothing ) ->
-                    { model
-                        | entry = Shown (value model.entry)
-                        , pending = Just ( value model.entry, operator )
-                        , repeat = Nothing
-                    }
+                Typed _ ->
+                    case model.pending of
+                        Just ( first, previous ) ->
+                            case apply previous first (value model.entry) of
+                                Just result ->
+                                    { model | entry = Shown result, pending = Just ( result, operator ), repeat = Nothing }
+
+                                Nothing ->
+                                    { model | entry = Error, pending = Nothing, repeat = Nothing }
+
+                        Nothing ->
+                            startOperation operator model
 
         Equals ->
-            case ( model.entry, model.pending, model.repeat ) of
-                ( Error, _, _ ) ->
+            case model.entry of
+                Error ->
                     model
 
-                ( _, Just ( first, operator ), _ ) ->
-                    let
-                        second =
-                            value model.entry
-                    in
-                    { entry = apply operator first second |> Maybe.map Shown |> Maybe.withDefault Error
-                    , pending = Nothing
-                    , repeat = Just ( operator, second )
-                    }
+                Shown _ ->
+                    equals model
 
-                ( _, Nothing, Just ( operator, second ) ) ->
-                    { model | entry = apply operator (value model.entry) second |> Maybe.map Shown |> Maybe.withDefault Error }
-
-                ( _, Nothing, Nothing ) ->
-                    { model | entry = Shown (value model.entry) }
+                Typed _ ->
+                    equals model
 
         Negate ->
             case model.entry of
@@ -239,13 +235,51 @@ typeDigit d entry =
             else
                 text ++ digit
 
-        _ ->
+        Shown _ ->
+            digit
+
+        Error ->
             digit
 
 
 digitCount : String -> Int
 digitCount text =
     String.filter Char.isDigit text |> String.length
+
+
+{-| An operator pressed with no operation pending: the number shown is its first number.
+-}
+startOperation : Operator -> Model -> Model
+startOperation operator model =
+    { model
+        | entry = Shown (value model.entry)
+        , pending = Just ( value model.entry, operator )
+        , repeat = Nothing
+    }
+
+
+{-| Equals when the entry isn't an error: finish the pending operation, or else repeat the last one.
+-}
+equals : Model -> Model
+equals model =
+    case model.pending of
+        Just ( first, operator ) ->
+            let
+                second =
+                    value model.entry
+            in
+            { entry = apply operator first second |> Maybe.map Shown |> Maybe.withDefault Error
+            , pending = Nothing
+            , repeat = Just ( operator, second )
+            }
+
+        Nothing ->
+            case model.repeat of
+                Just ( operator, second ) ->
+                    { model | entry = apply operator (value model.entry) second |> Maybe.map Shown |> Maybe.withDefault Error }
+
+                Nothing ->
+                    { model | entry = Shown (value model.entry) }
 
 
 value : Entry -> Float
@@ -524,7 +558,37 @@ fromKeyboard key =
         Keyboard.Backspace ->
             Just Backspace
 
-        _ ->
+        Keyboard.Spacebar ->
+            Nothing
+
+        Keyboard.Tab ->
+            Nothing
+
+        Keyboard.ArrowLeft ->
+            Nothing
+
+        Keyboard.ArrowRight ->
+            Nothing
+
+        Keyboard.ArrowUp ->
+            Nothing
+
+        Keyboard.ArrowDown ->
+            Nothing
+
+        Keyboard.Home ->
+            Nothing
+
+        Keyboard.End ->
+            Nothing
+
+        Keyboard.PageUp ->
+            Nothing
+
+        Keyboard.PageDown ->
+            Nothing
+
+        Keyboard.Other ->
             Nothing
 
 
@@ -671,9 +735,37 @@ keyRow model row =
 -}
 isPendingOperator : Model -> Key -> Bool
 isPendingOperator model key =
-    case ( key, model.pending, model.entry ) of
-        ( Operator operator, Just ( _, pending ), Shown _ ) ->
-            operator == pending
+    case key of
+        Operator operator ->
+            case model.entry of
+                Shown _ ->
+                    case model.pending of
+                        Just ( _, pending ) ->
+                            operator == pending
 
-        _ ->
+                        Nothing ->
+                            False
+
+                Typed _ ->
+                    False
+
+                Error ->
+                    False
+
+        Digit _ ->
+            False
+
+        Point ->
+            False
+
+        Equals ->
+            False
+
+        Negate ->
+            False
+
+        Backspace ->
+            False
+
+        Clear ->
             False

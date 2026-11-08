@@ -404,12 +404,26 @@ step event model =
                 next =
                     gotHttp id result model
             in
-            case ( model.weather, next.weather ) of
-                ( FindingPlace, LoadingForecast place ) ->
-                    -- Now that we know where we are, ask for the forecast there.
-                    ( next, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
+            case next.weather of
+                LoadingForecast place ->
+                    case model.weather of
+                        FindingPlace ->
+                            -- Now that we know where we are, ask for the forecast there.
+                            ( next, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
 
-                _ ->
+                        _ ->
+                            ( next, [] )
+
+                NoWeather ->
+                    ( next, [] )
+
+                FindingPlace ->
+                    ( next, [] )
+
+                GotWeather _ _ ->
+                    ( next, [] )
+
+                WeatherFailed _ ->
                     ( next, [] )
 
         Mouse x y ->
@@ -423,7 +437,10 @@ step event model =
                         Just (Ui.TextInputType { position }) ->
                             ( dragSelect focus position moved, [] )
 
-                        _ ->
+                        Just (Ui.ButtonType _) ->
+                            ( moved, [] )
+
+                        Nothing ->
                             ( moved, [] )
 
                 _ ->
@@ -596,24 +613,38 @@ gotHttp id result model =
                 Err error ->
                     Err (Err error)
     in
-    case ( id, model.weather ) of
-        ( "geo", FindingPlace ) ->
-            case decoded Weather.decodePlace of
-                Ok place ->
-                    { model | weather = LoadingForecast place }
+    case model.weather of
+        FindingPlace ->
+            if id == "geo" then
+                case decoded Weather.decodePlace of
+                    Ok place ->
+                        { model | weather = LoadingForecast place }
 
-                Err error ->
-                    { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+                    Err error ->
+                        { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
 
-        ( "forecast", LoadingForecast place ) ->
-            case decoded Weather.decodeForecast of
-                Ok forecast ->
-                    { model | weather = GotWeather place forecast }
+            else
+                model
 
-                Err error ->
-                    { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+        LoadingForecast place ->
+            if id == "forecast" then
+                case decoded Weather.decodeForecast of
+                    Ok forecast ->
+                        { model | weather = GotWeather place forecast }
 
-        _ ->
+                    Err error ->
+                        { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+
+            else
+                model
+
+        NoWeather ->
+            model
+
+        GotWeather _ _ ->
+            model
+
+        WeatherFailed _ ->
             model
 
 
@@ -723,7 +754,10 @@ click id model =
                         Just Restart ->
                             Effect.Restart
 
-                        _ ->
+                        Just PowerOff ->
+                            Effect.PowerOff
+
+                        Nothing ->
                             Effect.PowerOff
                     )
               ]
@@ -848,7 +882,58 @@ dragSelect focus position model =
         EditorInput ->
             { model | editor = TextInputMultiline.mouseDownMove (editorStyle model) (uiMouse model) position model.editor }
 
-        _ ->
+        NextColorButton ->
+            model
+
+        RefreshButton ->
+            model
+
+        NetworkButton _ ->
+            model
+
+        ShowPasswordButton ->
+            model
+
+        ConnectButton ->
+            model
+
+        DisconnectButton ->
+            model
+
+        WeatherButton ->
+            model
+
+        AboutButton ->
+            model
+
+        CloseAboutButton ->
+            model
+
+        CalculatorButton ->
+            model
+
+        PowerOffButton ->
+            model
+
+        RestartButton ->
+            model
+
+        ConfirmPowerButton ->
+            model
+
+        CancelPowerButton ->
+            model
+
+        CalculatorUiId _ ->
+            model
+
+        EditorButton ->
+            model
+
+        EditorWindow ->
+            model
+
+        CloseEditorButton ->
             model
 
 
@@ -1314,7 +1399,58 @@ resume saved =
                 Just (CalculatorUiId _) ->
                     saved.focus
 
-                _ ->
+                Just NextColorButton ->
+                    Nothing
+
+                Just RefreshButton ->
+                    Nothing
+
+                Just (NetworkButton _) ->
+                    Nothing
+
+                Just PasswordInput ->
+                    Nothing
+
+                Just ShowPasswordButton ->
+                    Nothing
+
+                Just ConnectButton ->
+                    Nothing
+
+                Just DisconnectButton ->
+                    Nothing
+
+                Just WeatherButton ->
+                    Nothing
+
+                Just AboutButton ->
+                    Nothing
+
+                Just CloseAboutButton ->
+                    Nothing
+
+                Just CalculatorButton ->
+                    Nothing
+
+                Just PowerOffButton ->
+                    Nothing
+
+                Just RestartButton ->
+                    Nothing
+
+                Just ConfirmPowerButton ->
+                    Nothing
+
+                Just CancelPowerButton ->
+                    Nothing
+
+                Just EditorButton ->
+                    Nothing
+
+                Just CloseEditorButton ->
+                    Nothing
+
+                Nothing ->
                     Nothing
         , aboutOpen = saved.aboutOpen
         , calculator = saved.calculator
@@ -1361,7 +1497,10 @@ networkPanel model =
                 Wifi.Card name ->
                     "Wifi (" ++ name ++ ")"
 
-                _ ->
+                Wifi.Unknown ->
+                    "Wifi"
+
+                Wifi.NoCard ->
                     "Wifi"
 
         header =
@@ -1380,7 +1519,10 @@ networkPanel model =
                             )
                         )
 
-                _ ->
+                Wifi.Unknown ->
+                    t title
+
+                Wifi.NoCard ->
                     t title
 
         status =
@@ -1427,7 +1569,10 @@ networkPanel model =
                     else
                         List.take 8 model.networks |> List.map (networkRow model)
 
-                _ ->
+                Wifi.Unknown ->
+                    []
+
+                Wifi.NoCard ->
                     []
 
         joinRows =
@@ -1935,7 +2080,16 @@ aboutPage model =
                         Wifi.Connected ->
                             name ++ ", connected to " ++ model.wifiStatus.ssid ++ " as " ++ model.wifiStatus.ip
 
-                        _ ->
+                        Wifi.Idle ->
+                            name ++ ", not connected"
+
+                        Wifi.Connecting ->
+                            name ++ ", not connected"
+
+                        Wifi.Dhcp ->
+                            name ++ ", not connected"
+
+                        Wifi.Failed ->
                             name ++ ", not connected"
 
                 Wifi.NoCard ->
@@ -1990,7 +2144,10 @@ aboutPage model =
                                             Wired.NoCable ->
                                                 l.name ++ ", no cable"
 
-                                            _ ->
+                                            Wired.Dhcp ->
+                                                l.name ++ ", not connected"
+
+                                            Wired.Failed ->
                                                 l.name ++ ", not connected"
                                     )
                                 |> String.join "; "
