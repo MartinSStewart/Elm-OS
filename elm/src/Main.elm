@@ -389,30 +389,31 @@ step event model =
 
         HttpResponse id result ->
             let
-                next =
+                model2 : Model
+                model2 =
                     gotHttp id result model
             in
-            case next.weather of
+            case model2.weather of
                 LoadingForecast place ->
                     case model.weather of
                         FindingPlace ->
                             -- Now that we know where we are, ask for the forecast there.
-                            ( next, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
+                            ( model2, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
 
                         _ ->
-                            ( next, [] )
+                            ( model2, [] )
 
                 NoWeather ->
-                    ( next, [] )
+                    ( model2, [] )
 
                 FindingPlace ->
-                    ( next, [] )
+                    ( model2, [] )
 
                 GotWeather _ _ ->
-                    ( next, [] )
+                    ( model2, [] )
 
                 WeatherFailed _ ->
-                    ( next, [] )
+                    ( model2, [] )
 
         Mouse x y ->
             let
