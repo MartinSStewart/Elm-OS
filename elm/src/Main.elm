@@ -6,7 +6,7 @@ password, join it; networks joined before are joined again by themselves), and t
 (Calculator.elm) that opens from the toolbar.
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
-including {"t":"frame"} whenever the screen is ready for a frame. `update` answers with a
+including a Frame whenever the screen is ready for a frame (HostMessage.elm). `update` answers with a
 list of effects (Effect.elm), such as the triangles to draw, which go back on one port.
 
 -}
@@ -17,6 +17,7 @@ import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect exposing (Effect)
+import HostMessage
 import Json.Decode as D
 import Keyboard
 import Persist
@@ -81,130 +82,126 @@ type alias SystemStats =
     }
 
 
-decodeInput : D.Decoder Input
-decodeInput =
-    D.field "t" D.string
-        |> D.andThen
-            (\t ->
-                case t of
-                    "screen" ->
-                        D.map2 Screen (D.field "w" D.int) (D.field "h" D.int)
+{-| What a message from the host (HostMessage.elm) means here.
+-}
+toInput : HostMessage.ToElm -> Result String Input
+toInput message =
+    case message of
+        HostMessage.Screen w h ->
+            Ok (Screen w h)
 
-                    "frame" ->
-                        D.map Frame (D.field "time" D.float)
+        HostMessage.Frame time ->
+            Ok (Frame time)
 
-                    "httpResponse" ->
-                        D.map3 (\id status body -> HttpResponse id (Ok { status = status, body = body }))
-                            (D.field "id" D.string)
-                            (D.field "status" D.int)
-                            (D.field "body" D.string)
+        HostMessage.Mouse x y ->
+            Ok (Mouse x y)
 
-                    "httpError" ->
-                        D.map3
-                            (\id error message ->
-                                HttpResponse id
-                                    (Err
-                                        (case error of
-                                            "badUrl" ->
-                                                Effect.BadUrl message
+        HostMessage.Button b down ->
+            Ok (Button b down)
 
-                                            "timeout" ->
-                                                Effect.Timeout
+        HostMessage.Wheel dy ->
+            Ok (Wheel dy)
 
-                                            _ ->
-                                                Effect.NetworkError message
-                                        )
-                                    )
-                            )
-                            (D.field "id" D.string)
-                            (D.field "error" D.string)
-                            (D.field "message" D.string)
+        HostMessage.Key code down repeat ->
+            Ok (Key code down repeat)
 
-                    "mouse" ->
-                        D.map2 Mouse (D.field "x" D.int) (D.field "y" D.int)
+        HostMessage.Renderer info ->
+            Ok (Renderer info)
 
-                    "button" ->
-                        D.map2 Button (D.field "b" D.int) (D.field "down" D.bool)
+        HostMessage.System info ->
+            Ok (System info)
 
-                    "wheel" ->
-                        D.map Wheel (D.field "dy" D.int)
+        HostMessage.Boot times ->
+            Ok (BootInfo (BootInfo.Boot times))
 
-                    "key" ->
-                        D.map3 Key
-                            (D.field "code" D.int)
-                            (D.field "down" D.bool)
-                            (D.maybe (D.field "repeat" D.bool) |> D.map (Maybe.withDefault False))
+        HostMessage.Stats stats ->
+            Ok
+                (Stats
+                    { cores = stats.cores
+                    , cpu = stats.cpu
+                    , cpuElm = stats.cpuElm
+                    , cpuHost = stats.cpuHost
+                    , cpuGpu = stats.cpuGpu
+                    , memUsed = stats.memUsed
+                    , memTotal = stats.memTotal
+                    , gpuMs = milliseconds stats.gpuMs
+                    , elmMs = milliseconds stats.elmMs
+                    , drawMs = milliseconds stats.drawMs
+                    }
+                )
 
-                    "wifiDevice" ->
-                        D.map WifiDevice Wifi.decodeDevice
+        HostMessage.WifiDevice name ->
+            Ok
+                (WifiDevice
+                    (case name of
+                        Just n ->
+                            Wifi.Card n
 
-                    "wifiScan" ->
-                        D.map WifiScan Wifi.decodeNetworks
+                        Nothing ->
+                            Wifi.NoCard
+                    )
+                )
 
-                    "wifiStatus" ->
-                        D.map WifiStatus Wifi.decodeStatus
+        HostMessage.WifiScan networks ->
+            Ok (WifiScan networks)
 
-                    "wired" ->
-                        D.map WiredLinks Wired.decodeLinks
+        HostMessage.WifiStatus status ->
+            Ok (WifiStatus status)
 
-                    "system" ->
-                        D.map3 SystemInfo (D.field "kernel" D.string) (D.field "cpu" D.string) (D.field "commit" D.string)
-                            |> D.map System
+        HostMessage.Wired links ->
+            Ok (WiredLinks links)
 
-                    "switching" ->
-                        D.map Switching (D.field "to" D.string)
+        HostMessage.NetConfig urls ->
+            Ok (NetConfig urls)
 
-                    "netConfig" ->
-                        D.map2 (\geo weather -> NetConfig { geoUrl = geo, weatherUrl = weather })
-                            (D.field "geoUrl" D.string)
-                            (D.field "weatherUrl" D.string)
+        HostMessage.DataDisk _ _ ->
+            Err "the data disk message is Persist's"
 
-                    "renderer" ->
-                        D.map3 RendererInfo
-                            (D.field "gpu" D.bool)
-                            (D.field "name" D.string)
-                            (D.field "hardwareCursor" D.bool)
-                            |> D.map Renderer
+        HostMessage.HttpResponse id status body ->
+            Ok (HttpResponse id (Ok { status = status, body = body }))
 
-                    "stats" ->
-                        D.map8 SystemStats
-                            (D.field "cores" D.int)
-                            (D.field "cpu" D.float)
-                            (D.field "cpuElm" D.float)
-                            (D.field "cpuHost" D.float)
-                            (D.field "cpuGpu" D.float)
-                            (D.field "memUsed" D.int)
-                            (D.field "memTotal" D.int)
-                            (D.field "gpuMs" milliseconds)
-                            |> D.andThen
-                                (\toStats ->
-                                    D.map2 toStats (D.field "elmMs" milliseconds) (D.field "drawMs" milliseconds)
-                                )
-                            |> D.map Stats
+        HostMessage.HttpError id failure text ->
+            Ok
+                (HttpResponse id
+                    (Err
+                        (case failure of
+                            HostMessage.BadUrl ->
+                                Effect.BadUrl text
 
-                    _ ->
-                        case BootInfo.decodeInput t of
-                            Just decoder ->
-                                D.map BootInfo decoder
+                            HostMessage.Timeout ->
+                                Effect.Timeout
 
-                            Nothing ->
-                                D.fail ("unknown input " ++ t)
-            )
+                            HostMessage.Network ->
+                                Effect.NetworkError text
+                        )
+                    )
+                )
+
+        HostMessage.Dir path entries ->
+            Ok (BootInfo (BootInfo.Dir path entries))
+
+        HostMessage.Files id files ->
+            Ok (BootInfo (BootInfo.Files id files))
+
+        HostMessage.Bytes path offset hex ->
+            Ok (BootInfo (BootInfo.Bytes path offset hex))
+
+        HostMessage.Sha256 path hex ->
+            Ok (BootInfo (BootInfo.Sha256 path hex))
+
+        HostMessage.Switching build ->
+            Ok (Switching build)
 
 
 {-| The host sends -1 for a time it doesn't know.
 -}
-milliseconds : D.Decoder (Maybe Float)
-milliseconds =
-    D.float
-        |> D.map
-            (\ms ->
-                if ms < 0 then
-                    Nothing
+milliseconds : Float -> Maybe Float
+milliseconds ms =
+    if ms < 0 then
+        Nothing
 
-                else
-                    Just ms
-            )
+    else
+        Just ms
 
 
 
@@ -1380,7 +1377,7 @@ persistConfig : Persist.Config Model Msg
 persistConfig =
     { init = init
     , update = update
-    , fromHost = \json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput
+    , fromHost = \message -> GotInput (Result.andThen toInput message)
 
     -- An idle eco program exits; a timer keeps the event loop alive. It also paces
     -- BootInfo's battery checks and USB stick search.

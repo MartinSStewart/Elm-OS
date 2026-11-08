@@ -9,7 +9,6 @@ module BootInfo exposing
     , bootRows
     , clockText
     , buildText
-    , decodeInput
     , init
     , start
     , tick
@@ -47,7 +46,6 @@ and says when the first frame was on screen; working out what they mean is here.
 import Array exposing (Array)
 import Dict exposing (Dict)
 import Effect exposing (Effect)
-import Json.Decode as D
 
 
 type alias Model =
@@ -91,42 +89,6 @@ type Input
     | Bytes String Int (Maybe String)
     | Sha256 String (Maybe String)
     | Boot BootTimes
-
-
-decodeInput : String -> Maybe (D.Decoder Input)
-decodeInput t =
-    case t of
-        "dir" ->
-            Just (D.map2 Dir (D.field "path" D.string) (D.field "entries" (D.nullable (D.list D.string))))
-
-        "files" ->
-            Just
-                (D.map2 Files
-                    (D.field "id" D.string)
-                    (D.field "files"
-                        (D.list (D.map2 Tuple.pair (D.index 0 D.string) (D.index 1 (D.nullable D.string))))
-                    )
-                )
-
-        "bytes" ->
-            Just
-                (D.map3 Bytes
-                    (D.field "path" D.string)
-                    (D.field "offset" D.int)
-                    (D.field "hex" (D.nullable D.string))
-                )
-
-        "sha256" ->
-            Just (D.map2 Sha256 (D.field "path" D.string) (D.field "hex" (D.nullable D.string)))
-
-        "boot" ->
-            Just
-                (D.map3 BootTimes (D.field "initMs" D.float) (D.field "elmMs" D.float) (D.field "frameMs" D.float)
-                    |> D.map Boot
-                )
-
-        _ ->
-            Nothing
 
 
 initrd : String

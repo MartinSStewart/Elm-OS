@@ -2,21 +2,20 @@ module ProtocolTest exposing (suite)
 
 {-| The Elm side of the messages between Elm and the host, against the examples in
 host/protocol/examples.json, which the host's side (host/protocol, `cargo test -p
-protocol`) is tested against too. ProtocolExamples is written from that file when the
-tests run (make elm-tests).
+protocol`) is tested against too. ProtocolExamples has each example with the bytes the
+host's own encoder gives it; it is written when the tests run (make elm-tests).
 -}
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color
-import Dict exposing (Dict)
 import Effect exposing (Effect)
 import Expect
-import Json.Decode as D
-import Json.Encode as E
+import HostMessage
 import Main
 import Persist
+import Postcard
 import ProtocolExamples
 import Quantity
 import Sprite
@@ -24,7 +23,7 @@ import Test exposing (Test, describe, test)
 import Units
 
 
-{-| Each Effect sent as JSON, in the order of examples.json's toHost.
+{-| Each Effect, in the order of examples.json's toHost.
 -}
 effects : List Effect
 effects =
@@ -53,69 +52,46 @@ effects =
     , Effect.WriteFile { path = "/data/snapshot", text = "" }
     , Effect.Log "couldn't read a message from the host"
     , Effect.SwitchReady
+    , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
     ]
-
-
-{-| JSON as a value that two equal JSON texts give, whatever their objects' key order.
--}
-type Json
-    = Object (Dict String Json)
-    | Array (List Json)
-    | Text String
-    | Number Float
-    | Boolean Bool
-    | Null
-
-
-json : D.Decoder Json
-json =
-    D.oneOf
-        [ D.map Text D.string
-        , D.map Number D.float
-        , D.map Boolean D.bool
-        , D.null Null
-        , D.map Array (D.list (D.lazy (\_ -> json)))
-        , D.map (\pairs -> Object (Dict.fromList pairs)) (D.keyValuePairs (D.lazy (\_ -> json)))
-        ]
 
 
 {-| What the host sends gets read: Persist takes it, or the program reads it without
 logging that it couldn't.
 -}
 readsHostMessage : String -> Expect.Expectation
-readsHostMessage text =
-    let
-        -- As host/link hands it to Elm: the kind byte, then the JSON.
-        value =
-            Effect.readFromHost (fromHostMessage 3 text)
-    in
-    case D.decodeValue (D.null ()) value of
-        Ok () ->
-            Expect.fail ("not read as JSON from bytes: " ++ text)
+readsHostMessage hexText =
+    case fromHex hexText of
+        Nothing ->
+            Expect.fail "not hex"
 
-        Err _ ->
-            case Persist.fromHost Main.persistConfig value of
-                Persist.AppMsg msg ->
-                    Main.persistConfig.update msg Main.persistConfig.init
-                        |> Tuple.second
-                        |> List.filterMap
-                            (\effect ->
-                                case effect of
-                                    Effect.Log line ->
-                                        Just line
+        Just bytes ->
+            case HostMessage.decode bytes of
+                Nothing ->
+                    Expect.fail "HostMessage.decode can't read it"
 
-                                    _ ->
-                                        Nothing
-                            )
-                        |> Expect.equal []
+                Just _ ->
+                    case Persist.fromHost Main.persistConfig bytes of
+                        Persist.AppMsg msg ->
+                            logs msg |> Expect.equal []
 
-                _ ->
-                    Expect.pass
+                        _ ->
+                            Expect.pass
 
 
-fromHostMessage : Int -> String -> Bytes
-fromHostMessage kind text =
-    BE.encode (BE.sequence [ BE.unsignedInt8 kind, BE.string text ])
+logs : Main.Msg -> List String
+logs msg =
+    Main.persistConfig.update msg Main.persistConfig.init
+        |> Tuple.second
+        |> List.filterMap
+            (\effect ->
+                case effect of
+                    Effect.Log line ->
+                        Just line
+
+                    _ ->
+                        Nothing
+            )
 
 
 {-| Bytes as lower-case hex.
@@ -145,11 +121,26 @@ hex bytes =
         bytes
 
 
-{-| A message on `toHost`: its kind byte, and the rest.
--}
-split : Bytes -> Maybe ( Int, Bytes )
-split bytes =
-    BD.decode (BD.map2 Tuple.pair BD.unsignedInt8 (BD.bytes (Bytes.width bytes - 1))) bytes
+fromHex : String -> Maybe Bytes
+fromHex text =
+    let
+        digit : Char -> Maybe Int
+        digit c =
+            String.indexes (String.fromChar c) hexDigits |> List.head
+
+        bytes : List Char -> Maybe (List Int)
+        bytes chars =
+            case chars of
+                high :: low :: rest ->
+                    Maybe.map3 (\h l more -> (h * 16 + l) :: more) (digit high) (digit low) (bytes rest)
+
+                [] ->
+                    Just []
+
+                [ _ ] ->
+                    Nothing
+    in
+    bytes (String.toList text) |> Maybe.map (\list -> BE.encode (BE.sequence (List.map BE.unsignedInt8 list)))
 
 
 hexDigits : String
@@ -160,61 +151,58 @@ hexDigits =
 suite : Test
 suite =
     describe "The messages between Elm and the host (host/protocol/examples.json)"
-        [ test "every Effect is encoded as in the examples"
+        [ test "every Effect is encoded as the host encodes the examples"
             (\_ ->
-                List.map
-                    (\effect ->
-                        case List.map split (Effect.messages [ effect ]) of
-                            [ Just ( 1, payload ) ] ->
-                                BD.decode (BD.string (Bytes.width payload)) payload
-                                    |> Maybe.withDefault ""
-                                    |> D.decodeString (D.index 0 json)
-
-                            _ ->
-                                Err (D.Failure "not one JSON message" E.null)
-                    )
-                    effects
-                    |> Expect.equal (List.map (D.decodeString json) ProtocolExamples.toHost)
+                List.map (\effect -> hex (BE.encode (Effect.encode effect))) effects
+                    |> Expect.equal (List.map (\( _, bytes ) -> Just bytes) ProtocolExamples.toHost)
             )
-        , test "the Effects sent as JSON go in one message, before each Render's"
+        , test "a message is the number of Effects, then each"
             (\_ ->
-                Effect.messages [ Effect.WifiScan, Effect.Render (\() -> []), Effect.Log "a", Effect.Render (\() -> []) ]
-                    |> List.map (\message -> Maybe.map Tuple.first (split message))
-                    |> Expect.equal [ Just 1, Just 2, Just 2 ]
+                Effect.message [ Effect.WifiScan, Effect.Log "a" ]
+                    |> hex
+                    |> Expect.equal (Just "02020e0161")
             )
-        , test "a Render is sent as bytes, as in the example"
+        , test "varints: 7 bits a byte, low first; signed ones zigzagged"
             (\_ ->
-                case List.map split (Effect.messages [ Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]) ]) of
-                    [ Just ( 2, payload ) ] ->
-                        Expect.equal (Just ProtocolExamples.render) (hex payload)
-
-                    other ->
-                        Expect.fail ("not one render message but " ++ String.fromInt (List.length other))
+                [ Postcard.unsigned 0, Postcard.unsigned 127, Postcard.unsigned 128, Postcard.unsigned 300, Postcard.unsigned (2 ^ 53 - 1), Postcard.int -1, Postcard.int 1, Postcard.int -150 ]
+                    |> List.map (\encoder -> BE.encode encoder)
+                    |> List.map (\bytes -> ( hex bytes, BD.decode Postcard.decodeUnsigned bytes ))
+                    |> Expect.equal
+                        [ ( Just "00", Just 0 )
+                        , ( Just "7f", Just 127 )
+                        , ( Just "8001", Just 128 )
+                        , ( Just "ac02", Just 300 )
+                        , ( Just "ffffffffffffff0f", Just (2 ^ 53 - 1) )
+                        , ( Just "01", Just 1 )
+                        , ( Just "02", Just 2 )
+                        , ( Just "ab02", Just 299 )
+                        ]
+            )
+        , test "signed varints come back"
+            (\_ ->
+                [ 0, -1, 1, -150, 1000000, -(2 ^ 52) ]
+                    |> List.map (\n -> BD.decode Postcard.decodeInt (BE.encode (Postcard.int n)))
+                    |> Expect.equal (List.map Just [ 0, -1, 1, -150, 1000000, -(2 ^ 52) ])
             )
         , describe "every message the host sends is read"
-            (List.map (\text -> test text (\_ -> readsHostMessage text)) ProtocolExamples.fromHost)
-        , test "a message from the host of another kind is null"
-            (\_ ->
-                Effect.readFromHost (fromHostMessage 1 "{}")
-                    |> D.decodeValue (D.null ())
-                    |> Expect.equal (Ok ())
-            )
+            (List.map (\( json, bytes ) -> test json (\_ -> readsHostMessage bytes)) ProtocolExamples.fromHost)
         , test "a message from the host that can't be read is logged, and nothing else happens"
             (\_ ->
-                [ """{"t":"noSuchMessage"}""", """{"t":"mouse","x":"left"}""", """[1,2]""" ]
+                [ "63", "", "02" ]
+                    |> List.filterMap fromHex
                     |> List.map
-                        (\text ->
-                            case D.decodeString D.value text |> Result.map (Persist.fromHost Main.persistConfig) of
-                                Ok (Persist.AppMsg msg) ->
-                                    Main.persistConfig.update msg Main.persistConfig.init |> Tuple.second
+                        (\bytes ->
+                            case Persist.fromHost Main.persistConfig bytes of
+                                Persist.AppMsg msg ->
+                                    logs msg
 
                                 _ ->
                                     []
                         )
                     |> Expect.equal
-                        [ [ Effect.Log "couldn't read a message from the host: Problem with the given value:\n\n{\n        \"t\": \"noSuchMessage\"\n    }\n\nunknown input noSuchMessage" ]
-                        , [ Effect.Log "couldn't read a message from the host: Problem with the value at json.x:\n\n    \"left\"\n\nExpecting an INT" ]
-                        , [ Effect.Log "couldn't read a message from the host: Problem with the given value:\n\n[\n        1,\n        2\n    ]\n\nExpecting an OBJECT with a field named `t`" ]
+                        [ [ "couldn't read a message from the host: its 1 bytes aren't a HostMessage" ]
+                        , [ "couldn't read a message from the host: its 0 bytes aren't a HostMessage" ]
+                        , [ "couldn't read a message from the host: its 1 bytes aren't a HostMessage" ]
                         ]
             )
         ]

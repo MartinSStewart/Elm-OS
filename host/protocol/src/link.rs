@@ -8,13 +8,10 @@
 
 use std::io::{self, Read, Write};
 
-/// Elm -> host: a JSON list of effects. Elm sends its messages on its `toHost` port
-/// with this kind byte or RENDER's in front (elm/src/Effect.elm).
+/// Elm -> host: what Elm sent on its `toHost` port, a list of effects
+/// (protocol::read_effects).
 pub const TO_HOST: u8 = 1;
-/// Elm -> host: the scene, as triangles (protocol::read_render).
-pub const RENDER: u8 = 2;
-/// Host -> Elm: one JSON message, which host/link gives Elm's `fromHostBytes` port
-/// with this kind byte in front (elm/src/Effect.elm).
+/// Host -> Elm: one message for Elm's `fromHost` port (protocol::ToElm::to_bytes).
 pub const FROM_HOST: u8 = 3;
 
 /// No message is anywhere near this long; a longer one means the stream is broken.
@@ -51,11 +48,11 @@ mod tests {
     fn messages_read_back() {
         let mut stream = Vec::new();
         write_message(&mut stream, TO_HOST, b"[]").unwrap();
-        write_message(&mut stream, RENDER, &[]).unwrap();
+        write_message(&mut stream, TO_HOST, &[]).unwrap();
         write_message(&mut stream, FROM_HOST, "{\"t\":\"é\"}".as_bytes()).unwrap();
         let mut r = &stream[..];
         assert_eq!(read_message(&mut r).unwrap(), (TO_HOST, b"[]".to_vec()));
-        assert_eq!(read_message(&mut r).unwrap(), (RENDER, vec![]));
+        assert_eq!(read_message(&mut r).unwrap(), (TO_HOST, vec![]));
         assert_eq!(read_message(&mut r).unwrap(), (FROM_HOST, "{\"t\":\"é\"}".as_bytes().to_vec()));
         assert_eq!(read_message(&mut r).unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
     }

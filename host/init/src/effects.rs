@@ -1,19 +1,7 @@
-//! Elm's output ports: `render`, the scene to draw, as bytes (protocol::read_render),
-//! and `toHost`, everything else Elm asks the host to do, as a JSON list of effects
-//! (elm/src/Effect.elm encodes both).
-//!
-//!   {"t":"cursor","rgba":C}       the mouse cursor's fill colour
-//!   {"t":"wifiScan"}  {"t":"wifiConnect","ssid":S,"password":P}  {"t":"wifiDisconnect"}
-//!   {"t":"power","action":"off"|"restart"}
-//!   {"t":"http","id":ID,"method":M,"url":U,"headers":[[NAME,VALUE],...],"body":B,"timeoutMs":MS|null}
-//!        answered on fromHost with {"t":"httpResponse","id":ID,"status":N,"body":B}
-//!        or {"t":"httpError","id":ID,"error":"badUrl"|"timeout"|"network","message":M}
-//!   {"t":"listDir",...}  {"t":"readFiles",...}  {"t":"readBytes",...}  {"t":"sha256",...}
-//!        reading files and devices, answered on fromHost (see files.rs)
-//!   {"t":"writeSys","path":P,"text":T}   writes a kernel setting under /sys (files.rs)
-//!   {"t":"appendFile","path":P,"text":T}  {"t":"writeFile","path":P,"text":T}
-//!        saving files on the data disk (persist.rs)
-//!   {"t":"log","text":T}   a line for the log, such as a message from the host Elm couldn't read
+//! What Elm sends on its one output port, `toHost`: lists of effects (protocol::Effect,
+//! postcard-encoded; elm/src/Effect.elm encodes them). Each frame's scene is one of them
+//! (Effect::Render, read by protocol::read_render). Some are answered on `fromHost`:
+//! HTTP requests, and reading files and devices (files.rs).
 //!
 //! The types are in host/protocol, with an example of each message that both sides are
 //! tested against.
@@ -30,8 +18,7 @@ use crate::sys::Waker;
 pub use protocol::Effect;
 
 enum Sent {
-    Json(String),
-    Scene(Vec<Tri>),
+    Effects(Vec<Effect>),
     Connected(u64),
 }
 
@@ -62,24 +49,28 @@ fn inbox() -> &'static Inbox {
     })
 }
 
-/// What the Elm program sent: a message from its socket (protocol::link).
-pub fn from_elm(kind: u8, payload: Vec<u8>) {
-    match kind {
-        protocol::link::TO_HOST => {
-            let json = String::from_utf8_lossy(&payload).into_owned();
+/// What the Elm program sent: a message from its socket (protocol::link). Says whether
+/// it had a scene in it.
+pub fn from_elm(kind: u8, payload: Vec<u8>) -> bool {
+    if kind != protocol::link::TO_HOST {
+        log!("host", "a message of kind {kind} from Elm");
+        return false;
+    }
+    match protocol::read_effects(&payload) {
+        Ok(effects) => {
             if crate::sys::debug() {
-                // Not all of it: every frame sends thousands of numbers.
-                log!("host", "toHost {:.300}", json);
+                for effect in effects.iter().filter(|e| !matches!(e, Effect::Render(_))) {
+                    log!("host", "toHost {:.300}", format!("{effect:?}"));
+                }
             }
-            push(Sent::Json(json));
+            let render = effects.iter().any(|e| matches!(e, Effect::Render(_)));
+            push(Sent::Effects(effects));
+            render
         }
-        protocol::link::RENDER => match protocol::read_render(&payload) {
-            Some(tris) => push(Sent::Scene(
-                tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
-            )),
-            None => log!("host", "couldn't read Elm's scene: {} bytes", payload.len()),
-        },
-        kind => log!("host", "a message of kind {kind} from Elm"),
+        Err(e) => {
+            log!("host", "couldn't read Elm's effects ({e}): {} bytes", payload.len());
+            false
+        }
     }
 }
 
@@ -99,27 +90,21 @@ pub fn take() -> Vec<FromElm> {
     let batches = std::mem::take(&mut *inbox().queue.lock().unwrap_or_else(|e| e.into_inner()));
     let mut effects = Vec::new();
     for sent in batches {
-        let json = match sent {
-            Sent::Scene(tris) => {
-                effects.push(FromElm::Render(tris));
-                continue;
-            }
-            Sent::Connected(program) => {
-                effects.push(FromElm::Connected(program));
-                continue;
-            }
-            Sent::Json(json) => json,
-        };
-        match protocol::read_effects(&json) {
-            Ok(list) => {
+        match sent {
+            Sent::Connected(program) => effects.push(FromElm::Connected(program)),
+            Sent::Effects(list) => {
                 for effect in list {
                     match effect {
-                        Ok(effect) => effects.push(FromElm::Effect(effect)),
-                        Err(e) => log!("host", "couldn't read Elm's effect ({e})"),
+                        Effect::Render(bytes) => match protocol::read_render(&bytes) {
+                            Some(tris) => effects.push(FromElm::Render(
+                                tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
+                            )),
+                            None => log!("host", "couldn't read Elm's scene: {} bytes", bytes.len()),
+                        },
+                        effect => effects.push(FromElm::Effect(effect)),
                     }
                 }
             }
-            Err(e) => log!("host", "couldn't read Elm's effects ({e}): {:.200}", json),
         }
     }
     effects

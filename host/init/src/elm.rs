@@ -195,14 +195,14 @@ pub fn http_started(id: &str) {
 }
 
 /// What goes on the socket for `msg`: the data disk message gets the requests in flight.
-fn encode(s: &State, msg: &ToElm) -> String {
+fn encode(s: &State, msg: &ToElm) -> Vec<u8> {
     match msg {
         ToElm::DataDisk { path, .. } => ToElm::DataDisk {
             path: path.clone(),
             http_in_flight: s.http_in_flight.clone(),
         }
-        .to_json(),
-        msg => msg.to_json(),
+        .to_bytes(),
+        msg => msg.to_bytes(),
     }
 }
 
@@ -228,13 +228,13 @@ fn writer() {
         let stream = s.to_elm.clone().unwrap();
         let program = s.program;
         let msg = s.queue.remove(next).unwrap();
-        let json = encode(&s, &msg);
+        let bytes = encode(&s, &msg);
         drop(s);
 
         if crate::sys::debug() && !matches!(msg, ToElm::Frame { .. }) {
-            log!("host", "-> Elm {:.300}", json);
+            log!("host", "-> Elm {:.300}", format!("{msg:?}"));
         }
-        let written = link::write_message(&mut &*stream, link::FROM_HOST, json.as_bytes())
+        let written = link::write_message(&mut &*stream, link::FROM_HOST, &bytes)
             .and_then(|_| (&*stream).flush());
         let mut s = state();
         match written {
@@ -581,10 +581,9 @@ fn read(mut stream: UnixStream, program: u64) {
     loop {
         match link::read_message(&mut stream) {
             Ok((kind, payload)) => {
-                if kind == link::RENDER {
+                if crate::effects::from_elm(kind, payload) {
                     first_frame(program);
                 }
-                crate::effects::from_elm(kind, payload)
             }
             Err(e) => {
                 // A crash resets the connection rather than closing it.

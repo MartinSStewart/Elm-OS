@@ -1,13 +1,12 @@
 port module Effect exposing
     ( Effect(..)
-    , Encoded(..)
     , HttpError(..)
     , HttpRequest
     , PowerAction(..)
-    , messages
+    , encode
     , fromHost
-    , readFromHost
     , get
+    , message
     , toCmd
     )
 
@@ -16,30 +15,24 @@ port module Effect exposing
 `update` returns a list of these instead of `Cmd`s, so what it does is plain data
 that tests can compare, and the host is free to carry it out however it likes (HTTP,
 for example, uses Rust's rustls rather than eco's libcurl and OpenSSL). They all go
-out on one port, `toHost`, as `Bytes` (`messages`); host/init/src/effects.rs reads them.
-Each message starts with a byte saying what it holds (host/protocol/src/link.rs):
-
-  - 1: the Effects as a JSON list, in UTF-8
-  - 2: a `Render`'s triangles (`renderBytes`), which is sent every frame with thousands
-    of numbers in it, so it isn't JSON: eco hands the host these bytes without
-    encoding, copying or parsing anything
+out on one port, `toHost`, as `Bytes`: each `update`'s Effects in one message
+(`message`), which host/init/src/effects.rs reads.
 
 The host answers and reports on one port too, `fromHost`, also as `Bytes`: input
-events, frames, wifi, HTTP responses. Each message is the byte 3 and then one JSON
-message in UTF-8 (`readFromHost`). Main.elm decodes those.
+events, frames, wifi, HTTP responses (HostMessage.elm reads them).
 
-The host's side of both is in host/protocol, as Rust types, with an example of every
-message (host/protocol/examples.json). elm/tests/ProtocolTest.elm checks these encoders
-and the decoders against the same examples, so the two sides can't drift apart.
+Both are postcard, a compact binary format (Postcard.elm). The host's side is in
+host/protocol, as Rust types: the order of their variants and fields is the format,
+so `encode` follows protocol::Effect's. host/protocol/examples.json has an example of
+every message, and elm/tests/ProtocolTest.elm checks these encoders and HostMessage's
+decoder give the same bytes as the host's, so the two sides can't drift apart.
 
 -}
 
 import Bytes exposing (Bytes)
-import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color exposing (Color)
-import Json.Decode as D
-import Json.Encode as E
+import Postcard
 import Sprite exposing (Triangle)
 import Units exposing (DevicePixels, UiScale)
 
@@ -47,36 +40,7 @@ import Units exposing (DevicePixels, UiScale)
 port toHost : Bytes -> Cmd msg
 
 
-port fromHostBytes : (Bytes -> msg) -> Sub msg
-
-
-{-| Each message from the host, as JSON.
--}
-fromHost : (D.Value -> msg) -> Sub msg
-fromHost toMsg =
-    fromHostBytes (\bytes -> toMsg (readFromHost bytes))
-
-
-{-| A message from the host: its kind byte (3, host/protocol/src/link.rs's
-FROM_HOST), then JSON in UTF-8. Anything else is `null`, which the decoders turn into
-a logged "isn't as expected" (Main.hostInput).
--}
-readFromHost : Bytes -> D.Value
-readFromHost bytes =
-    BD.decode
-        (BD.unsignedInt8
-            |> BD.andThen
-                (\kind ->
-                    if kind == 3 then
-                        BD.string (Bytes.width bytes - 1)
-
-                    else
-                        BD.fail
-                )
-        )
-        bytes
-        |> Maybe.andThen (\text -> Result.toMaybe (D.decodeString D.value text))
-        |> Maybe.withDefault E.null
+port fromHost : (Bytes -> msg) -> Sub msg
 
 
 type Effect
@@ -153,43 +117,18 @@ get id url =
 
 toCmd : List Effect -> Cmd msg
 toCmd effects =
-    Cmd.batch (List.map toHost (messages effects))
+    if List.isEmpty effects then
+        Cmd.none
+
+    else
+        toHost (message effects)
 
 
-{-| What `toCmd` sends on `toHost`, in order: the Effects that are JSON, in one
-message, then each Render.
+{-| What `toCmd` sends on `toHost`: the Effects in order (protocol::read_effects).
 -}
-messages : List Effect -> List Bytes
-messages effects =
-    let
-        ( json, renders ) =
-            List.foldr
-                (\effect ( js, rs ) ->
-                    case encode effect of
-                        Json value ->
-                            ( value :: js, rs )
-
-                        Triangles bytes ->
-                            ( js, bytes :: rs )
-                )
-                ( [], [] )
-                effects
-
-        message kind bytes =
-            BE.encode (BE.sequence [ BE.unsignedInt8 kind, BE.bytes bytes ])
-    in
-    (if List.isEmpty json then
-        []
-
-     else
-        [ message 1 (BE.encode (BE.string (E.encode 0 (E.list identity json)))) ]
-    )
-        ++ List.map (message 2) renders
-
-
-type Encoded
-    = Json E.Value
-    | Triangles Bytes
+message : List Effect -> Bytes
+message effects =
+    BE.encode (Postcard.list encode effects)
 
 
 {-| 52 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
@@ -201,101 +140,69 @@ renderBytes triangles =
     BE.encode (BE.sequence (List.map Sprite.encoder triangles))
 
 
-encode : Effect -> Encoded
+{-| One Effect, as protocol::Effect: its variant's number there, then its fields.
+-}
+encode : Effect -> BE.Encoder
 encode effect =
     case effect of
         Render triangles ->
-            Triangles (renderBytes (triangles ()))
+            Postcard.variant 0 [ Postcard.bytes (renderBytes (triangles ())) ]
 
         SetCursor { color, scale } ->
-            E.object
-                [ ( "t", E.string "cursor" )
-                , ( "rgba", E.float (Color.toFloat color) )
-                , ( "scale", E.int (Units.scaleInt scale) )
-                ]
-                |> Json
+            Postcard.variant 1 [ Postcard.unsigned (Color.toInt color), Postcard.unsigned (Units.scaleInt scale) ]
 
         WifiScan ->
-            E.object [ ( "t", E.string "wifiScan" ) ]
-                |> Json
+            Postcard.variant 2 []
 
         WifiConnect { ssid, password } ->
-            E.object [ ( "t", E.string "wifiConnect" ), ( "ssid", E.string ssid ), ( "password", E.string password ) ]
-                |> Json
+            Postcard.variant 3 [ Postcard.string ssid, Postcard.string password ]
 
         WifiDisconnect ->
-            E.object [ ( "t", E.string "wifiDisconnect" ) ]
-                |> Json
+            Postcard.variant 4 []
 
         Power action ->
-            E.object
-                [ ( "t", E.string "power" )
-                , ( "action"
-                  , E.string
-                        (case action of
-                            PowerOff ->
-                                "off"
+            Postcard.variant 5
+                [ case action of
+                    PowerOff ->
+                        Postcard.variant 0 []
 
-                            Restart ->
-                                "restart"
-                        )
-                  )
+                    Restart ->
+                        Postcard.variant 1 []
                 ]
-                |> Json
 
         Http request ->
-            E.object
-                [ ( "t", E.string "http" )
-                , ( "id", E.string request.id )
-                , ( "method", E.string request.method )
-                , ( "url", E.string request.url )
-                , ( "headers", E.list (\( name, value ) -> E.list E.string [ name, value ]) request.headers )
-                , ( "body", E.string request.body )
-                , ( "timeoutMs", Maybe.map E.float request.timeoutMs |> Maybe.withDefault E.null )
+            Postcard.variant 6
+                [ Postcard.string request.id
+                , Postcard.string request.method
+                , Postcard.string request.url
+                , Postcard.list (\( name, value ) -> BE.sequence [ Postcard.string name, Postcard.string value ]) request.headers
+                , Postcard.string request.body
+                , Postcard.maybe Postcard.float64 request.timeoutMs
                 ]
-                |> Json
 
         ListDir path ->
-            E.object [ ( "t", E.string "listDir" ), ( "path", E.string path ) ]
-                |> Json
+            Postcard.variant 7 [ Postcard.string path ]
 
         ReadFiles { id, paths } ->
-            E.object [ ( "t", E.string "readFiles" ), ( "id", E.string id ), ( "paths", E.list E.string paths ) ]
-                |> Json
+            Postcard.variant 8 [ Postcard.string id, Postcard.list Postcard.string paths ]
 
         ReadBytes { path, offset, length } ->
-            E.object
-                [ ( "t", E.string "readBytes" )
-                , ( "path", E.string path )
-                , ( "offset", E.int offset )
-                , ( "length", E.int length )
-                ]
-                |> Json
+            Postcard.variant 9 [ Postcard.string path, Postcard.unsigned offset, Postcard.unsigned length ]
 
         Sha256 { path, length } ->
-            E.object
-                [ ( "t", E.string "sha256" )
-                , ( "path", E.string path )
-                , ( "length", Maybe.map E.int length |> Maybe.withDefault E.null )
-                ]
-                |> Json
+            Postcard.variant 10 [ Postcard.string path, Postcard.maybe Postcard.unsigned length ]
 
         WriteSys { path, text } ->
-            E.object [ ( "t", E.string "writeSys" ), ( "path", E.string path ), ( "text", E.string text ) ]
-                |> Json
+            Postcard.variant 11 [ Postcard.string path, Postcard.string text ]
 
         AppendFile { path, text } ->
-            E.object [ ( "t", E.string "appendFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
-                |> Json
+            Postcard.variant 12 [ Postcard.string path, Postcard.string text ]
 
         WriteFile { path, text } ->
-            E.object [ ( "t", E.string "writeFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
-                |> Json
+            Postcard.variant 13 [ Postcard.string path, Postcard.string text ]
 
         Log text ->
-            E.object [ ( "t", E.string "log" ), ( "text", E.string text ) ]
-                |> Json
+            Postcard.variant 14 [ Postcard.string text ]
 
         SwitchReady ->
-            E.object [ ( "t", E.string "switchReady" ) ]
-                |> Json
+            Postcard.variant 15 []
