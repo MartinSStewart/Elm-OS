@@ -223,7 +223,7 @@ $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/k
 # decoders for the Model and Msg added by tools/wire (for Persist.elm), and the
 # program's entry module, ElmOs.elm. Errors still name src/<Module>.elm and the
 # original line numbers.
-$(BUILD)/elm.o: $(BUILD)/wire/.done | check-deps
+$(BUILD)/elm.o: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
 	cd $(BUILD)/wire && $(ECO) make src/ElmOs.elm --output=$(abspath $@)
 
 WIRE_FLAGS := --runtime tools/wire/Wire.elm --entry ElmOs \
@@ -246,7 +246,7 @@ migration: $(BUILD)/wire-tool
 # tools/wire is an Elm program too (eco/system and elm-syntax). eco 0.2 crashes linking
 # it (`eco make --output=<exe>`), so it's compiled to an object and linked here, the
 # way /init is, plus the TLS libraries eco/system needs.
-$(BUILD)/wire-tool.o: tools/wire/elm.json $(wildcard tools/wire/src/*.elm) | check-deps
+$(BUILD)/wire-tool.o: tools/wire/elm.json $(wildcard tools/wire/src/*.elm) $(BUILD)/eco-setting | check-deps
 	@mkdir -p $(BUILD)
 	cd tools/wire && $(ECO) make src/Main.elm --output=$(abspath $@)
 
@@ -370,7 +370,8 @@ $(BUILD)/src/%-$(HOSTAP_VER).tar.gz:
 	mv $@.tmp $@
 
 # build/wpa_supplicant from wpa_supplicant-VER.tar.gz, build/hostapd from hostapd-VER.tar.gz.
-# The tarball is checked against its SHA-256 in versions.mk every time.
+# The tarball is checked against its SHA-256 in versions.mk every time. hostap's Makefile
+# asks pkg-config for libnl: point it at Alpine's libnl, not the build machine's.
 HOSTAP_SHA256_wpa_supplicant := $(WPA_SUPPLICANT_SHA256)
 HOSTAP_SHA256_hostapd := $(HOSTAPD_SHA256)
 
@@ -383,7 +384,8 @@ $(BUILD)/wpa_supplicant $(BUILD)/hostapd: $(BUILD)/%: $(BUILD)/src/%-$(HOSTAP_VE
 	  echo 'CC=musl-gcc'; \
 	  echo 'CFLAGS += -Os -isystem $(abspath $(BUILD)/kheaders/include) -I$(abspath $(LIBNL)/root/usr/include/libnl3)'; \
 	  echo 'LDFLAGS += -static -L$(abspath $(LIBNL)/root/usr/lib)'; } > $(BUILD)/hostap-$*/$*/.config
-	$(MAKE) -C $(BUILD)/hostap-$*/$* $*
+	PKG_CONFIG_LIBDIR=$(abspath $(LIBNL)/root/usr/lib/pkgconfig) PKG_CONFIG_SYSROOT_DIR=$(abspath $(LIBNL)/root) \
+	  $(MAKE) -C $(BUILD)/hostap-$*/$* $*
 	strip -o $@ $(BUILD)/hostap-$*/$*/$*
 
 INITRAMFS_DEPS := $(BUILD)/init $(BUILD)/wpa_supplicant $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
@@ -392,6 +394,13 @@ INITRAMFS_DEPS := $(BUILD)/init $(BUILD)/wpa_supplicant $(if $(filter 1,$(GPU)),
 $(BUILD)/gpu-setting: FORCE
 	@mkdir -p $(BUILD); echo $(GPU) | cmp -s - $@ || echo $(GPU) > $@
 FORCE:
+
+# Which eco compiles the Elm, and its version. When it changes (a new ECO_VER, or ECO=...),
+# the Elm is compiled again and eco's caches of the old eco's output are dropped:
+# objects from one eco don't link with another eco's runtime (undefined Elm_Kernel_* symbols).
+$(BUILD)/eco-setting: FORCE
+	@mkdir -p $(BUILD); s="$(ECO_BIN) $$($(ECO) --version)"; \
+	  echo "$$s" | cmp -s - $@ || { rm -rf $(BUILD)/wire/eco-stuff $(BUILD)/wire-test/eco-stuff tools/wire/eco-stuff elm/eco-stuff; echo "$$s" > $@; }
 
 $(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos
