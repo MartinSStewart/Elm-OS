@@ -16,6 +16,7 @@ import BootInfo
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Dict exposing (Dict)
 import Effect exposing (Effect)
 import Json.Decode as D
 import Keyboard
@@ -233,6 +234,8 @@ type alias Model =
     , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
     , selected : Maybe Wifi.Network
     , password : TextInput.Model
+    , -- save passwords here for networks that have been connected to before
+      savedWifiPasswords : Dict String String
     , showPassword : Bool
     , weather : WeatherState
     , geoUrl : String
