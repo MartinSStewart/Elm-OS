@@ -25,11 +25,19 @@ jobs:
         # host/rust-toolchain.toml picks the Rust version; add the target to that one.
         run: cd host && rustup target add x86_64-unknown-linux-musl
 
+      - name: Cache eco's bundle
+        uses: actions/cache@v4
+        with:
+          path: eco.tar.gz
+          key: eco-0.2.0-rc3
+
       - name: Install eco
         run: |
-          # GitHub's release downloads sometimes answer with an error page: retry, and
-          # check it's the bundle tools/build-env/Dockerfile pins.
-          curl -fsSL --retry 5 --retry-all-errors -o eco.tar.gz https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
+          # Downloaded once, then cached. GitHub's release downloads sometimes answer
+          # 504 for minutes at a time: retry for up to about 10 minutes, and check it's
+          # the bundle tools/build-env/Dockerfile pins.
+          [ -s eco.tar.gz ] || curl -fsSL --retry 20 --retry-delay 30 --retry-all-errors -o eco.tar.gz \
+            https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
           echo "02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca  eco.tar.gz" | sha256sum -c
           sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
           echo /opt/eco/bin >> "$GITHUB_PATH"
