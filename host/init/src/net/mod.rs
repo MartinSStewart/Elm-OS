@@ -19,7 +19,7 @@
 //! In QEMU, `make run` and `make test` add build/wifi-sim.cpio to the initramfs. It
 //! carries hostapd and /etc/elmos/hostapd.conf, and the kernel's mac80211_hwsim makes
 //! two simulated radios. We then run an access point ("Elm OS test network",
-//! password 123) on the second radio, bridged to QEMU's virtual Ethernet card,
+//! password is "password") on the second radio, bridged to QEMU's virtual Ethernet card,
 //! so joining it gets an address from QEMU's DHCP server and real internet access.
 //! The first radio is the one the user sees.
 //!

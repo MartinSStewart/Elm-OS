@@ -11,7 +11,7 @@
 #
 # The guest gets two simulated wifi radios (mac80211_hwsim) and QEMU's user-mode
 # network; Elm OS runs a test access point on one radio, bridged to that network
-# ("Elm OS test network", password 123), and shows the other to Elm.
+# ("Elm OS test network", password is "password"), and shows the other to Elm.
 #
 # build/data-qemu.img is its data disk (make run makes it), where Elm OS keeps its
 # Model, so what you did comes back next time (elm/src/Persist.elm). Delete it to

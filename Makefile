@@ -30,7 +30,7 @@
 #                   the same commit gives the same bytes on any machine (make docker TARGET=all)
 #
 # `make run` and `make test` also give the guest a simulated wifi network to join
-# ("Elm OS test network", password 123): see host/init/src/net/mod.rs.
+# ("Elm OS test network", password is "password"): see host/init/src/net/mod.rs.
 #
 # `make run` gives it a data disk too, build/data-qemu.img, where Elm OS saves its
 # state (elm/src/Persist.elm), so it comes back the next time. Delete the file to
