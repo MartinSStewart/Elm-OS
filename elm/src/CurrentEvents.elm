@@ -31,6 +31,7 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 -}
 
 import Color
+import Coord
 import Effect
 import Json.Decode as D
 import Sprite
@@ -98,12 +99,35 @@ newsPage news =
                 LoadedNews days ->
                     List.map
                         (\{ date, topics } ->
-                            monthName date.month
-                                ++ " "
-                                ++ String.fromInt date.day
-                                ++ ", "
-                                ++ String.fromInt date.year
-                                |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Big)
+                            Ui.column
+                                { spacing = 8, padding = Ui.noPadding }
+                                [ monthName date.month
+                                    ++ " "
+                                    ++ String.fromInt date.day
+                                    ++ ", "
+                                    ++ String.fromInt date.year
+                                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                                , List.map
+                                    (\topic ->
+                                        Ui.column
+                                            { spacing = 8, padding = Ui.noPadding }
+                                            [ Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) topic.heading
+                                            , Ui.el
+                                                { padding = { topLeft = Coord.xy 16 0, bottomRight = Coord.origin }
+                                                , inFront = []
+                                                , borderAndFill = Ui.NoBorderOrFill
+                                                }
+                                                (Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) "Content")
+
+                                            --(Ui.column
+                                            --    { spacing = 8, padding = Ui.noPadding }
+                                            --    topic.items
+                                            --)
+                                            ]
+                                    )
+                                    topics
+                                    |> Ui.column { spacing = 8, padding = Ui.noPadding }
+                                ]
                         )
                         days
                         |> Ui.column { spacing = 16, padding = Ui.noPadding }
