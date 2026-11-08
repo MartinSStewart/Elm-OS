@@ -65,7 +65,7 @@ there didn't make it into the kernel's config (its dependencies are off, or a ne
 renamed it), rather than leaving a driver out without saying so.
 
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
-wifi network to join: **Elm OS test network**, password `elmos-wifi`. `make run` keeps what Elm
+wifi network to join: **Elm OS test network**, password `password`. `make run` keeps what Elm
 OS saves in `build/data-qemu.img`; delete it to start afresh.
 
 ## Staying up to date

@@ -1,9 +1,9 @@
-module CurrentEventsTest exposing (suite)
+module NewsTest exposing (suite)
 
-import CurrentEvents exposing (Inline(..), Item(..))
 import Effect
 import Expect
 import Json.Decode as D
+import News exposing (Inline(..), Item(..))
 import Test exposing (Test, describe, test)
 import Time
 
@@ -40,10 +40,10 @@ link article label =
 
 suite : Test
 suite =
-    describe "CurrentEvents"
+    describe "News"
         [ test "a day's wikitext"
             (\_ ->
-                CurrentEvents.parseWikitext day
+                News.parseWikitext day
                     |> Expect.equal
                         [ { heading = "Armed conflicts and attacks"
                           , items =
@@ -85,7 +85,7 @@ suite =
             )
         , test "the API's answer, newest first, without missing or empty days"
             (\_ ->
-                D.decodeString CurrentEvents.decoder
+                D.decodeString News.decoder
                     """{"batchcomplete":true,"query":{"pages":[
                     {"ns":100,"title":"Portal:Current events/2026 November 9","missing":true},
                     {"pageid":2,"ns":100,"title":"Portal:Current events/2026 October 31","revisions":[{"slots":{"main":{"content":"'''Sports'''\\n*Someone wins."}}}]},
@@ -103,7 +103,7 @@ suite =
         , test "the last days, across a month's end"
             (\_ ->
                 -- 2026-11-01T12:00:00Z
-                CurrentEvents.lastDays 3 (Time.millisToPosix 1793534400000)
+                News.lastDays 3 (Time.millisToPosix 1793534400000)
                     |> Expect.equal
                         [ { year = 2026, month = 11, day = 1 }
                         , { year = 2026, month = 10, day = 31 }
@@ -112,7 +112,7 @@ suite =
             )
         , test "the request"
             (\_ ->
-                CurrentEvents.request "news" [ { year = 2026, month = 11, day = 8 }, { year = 2026, month = 11, day = 7 } ]
+                News.request "news" [ { year = 2026, month = 11, day = 8 }, { year = 2026, month = 11, day = 7 } ]
                     |> Expect.equal
                         (Effect.Http
                             { id = "news"

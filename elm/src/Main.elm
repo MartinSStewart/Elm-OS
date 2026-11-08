@@ -20,6 +20,7 @@ import Effect exposing (Effect)
 import HostMessage
 import Json.Decode as D
 import Keyboard
+import News exposing (NewsState(..))
 import Persist
 import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
@@ -239,6 +240,8 @@ type alias Model =
     , system : Maybe SystemInfo
     , bootInfo : BootInfo.Model
     , aboutOpen : Bool
+    , newsOpen : Bool
+    , news : NewsState
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
@@ -278,6 +281,7 @@ type UiId
     | DisconnectButton
     | WeatherButton
     | AboutButton
+    | NewsButton
     | CloseAboutButton
     | CalculatorButton
     | PowerOffButton
@@ -322,6 +326,8 @@ init =
     , system = Nothing
     , bootInfo = BootInfo.init
     , aboutOpen = False
+    , newsOpen = False
+    , news = NewsNotRequested
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
@@ -388,32 +394,67 @@ step event model =
             ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
-            let
-                afterHttp : Model
-                afterHttp =
-                    gotHttp id result model
-            in
-            case afterHttp.weather of
-                LoadingForecast place ->
-                    case model.weather of
-                        FindingPlace ->
-                            -- Now that we know where we are, ask for the forecast there.
-                            ( afterHttp, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
+            case Effect.stringToHttpRequestId id of
+                Just id2 ->
+                    let
+                        decoded : D.Decoder value -> Result (Result Effect.HttpError Int) value
+                        decoded decoder =
+                            case result of
+                                Ok response ->
+                                    if response.status >= 200 && response.status < 300 then
+                                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
 
-                        _ ->
-                            ( afterHttp, [] )
+                                    else
+                                        Err (Ok response.status)
 
-                NoWeather ->
-                    ( afterHttp, [] )
+                                Err error ->
+                                    Err (Err error)
+                    in
+                    case id2 of
+                        Effect.GeoRequest ->
+                            case model.weather of
+                                FindingPlace ->
+                                    case decoded Weather.decodePlace of
+                                        Ok place ->
+                                            ( { model | weather = LoadingForecast place }
+                                            , [ Effect.get Effect.ForecastRequest (Weather.forecastUrl model.weatherUrl place) ]
+                                            )
 
-                FindingPlace ->
-                    ( afterHttp, [] )
+                                        Err error ->
+                                            ( { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+                                            , []
+                                            )
 
-                GotWeather _ _ ->
-                    ( afterHttp, [] )
+                                _ ->
+                                    ( model, [] )
 
-                WeatherFailed _ ->
-                    ( afterHttp, [] )
+                        Effect.ForecastRequest ->
+                            ( case model.weather of
+                                LoadingForecast place ->
+                                    case decoded Weather.decodeForecast of
+                                        Ok forecast ->
+                                            { model | weather = GotWeather place forecast }
+
+                                        Err error ->
+                                            { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+
+                                _ ->
+                                    model
+                            , []
+                            )
+
+                        Effect.NewsRequest ->
+                            ( case decoded News.decoder of
+                                Ok data ->
+                                    { model | news = LoadedNews data }
+
+                                Err error ->
+                                    { model | news = NewsFailed ("Loading news: " ++ Weather.errorText error) }
+                            , []
+                            )
+
+                Nothing ->
+                    ( model, [] )
 
         Mouse x y ->
             let
@@ -638,60 +679,7 @@ nonEmpty value default =
 
 fetchWeather : Model -> ( Model, List Effect )
 fetchWeather model =
-    ( { model | weather = FindingPlace }, [ Effect.get "geo" model.geoUrl ] )
-
-
-{-| The answers to the weather's two requests: where we are ("geo"), then the
-forecast for there ("forecast").
--}
-gotHttp : String -> Result Effect.HttpError { status : Int, body : String } -> Model -> Model
-gotHttp id result model =
-    let
-        decoded decoder =
-            case result of
-                Ok response ->
-                    if response.status >= 200 && response.status < 300 then
-                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
-
-                    else
-                        Err (Ok response.status)
-
-                Err error ->
-                    Err (Err error)
-    in
-    case model.weather of
-        FindingPlace ->
-            if id == "geo" then
-                case decoded Weather.decodePlace of
-                    Ok place ->
-                        { model | weather = LoadingForecast place }
-
-                    Err error ->
-                        { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
-
-            else
-                model
-
-        LoadingForecast place ->
-            if id == "forecast" then
-                case decoded Weather.decodeForecast of
-                    Ok forecast ->
-                        { model | weather = GotWeather place forecast }
-
-                    Err error ->
-                        { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
-
-            else
-                model
-
-        NoWeather ->
-            model
-
-        GotWeather _ _ ->
-            model
-
-        WeatherFailed _ ->
-            model
+    ( { model | weather = FindingPlace }, [ Effect.get Effect.GeoRequest model.geoUrl ] )
 
 
 click : UiId -> Model -> ( Model, List Effect )
@@ -746,6 +734,23 @@ click id model =
 
         AboutButton ->
             ( { model | aboutOpen = not model.aboutOpen, editorOpen = False, focus = Nothing }, [] )
+
+        NewsButton ->
+            let
+                isOpen =
+                    not model.newsOpen
+            in
+            case ( isOpen, model.news ) of
+                ( _, LoadingNews ) ->
+                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
+
+                ( True, _ ) ->
+                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing, news = LoadingNews }
+                    , [ News.request "news" [ { year = 2026, month = 10, day = 4 } ] ]
+                    )
+
+                ( False, _ ) ->
+                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
 
         EditorButton ->
             ( { model
@@ -946,6 +951,9 @@ dragSelect focus position model =
         AboutButton ->
             model
 
+        NewsButton ->
+            model
+
         CloseAboutButton ->
             model
 
@@ -1134,6 +1142,15 @@ screenUi model =
                    )
                 ++ (if model.aboutOpen then
                         [ aboutPage model ]
+
+                    else
+                        []
+                   )
+                ++ (if model.newsOpen then
+                        [ Ui.topRight
+                            { size = uiSize model }
+                            (News.newsPage model.news)
+                        ]
 
                     else
                         []
@@ -1964,6 +1981,7 @@ toolbar model =
 
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
+                    , Ui.selectableButton { id = NewsButton, padding = small } model.aboutOpen (t "News")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")

@@ -2,11 +2,13 @@ port module Effect exposing
     ( Effect(..)
     , HttpError(..)
     , HttpRequest
+    , HttpRequestId(..)
     , PowerAction(..)
     , encode
     , fromHost
     , get
     , message
+    , stringToHttpRequestId
     , toCmd
     )
 
@@ -110,9 +112,44 @@ type HttpError
     | Interrupted
 
 
-get : String -> String -> Effect
+get : HttpRequestId -> String -> Effect
 get id url =
-    Http { id = id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just 30000 }
+    Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just 30000 }
+
+
+type HttpRequestId
+    = GeoRequest
+    | ForecastRequest
+    | NewsRequest
+
+
+httpRequestIdToString : HttpRequestId -> String
+httpRequestIdToString request =
+    case request of
+        GeoRequest ->
+            "geo"
+
+        ForecastRequest ->
+            "forecast"
+
+        NewsRequest ->
+            "news"
+
+
+stringToHttpRequestId : String -> Maybe HttpRequestId
+stringToHttpRequestId string =
+    case string of
+        "geo" ->
+            Just GeoRequest
+
+        "forecast" ->
+            Just ForecastRequest
+
+        "news" ->
+            Just NewsRequest
+
+        _ ->
+            Nothing
 
 
 toCmd : List Effect -> Cmd msg
@@ -124,7 +161,7 @@ toCmd effects =
         toHost (message effects)
 
 
-{-| What `toCmd` sends on `toHost`: the Effects in order (protocol::read_effects).
+{-| What `toCmd` sends on `toHost`: the Effects in order (protocol::read\_effects).
 -}
 message : List Effect -> Bytes
 message effects =

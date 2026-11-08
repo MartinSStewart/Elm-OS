@@ -327,7 +327,7 @@ if not usb:
     click((w - 60 * s) / w, 26 * s / h)  # Refresh
     time.sleep(5)
     click((w - 330 * s) / w, 75 * s / h)  # the first network
-    for ch in "elmos-wifi":
+    for ch in "password":
         cmd("send-key", keys=[{"type": "qcode", "data": {"-": "minus"}.get(ch, ch)}])
         time.sleep(0.2)
     cmd("send-key", keys=[{"type": "qcode", "data": "ret"}])
