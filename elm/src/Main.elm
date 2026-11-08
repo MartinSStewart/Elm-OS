@@ -15,6 +15,7 @@ import BootInfo
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
+import CurrentEvents
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import HostMessage
@@ -239,6 +240,8 @@ type alias Model =
     , system : Maybe SystemInfo
     , bootInfo : BootInfo.Model
     , aboutOpen : Bool
+    , newsOpen : Bool
+    , news : NewsState
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
@@ -261,6 +264,13 @@ type WeatherState
     | WeatherFailed String
 
 
+type NewsState
+    = NewsNotRequested
+    | LoadingNews
+    | LoadedNews (List CurrentEvents.Day)
+    | NewsFailed String
+
+
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
 saved and sent elsewhere later.
 -}
@@ -278,6 +288,7 @@ type UiId
     | DisconnectButton
     | WeatherButton
     | AboutButton
+    | NewsButton
     | CloseAboutButton
     | CalculatorButton
     | PowerOffButton
@@ -322,6 +333,8 @@ init =
     , system = Nothing
     , bootInfo = BootInfo.init
     , aboutOpen = False
+    , newsOpen = False
+    , news = NewsNotRequested
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
@@ -388,32 +401,67 @@ step event model =
             ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
-            let
-                afterHttp : Model
-                afterHttp =
-                    gotHttp id result model
-            in
-            case afterHttp.weather of
-                LoadingForecast place ->
-                    case model.weather of
-                        FindingPlace ->
-                            -- Now that we know where we are, ask for the forecast there.
-                            ( afterHttp, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
+            case stringToHttpRequestId id of
+                Just id2 ->
+                    let
+                        decoded : D.Decoder value -> Result (Result Effect.HttpError Int) value
+                        decoded decoder =
+                            case result of
+                                Ok response ->
+                                    if response.status >= 200 && response.status < 300 then
+                                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
 
-                        _ ->
-                            ( afterHttp, [] )
+                                    else
+                                        Err (Ok response.status)
 
-                NoWeather ->
-                    ( afterHttp, [] )
+                                Err error ->
+                                    Err (Err error)
+                    in
+                    case id2 of
+                        GeoRequest ->
+                            case model.weather of
+                                FindingPlace ->
+                                    case decoded Weather.decodePlace of
+                                        Ok place ->
+                                            ( { model | weather = LoadingForecast place }
+                                            , [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ]
+                                            )
 
-                FindingPlace ->
-                    ( afterHttp, [] )
+                                        Err error ->
+                                            ( { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+                                            , []
+                                            )
 
-                GotWeather _ _ ->
-                    ( afterHttp, [] )
+                                _ ->
+                                    ( model, [] )
 
-                WeatherFailed _ ->
-                    ( afterHttp, [] )
+                        ForecastRequest ->
+                            ( case model.weather of
+                                LoadingForecast place ->
+                                    case decoded Weather.decodeForecast of
+                                        Ok forecast ->
+                                            { model | weather = GotWeather place forecast }
+
+                                        Err error ->
+                                            { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+
+                                _ ->
+                                    model
+                            , []
+                            )
+
+                        NewsRequest ->
+                            ( case decoded CurrentEvents.decoder of
+                                Ok data ->
+                                    { model | news = LoadedNews data }
+
+                                Err error ->
+                                    { model | news = NewsFailed ("Loading news: " ++ Weather.errorText error) }
+                            , []
+                            )
+
+                Nothing ->
+                    ( model, [] )
 
         Mouse x y ->
             let
@@ -641,57 +689,39 @@ fetchWeather model =
     ( { model | weather = FindingPlace }, [ Effect.get "geo" model.geoUrl ] )
 
 
-{-| The answers to the weather's two requests: where we are ("geo"), then the
-forecast for there ("forecast").
--}
-gotHttp : String -> Result Effect.HttpError { status : Int, body : String } -> Model -> Model
-gotHttp id result model =
-    let
-        decoded decoder =
-            case result of
-                Ok response ->
-                    if response.status >= 200 && response.status < 300 then
-                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
+type HttpRequestId
+    = GeoRequest
+    | ForecastRequest
+    | NewsRequest
 
-                    else
-                        Err (Ok response.status)
 
-                Err error ->
-                    Err (Err error)
-    in
-    case model.weather of
-        FindingPlace ->
-            if id == "geo" then
-                case decoded Weather.decodePlace of
-                    Ok place ->
-                        { model | weather = LoadingForecast place }
+httpRequestIdToString : HttpRequestId -> String
+httpRequestIdToString request =
+    case request of
+        GeoRequest ->
+            "geo"
 
-                    Err error ->
-                        { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+        ForecastRequest ->
+            "forecast"
 
-            else
-                model
+        NewsRequest ->
+            "news"
 
-        LoadingForecast place ->
-            if id == "forecast" then
-                case decoded Weather.decodeForecast of
-                    Ok forecast ->
-                        { model | weather = GotWeather place forecast }
 
-                    Err error ->
-                        { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+stringToHttpRequestId : String -> Maybe HttpRequestId
+stringToHttpRequestId string =
+    case string of
+        "geo" ->
+            Just GeoRequest
 
-            else
-                model
+        "forecast" ->
+            Just ForecastRequest
 
-        NoWeather ->
-            model
+        "news" ->
+            Just NewsRequest
 
-        GotWeather _ _ ->
-            model
-
-        WeatherFailed _ ->
-            model
+        _ ->
+            Nothing
 
 
 click : UiId -> Model -> ( Model, List Effect )
@@ -746,6 +776,23 @@ click id model =
 
         AboutButton ->
             ( { model | aboutOpen = not model.aboutOpen, editorOpen = False, focus = Nothing }, [] )
+
+        NewsButton ->
+            let
+                isOpen =
+                    not model.newsOpen
+            in
+            case ( isOpen, model.news ) of
+                ( _, LoadingNews ) ->
+                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
+
+                ( True, _ ) ->
+                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing, news = LoadingNews }
+                    , [ CurrentEvents.request "news" [ { year = 2026, month = 10, day = 4 } ] ]
+                    )
+
+                ( False, _ ) ->
+                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
 
         EditorButton ->
             ( { model
@@ -946,6 +993,9 @@ dragSelect focus position model =
         AboutButton ->
             model
 
+        NewsButton ->
+            model
+
         CloseAboutButton ->
             model
 
@@ -1134,6 +1184,12 @@ screenUi model =
                    )
                 ++ (if model.aboutOpen then
                         [ aboutPage model ]
+
+                    else
+                        []
+                   )
+                ++ (if model.newsOpen then
+                        [ newsPage model ]
 
                     else
                         []
@@ -1964,6 +2020,7 @@ toolbar model =
 
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
+                    , Ui.selectableButton { id = NewsButton, padding = small } model.aboutOpen (t "News")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
@@ -2008,6 +2065,35 @@ upgradeNotice model build =
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
                 (Ui.text bodyFont ("Upgrade to " ++ build ++ " in progress"))
+            )
+        )
+
+
+newsPage : Model -> Ui.Element UiId
+newsPage model =
+    Ui.topRight
+        { size = uiSize model }
+        (Ui.el
+            { padding = Ui.paddingXY 12 10
+            , inFront = []
+            , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+            }
+            (Ui.column
+                { spacing = 0, padding = Ui.noPadding }
+                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) "Wikipedia: Current events"
+                , case model.news of
+                    NewsNotRequested ->
+                        Ui.none
+
+                    LoadingNews ->
+                        Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
+
+                    LoadedNews days ->
+                        Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loaded"
+
+                    NewsFailed string ->
+                        Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
+                ]
             )
         )
 
