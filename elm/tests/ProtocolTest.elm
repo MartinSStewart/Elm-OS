@@ -128,9 +128,9 @@ suite =
                                     []
                         )
                     |> Expect.equal
-                        [ [ Effect.Log "couldn't read a message from the host: a \"noSuchMessage\" message that isn't as expected" ]
-                        , [ Effect.Log "couldn't read a message from the host: a \"mouse\" message that isn't as expected" ]
-                        , [ Effect.Log "couldn't read a message from the host: a message without a \"t\"" ]
+                        [ [ Effect.Log "couldn't read a message from the host: Problem with the given value:\n\n{\n        \"t\": \"noSuchMessage\"\n    }\n\nunknown input noSuchMessage" ]
+                        , [ Effect.Log "couldn't read a message from the host: Problem with the value at json.x:\n\n    \"left\"\n\nExpecting an INT" ]
+                        , [ Effect.Log "couldn't read a message from the host: Problem with the given value:\n\n[\n        1,\n        2\n    ]\n\nExpecting an OBJECT with a field named `t`" ]
                         ]
             )
         ]

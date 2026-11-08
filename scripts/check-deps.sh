@@ -68,7 +68,7 @@ case "$mode" in
       # runtime compiles fine but fails the final link with undefined eco_* symbols.
       echo "Your eco runtime in $ECO_RUNTIME looks like eco 0.1.0 (no mimalloc.o),"
       echo "but this needs 0.2.0. Usually that means a newer eco was copied over an old"
-      echo "install. Delete the old install and extract a fresh v0.2.0-rc2 (or newer)"
+      echo "install. Delete the old install and extract a fresh v0.2.0-rc3 (or newer)"
       echo "x86_64-linux-musl bundle from https://github.com/eco-lang/eco-compiler/releases"
       eco_missing=1
     fi

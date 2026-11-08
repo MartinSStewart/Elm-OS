@@ -186,24 +186,6 @@ decodeInput =
             )
 
 
-{-| A host message, or what is wrong with it. This decoder never fails.
-
-What is wrong is only which kind of message it was, not why it couldn't be read: the
-program can't look inside a `Json.Decode.Error` when eco compiles it (eco 0.2 builds it
-with its constructors numbered differently from elm/json's, so a `case` on one picks the
-wrong branch and then crashes, and `Json.Decode.errorToString` crashes the same way),
-and a crash in Elm takes /init with it. So this never makes one to look at.
-
--}
-hostInput : D.Decoder (Result String Input)
-hostInput =
-    D.oneOf
-        [ D.map Ok decodeInput
-        , D.field "t" D.string |> D.map (\t -> Err ("a \"" ++ t ++ "\" message that isn't as expected"))
-        , D.succeed (Err "a message without a \"t\"")
-        ]
-
-
 {-| The host sends -1 for a time it doesn't know.
 -}
 milliseconds : D.Decoder (Maybe Float)
@@ -1357,7 +1339,7 @@ persistConfig =
     , update = update
     , draw = draw
     , resume = resume
-    , fromHost = \json -> D.decodeValue hostInput json |> Result.withDefault (Err "not JSON") |> GotInput
+    , fromHost = \json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput
 
     -- An idle eco program exits; a timer keeps the event loop alive. It also paces
     -- BootInfo's battery checks and USB stick search.

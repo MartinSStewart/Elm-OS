@@ -9,8 +9,8 @@ FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce
 
 ARG SNAPSHOT=20261106T000000Z
 ARG RUST_VERSION=1.97.0
-ARG ECO_URL=https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc2/eco-0.2.0-rc2-x86_64-linux-musl.tar.gz
-ARG ECO_SHA256=9bdffce78f1327e8a0c636a4abc9b5f750906579274880ce31fc56c39fa3edc0
+ARG ECO_URL=https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
+ARG ECO_SHA256=02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 

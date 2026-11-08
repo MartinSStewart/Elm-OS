@@ -27,7 +27,7 @@ jobs:
 
       - name: Install eco
         run: |
-          curl -sSL -o eco.tar.gz https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc2/eco-0.2.0-rc2-x86_64-linux-musl.tar.gz
+          curl -sSL -o eco.tar.gz https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
           sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
           echo /opt/eco/bin >> "$GITHUB_PATH"
 
