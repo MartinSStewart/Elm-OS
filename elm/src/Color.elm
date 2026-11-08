@@ -11,6 +11,7 @@ module Color exposing
     , rgb
     , rgb255
     , toFloat
+    , toInt
     , white
     )
 
@@ -46,6 +47,11 @@ rgb r g b =
 toFloat : Color -> Float
 toFloat (Color c) =
     Basics.toFloat c
+
+
+toInt : Color -> Int
+toInt (Color c) =
+    c
 
 
 black : Color

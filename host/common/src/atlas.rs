@@ -108,7 +108,7 @@ pub fn cursor_image(scale: usize, fill: u32) -> Vec<u32> {
     argb
 }
 
-/// One triangle as /init hands it to a renderer: the 13 numbers Elm sends per triangle,
+/// One triangle as /init hands it to a renderer: the 13 values Elm sends per triangle,
 /// x, y, u, v for each corner (screen and atlas pixels), then the colour as 0xRRGGBBAA.
 /// elmos-gpu reads these from a pipe, so the layout is fixed (52 bytes).
 #[repr(C)]
@@ -120,21 +120,6 @@ pub struct Tri {
 
 impl Tri {
     pub const SIZE: usize = std::mem::size_of::<Tri>();
-
-    /// Reads Elm's flat list of numbers, 13 per triangle. Colours need all 32 bits,
-    /// which is why Elm sends doubles.
-    pub fn from_numbers(nums: &[f64]) -> Vec<Tri> {
-        nums.chunks_exact(13)
-            .map(|c| {
-                let mut t = Tri::default();
-                for k in 0..12 {
-                    t.p[k / 4][k % 4] = c[k] as f32;
-                }
-                t.rgba = c[12].clamp(0.0, 4294967295.0) as u32;
-                t
-            })
-            .collect()
-    }
 
     pub fn as_bytes(tris: &[Tri]) -> &[u8] {
         // SAFETY: Tri is repr(C), made of f32s and a u32 with no padding.

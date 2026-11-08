@@ -11,14 +11,44 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A triangle of the scene Elm draws: x, y, u, v of each corner (screen pixels, then
+/// texture atlas pixels: see common/src/atlas.rs) and the colour, 0xRRGGBBAA.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RenderTriangle {
+    pub corners: [[f32; 4]; 3],
+    pub rgba: u32,
+}
+
+/// How many bytes each triangle takes on the render port.
+pub const RENDER_TRIANGLE_BYTES: usize = 52;
+
+/// Reads what Elm sends on its `render` port: 52 bytes a triangle, the 12 numbers of its
+/// corners as 32-bit floats and then its colour as an unsigned 32-bit integer, all
+/// little-endian. None if the length isn't a whole number of triangles.
+pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
+    if bytes.len() % RENDER_TRIANGLE_BYTES != 0 {
+        return None;
+    }
+    let word = |b: &[u8], i: usize| [b[4 * i], b[4 * i + 1], b[4 * i + 2], b[4 * i + 3]];
+    Some(
+        bytes
+            .chunks_exact(RENDER_TRIANGLE_BYTES)
+            .map(|b| {
+                let mut t = RenderTriangle::default();
+                for k in 0..12 {
+                    t.corners[k / 4][k % 4] = f32::from_le_bytes(word(b, k));
+                }
+                t.rgba = u32::from_le_bytes(word(b, 12));
+                t
+            })
+            .collect(),
+    )
+}
+
 /// What Elm asks the host to do.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum Effect {
-    /// 13 numbers per triangle: screen pixels, texture atlas pixels (see
-    /// common/src/atlas.rs), and the colour as 0xRRGGBBAA, for each of the 3 corners
-    /// x, y, u, v, then the colour.
-    Render { tris: Vec<f64> },
     /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
     /// sets the cursor's size and how far mouse motion moves it.
     Cursor { rgba: f64, scale: u32 },
@@ -227,7 +257,6 @@ mod tests {
     /// match has no `_` arm, so it stops compiling until the new one is listed.)
     fn effect_tag(e: &Effect) -> &'static str {
         match e {
-            Effect::Render { .. } => "render",
             Effect::Cursor { .. } => "cursor",
             Effect::WifiScan => "wifiScan",
             Effect::WifiConnect { .. } => "wifiConnect",
@@ -244,7 +273,7 @@ mod tests {
             Effect::Log { .. } => "log",
         }
     }
-    const EFFECT_TAGS: usize = 15;
+    const EFFECT_TAGS: usize = 14;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -273,6 +302,20 @@ mod tests {
         }
     }
     const TO_ELM_TAGS: usize = 22;
+
+    #[test]
+    fn reads_the_render_example() {
+        let all: Value = serde_json::from_str(include_str!("../examples.json")).unwrap();
+        let hex = all["render"].as_str().unwrap();
+        let bytes: Vec<u8> =
+            (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+        let at = |x, y| [x, y, 252.0, 252.0];
+        assert_eq!(
+            read_render(&bytes),
+            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff }])
+        );
+        assert_eq!(read_render(&bytes[1..]), None);
+    }
 
     #[test]
     fn reads_every_effect_elm_sends() {

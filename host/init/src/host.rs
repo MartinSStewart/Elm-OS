@@ -25,7 +25,7 @@ use protocol::{PowerAction, ToElm};
 use std::time::Duration;
 
 use crate::display::CpuDisplay;
-use crate::effects::{self, Effect};
+use crate::effects::{self, Effect, FromElm};
 use crate::gpu::Gpu;
 use crate::input::Inputs;
 use crate::stats::Stats;
@@ -149,10 +149,9 @@ impl Host {
         self.cpu_next_at = None;
     }
 
-    fn draw(&mut self, nums: &[f64]) {
-        let tris = Tri::from_numbers(nums);
+    fn draw(&mut self, tris: &[Tri]) {
         if let Renderer::Gpu(g) = &mut self.renderer {
-            if g.send_frame(&tris) {
+            if g.send_frame(tris) {
                 return;
             }
             log!("host", "GPU renderer stopped; drawing on the CPU");
@@ -164,7 +163,7 @@ impl Host {
         }
         if let Renderer::Cpu(d, atlas) = &mut self.renderer {
             d.back.fill(0);
-            for t in &tris {
+            for t in tris {
                 raster::fill_triangle(&mut d.back, d.stride, d.w, d.h, atlas, t);
             }
             d.present();
@@ -201,9 +200,15 @@ impl Host {
     fn run_effects(&mut self) {
         let mut scene = None;
         let mut cursor_dirty = false;
-        for effect in effects::take() {
+        for sent in effects::take() {
+            let effect = match sent {
+                FromElm::Render(tris) => {
+                    scene = Some(tris); // only the newest gets drawn
+                    continue;
+                }
+                FromElm::Effect(effect) => effect,
+            };
             match effect {
-                Effect::Render { tris } => scene = Some(tris), // only the newest gets drawn
                 Effect::Cursor { rgba, scale } => {
                     self.cursor_fill = rgba.clamp(0.0, 4294967295.0) as u32;
                     self.cursor_scale = scale.clamp(1, 4) as usize;
@@ -240,12 +245,12 @@ impl Host {
         if cursor_dirty {
             self.cursor_redraw();
         }
-        if let Some(nums) = scene {
+        if let Some(tris) = scene {
             let start = now();
             if self.awaiting_render {
                 self.stats.elm.push(start - self.asked_at);
             }
-            self.draw(&nums);
+            self.draw(&tris);
             self.stats.draw.push(now() - start);
             self.scene_drawn();
         }

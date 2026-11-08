@@ -1,7 +1,7 @@
 {
-  "comment": "One example of every message between Elm and the host (src/lib.rs). cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) the Elm side. toHost is in the same order as ProtocolTest.effects.",
+  "comment": "One example of every message between Elm and the host (src/lib.rs). cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) the Elm side. toHost is in the same order as ProtocolTest.effects. render is what Elm sends on its render port, as hex: one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252).",
+  "render": "000000000000000000007c4300007c43000020410000000000007c4300007c43000000000000204100007c4300007c43ffffffff",
   "toHost": [
-    {"t": "render", "tris": [0, 0, 252, 252, 10, 0, 252, 252, 0, 10, 252, 252, 4294967295]},
     {"t": "cursor", "rgba": 4278190335, "scale": 2},
     {"t": "wifiScan"},
     {"t": "wifiConnect", "ssid": "Home", "password": "secret"},

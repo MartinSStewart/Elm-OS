@@ -149,11 +149,12 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `scripts/`, `tools/` | QEMU run and test scripts, USB image tools, Mesa and firmware fetchers |
 
 - The host is a Rust static library that hooks into eco's runtime with a constructor that
-  runs before eco's `main`, using `eco_port_send` and `eco_port_subscribe`. The `Makefile`
+  runs before eco's `main`, using `eco_port_send`, `eco_port_subscribe` and
+  `eco_port_subscribe_bytes`. The `Makefile`
   links it using eco's own static musl link line.
 - Elm uses no effect packages besides `Time`: `Effect.toHost` carries a list of `Effect`s
-  (render, cursor colour, wifi scan/connect/disconnect, power, HTTP) as JSON, and everything
-  comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
+  (cursor colour, wifi scan/connect/disconnect, power, HTTP, files) as JSON, `Effect.render`
+  carries each frame's scene as bytes, and everything comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
   certificates against Mozilla's CA list compiled in from `webpki-roots`, so there is no
   OpenSSL, libcurl or CA bundle in the image. eco's runtime still references libcurl, so the
   host provides stubs that fail cleanly.
@@ -165,9 +166,13 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   `elmos-gpu`, a small dynamically linked program. If that fails or finds only a software
   driver, `/init` draws on the CPU instead. Mesa comes prebuilt from Alpine Linux.
 - Elm draws only when the host sends a `frame` message, which follows the display's refresh.
-  Each frame is a flat list of 13 numbers per triangle (three corners of screen and atlas
-  coordinates, plus a colour), all sampling one texture atlas (`host/common/src/atlas.rs`).
-- Port payloads are JSON; see `elm/src/Effect.elm` and the decoders in `elm/src/Main.elm`.
+  Each frame is 52 bytes per triangle (three corners of screen and atlas coordinates as
+  32-bit floats, plus a colour), all sampling one texture atlas (`host/common/src/atlas.rs`).
+  They go out on a bytes port, which eco lends to the host without encoding or copying, and
+  the host hands them to the renderer nearly as they are. With JSON, encoding and parsing
+  them took most of Elm's time per frame: `make measure-frames` measured 88 ms per frame
+  with JSON and 15 ms with bytes (QEMU without KVM, virgl GPU), 10 fps then and 37 fps now.
+- The other port payloads are JSON; see `elm/src/Effect.elm` and the decoders in `elm/src/Main.elm`.
 - `wpa_supplicant` is built from w1.fi's source with its internal crypto instead of OpenSSL.
   That crypto has no elliptic curves, so WPA3-only (SAE) networks can't be joined; WPA2 and
   WPA2/WPA3 mixed networks work, with management frame protection when the router offers it.

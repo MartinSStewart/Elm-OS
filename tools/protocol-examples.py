@@ -19,8 +19,10 @@ def elm_list(name, items):
 
 
 with open(sys.argv[2], "w") as out:
-    out.write("module ProtocolExamples exposing (fromHost, toHost)\n\n"
+    out.write("module ProtocolExamples exposing (fromHost, render, toHost)\n\n"
               "{-| Written by tools/protocol-examples.py from host/protocol/examples.json. -}\n\n\n")
     out.write(elm_list("toHost", examples["toHost"]))
     out.write("\n\n")
     out.write(elm_list("fromHost", examples["fromHost"]))
+    out.write("\n\n")
+    out.write(f"render : String\nrender =\n    {json.dumps(examples['render'])}\n")

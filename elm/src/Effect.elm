@@ -2,6 +2,7 @@ port module Effect exposing
     ( Effect(..)
     , HttpError(..)
     , HttpRequest
+    , Encoded(..)
     , PowerAction(..)
     , encode
     , fromHost
@@ -14,7 +15,10 @@ port module Effect exposing
 `update` returns a list of these instead of `Cmd`s, so what it does is plain data
 that tests can compare, and the host is free to carry it out however it likes (HTTP,
 for example, uses Rust's rustls rather than eco's libcurl and OpenSSL). They all go
-out on one port, `toHost`, as a JSON list; host/init/src/effects.rs reads them.
+out on one port, `toHost`, as a JSON list; host/init/src/effects.rs reads them. The one
+exception is `Render`, sent every frame with thousands of numbers in it: it goes out on
+`render` as raw bytes (`renderBytes`), which eco hands the host without encoding,
+copying or parsing anything.
 
 The host answers and reports on one port too, `fromHost`: input events, frames,
 wifi, HTTP responses. Main.elm decodes those.
@@ -25,6 +29,8 @@ and the decoders against the same examples, so the two sides can't drift apart.
 
 -}
 
+import Bytes exposing (Bytes)
+import Bytes.Encode as BE
 import Color exposing (Color)
 import Json.Decode as D
 import Json.Encode as E
@@ -33,6 +39,9 @@ import Units exposing (DevicePixels, UiScale)
 
 
 port toHost : E.Value -> Cmd msg
+
+
+port render : Bytes -> Cmd msg
 
 
 port fromHost : (D.Value -> msg) -> Sub msg
@@ -105,18 +114,52 @@ get id url =
 
 toCmd : List Effect -> Cmd msg
 toCmd effects =
-    if List.isEmpty effects then
-        Cmd.none
+    let
+        ( json, renders ) =
+            List.foldr
+                (\effect ( js, rs ) ->
+                    case encode effect of
+                        OnToHost value ->
+                            ( value :: js, rs )
 
-    else
-        toHost (E.list encode effects)
+                        OnRender bytes ->
+                            ( js, render bytes :: rs )
+                )
+                ( [], [] )
+                effects
+    in
+    Cmd.batch
+        ((if List.isEmpty json then
+            Cmd.none
+
+          else
+            toHost (E.list identity json)
+         )
+            :: renders
+        )
 
 
-encode : Effect -> E.Value
+{-| An Effect as it goes to the host: JSON on `toHost`, or bytes on `render`.
+-}
+type Encoded
+    = OnToHost E.Value
+    | OnRender Bytes
+
+
+{-| 52 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
+x, y, u, v of each corner as 32-bit floats (screen pixels, atlas pixels), then the
+colour as an unsigned 32-bit 0xRRGGBBAA.
+-}
+renderBytes : List (Triangle DevicePixels) -> Bytes
+renderBytes triangles =
+    BE.encode (BE.sequence (List.map Sprite.encoder triangles))
+
+
+encode : Effect -> Encoded
 encode effect =
     case effect of
         Render triangles ->
-            E.object [ ( "t", E.string "render" ), ( "tris", E.list E.float (Sprite.encode triangles) ) ]
+            OnRender (renderBytes triangles)
 
         SetCursor { color, scale } ->
             E.object
@@ -124,15 +167,19 @@ encode effect =
                 , ( "rgba", E.float (Color.toFloat color) )
                 , ( "scale", E.int (Units.scaleInt scale) )
                 ]
+                |> OnToHost
 
         WifiScan ->
             E.object [ ( "t", E.string "wifiScan" ) ]
+                |> OnToHost
 
         WifiConnect { ssid, password } ->
             E.object [ ( "t", E.string "wifiConnect" ), ( "ssid", E.string ssid ), ( "password", E.string password ) ]
+                |> OnToHost
 
         WifiDisconnect ->
             E.object [ ( "t", E.string "wifiDisconnect" ) ]
+                |> OnToHost
 
         Power action ->
             E.object
@@ -148,6 +195,7 @@ encode effect =
                         )
                   )
                 ]
+                |> OnToHost
 
         Http request ->
             E.object
@@ -159,12 +207,15 @@ encode effect =
                 , ( "body", E.string request.body )
                 , ( "timeoutMs", Maybe.map E.float request.timeoutMs |> Maybe.withDefault E.null )
                 ]
+                |> OnToHost
 
         ListDir path ->
             E.object [ ( "t", E.string "listDir" ), ( "path", E.string path ) ]
+                |> OnToHost
 
         ReadFiles { id, paths } ->
             E.object [ ( "t", E.string "readFiles" ), ( "id", E.string id ), ( "paths", E.list E.string paths ) ]
+                |> OnToHost
 
         ReadBytes { path, offset, length } ->
             E.object
@@ -173,6 +224,7 @@ encode effect =
                 , ( "offset", E.int offset )
                 , ( "length", E.int length )
                 ]
+                |> OnToHost
 
         Sha256 { path, length } ->
             E.object
@@ -180,15 +232,20 @@ encode effect =
                 , ( "path", E.string path )
                 , ( "length", Maybe.map E.int length |> Maybe.withDefault E.null )
                 ]
+                |> OnToHost
 
         WriteSys { path, text } ->
             E.object [ ( "t", E.string "writeSys" ), ( "path", E.string path ), ( "text", E.string text ) ]
+                |> OnToHost
 
         AppendFile { path, text } ->
             E.object [ ( "t", E.string "appendFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
+                |> OnToHost
 
         WriteFile { path, text } ->
             E.object [ ( "t", E.string "writeFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
+                |> OnToHost
 
         Log text ->
             E.object [ ( "t", E.string "log" ), ( "text", E.string text ) ]
+                |> OnToHost

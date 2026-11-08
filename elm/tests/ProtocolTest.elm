@@ -6,6 +6,8 @@ protocol`) is tested against too. ProtocolExamples is written from that file whe
 tests run (make elm-tests).
 -}
 
+import Bytes exposing (Bytes)
+import Bytes.Decode as BD
 import Color
 import Dict exposing (Dict)
 import Effect exposing (Effect)
@@ -21,12 +23,11 @@ import Test exposing (Test, describe, test)
 import Units
 
 
-{-| Each Effect, in the order of examples.json's toHost.
+{-| Each Effect sent as JSON, in the order of examples.json's toHost.
 -}
 effects : List Effect
 effects =
-    [ Effect.Render [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]
-    , Effect.SetCursor { color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
+    [ Effect.SetCursor { color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
     , Effect.WifiScan
     , Effect.WifiConnect { ssid = "Home", password = "secret" }
     , Effect.WifiDisconnect
@@ -105,13 +106,63 @@ readsHostMessage text =
                     Expect.pass
 
 
+{-| Bytes as lower-case hex.
+-}
+hex : Bytes -> Maybe String
+hex bytes =
+    BD.decode
+        (BD.loop ( Bytes.width bytes, [] )
+            (\( left, digits ) ->
+                if left == 0 then
+                    BD.succeed (BD.Done (String.concat (List.reverse digits)))
+
+                else
+                    BD.unsignedInt8
+                        |> BD.map
+                            (\byte ->
+                                BD.Loop
+                                    ( left - 1
+                                    , (String.slice (byte // 16) (byte // 16 + 1) hexDigits
+                                        ++ String.slice (modBy 16 byte) (modBy 16 byte + 1) hexDigits
+                                      )
+                                        :: digits
+                                    )
+                            )
+            )
+        )
+        bytes
+
+
+hexDigits : String
+hexDigits =
+    "0123456789abcdef"
+
+
 suite : Test
 suite =
     describe "The messages between Elm and the host (host/protocol/examples.json)"
         [ test "every Effect is encoded as in the examples"
             (\_ ->
-                List.map (\effect -> D.decodeString json (E.encode 0 (Effect.encode effect))) effects
+                List.map
+                    (\effect ->
+                        case Effect.encode effect of
+                            Effect.OnToHost value ->
+                                D.decodeString json (E.encode 0 value)
+
+                            Effect.OnRender _ ->
+                                Err (D.Failure "sent as bytes" E.null)
+                    )
+                    effects
                     |> Expect.equal (List.map (D.decodeString json) ProtocolExamples.toHost)
+            )
+        , test "a Render is sent as bytes, as in the example"
+            (\_ ->
+                case Effect.encode (Effect.Render [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]) of
+                    Effect.OnRender bytes ->
+                        Expect.equal (Just ProtocolExamples.render) (hex bytes)
+
+                    Effect.OnToHost value ->
+                        Expect.fail ("sent as JSON: " ++ E.encode 0 value)
             )
         , describe "every message the host sends is read"
             (List.map (\text -> test text (\_ -> readsHostMessage text)) ProtocolExamples.fromHost)

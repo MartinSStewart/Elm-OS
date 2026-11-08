@@ -6,7 +6,7 @@ module Sprite exposing
     , clippedText
     , cursor
     , ellipsis
-    , encode
+    , encoder
     , lineHeight
     , move
     , rectangle
@@ -35,6 +35,8 @@ than blown up pixels.
 
 -}
 
+import Bytes exposing (Endianness(..))
+import Bytes.Encode as BE
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
@@ -53,14 +55,30 @@ type Triangle units
     = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color }
 
 
-{-| 13 numbers per triangle: x, y, u, v for each corner, then the colour as 0xRRGGBBAA.
+{-| A triangle as Effect.renderBytes sends it: x, y, u, v of each corner as 32-bit
+floats, then the colour as an unsigned 32-bit 0xRRGGBBAA, all little-endian.
 -}
-encode : List (Triangle DevicePixels) -> List Float
-encode =
-    List.concatMap
-        (\(Triangle t) ->
-            [ t.a.x, t.a.y, t.a.u, t.a.v, t.b.x, t.b.y, t.b.u, t.b.v, t.c.x, t.c.y, t.c.u, t.c.v, Color.toFloat t.color ]
-        )
+encoder : Triangle DevicePixels -> BE.Encoder
+encoder (Triangle t) =
+    let
+        f =
+            BE.float32 LE
+    in
+    BE.sequence
+        [ f t.a.x
+        , f t.a.y
+        , f t.a.u
+        , f t.a.v
+        , f t.b.x
+        , f t.b.y
+        , f t.b.u
+        , f t.b.v
+        , f t.c.x
+        , f t.c.y
+        , f t.c.u
+        , f t.c.v
+        , BE.unsignedInt32 LE (Color.toInt t.color)
+        ]
 
 
 mapCorners : (Vertex -> Vertex) -> List (Triangle a) -> List (Triangle b)

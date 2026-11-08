@@ -1,9 +1,7 @@
-//! Elm's one output port, `toHost`: everything Elm asks the host to do, as a list of
-//! effects (elm/src/Effect.elm encodes them).
+//! Elm's output ports: `render`, the scene to draw, as bytes (protocol::read_render),
+//! and `toHost`, everything else Elm asks the host to do, as a JSON list of effects
+//! (elm/src/Effect.elm encodes both).
 //!
-//!   {"t":"render","tris":[x1,y1,u1,v1, x2,y2,u2,v2, x3,y3,u3,v3, rgba, ...]}
-//!        13 numbers per triangle: screen pixels, texture atlas pixels (see
-//!        common/src/atlas.rs), and the colour as 0xRRGGBBAA
 //!   {"t":"cursor","rgba":C}       the mouse cursor's fill colour
 //!   {"t":"wifiScan"}  {"t":"wifiConnect","ssid":S,"password":P}  {"t":"wifiDisconnect"}
 //!   {"t":"power","action":"off"|"restart"}
@@ -20,17 +18,36 @@
 //! The types are in host/protocol, with an example of each message that both sides are
 //! tested against.
 //!
-//! eco calls us on Elm's thread, so the callback only queues the JSON and wakes the
-//! host thread, which parses it and acts (host.rs).
+//! eco calls us on Elm's thread, so the callbacks only queue what Elm sent and wake the
+//! host thread, which reads it and acts (host.rs). A scene is copied out of Elm's
+//! value as it is read, because eco lends the bytes only for the call.
 
 use std::sync::{Mutex, OnceLock};
+
+use common::atlas::Tri;
 
 use crate::sys::Waker;
 pub use protocol::Effect;
 
+enum Sent {
+    Json(String),
+    Scene(Vec<Tri>),
+}
+
+/// What Elm sent, in order.
+pub enum FromElm {
+    Effect(Effect),
+    Render(Vec<Tri>),
+}
+
 struct Inbox {
-    queue: Mutex<Vec<String>>,
+    queue: Mutex<Vec<Sent>>,
     waker: Waker,
+}
+
+fn push(sent: Sent) {
+    inbox().queue.lock().unwrap_or_else(|e| e.into_inner()).push(sent);
+    inbox().waker.wake();
 }
 
 fn inbox() -> &'static Inbox {
@@ -48,12 +65,13 @@ pub fn start() {
             // Not all of it: every frame sends thousands of numbers.
             log!("host", "toHost {:.300}", json);
         }
-        inbox()
-            .queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(json.to_owned());
-        inbox().waker.wake();
+        push(Sent::Json(json.to_owned()));
+    });
+    crate::eco::subscribe_bytes(c"render", |bytes| match protocol::read_render(bytes) {
+        Some(tris) => push(Sent::Scene(
+            tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
+        )),
+        None => log!("host", "couldn't read Elm's scene: {} bytes", bytes.len()),
     });
 }
 
@@ -63,16 +81,23 @@ pub fn wake_fd() -> i32 {
 }
 
 /// Everything Elm has sent since the last call, in order.
-pub fn take() -> Vec<Effect> {
+pub fn take() -> Vec<FromElm> {
     inbox().waker.clear();
     let batches = std::mem::take(&mut *inbox().queue.lock().unwrap_or_else(|e| e.into_inner()));
     let mut effects = Vec::new();
-    for json in batches {
+    for sent in batches {
+        let json = match sent {
+            Sent::Scene(tris) => {
+                effects.push(FromElm::Render(tris));
+                continue;
+            }
+            Sent::Json(json) => json,
+        };
         match protocol::read_effects(&json) {
             Ok(list) => {
                 for effect in list {
                     match effect {
-                        Ok(effect) => effects.push(effect),
+                        Ok(effect) => effects.push(FromElm::Effect(effect)),
                         Err(e) => log!("host", "couldn't read Elm's effect ({e})"),
                     }
                 }
