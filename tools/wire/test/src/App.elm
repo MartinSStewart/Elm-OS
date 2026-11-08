@@ -111,4 +111,6 @@ config =
     , resume = identity
     , fromHost = \_ -> NoOp
     , subscriptions = \_ -> Sub.none
+    , httpAnswered = \_ -> Nothing
+    , httpInterrupted = \_ -> NoOp
     }

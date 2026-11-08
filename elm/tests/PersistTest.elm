@@ -211,4 +211,18 @@ suite =
                 in
                 restored other |> Expect.equal Main.persistConfig.init
             )
+        , test "a request still waiting at a power cut is answered as interrupted at the next boot"
+            (\_ ->
+                let
+                    ( _, disk ) =
+                        boot Dict.empty session
+
+                    pending d =
+                        (Persist.restore Main.persistConfig ElmOs.codecs { snapshot = Dict.get "/data/snapshot" d, log = Dict.get "/data/log" d }).pending
+
+                    ( _, rebooted ) =
+                        boot disk []
+                in
+                ( pending disk, pending rebooted ) |> Expect.equal ( [ "geo" ], [] )
+            )
         ]

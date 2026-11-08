@@ -202,6 +202,11 @@ host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying
   A snapshot goes to a new file, which is fsynced and renamed over the old one. Appends are
   fsynced within a second (a USB stick is slow to fsync and wears), so a power cut loses at most
   the last second.
+- **HTTP requests in flight:** a request doesn't outlive the host, so the snapshot keeps the ids
+  of requests not yet answered (worked out from the logged Msgs, so no extra write before each
+  request), and after a restart or power cut each gets `Effect.Interrupted` as its answer. As
+  with a timeout, whether the server got it is unknown. A second request with an id that is
+  still waiting isn't sent.
 - **Changing types:** see "Versions and migrations" below. The snapshot says which version of
   the Model's types wrote it, and an older one is migrated. Msgs are never migrated: a log
   written by a build with a different Msg type is skipped. A snapshot that can't be read is

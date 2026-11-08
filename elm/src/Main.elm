@@ -1344,7 +1344,26 @@ persistConfig =
     -- An idle eco program exits; a timer keeps the event loop alive. It also paces
     -- BootInfo's battery checks and USB stick search.
     , subscriptions = \_ -> Time.every 1000 (\_ -> Tick)
+    , httpAnswered = httpAnswered
+    , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     }
+
+
+httpAnswered : Msg -> Maybe String
+httpAnswered msg =
+    case msg of
+        GotInput (Ok (HttpResponse id _)) ->
+            Just id
+
+        -- Only HttpResponse answers a request, so new kinds of input fall in here.
+        GotInput (Ok _) ->
+            Nothing
+
+        GotInput (Err _) ->
+            Nothing
+
+        Tick ->
+            Nothing
 
 
 {-| Drawing a frame takes a while, so it isn't part of `update`: replaying the saved Msgs

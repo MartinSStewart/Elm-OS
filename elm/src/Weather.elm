@@ -231,6 +231,9 @@ errorText error =
         Err (Effect.NetworkError _) ->
             "Couldn't reach the server"
 
+        Err Effect.Interrupted ->
+            "A restart came before the answer"
+
         Ok status ->
             if status >= 200 && status < 300 then
                 "Didn't understand the server's answer"

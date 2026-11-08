@@ -39,12 +39,16 @@ writes files; what goes in them is decided here.
     written to a new file and then renamed over the old one (the host makes that
     atomic), and the log is emptied after it, so if the power goes in between, the log's
     entries that the snapshot already has are skipped by their numbers.
-  - A snapshot is `[format, version, modelHash, msgHash, n, model]`. `version` is
+  - A snapshot is `[format, version, modelHash, msgHash, n, model, pending]`. `version` is
     the version of the Model's types (elm/src/Evergreen, see tools/wire), and the
     hashes are of the Model's and the Msg's types. A snapshot of an earlier version
     is migrated to this build's; the log is only replayed when it was written by a
     build with the same Msg type, since Msgs are never migrated. A snapshot that
     can't be read is kept as `snapshot-unreadable`, and the Model starts afresh.
+    `pending` is the ids of the HTTP requests not yet answered.
+  - An HTTP request doesn't outlive the host, so after a restart or a power cut
+    each request still waiting gets `httpInterrupted` as its answer, before
+    anything else happens (see `trackRequests`).
   - A snapshot is taken at start (once the log is replayed), when the log reaches
     `snapshotAfterBytes`, and before powering off or restarting.
 
@@ -75,6 +79,12 @@ type alias Config model msg =
     , resume : model -> model
     , fromHost : D.Value -> msg
     , subscriptions : model -> Sub msg
+
+    -- The id of the HTTP request a Msg is the answer to, if it is one.
+    , httpAnswered : msg -> Maybe String
+
+    -- The answer to a request that was cut off by a restart or a power cut.
+    , httpInterrupted : String -> msg
     }
 
 
@@ -117,7 +127,8 @@ type Model model msg
     = -- Until the host says whether there is a disk. The Msgs that came meanwhile, newest first.
       WaitingForDisk (List msg)
     | ReadingDisk String (List msg)
-    | Running model Saving
+    | -- The ids of the HTTP requests that haven't been answered yet, oldest first.
+      Running model Saving (List String)
 
 
 type Saving
@@ -143,7 +154,7 @@ snapshotAfterBytes =
 appModel : Model model msg -> Maybe model
 appModel model =
     case model of
-        Running app _ ->
+        Running app _ _ ->
             Just app
 
         WaitingForDisk _ ->
@@ -163,7 +174,7 @@ subscriptions config model =
     Sub.batch
         [ Effect.fromHost (fromHost config)
         , case model of
-            Running app _ ->
+            Running app _ _ ->
                 Sub.map AppMsg (config.subscriptions app)
 
             WaitingForDisk _ ->
@@ -225,8 +236,8 @@ update config codecs msg model =
     case msg of
         AppMsg appMsg ->
             case model of
-                Running app saving ->
-                    live config codecs appMsg app saving
+                Running app saving pending ->
+                    live config codecs appMsg app saving pending
 
                 WaitingForDisk early ->
                     ( WaitingForDisk (appMsg :: early), [] )
@@ -244,12 +255,12 @@ update config codecs msg model =
                             )
 
                         Nothing ->
-                            runEarly config codecs early config.init NotSaving
+                            runEarly config codecs early config.init NotSaving []
 
                 ReadingDisk _ _ ->
                     ( model, [] )
 
-                Running _ _ ->
+                Running _ _ _ ->
                     ( model, [] )
 
         DataFiles snapshot log ->
@@ -273,10 +284,11 @@ update config codecs msg model =
                         notes =
                             List.map (\note -> Effect.Log ("persist: " ++ note)) restored.notes
                     in
-                    -- The snapshot has the Msgs that waited, so they needn't be logged.
-                    case runEarly config codecs early (config.resume restored.model) NotSaving of
-                        ( Running app _, effects ) ->
-                            ( Running app (Saving saving), notes ++ kept ++ snapshotEffects codecs app saving ++ effects )
+                    -- Requests that were cut off are answered first, then the Msgs
+                    -- that waited. The snapshot has them all, so they needn't be logged.
+                    case runEarly config codecs (early ++ List.reverse (List.map config.httpInterrupted restored.pending)) (config.resume restored.model) NotSaving restored.pending of
+                        ( Running app _ pending, effects ) ->
+                            ( Running app (Saving saving) pending, notes ++ kept ++ snapshotEffects codecs app pending saving ++ effects )
 
                         ( WaitingForDisk _, _ ) as other ->
                             other
@@ -287,16 +299,16 @@ update config codecs msg model =
                 WaitingForDisk _ ->
                     ( model, [] )
 
-                Running _ _ ->
+                Running _ _ _ ->
                     ( model, [] )
 
-runEarly : Config model msg -> Codecs model msg -> List msg -> model -> Saving -> ( Model model msg, List Effect )
-runEarly config codecs early app saving =
+runEarly : Config model msg -> Codecs model msg -> List msg -> model -> Saving -> List String -> ( Model model msg, List Effect )
+runEarly config codecs early app saving pending =
     List.foldr
         (\appMsg ( state, effects ) ->
             case state of
-                Running a s ->
-                    live config codecs appMsg a s |> Tuple.mapSecond (\more -> effects ++ more)
+                Running a s p ->
+                    live config codecs appMsg a s p |> Tuple.mapSecond (\more -> effects ++ more)
 
                 WaitingForDisk _ ->
                     ( state, effects )
@@ -304,22 +316,25 @@ runEarly config codecs early app saving =
                 ReadingDisk _ _ ->
                     ( state, effects )
         )
-        ( Running app saving, [] )
+        ( Running app saving pending, [] )
         early
 
 
-live : Config model msg -> Codecs model msg -> msg -> model -> Saving -> ( Model model msg, List Effect )
-live config codecs msg app saving =
+live : Config model msg -> Codecs model msg -> msg -> model -> Saving -> List String -> ( Model model msg, List Effect )
+live config codecs msg app saving pending =
     let
-        ( next, effects ) =
+        ( next, sent ) =
             config.update msg app
+
+        ( nextPending, effects ) =
+            trackRequests config msg sent pending
 
         drawn =
             config.draw msg next
     in
     case saving of
         NotSaving ->
-            ( Running next saving, effects ++ drawn )
+            ( Running next saving nextPending, effects ++ drawn )
 
         Saving s ->
             let
@@ -331,12 +346,47 @@ live config codecs msg app saving =
             in
             if logged.logBytes >= snapshotAfterBytes || List.any isPower effects then
                 -- The snapshot has this Msg in it, so it needn't be logged too.
-                ( Running next (Saving { logged | logBytes = 0 }), snapshotEffects codecs next logged ++ effects ++ drawn )
+                ( Running next (Saving { logged | logBytes = 0 }) nextPending, snapshotEffects codecs next nextPending logged ++ effects ++ drawn )
 
             else
-                ( Running next (Saving logged)
+                ( Running next (Saving logged) nextPending
                 , Effect.AppendFile { path = s.dir ++ "/log", text = entry } :: effects ++ drawn
                 )
+
+
+{-| Keeps track of the HTTP requests waiting for an answer, so that after a restart
+or a power cut each one still waiting gets one (`httpInterrupted`) rather than the
+program waiting for ever: the host's requests don't outlive it. This works out the
+same when the log is replayed, since the requests are effects of the logged Msgs.
+A request whose id is already waiting isn't sent, since its answer couldn't be told
+apart from the other's.
+-}
+trackRequests : Config model msg -> msg -> List Effect -> List String -> ( List String, List Effect )
+trackRequests config msg effects pending =
+    let
+        answered =
+            case config.httpAnswered msg of
+                Just id ->
+                    List.filter (\p -> p /= id) pending
+
+                Nothing ->
+                    pending
+    in
+    List.foldl
+        (\effect ( waiting, kept ) ->
+            case effect of
+                Effect.Http request ->
+                    if List.member request.id waiting then
+                        ( waiting, kept ++ [ Effect.Log ("persist: didn't send HTTP request " ++ request.id ++ ", since one with that id is still waiting for its answer") ] )
+
+                    else
+                        ( waiting ++ [ request.id ], kept ++ [ effect ] )
+
+                _ ->
+                    ( waiting, kept ++ [ effect ] )
+        )
+        ( answered, [] )
+        effects
 
 
 isPower : Effect -> Bool
@@ -349,8 +399,8 @@ isPower effect =
             False
 
 
-snapshotEffects : Codecs model msg -> model -> { a | dir : String, next : Int } -> List Effect
-snapshotEffects codecs app { dir, next } =
+snapshotEffects : Codecs model msg -> model -> List String -> { a | dir : String, next : Int } -> List Effect
+snapshotEffects codecs app pending { dir, next } =
     [ Effect.WriteFile
         { path = dir ++ "/snapshot"
         , text =
@@ -363,6 +413,7 @@ snapshotEffects codecs app { dir, next } =
                         , E.string (hash codecs.msgShape)
                         , E.int next
                         , codecs.encodeModel app
+                        , E.list E.string pending
                         ]
                     )
                 )
@@ -375,7 +426,7 @@ snapshotEffects codecs app { dir, next } =
 -}
 snapshotFormat : String
 snapshotFormat =
-    "elmos-persist-3"
+    "elmos-persist-4"
 
 
 hash : String -> String
@@ -399,6 +450,9 @@ type alias Restored model =
 
     -- A snapshot that couldn't be read, to keep rather than write over.
     , unreadable : Maybe String
+
+    -- The HTTP requests that were waiting for an answer.
+    , pending : List String
     }
 
 
@@ -416,7 +470,7 @@ restore config codecs files =
             Maybe.map unframe files.log |> Maybe.withDefault []
 
         fresh notes unreadable =
-            { model = config.init, next = 0, replayed = 0, notes = notes, unreadable = unreadable }
+            { model = config.init, next = 0, replayed = 0, notes = notes, unreadable = unreadable, pending = [] }
     in
     case files.snapshot of
         Nothing ->
@@ -429,7 +483,7 @@ restore config codecs files =
             case readSnapshot codecs text of
                 Ok snapshot ->
                     if snapshot.version == codecs.version && snapshot.msgHash == hash codecs.msgShape then
-                        replay config codecs entries { model = snapshot.model, next = snapshot.next, replayed = 0, notes = snapshot.notes, unreadable = Nothing }
+                        replay config codecs entries { model = snapshot.model, next = snapshot.next, replayed = 0, notes = snapshot.notes, unreadable = Nothing, pending = snapshot.pending }
 
                     else
                         -- Numbered past the log's entries, which mustn't be replayed
@@ -446,6 +500,7 @@ restore config codecs files =
                                         [ "skipped " ++ String.fromInt (List.length entries) ++ " logged Msgs, which an older build wrote" ]
                                    )
                         , unreadable = Nothing
+                        , pending = snapshot.pending
                         }
 
                 Err problem ->
@@ -458,6 +513,7 @@ type alias Snapshot model =
     , next : Int
     , model : model
     , notes : List String
+    , pending : List String
     }
 
 
@@ -467,13 +523,14 @@ readSnapshot codecs text =
         [ payload ] ->
             case
                 D.decodeString
-                    (D.map6 (\format version modelHash msgHash next json -> { format = format, version = version, modelHash = modelHash, msgHash = msgHash, next = next, json = json })
+                    (D.map7 (\format version modelHash msgHash next json pending -> { format = format, version = version, modelHash = modelHash, msgHash = msgHash, next = next, json = json, pending = pending })
                         (D.index 0 D.string)
                         (D.index 1 D.int)
                         (D.index 2 D.string)
                         (D.index 3 D.string)
                         (D.index 4 D.int)
                         (D.index 5 D.value)
+                        (D.index 6 (D.list D.string))
                     )
                     payload
                     |> Result.toMaybe
@@ -499,6 +556,7 @@ readSnapshot codecs text =
                                     , msgHash = s.msgHash
                                     , next = s.next
                                     , model = model
+                                    , pending = s.pending
                                     , notes =
                                         if s.version == codecs.version then
                                             []
@@ -544,12 +602,17 @@ replay config codecs entries state =
                         replay config codecs rest state
 
                     else if n == state.next then
+                        let
+                            ( model, effects ) =
+                                config.update msg state.model
+                        in
                         replay config codecs
                             rest
                             { state
-                                | model = Tuple.first (config.update msg state.model)
+                                | model = model
                                 , next = n + 1
                                 , replayed = state.replayed + 1
+                                , pending = Tuple.first (trackRequests config msg effects state.pending)
                             }
 
                     else

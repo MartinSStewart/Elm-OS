@@ -105,6 +105,9 @@ type HttpError
     = BadUrl String
     | Timeout
     | NetworkError String
+      -- A restart or a power cut came before the answer (Persist.elm). Whether the
+      -- server got the request is unknown, as with a Timeout.
+    | Interrupted
 
 
 get : String -> String -> Effect

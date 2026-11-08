@@ -60,12 +60,13 @@ v1Files =
             (Persist.frame
                 (E.encode 0
                     (E.list identity
-                        [ E.string "elmos-persist-3"
+                        [ E.string "elmos-persist-4"
                         , E.int 1
                         , E.string (Persist.hash (Maybe.withDefault "" (ElmOs.codecs.versionShape 1)))
                         , E.string "an older Msg type"
                         , E.int 4
                         , Evergreen.V1.App.w3_encode_Model v1Sample
+                        , E.list E.string []
                         ]
                     )
                 )
@@ -118,7 +119,7 @@ suite =
             (\_ ->
                 let
                     newer =
-                        Persist.frame "[\"elmos-persist-3\",3,\"00000000\",\"00000000\",0,[]]"
+                        Persist.frame "[\"elmos-persist-4\",3,\"00000000\",\"00000000\",0,[],[]]"
                 in
                 (Persist.restore App.config ElmOs.codecs { snapshot = Just newer, log = Nothing }).notes
                     |> Expect.equal [ "the snapshot is of version 3 of the Model, newer than this build's 2; starting afresh, and keeping it as snapshot-unreadable" ]
