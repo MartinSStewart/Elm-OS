@@ -1,4 +1,4 @@
-module CurrentEvents exposing
+module News exposing
     ( Date
     , Day
     , Inline(..)

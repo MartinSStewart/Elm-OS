@@ -15,12 +15,12 @@ import BootInfo
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
-import CurrentEvents exposing (NewsState(..))
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import HostMessage
 import Json.Decode as D
 import Keyboard
+import News exposing (NewsState(..))
 import Persist
 import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
@@ -444,7 +444,7 @@ step event model =
                             )
 
                         NewsRequest ->
-                            ( case decoded CurrentEvents.decoder of
+                            ( case decoded News.decoder of
                                 Ok data ->
                                     { model | news = LoadedNews data }
 
@@ -781,7 +781,7 @@ click id model =
 
                 ( True, _ ) ->
                     ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing, news = LoadingNews }
-                    , [ CurrentEvents.request "news" [ { year = 2026, month = 10, day = 4 } ] ]
+                    , [ News.request "news" [ { year = 2026, month = 10, day = 4 } ] ]
                     )
 
                 ( False, _ ) ->
@@ -1184,7 +1184,7 @@ screenUi model =
                 ++ (if model.newsOpen then
                         [ Ui.topRight
                             { size = uiSize model }
-                            (CurrentEvents.newsPage model.news)
+                            (News.newsPage model.news)
                         ]
 
                     else
