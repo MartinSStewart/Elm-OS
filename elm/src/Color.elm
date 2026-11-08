@@ -10,7 +10,6 @@ module Color exposing
     , outlineColor
     , rgb
     , rgb255
-    , toFloat
     , toInt
     , white
     )
@@ -42,11 +41,6 @@ rgb255 r g b =
 rgb : Float -> Float -> Float -> Color
 rgb r g b =
     rgb255 (round (r * 255)) (round (g * 255)) (round (b * 255))
-
-
-toFloat : Color -> Float
-toFloat (Color c) =
-    Basics.toFloat c
 
 
 toInt : Color -> Int

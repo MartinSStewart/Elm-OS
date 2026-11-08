@@ -10,11 +10,11 @@
 //! constructor that runs before eco's `main`. It carries Elm's ports over the socket
 //! (protocol/src/link.rs has the format):
 //!
-//!   toHost   (bytes): Elm -> host, written as eco calls us. Elm starts each message
-//!            with its kind (link::TO_HOST for JSON effects, link::RENDER for
-//!            triangles; elm/src/Effect.elm), and the rest is the payload
-//!   fromHost (bytes): host -> Elm, read by a thread of ours and given to eco: the
-//!            kind (link::FROM_HOST) and then the JSON
+//!   toHost   (bytes): Elm -> host, written as eco calls us
+//!   fromHost (bytes): host -> Elm, read by a thread of ours and given to eco
+//!
+//! Both carry postcard-encoded messages (protocol/src/lib.rs); we pass them on as they
+//! are, without reading them.
 //!
 //! When the host closes the socket, the program exits.
 
@@ -80,11 +80,7 @@ pub extern "C" fn elmos_link_init() {
     let reader = stream.try_clone().expect("clone the socket to the host");
     let _ = TO_HOST.set(Mutex::new(stream));
 
-    subscribe_bytes(c"toHost", |message| match message.split_first() {
-        Some((&kind, payload)) if kind == link::TO_HOST || kind == link::RENDER => write(kind, payload),
-        Some((&kind, _)) => log!("a message of kind {kind} on toHost"),
-        None => log!("an empty message on toHost"),
-    });
+    subscribe_bytes(c"toHost", |message| write(link::TO_HOST, message));
 
     std::thread::Builder::new()
         .name("from host".into())
@@ -105,12 +101,7 @@ fn write(kind: u8, payload: &[u8]) {
 fn from_host(mut stream: UnixStream) {
     loop {
         match link::read_message(&mut stream) {
-            Ok((link::FROM_HOST, json)) => {
-                let mut message = Vec::with_capacity(1 + json.len());
-                message.push(link::FROM_HOST);
-                message.extend_from_slice(&json);
-                send(&message);
-            }
+            Ok((link::FROM_HOST, message)) => send(&message),
             Ok((kind, _)) => log!("a message of kind {kind} from the host"),
             Err(e) => {
                 log!("the host has gone ({e}); exiting");
@@ -127,14 +118,14 @@ fn send(message: &[u8]) {
         // SAFETY: a static NUL-terminated name, and bytes eco copies before returning
         // (no release function).
         let sent = unsafe {
-            eco_port_send_bytes(c"fromHostBytes".as_ptr(), message.as_ptr(), message.len(), None, std::ptr::null_mut())
+            eco_port_send_bytes(c"fromHost".as_ptr(), message.as_ptr(), message.len(), None, std::ptr::null_mut())
         };
         if sent == 0 {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    log!("Elm didn't take {:.200}", String::from_utf8_lossy(message));
+    log!("Elm didn't take a message of {} bytes", message.len());
 }
 
 /// Calls `f` with the bytes of each value Elm sends on the bytes port `port`, on Elm's

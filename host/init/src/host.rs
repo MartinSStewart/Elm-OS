@@ -223,8 +223,10 @@ impl Host {
                 FromElm::Effect(effect) => effect,
             };
             match effect {
+                // effects::take turns these into FromElm::Render.
+                Effect::Render(_) => {}
                 Effect::Cursor { rgba, scale } => {
-                    self.cursor_fill = rgba.clamp(0.0, 4294967295.0) as u32;
+                    self.cursor_fill = rgba;
                     self.cursor_scale = scale.clamp(1, 4) as usize;
                     self.inputs.scale = self.cursor_scale as f64;
                     cursor_dirty = true;

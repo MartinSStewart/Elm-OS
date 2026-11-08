@@ -139,7 +139,9 @@ impl Stats {
         // For scripts/measure-frames.py: the stats on the serial console, without the
         // rest of ELMOS_DEBUG's logging, which would slow Elm down.
         if std::env::var_os("ELMOS_STATS").is_some() {
-            log!("stats", "frames={} {}", frames, stats.to_json());
+            // Just the fields, as JSON: {"stats": {...}} is the message.
+            let json = serde_json::to_value(&stats).map(|v| v["stats"].to_string()).unwrap_or_default();
+            log!("stats", "frames={} {}", frames, json);
         }
         elm::send(&stats);
     }

@@ -68,7 +68,9 @@ screen, the network and anything else that belonged to the last one is forgotten
 
 import Array exposing (Array)
 import Bitwise
+import Bytes exposing (Bytes)
 import Effect exposing (Effect)
+import HostMessage
 import Json.Decode as D
 import Json.Encode as E
 
@@ -76,7 +78,8 @@ import Json.Encode as E
 type alias Config model msg =
     { init : model
     , update : msg -> model -> ( model, List Effect )
-    , fromHost : D.Value -> msg
+    -- A message from the host for the program, or why the host's bytes couldn't be read.
+    , fromHost : Result String HostMessage.ToElm -> msg
     , subscriptions : model -> Sub msg
 
     -- The id of the HTTP request a Msg is the answer to, if it is one.
@@ -187,47 +190,39 @@ subscriptions config model =
         ]
 
 
-{-| A message from the host: ours (the data disk and its files), or the program's.
+{-| A message from the host (HostMessage.elm): ours (the data disk and its files), or
+the program's.
 -}
-fromHost : Config model msg -> D.Value -> Msg msg
-fromHost config json =
-    case D.decodeValue hostMessage json of
-        Ok msg ->
-            msg
+fromHost : Config model msg -> Bytes -> Msg msg
+fromHost config bytes =
+    case HostMessage.decode bytes of
+        Just message ->
+            hostMessage config message
 
-        Err _ ->
-            AppMsg (config.fromHost json)
+        Nothing ->
+            AppMsg (config.fromHost (Err ("its " ++ String.fromInt (Bytes.width bytes) ++ " bytes aren't a HostMessage")))
 
 
-{-| The host's messages that are for us rather than the program.
--}
-hostMessage : D.Decoder (Msg msg)
-hostMessage =
-    D.field "t" D.string
-        |> D.andThen
-            (\t ->
-                case t of
-                    "dataDisk" ->
-                        D.map2 DataDisk
-                            (D.field "path" (D.nullable D.string))
-                            (D.oneOf [ D.field "httpInFlight" (D.list D.string), D.succeed [] ])
+hostMessage : Config model msg -> HostMessage.ToElm -> Msg msg
+hostMessage config message =
+    case message of
+        HostMessage.DataDisk path httpInFlight ->
+            DataDisk path httpInFlight
 
-                    "files" ->
-                        D.field "id" D.string
-                            |> D.andThen
-                                (\id ->
-                                    if id == readId then
-                                        D.map2 DataFiles
-                                            (D.field "files" (D.index 0 (D.index 1 (D.nullable D.string))))
-                                            (D.field "files" (D.index 1 (D.index 1 (D.nullable D.string))))
+        HostMessage.Files id files ->
+            if id == readId then
+                let
+                    text : Int -> Maybe String
+                    text i =
+                        List.drop i files |> List.head |> Maybe.andThen Tuple.second
+                in
+                DataFiles (text 0) (text 1)
 
-                                    else
-                                        D.fail "not ours"
-                                )
+            else
+                AppMsg (config.fromHost (Ok message))
 
-                    _ ->
-                        D.fail "not ours"
-            )
+        _ ->
+            AppMsg (config.fromHost (Ok message))
 
 
 readId : String

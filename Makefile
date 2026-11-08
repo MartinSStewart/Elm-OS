@@ -600,7 +600,8 @@ review-tests:
 # They run on the build/wire copy, so they can use the generated encoders and decoders.
 elm-tests: $(BUILD)/wire/.done
 	rm -rf $(BUILD)/wire/tests && cp -r elm/tests $(BUILD)/wire/tests
-	python3 -I tools/protocol-examples.py host/protocol/examples.json $(BUILD)/wire/tests/ProtocolExamples.elm
+	$(CARGO) run -q --locked --manifest-path host/Cargo.toml -p protocol --bin protocol-examples --target-dir $(abspath $(BUILD)/cargo-tools) > $(BUILD)/protocol-examples.json
+	python3 -I tools/protocol-examples.py host/protocol/examples.json $(BUILD)/protocol-examples.json $(BUILD)/wire/tests/ProtocolExamples.elm
 	cd $(BUILD)/wire && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
 
 # The host's side of the messages between Elm and the host, against the examples in

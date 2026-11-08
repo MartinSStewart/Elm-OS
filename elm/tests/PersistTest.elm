@@ -1,41 +1,46 @@
 module PersistTest exposing (suite)
 
 import ElmOs
+import Json.Decode as D
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import Expect
-import Json.Decode as D
-import Json.Encode as E
+import HostMessage
 import Main
 import Persist
 import Test exposing (Test, describe, test)
+import Wifi
 
 
 {-| Host messages, as the host sends them: the screen, some frames, a click on the
 toolbar's text editor button, typing, and the clock ticking.
 -}
-session : List String
+session : List HostIn
 session =
-    [ """{"t":"screen","w":1280,"h":800}"""
-    , """{"t":"renderer","gpu":false,"name":"rasteriser in /init","hardwareCursor":false}"""
-    , """{"t":"frame","time":1000.5}"""
-    , """{"t":"frame","time":1017.25}"""
-    , """{"t":"mouse","x":300,"y":20}"""
-    , """{"t":"wifiStatus","state":"connected","ssid":"Home","ip":"10.0.0.2","error":""}"""
-    , """{"t":"key","code":30,"down":true}"""
-    , """{"t":"key","code":30,"down":false}"""
-    , """{"t":"frame","time":1034}"""
-    , """{"t":"wheel","dy":-1}"""
-    , """{"t":"no such message"}"""
+    [ Ok (HostMessage.Screen 1280 800)
+    , Ok (HostMessage.Renderer { gpu = False, name = "rasteriser in /init", hardwareCursor = False })
+    , Ok (HostMessage.Frame 1000.5)
+    , Ok (HostMessage.Frame 1017.25)
+    , Ok (HostMessage.Mouse 300 20)
+    , Ok (HostMessage.WifiStatus { state = Wifi.Connected, ssid = "Home", ip = "10.0.0.2", error = "" })
+    , Ok (HostMessage.Key 30 True False)
+    , Ok (HostMessage.Key 30 False False)
+    , Ok (HostMessage.Frame 1034)
+    , Ok (HostMessage.Wheel -1)
+    , Err "a message that couldn't be read"
     ]
-        ++ List.concatMap (\n -> [ """{"t":"key","code":""" ++ String.fromInt n ++ ""","down":true}""", """{"t":"frame","time":""" ++ String.fromInt (2000 + n) ++ "}" ]) (List.range 16 25)
+        ++ List.concatMap (\n -> [ Ok (HostMessage.Key n True False), Ok (HostMessage.Frame (toFloat (2000 + n))) ]) (List.range 16 25)
 
 
-hostMsg : String -> Main.Msg
-hostMsg json =
-    D.decodeString D.value json
-        |> Result.map Main.persistConfig.fromHost
-        |> Result.withDefault (Main.persistConfig.fromHost E.null)
+{-| A message from the host as the program gets it, or why it couldn't be read.
+-}
+type alias HostIn =
+    Result String HostMessage.ToElm
+
+
+hostMsg : HostIn -> Main.Msg
+hostMsg =
+    Main.persistConfig.fromHost
 
 
 {-| A disk: file contents by path.
@@ -64,7 +69,7 @@ applyEffects effects disk =
 
 {-| Boots with this disk, then runs these host messages. The Model and the disk after.
 -}
-boot : Disk -> List String -> ( Maybe Main.Model, Disk )
+boot : Disk -> List HostIn -> ( Maybe Main.Model, Disk )
 boot =
     bootWith []
 
@@ -72,7 +77,7 @@ boot =
 {-| `boot`, when the host started the program again (it crashed, say) while it was
 still answering these HTTP requests of the last run.
 -}
-bootWith : List String -> Disk -> List String -> ( Maybe Main.Model, Disk )
+bootWith : List String -> Disk -> List HostIn -> ( Maybe Main.Model, Disk )
 bootWith httpInFlight disk messages =
     let
         step msg ( model, d ) =
@@ -88,15 +93,15 @@ bootWith httpInFlight disk messages =
     ( start, disk )
         |> step (Persist.DataDisk (Just "/data") httpInFlight)
         |> step (Persist.DataFiles (Dict.get "/data/snapshot" disk) (Dict.get "/data/log" disk))
-        |> (\state -> List.foldl (\json -> step (Persist.AppMsg (hostMsg json))) state messages)
+        |> (\state -> List.foldl (\message -> step (Persist.AppMsg (hostMsg message))) state messages)
         |> Tuple.mapFirst Persist.appModel
 
 
 {-| The Model replaying the messages gives, without any disk.
 -}
-direct : List String -> Main.Model
+direct : List HostIn -> Main.Model
 direct messages =
-    List.foldl (\json model -> Tuple.first (Main.persistConfig.update (hostMsg json) model)) Main.persistConfig.init messages
+    List.foldl (\message model -> Tuple.first (Main.persistConfig.update (hostMsg message) model)) Main.persistConfig.init messages
 
 
 restored : Disk -> Main.Model
@@ -247,7 +252,7 @@ suite =
                         bootWith [ "geo" ] disk []
 
                     ( _, answered ) =
-                        bootWith [ "geo" ] disk [ "{\"t\":\"httpError\",\"id\":\"geo\",\"error\":\"network\",\"message\":\"no route\"}" ]
+                        bootWith [ "geo" ] disk [ Ok (HostMessage.HttpError "geo" HostMessage.Network "no route") ]
                 in
                 ( pending restarted, pending answered ) |> Expect.equal ( [ "geo" ], [] )
             )

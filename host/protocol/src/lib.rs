@@ -1,13 +1,25 @@
 //! Every message between the Elm program and the host, in both directions, as Rust
 //! types: `Effect` is what Elm asks for on its `toHost` port (elm/src/Effect.elm
-//! encodes them), and `ToElm` is what the host sends on `fromHost` (Main.decodeInput,
-//! Persist.elm and BootInfo.elm decode them). Both are JSON objects tagged by "t".
+//! encodes them), and `ToElm` is what the host sends on `fromHost`
+//! (elm/src/HostMessage.elm decodes them).
 //!
-//! Both sides are written by hand, so examples.json holds one example of every message,
-//! and both sides are tested against it: `cargo test -p protocol` (the tests below)
-//! checks the Rust side reads and writes exactly those, and elm/tests/ProtocolTest.elm
-//! (make elm-tests) checks the Elm side does. Add a message here, to examples.json and
-//! to the Elm side together; `make check` runs both tests.
+//! On the wire both are postcard (https://postcard.jamesmunns.com/wire-format): compact
+//! binary, with no field names. A message from Elm is a `Vec<Effect>`; one from the host
+//! is one `ToElm`. In short: an enum is its variant's number (counting from 0 in the
+//! order below) and then its fields in order; unsigned integers are varints (7 bits a
+//! byte, low first, the top bit set on all but the last byte); signed ones are
+//! zigzagged first (0, -1, 1, -2 ... become 0, 1, 2, 3 ...); f64 is 8 bytes and f32 4,
+//! little-endian; bool is a byte; Option is a byte (0 None, 1 Some) and the value;
+//! strings, byte strings and lists are their length as a varint, then the contents.
+//! So the order of variants and of fields is the format: Elm's codecs follow it.
+//!
+//! Both sides are written by hand, so examples.json holds one example of every message
+//! (as JSON, to be readable), and both sides are tested against it: `cargo test -p
+//! protocol` (the tests below) checks the Rust side reads and writes exactly those, and
+//! elm/tests/ProtocolTest.elm (make elm-tests) checks that the Elm side's bytes are the
+//! same as Rust's (`cargo run -p protocol --bin protocol-examples` prints them). Add a
+//! message here, to examples.json and to the Elm side together; `make check` runs both
+//! tests.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,10 +33,10 @@ pub struct RenderTriangle {
     pub rgba: u32,
 }
 
-/// How many bytes each triangle takes on the render port.
+/// How many bytes each triangle takes in `Effect::Render`.
 pub const RENDER_TRIANGLE_BYTES: usize = 52;
 
-/// Reads what Elm sends on its `render` port: 52 bytes a triangle, the 12 numbers of its
+/// Reads the scene in `Effect::Render`: 52 bytes a triangle, the 12 numbers of its
 /// corners as 32-bit floats and then its colour as an unsigned 32-bit integer, all
 /// little-endian. None if the length isn't a whole number of triangles.
 pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
@@ -49,11 +61,14 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
 
 /// What Elm asks the host to do.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum Effect {
+    /// The scene to draw, once a frame: triangles as `read_render` reads them. A byte
+    /// string, so eco and the host copy it rather than look at each number.
+    Render(#[serde(with = "serde_bytes")] Vec<u8>),
     /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
     /// sets the cursor's size and how far mouse motion moves it.
-    Cursor { rgba: f64, scale: u32 },
+    Cursor { rgba: u32, scale: u32 },
     WifiScan,
     WifiConnect { ssid: String, password: String },
     WifiDisconnect,
@@ -104,7 +119,7 @@ pub struct HttpRequest {
 /// What the host tells Elm: input, frames, hardware and network state, and the answers
 /// to Elm's effects.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ToElm {
     /// First, once: the screen's size in pixels.
     Screen { w: u32, h: u32 },
@@ -224,22 +239,20 @@ pub enum HttpFailure {
 }
 
 impl ToElm {
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("a ToElm is always JSON")
+    /// What goes on the socket to the Elm program.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("a ToElm always encodes")
     }
 }
 
-/// Reads one batch of Elm's effects (a JSON list). Effects that don't parse are
-/// returned as errors in their place, so one bad effect doesn't lose the rest.
-pub fn read_effects(json: &str) -> Result<Vec<Result<Effect, String>>, String> {
-    let list: Vec<serde_json::Value> = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    Ok(list
-        .into_iter()
-        .map(|v| {
-            let shown = v.to_string();
-            serde_json::from_value(v).map_err(|e| format!("{e}: {shown:.200}"))
-        })
-        .collect())
+/// Reads one message from Elm: its effects, in order.
+pub fn read_effects(bytes: &[u8]) -> Result<Vec<Effect>, String> {
+    postcard::from_bytes(bytes).map_err(|e| e.to_string())
+}
+
+/// What Elm sends for these effects (for the tests, and protocol-examples).
+pub fn write_effects(effects: &[Effect]) -> Vec<u8> {
+    postcard::to_allocvec(effects).expect("Effects always encode")
 }
 
 #[cfg(test)]
@@ -264,14 +277,20 @@ mod tests {
         }
     }
 
+    /// The variant's name: "name", or {"name": fields}.
     fn tag(v: &Value) -> String {
-        v["t"].as_str().unwrap().to_owned()
+        match v {
+            Value::String(t) => t.clone(),
+            Value::Object(o) if o.len() == 1 => o.keys().next().unwrap().clone(),
+            _ => panic!("{v} isn't an enum variant"),
+        }
     }
 
     /// Each kind of message once, so a new kind of message must get an example. (This
     /// match has no `_` arm, so it stops compiling until the new one is listed.)
     fn effect_tag(e: &Effect) -> &'static str {
         match e {
+            Effect::Render(_) => "render",
             Effect::Cursor { .. } => "cursor",
             Effect::WifiScan => "wifiScan",
             Effect::WifiConnect { .. } => "wifiConnect",
@@ -289,7 +308,7 @@ mod tests {
             Effect::SwitchReady => "switchReady",
         }
     }
-    const EFFECT_TAGS: usize = 15;
+    const EFFECT_TAGS: usize = 16;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -322,10 +341,8 @@ mod tests {
 
     #[test]
     fn reads_the_render_example() {
-        let all: Value = serde_json::from_str(include_str!("../examples.json")).unwrap();
-        let hex = all["render"].as_str().unwrap();
-        let bytes: Vec<u8> =
-            (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+        let render = examples("toHost").into_iter().find(|e| tag(e) == "render").unwrap();
+        let Effect::Render(bytes) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
             read_render(&bytes),
@@ -337,6 +354,7 @@ mod tests {
     #[test]
     fn reads_every_effect_elm_sends() {
         let mut tags = std::collections::BTreeSet::new();
+        let mut all = Vec::new();
         for example in examples("toHost") {
             let effect: Effect = serde_json::from_value(example.clone())
                 .unwrap_or_else(|e| panic!("can't read {example}: {e}"));
@@ -345,8 +363,11 @@ mod tests {
             let back = serde_json::to_value(&effect).unwrap();
             assert!(same(&back, &example), "{example} came back as {back}");
             tags.insert(tag(&example));
+            all.push(effect);
         }
         assert_eq!(tags.len(), EFFECT_TAGS, "examples.json needs one toHost example of each Effect; it has {tags:?}");
+        // And on the wire, all of them in one message.
+        assert_eq!(read_effects(&write_effects(&all)), Ok(all));
     }
 
     #[test]
@@ -356,19 +377,21 @@ mod tests {
             let message: ToElm = serde_json::from_value(example.clone())
                 .unwrap_or_else(|e| panic!("{example} isn't a ToElm: {e}"));
             assert_eq!(to_elm_tag(&message), tag(&example));
-            let sent: Value = serde_json::from_str(&message.to_json()).unwrap();
-            assert!(same(&sent, &example), "{example} is sent as {sent}");
+            let back = serde_json::to_value(&message).unwrap();
+            assert!(same(&back, &example), "{example} came back as {back}");
+            assert_eq!(postcard::from_bytes::<ToElm>(&message.to_bytes()), Ok(message));
             tags.insert(tag(&example));
         }
         assert_eq!(tags.len(), TO_ELM_TAGS, "examples.json needs one fromHost example of each ToElm; it has {tags:?}");
     }
 
     #[test]
-    fn one_bad_effect_keeps_the_rest() {
-        let read = read_effects(r#"[{"t":"wifiScan"},{"t":"noSuchEffect"},{"t":"wifiDisconnect"}]"#).unwrap();
-        assert_eq!(read.len(), 3);
-        assert_eq!(read[0], Ok(Effect::WifiScan));
-        assert!(read[1].is_err());
-        assert_eq!(read[2], Ok(Effect::WifiDisconnect));
+    fn the_wire_format_is_postcard() {
+        // Variant 1 (Cursor), rgba 0xff0000ff as a varint, scale 2.
+        let cursor = Effect::Cursor { rgba: 0xff00_00ff, scale: 2 };
+        assert_eq!(write_effects(&[cursor]), vec![1, 1, 0xff, 0x81, 0x80, 0xf8, 0x0f, 2]);
+        // Variant 2 (Mouse), zigzagged -1 and 300.
+        assert_eq!(ToElm::Mouse { x: -1, y: 300 }.to_bytes(), vec![2, 1, 0xd8, 0x04]);
+        assert!(read_effects(&[1, 99]).is_err());
     }
 }
