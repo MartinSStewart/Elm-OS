@@ -4,7 +4,7 @@ port module Effect exposing
     , HttpError(..)
     , HttpRequest
     , PowerAction(..)
-    , encode
+    , messages
     , fromHost
     , get
     , toCmd
@@ -15,10 +15,13 @@ port module Effect exposing
 `update` returns a list of these instead of `Cmd`s, so what it does is plain data
 that tests can compare, and the host is free to carry it out however it likes (HTTP,
 for example, uses Rust's rustls rather than eco's libcurl and OpenSSL). They all go
-out on one port, `toHost`, as a JSON list; host/init/src/effects.rs reads them. The one
-exception is `Render`, sent every frame with thousands of numbers in it: it goes out on
-`render` as raw bytes (`renderBytes`), which eco hands the host without encoding,
-copying or parsing anything.
+out on one port, `toHost`, as `Bytes` (`messages`); host/init/src/effects.rs reads them.
+Each message starts with a byte saying what it holds (host/protocol/src/link.rs):
+
+  - 1: the Effects as a JSON list, in UTF-8
+  - 2: a `Render`'s triangles (`renderBytes`), which is sent every frame with thousands
+    of numbers in it, so it isn't JSON: eco hands the host these bytes without
+    encoding, copying or parsing anything
 
 The host answers and reports on one port too, `fromHost`: input events, frames,
 wifi, HTTP responses. Main.elm decodes those.
@@ -38,10 +41,7 @@ import Sprite exposing (Triangle)
 import Units exposing (DevicePixels, UiScale)
 
 
-port toHost : E.Value -> Cmd msg
-
-
-port render : Bytes -> Cmd msg
+port toHost : Bytes -> Cmd msg
 
 
 port fromHost : (D.Value -> msg) -> Sub msg
@@ -121,36 +121,43 @@ get id url =
 
 toCmd : List Effect -> Cmd msg
 toCmd effects =
+    Cmd.batch (List.map toHost (messages effects))
+
+
+{-| What `toCmd` sends on `toHost`, in order: the Effects that are JSON, in one
+message, then each Render.
+-}
+messages : List Effect -> List Bytes
+messages effects =
     let
         ( json, renders ) =
             List.foldr
                 (\effect ( js, rs ) ->
                     case encode effect of
-                        OnToHost value ->
+                        Json value ->
                             ( value :: js, rs )
 
-                        OnRender bytes ->
-                            ( js, render bytes :: rs )
+                        Triangles bytes ->
+                            ( js, bytes :: rs )
                 )
                 ( [], [] )
                 effects
+
+        message kind bytes =
+            BE.encode (BE.sequence [ BE.unsignedInt8 kind, BE.bytes bytes ])
     in
-    Cmd.batch
-        ((if List.isEmpty json then
-            Cmd.none
+    (if List.isEmpty json then
+        []
 
-          else
-            toHost (E.list identity json)
-         )
-            :: renders
-        )
+     else
+        [ message 1 (BE.encode (BE.string (E.encode 0 (E.list identity json)))) ]
+    )
+        ++ List.map (message 2) renders
 
 
-{-| An Effect as it goes to the host: JSON on `toHost`, or bytes on `render`.
--}
 type Encoded
-    = OnToHost E.Value
-    | OnRender Bytes
+    = Json E.Value
+    | Triangles Bytes
 
 
 {-| 52 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
@@ -166,7 +173,7 @@ encode : Effect -> Encoded
 encode effect =
     case effect of
         Render triangles ->
-            OnRender (renderBytes (triangles ()))
+            Triangles (renderBytes (triangles ()))
 
         SetCursor { color, scale } ->
             E.object
@@ -174,19 +181,19 @@ encode effect =
                 , ( "rgba", E.float (Color.toFloat color) )
                 , ( "scale", E.int (Units.scaleInt scale) )
                 ]
-                |> OnToHost
+                |> Json
 
         WifiScan ->
             E.object [ ( "t", E.string "wifiScan" ) ]
-                |> OnToHost
+                |> Json
 
         WifiConnect { ssid, password } ->
             E.object [ ( "t", E.string "wifiConnect" ), ( "ssid", E.string ssid ), ( "password", E.string password ) ]
-                |> OnToHost
+                |> Json
 
         WifiDisconnect ->
             E.object [ ( "t", E.string "wifiDisconnect" ) ]
-                |> OnToHost
+                |> Json
 
         Power action ->
             E.object
@@ -202,7 +209,7 @@ encode effect =
                         )
                   )
                 ]
-                |> OnToHost
+                |> Json
 
         Http request ->
             E.object
@@ -214,15 +221,15 @@ encode effect =
                 , ( "body", E.string request.body )
                 , ( "timeoutMs", Maybe.map E.float request.timeoutMs |> Maybe.withDefault E.null )
                 ]
-                |> OnToHost
+                |> Json
 
         ListDir path ->
             E.object [ ( "t", E.string "listDir" ), ( "path", E.string path ) ]
-                |> OnToHost
+                |> Json
 
         ReadFiles { id, paths } ->
             E.object [ ( "t", E.string "readFiles" ), ( "id", E.string id ), ( "paths", E.list E.string paths ) ]
-                |> OnToHost
+                |> Json
 
         ReadBytes { path, offset, length } ->
             E.object
@@ -231,7 +238,7 @@ encode effect =
                 , ( "offset", E.int offset )
                 , ( "length", E.int length )
                 ]
-                |> OnToHost
+                |> Json
 
         Sha256 { path, length } ->
             E.object
@@ -239,24 +246,24 @@ encode effect =
                 , ( "path", E.string path )
                 , ( "length", Maybe.map E.int length |> Maybe.withDefault E.null )
                 ]
-                |> OnToHost
+                |> Json
 
         WriteSys { path, text } ->
             E.object [ ( "t", E.string "writeSys" ), ( "path", E.string path ), ( "text", E.string text ) ]
-                |> OnToHost
+                |> Json
 
         AppendFile { path, text } ->
             E.object [ ( "t", E.string "appendFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
-                |> OnToHost
+                |> Json
 
         WriteFile { path, text } ->
             E.object [ ( "t", E.string "writeFile" ), ( "path", E.string path ), ( "text", E.string text ) ]
-                |> OnToHost
+                |> Json
 
         Log text ->
             E.object [ ( "t", E.string "log" ), ( "text", E.string text ) ]
-                |> OnToHost
+                |> Json
 
         SwitchReady ->
             E.object [ ( "t", E.string "switchReady" ) ]
-                |> OnToHost
+                |> Json

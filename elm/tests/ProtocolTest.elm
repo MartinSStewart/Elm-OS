@@ -134,6 +134,13 @@ hex bytes =
         bytes
 
 
+{-| A message on `toHost`: its kind byte, and the rest.
+-}
+split : Bytes -> Maybe ( Int, Bytes )
+split bytes =
+    BD.decode (BD.map2 Tuple.pair BD.unsignedInt8 (BD.bytes (Bytes.width bytes - 1))) bytes
+
+
 hexDigits : String
 hexDigits =
     "0123456789abcdef"
@@ -146,24 +153,32 @@ suite =
             (\_ ->
                 List.map
                     (\effect ->
-                        case Effect.encode effect of
-                            Effect.OnToHost value ->
-                                D.decodeString json (E.encode 0 value)
+                        case List.map split (Effect.messages [ effect ]) of
+                            [ Just ( 1, payload ) ] ->
+                                BD.decode (BD.string (Bytes.width payload)) payload
+                                    |> Maybe.withDefault ""
+                                    |> D.decodeString (D.index 0 json)
 
-                            Effect.OnRender _ ->
-                                Err (D.Failure "sent as bytes" E.null)
+                            _ ->
+                                Err (D.Failure "not one JSON message" E.null)
                     )
                     effects
                     |> Expect.equal (List.map (D.decodeString json) ProtocolExamples.toHost)
             )
+        , test "the Effects sent as JSON go in one message, before each Render's"
+            (\_ ->
+                Effect.messages [ Effect.WifiScan, Effect.Render [], Effect.Log "a", Effect.Render [] ]
+                    |> List.map (\message -> Maybe.map Tuple.first (split message))
+                    |> Expect.equal [ Just 1, Just 2, Just 2 ]
+            )
         , test "a Render is sent as bytes, as in the example"
             (\_ ->
-                case Effect.encode (Effect.Render [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]) of
-                    Effect.OnRender bytes ->
-                        Expect.equal (Just ProtocolExamples.render) (hex bytes)
+                case List.map split (Effect.messages [ Effect.Render [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ] ]) of
+                    [ Just ( 2, payload ) ] ->
+                        Expect.equal (Just ProtocolExamples.render) (hex payload)
 
-                    Effect.OnToHost value ->
-                        Expect.fail ("sent as JSON: " ++ E.encode 0 value)
+                    other ->
+                        Expect.fail ("not one render message but " ++ String.fromInt (List.length other))
             )
         , describe "every message the host sends is read"
             (List.map (\text -> test text (\_ -> readsHostMessage text)) ProtocolExamples.fromHost)

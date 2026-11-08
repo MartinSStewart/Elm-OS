@@ -8,9 +8,10 @@
 
 use std::io::{self, Read, Write};
 
-/// Elm -> host: what Elm sent on its `toHost` port, a JSON list of effects.
+/// Elm -> host: a JSON list of effects. Elm sends its messages on its `toHost` port
+/// with this kind byte or RENDER's in front (elm/src/Effect.elm).
 pub const TO_HOST: u8 = 1;
-/// Elm -> host: what Elm sent on its `render` port, the scene as bytes.
+/// Elm -> host: the scene, as triangles (protocol::read_render).
 pub const RENDER: u8 = 2;
 /// Host -> Elm: one JSON message for Elm's `fromHost` port.
 pub const FROM_HOST: u8 = 3;

@@ -165,9 +165,10 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   answers to the old program's file reads are dropped. The data disk message lists the HTTP
   requests the host is still answering, so `Persist.elm` doesn't report them as interrupted.
   This is the base for switching to a newer build of the Elm program without restarting.
-- Elm uses no effect packages besides `Time`: `Effect.toHost` carries a list of `Effect`s
-  (cursor colour, wifi scan/connect/disconnect, power, HTTP, files) as JSON, `Effect.render`
-  carries each frame's scene as bytes, and everything comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
+- Elm uses no effect packages besides `Time`: everything Elm sends goes out as bytes on
+  one port, `Effect.toHost`: the `Effect`s (cursor colour, wifi scan/connect/disconnect,
+  power, HTTP, files) as JSON, and each frame's scene as triangles, each message
+  starting with a byte saying which. Everything comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
   certificates against Mozilla's CA list compiled in from `webpki-roots`, so there is no
   OpenSSL, libcurl or CA bundle in the image. eco's runtime still references libcurl, so the
   host provides stubs that fail cleanly.

@@ -10,7 +10,9 @@
 //! constructor that runs before eco's `main`. It carries Elm's ports over the socket
 //! (protocol/src/link.rs has the format):
 //!
-//!   toHost   (JSON) and render (bytes): Elm -> host, written as eco calls us
+//!   toHost   (bytes): Elm -> host, written as eco calls us. Elm starts each message
+//!            with its kind (link::TO_HOST for JSON effects, link::RENDER for
+//!            triangles; elm/src/Effect.elm), and the rest is the payload
 //!   fromHost (JSON): host -> Elm, read by a thread of ours and given to eco
 //!
 //! When the host closes the socket, the program exits.
@@ -40,13 +42,11 @@ pub(crate) fn log_line(line: &str) {
 }
 pub(crate) use log;
 
-type Callback = extern "C" fn(json: *const c_char, user: *mut c_void);
 type BytesCallback = extern "C" fn(data: *const u8, length: usize, user: *mut c_void);
 
 // eco's port API (include/eco/eco_embed.h in eco's bundle).
 extern "C" {
     fn eco_port_send(port: *const c_char, json_utf8: *const c_char) -> c_int;
-    fn eco_port_subscribe(port: *const c_char, cb: Callback, user: *mut c_void) -> c_int;
     fn eco_port_subscribe_bytes(port: *const c_char, cb: BytesCallback, user: *mut c_void) -> c_int;
 }
 
@@ -73,8 +73,11 @@ pub extern "C" fn elmos_link_init() {
     let reader = stream.try_clone().expect("clone the socket to the host");
     let _ = TO_HOST.set(Mutex::new(stream));
 
-    subscribe(c"toHost", |json| write(link::TO_HOST, json.as_bytes()));
-    subscribe_bytes(c"render", |bytes| write(link::RENDER, bytes));
+    subscribe_bytes(c"toHost", |message| match message.split_first() {
+        Some((&kind, payload)) if kind == link::TO_HOST || kind == link::RENDER => write(kind, payload),
+        Some((&kind, _)) => log!("a message of kind {kind} on toHost"),
+        None => log!("an empty message on toHost"),
+    });
 
     std::thread::Builder::new()
         .name("from host".into())
@@ -119,18 +122,6 @@ fn send(json: &CStr) {
         std::thread::sleep(Duration::from_millis(1));
     }
     log!("Elm didn't take {:.200}", json.to_string_lossy());
-}
-
-/// Calls `f` with each message Elm sends on `port`, on Elm's thread.
-fn subscribe(port: &'static CStr, f: fn(&str)) {
-    extern "C" fn trampoline(json: *const c_char, user: *mut c_void) {
-        // SAFETY: `user` is the fn pointer we registered, and eco hands us a C string.
-        let f: fn(&str) = unsafe { std::mem::transmute(user) };
-        let json = unsafe { CStr::from_ptr(json) }.to_string_lossy();
-        f(&json);
-    }
-    // SAFETY: a static port name and a plain function pointer as user data.
-    unsafe { eco_port_subscribe(port.as_ptr(), trampoline, f as *mut c_void) };
 }
 
 /// Calls `f` with the bytes of each value Elm sends on the bytes port `port`, on Elm's
