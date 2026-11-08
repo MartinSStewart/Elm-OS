@@ -125,6 +125,7 @@ impl Stats {
                 }
             }
         }
+        let frames = self.elm.len();
         let gpu_ms = average(&mut self.gpu_ns, 1e-6);
         let elm_ms = average(&mut self.elm, 1000.0);
         let draw_ms = average(&mut self.draw, 1000.0);
@@ -133,7 +134,7 @@ impl Stats {
         let cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
         let round = |x: f64| (x * 10.0).round() / 10.0;
         let ms = |x: f64| (x * 1000.0).round() / 1000.0;
-        eco::send(&ToElm::Stats {
+        let stats = ToElm::Stats {
             cores: cores as i64,
             cpu: round(self.cpu_load()),
             cpu_elm: round(elm_cpu),
@@ -144,7 +145,13 @@ impl Stats {
             gpu_ms: ms(gpu_ms),
             elm_ms: ms(elm_ms),
             draw_ms: ms(draw_ms),
-        });
+        };
+        // For scripts/measure-frames.py: the stats on the serial console, without the
+        // rest of ELMOS_DEBUG's logging, which would slow Elm down.
+        if std::env::var_os("ELMOS_STATS").is_some() {
+            log!("stats", "frames={} {}", frames, stats.to_json());
+        }
+        eco::send(&stats);
     }
 }
 
