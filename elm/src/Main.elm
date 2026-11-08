@@ -271,8 +271,7 @@ type Msg
 
 
 type UiId
-    = NextColorButton
-    | RefreshButton
+    = RefreshButton
     | NetworkButton String
     | PasswordInput
     | ShowPasswordButton
@@ -504,11 +503,8 @@ step event model =
                     _ ->
                         ( model, [] )
 
-            else if repeat then
-                ( model, [] )
-
             else
-                ( nextColor model, [] )
+                ( model, [] )
 
         Renderer renderer ->
             ( { model | renderer = Just renderer }, [] )
@@ -646,9 +642,6 @@ gotHttp id result model =
 click : UiId -> Model -> ( Model, List Effect )
 click id model =
     case id of
-        NextColorButton ->
-            ( nextColor { model | focus = Nothing }, [] )
-
         RefreshButton ->
             ( { model | scanning = True, focus = Nothing }, [ Effect.WifiScan ] )
 
@@ -877,9 +870,6 @@ dragSelect focus position model =
         EditorInput ->
             { model | editor = TextInputMultiline.mouseDownMove (editorStyle model) (uiMouse model) position model.editor }
 
-        NextColorButton ->
-            model
-
         RefreshButton ->
             model
 
@@ -998,21 +988,6 @@ cursorColor model =
         Color.white
 
 
-nextColor : Model -> Model
-nextColor model =
-    { model | colorIndex = modBy (List.length palette) (model.colorIndex + 1) }
-
-
-palette : List Color
-palette =
-    [ Color.rgb 0.12 0.14 0.2
-    , Color.rgb 0.3 0.8 0.45
-    , Color.rgb 0.3 0.55 0.95
-    , Color.rgb 0.95 0.8 0.25
-    , Color.rgb 0.95 0.35 0.3
-    ]
-
-
 
 -- VIEW
 
@@ -1020,20 +995,13 @@ palette =
 view : Model -> List (Triangle DevicePixels)
 view model =
     let
-        color =
-            palette |> List.drop model.colorIndex |> List.head |> Maybe.withDefault Color.white
-
-        ( w, h ) =
-            Coord.toTuple model.screenSize |> Tuple.mapBoth toFloat toFloat
-
         ui =
             screenUi model
 
         hovered =
             Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
-    Sprite.triangle color ( 0, h ) ( w, h ) ( w / 2, h * 0.55 )
-        :: Ui.view (uiScale model) hovered model.focus ui
+    Ui.view (uiScale model) hovered model.focus ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however
@@ -1253,9 +1221,6 @@ overlay model =
                                 :: line "Battery" (BootInfo.batteryText model.bootInfo)
                                 :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
                            )
-                        ++ [ Ui.button { id = NextColorButton, padding = Ui.paddingXY 6 3 }
-                                (Ui.text mono "Next colour")
-                           ]
                     )
                 )
             )
@@ -1419,9 +1384,6 @@ resume saved =
 
                 Just (CalculatorUiId _) ->
                     saved.focus
-
-                Just NextColorButton ->
-                    Nothing
 
                 Just RefreshButton ->
                     Nothing
