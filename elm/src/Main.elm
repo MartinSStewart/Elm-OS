@@ -394,7 +394,7 @@ step event model =
             ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
-            case stringToHttpRequestId id of
+            case Effect.stringToHttpRequestId id of
                 Just id2 ->
                     let
                         decoded : D.Decoder value -> Result (Result Effect.HttpError Int) value
@@ -411,13 +411,13 @@ step event model =
                                     Err (Err error)
                     in
                     case id2 of
-                        GeoRequest ->
+                        Effect.GeoRequest ->
                             case model.weather of
                                 FindingPlace ->
                                     case decoded Weather.decodePlace of
                                         Ok place ->
                                             ( { model | weather = LoadingForecast place }
-                                            , [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ]
+                                            , [ Effect.get Effect.ForecastRequest (Weather.forecastUrl model.weatherUrl place) ]
                                             )
 
                                         Err error ->
@@ -428,7 +428,7 @@ step event model =
                                 _ ->
                                     ( model, [] )
 
-                        ForecastRequest ->
+                        Effect.ForecastRequest ->
                             ( case model.weather of
                                 LoadingForecast place ->
                                     case decoded Weather.decodeForecast of
@@ -443,7 +443,7 @@ step event model =
                             , []
                             )
 
-                        NewsRequest ->
+                        Effect.NewsRequest ->
                             ( case decoded News.decoder of
                                 Ok data ->
                                     { model | news = LoadedNews data }
@@ -679,42 +679,7 @@ nonEmpty value default =
 
 fetchWeather : Model -> ( Model, List Effect )
 fetchWeather model =
-    ( { model | weather = FindingPlace }, [ Effect.get "geo" model.geoUrl ] )
-
-
-type HttpRequestId
-    = GeoRequest
-    | ForecastRequest
-    | NewsRequest
-
-
-httpRequestIdToString : HttpRequestId -> String
-httpRequestIdToString request =
-    case request of
-        GeoRequest ->
-            "geo"
-
-        ForecastRequest ->
-            "forecast"
-
-        NewsRequest ->
-            "news"
-
-
-stringToHttpRequestId : String -> Maybe HttpRequestId
-stringToHttpRequestId string =
-    case string of
-        "geo" ->
-            Just GeoRequest
-
-        "forecast" ->
-            Just ForecastRequest
-
-        "news" ->
-            Just NewsRequest
-
-        _ ->
-            Nothing
+    ( { model | weather = FindingPlace }, [ Effect.get Effect.GeoRequest model.geoUrl ] )
 
 
 click : UiId -> Model -> ( Model, List Effect )
