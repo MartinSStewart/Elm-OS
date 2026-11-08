@@ -66,6 +66,15 @@ jobs:
       - name: Tests that don't boot (review, Elm, tools/wire, host protocol)
         run: make check
 
+      - name: If elm-review's configuration didn't compile, say why
+        # elm-review only shows eco's stderr, which is empty when eco dies of a signal.
+        if: failure()
+        run: |
+          cd elm/elm-stuff/generated-code/jfmengels/elm-review/cli/*/build-project/review-project || exit 0
+          main=$(grep -o '"[^"]*elm-review/template/src"' elm.json | tr -d '"')/Elm/Review/Main.elm
+          eco make --optimize --output=/tmp/review.js "$main"; echo "eco exit status: $?"
+          sudo dmesg | tail -20
+
       - name: Boot in QEMU and check the screen
         run: make test
 
