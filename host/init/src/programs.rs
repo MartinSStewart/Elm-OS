@@ -123,3 +123,45 @@ pub fn roll_back() -> bool {
 pub fn drop_kept_snapshot() {
     persist::on_disk(|d| d.remove("snapshot-before-switch"));
 }
+
+/// The version of the Model's types a build saves (elm/src/Evergreen): for the built-in
+/// one from the initramfs, for one on the disk from the manifest it came with.
+pub fn model_version(build: &Build) -> Option<u64> {
+    match build {
+        None => std::fs::read_to_string("/etc/elmos/model-version").ok()?.trim().parse().ok(),
+        Some(name) => {
+            let text = std::fs::read_to_string(persist::Disk::path(&format!("programs/{name}/manifest.json"))).ok()?;
+            serde_json::from_str::<serde_json::Value>(&text).ok()?.get("modelVersion")?.as_u64()
+        }
+    }
+}
+
+/// The commit a build was made from, as far as known: a disk build's name is the
+/// first 12 digits of its commit; the built-in one says in /etc/elmos/commit (with
+/// "-dirty" if it had uncommitted changes).
+pub fn commit(build: &Build) -> Option<String> {
+    match build {
+        Some(name) => Some(name.clone()),
+        None => Some(std::fs::read_to_string("/etc/elmos/commit").ok()?.trim().to_owned()),
+    }
+}
+
+/// Puts a downloaded build on the disk as programs/<name>/elm, with its manifest.
+/// Written to a temporary file and renamed, so a power cut never leaves half a build.
+pub fn install(name: &str, program: &[u8], manifest: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    if !valid_name(name) {
+        return Err(std::io::Error::other(format!("{name:?} isn't a build name")));
+    }
+    let dir = persist::Disk::path(&format!("programs/{name}"));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("manifest.json"), manifest)?;
+    let part = dir.join("elm.part");
+    let mut f = std::fs::File::create(&part)?;
+    f.write_all(program)?;
+    f.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+    f.sync_all()?;
+    std::fs::rename(&part, dir.join("elm"))?;
+    std::fs::File::open(&dir)?.sync_all()
+}

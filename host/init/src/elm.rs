@@ -367,17 +367,17 @@ fn after_switch(build: &Build, drawn: bool) -> bool {
 }
 
 /// Replaces the running program with build `name` (see the top). Returns once the new
-/// build has drawn its first frame, or the old one is back.
-pub fn switch_to(name: String) {
+/// build has drawn its first frame (true), or the old one is back (false).
+pub fn switch_to(name: String) -> bool {
     let from = {
         let mut s = state();
         if s.switch.is_some() || s.to_elm.is_none() || !s.drawn {
             log!("host", "not switching to build {name}: the running program isn't ready for it");
-            return;
+            return false;
         }
         if !programs::exists(&name) {
             log!("host", "not switching to build {name}: it isn't in /data/programs");
-            return;
+            return false;
         }
         s.switch = Some(Switch { from: s.build.clone(), to: name.clone(), ready: None, started: false });
         s.build.clone()
@@ -392,7 +392,7 @@ pub fn switch_to(name: String) {
         let mut s = state();
         s.switch = None;
         stop(&s);
-        return;
+        return false;
     };
     let renders = {
         let mut s = state();
@@ -415,7 +415,7 @@ pub fn switch_to(name: String) {
         s.build = from;
         s.switch = None;
         s.holding = false;
-        return; // the supervisor starts the old build again
+        return false; // the supervisor starts the old build again
     }
     state().switch.as_mut().unwrap().started = true;
     link().ready.notify_all();
@@ -440,11 +440,13 @@ pub fn switch_to(name: String) {
                 log!("host", "switched to build {name}, but couldn't save that; the next boot runs {}", programs::describe(&from));
             }
             programs::drop_kept_snapshot();
+            true
         }
-        Some(false) => {}
+        Some(false) => false,
         None => {
             log!("host", "build {name} drew nothing for {} s; stopping it", FIRST_FRAME_WITHIN.as_secs());
             stop(&state()); // after_switch rolls back
+            false
         }
     }
 }
@@ -463,6 +465,11 @@ fn wait_until<T>(limit: Duration, f: impl Fn(&State) -> Option<T>) -> Option<T> 
         }
         s = link().ready.wait_timeout(s, left.min(Duration::from_millis(100))).unwrap_or_else(|e| e.into_inner()).0;
     }
+}
+
+/// The build running now (or about to start again).
+pub fn running_build() -> Build {
+    state().build.clone()
 }
 
 /// Kills the program running now; the supervisor notices.
@@ -562,6 +569,7 @@ fn first_frame(program: u64) {
                 if let Some(name) = programs::take_next() {
                     switch_to(name);
                 }
+                crate::update::start();
             })
             .ok();
     }

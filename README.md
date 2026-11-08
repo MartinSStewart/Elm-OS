@@ -261,9 +261,9 @@ program with another build, without restarting the computer:
    disk that fails to draw three times running is given up on, for the built-in one, until the
    next boot.
 
-For now a switch starts when `/data/programs/next` names a build at boot (the host removes it
-first, so a failing build isn't retried). Fetching new builds from CI comes later. A build can
-only be switched away from if it knows `switching`: those from before this change don't.
+A switch starts when the updater finds a new build (below), or when `/data/programs/next` names
+a build at boot (the host removes it first, so a failing build isn't retried). A build can only
+be switched away from if it knows `switching`: those from before 1391d07 don't.
 `make test-switch` checks a switch, and going back from a build that fails.
 
 ### Published builds and the `deployed` branch
@@ -275,8 +275,15 @@ program (`elm`) and `manifest.json` (`make release`, `tools/release.sh`):
     {"commit": ..., "hostVersion": ..., "modelVersion": 2, "elmSha256": ...}
 
 and then moves the `deployed` branch to that commit (only forwards: a slower run for an older
-commit leaves it alone). Computers running Elm OS will follow `deployed` (not built yet): when
-it moves, download the release's `elm` and switch to it. `main` itself is never held back,
+commit leaves it alone). Computers running Elm OS follow `deployed` (`host/init/src/update.rs`):
+a little after the first frame, then every 10 minutes, the host asks GitHub where `deployed` is
+(the repository is public, so no token), and if that isn't the running build, downloads the
+release's `elm`, checks it against the manifest's SHA-256, puts it in `/data/programs`, and
+switches to it as above. It doesn't when GitHub says the running build is newer than `deployed`
+(CI is still on it), when the build is for another host version, or when its Model version is
+older than the running one's (a Model can't be migrated backwards). Only the USB stick follows
+`deployed` (`ELMOS_UPDATES=1` in its kernel command line); `make run` keeps the build you made.
+`make test-update` checks this against a stand-in for GitHub. `main` itself is never held back,
 since there are no pull requests; `deployed` is what has passed.
 
 `hostVersion` is a SHA-256 of everything on the computer's side of Elm OS (the host, kernel

@@ -53,6 +53,7 @@ dependencies = [
  "libc",
  "protocol",
  "ring",
+ "serde_json",
  "ureq",
 ]
 

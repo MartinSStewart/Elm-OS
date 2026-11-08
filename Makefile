@@ -7,6 +7,7 @@
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make test-persist  boot twice with a power cut between: the Model must come back
 #   make test-switch   switch to another build of the Elm program without restarting
+#   make test-update   follow the deployed branch, against a stand-in for GitHub
 #   make measure-frames  how long Elm takes to answer a frame, in QEMU (MEASURE_GPU=1 for virgl)
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
@@ -87,7 +88,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE eco atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch release measure-frames
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-update release measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -150,7 +151,8 @@ KMAKE     = SOURCE_DATE_EPOCH=$(KERNEL_EPOCH) $(MAKE) -C $(KERNEL_SRC) KBUILD_BU
 # The kernel command line on the USB stick: messages on the screen (the last console=),
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
-USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0
+# ELMOS_UPDATES=1: follow the deployed branch (host/init/src/update.rs); QEMU runs don't.
+USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_UPDATES=1
 
 kernel-src: $(KERNEL_SRC)/Makefile
 
@@ -298,6 +300,12 @@ $(BUILD)/commit: FORCE
 $(BUILD)/host-version: FORCE
 	@mkdir -p $(BUILD); v=$$(tools/host-version.sh); echo "$$v" | cmp -s - $@ || echo "$$v" > $@
 
+# The newest version of the Model's types (elm/src/Evergreen/V<n>), for the updater
+# (host/init/src/update.rs): it never switches to a build with an older one.
+$(BUILD)/model-version: FORCE
+	@mkdir -p $(BUILD); v=$$(ls elm/src/Evergreen | sed -n 's/^V\([0-9][0-9]*\)$$/\1/p' | sort -n | tail -1); \
+	  echo "$$v" | cmp -s - $@ || echo "$$v" > $@
+
 # What CI publishes for each commit on main (tools/release.sh): the Elm program and
 # its manifest, in build/release.
 release: $(BUILD)/elm $(BUILD)/host-version
@@ -422,13 +430,14 @@ $(BUILD)/eco-setting: FORCE
 	@mkdir -p $(BUILD); s="$(ECO_BIN) $$($(ECO) --version)"; \
 	  echo "$$s" | cmp -s - $@ || { rm -rf $(BUILD)/wire/eco-stuff $(BUILD)/wire-test/eco-stuff tools/wire/eco-stuff elm/eco-stuff; echo "$$s" > $@; }
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos
 	cp $(BUILD)/init $(BUILD)/rootfs/init
 	mkdir -p $(BUILD)/rootfs/usr/lib/elmos
 	cp $(BUILD)/elm $(BUILD)/rootfs/usr/lib/elmos/elm
 	cp $(BUILD)/commit $(BUILD)/rootfs/etc/elmos/commit
 	cp $(BUILD)/host-version $(BUILD)/rootfs/etc/elmos/host-version
+	cp $(BUILD)/model-version $(BUILD)/rootfs/etc/elmos/model-version
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
@@ -550,6 +559,10 @@ test-persist: all $(BUILD)/data-empty.img | check-run-deps
 # from one that fails (see the script).
 test-switch: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-switch.py
+
+# Following the deployed branch, against a stand-in for GitHub (see the script).
+test-update: all $(BUILD)/data-empty.img | check-run-deps
+	python3 scripts/test-update.py
 
 # How fast Elm answers frames, on the desktop in QEMU (see the script).
 measure-frames: all $(BUILD)/data-empty.img | check-run-deps

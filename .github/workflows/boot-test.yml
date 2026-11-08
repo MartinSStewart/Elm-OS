@@ -85,6 +85,9 @@ jobs:
       - name: Switching to another build without restarting
         run: make test-switch
 
+      - name: Following the deployed branch (against a stand-in for GitHub)
+        run: make test-update
+
       - name: Publish the build, and move `deployed` to it
         # Only on main, once everything above passed. The release, build-<commit>, has
         # the Elm program and its manifest (tools/release.sh); computers running
