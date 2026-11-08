@@ -27,7 +27,10 @@ jobs:
 
       - name: Install eco
         run: |
-          curl -sSL -o eco.tar.gz https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
+          # GitHub's release downloads sometimes answer with an error page: retry, and
+          # check it's the bundle tools/build-env/Dockerfile pins.
+          curl -fsSL --retry 5 --retry-all-errors -o eco.tar.gz https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
+          echo "02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca  eco.tar.gz" | sha256sum -c
           sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
           echo /opt/eco/bin >> "$GITHUB_PATH"
 
