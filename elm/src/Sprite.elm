@@ -1,6 +1,7 @@
 module Sprite exposing
     ( Font(..)
     , FontSize(..)
+    , Style(..)
     , Triangle
     , caretPositions
     , clippedText
@@ -19,14 +20,14 @@ module Sprite exposing
 
 {-| Turning things into textured triangles for the render port, after town-collab's Sprite.
 
-Every triangle samples the host's texture atlas (host/common/src/atlas.rs, 1024 x 512
+Every triangle samples the host's texture atlas (host/common/src/atlas.rs, 1024 x 2048
 pixels) and multiplies the sample by its colour:
 
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-250, y 0-180, 25 to a row,
     in the order of `asciiChars` below
   - the mouse cursor, 12 x 19: its outline at x 0, y 184 and its fill at x 16, y 184
   - a solid white block at x 248-256, y 248-256, for flat colours
-  - Noto Sans at a few sizes everywhere else, where NotoSans.elm says
+  - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
 UI pixels and `toDevice` scales them; text is measured in UI pixels but drawn straight
@@ -200,14 +201,24 @@ cursor fill scale position =
 
   - `Mono` is town-collab's 10 x 18 pixel font, a monospace "Courier New", one font
     pixel per UI pixel (`Small`) or two (`Big`). The debug overlay uses it.
-  - `Sans` is Noto Sans (what at-chat uses), 16 UI pixels (`Small`) or 24 (`Big`),
-    drawn natively at that many device pixels times the UI scale, with antialiasing and
-    kerning.
+  - `Sans` is Noto Sans (what at-chat uses) in a `Style`, 16 UI pixels (`Small`) or 24
+    (`Big`), drawn natively at that many device pixels times the UI scale, with
+    antialiasing and kerning.
 
 -}
 type Font
     = Mono FontSize
-    | Sans FontSize
+    | Sans Style FontSize
+
+
+{-| Noto Sans's styles. Each is its own font file, drawn into the atlas at every size,
+rather than slanting or thickening the regular glyphs.
+-}
+type Style
+    = Regular
+    | Bold
+    | Italic
+    | BoldItalic
 
 
 type FontSize
@@ -283,16 +294,32 @@ charTexturePosition char =
     ( modBy charsPerRow index * Tuple.first charSize, index // charsPerRow * Tuple.second charSize )
 
 
-{-| The Noto Sans face for a size: that size if the atlas has it, otherwise the nearest smaller one.
+variant : Style -> NotoSans.Variant
+variant style =
+    case style of
+        Regular ->
+            NotoSans.regular
+
+        Bold ->
+            NotoSans.bold
+
+        Italic ->
+            NotoSans.italic
+
+        BoldItalic ->
+            NotoSans.boldItalic
+
+
+{-| A Noto Sans face for a size: that size if the atlas has it, otherwise the nearest smaller one.
 -}
-face : Int -> NotoSans.Face
-face size =
-    case List.filter (\f -> f.size <= size) NotoSans.faces |> List.reverse of
+face : NotoSans.Variant -> Int -> NotoSans.Face
+face v size =
+    case List.filter (\f -> f.size <= size) v.faces |> List.reverse of
         f :: _ ->
             f
 
         [] ->
-            case NotoSans.faces of
+            case v.faces of
                 f :: _ ->
                     f
 
@@ -318,10 +345,10 @@ lineHeightRaw font =
         Mono fontSize ->
             Tuple.second charSize * monoScale fontSize
 
-        Sans fontSize ->
+        Sans style fontSize ->
             let
                 f =
-                    face (sansSize fontSize)
+                    face (variant style) (sansSize fontSize)
             in
             f.ascent + f.descent
 
@@ -342,18 +369,21 @@ layoutLine font string =
             , String.length string * advance
             )
 
-        Sans fontSize ->
+        Sans style fontSize ->
             let
+                v =
+                    variant style
+
                 ( placed, end ) =
-                    layoutSans (face (sansSize fontSize)) string
+                    layoutSans v.kerning (face v (sansSize fontSize)) string
             in
             ( List.map (\( at, char, _ ) -> ( at, char )) placed, end )
 
 
 {-| Noto Sans's glyphs for one line, with where each starts (1/64 pixels), kerned.
 -}
-layoutSans : NotoSans.Face -> String -> ( List ( Int, Char, NotoSans.Glyph ), Int )
-layoutSans f string =
+layoutSans : Dict ( Char, Char ) Int -> NotoSans.Face -> String -> ( List ( Int, Char, NotoSans.Glyph ), Int )
+layoutSans kerning f string =
     let
         missing =
             missingGlyph f
@@ -361,7 +391,7 @@ layoutSans f string =
         step char ( pen, previous, acc ) =
             let
                 at =
-                    case Dict.get ( previous, char ) NotoSans.kerning of
+                    case Dict.get ( previous, char ) kerning of
                         Just k ->
                             pen + (k * f.size * 64 + 500) // 1000
 
@@ -460,14 +490,17 @@ clippedText uiScale color font clip string position =
                 lines
                 |> List.concat
 
-        Sans fontSize ->
+        Sans style fontSize ->
             let
+                v =
+                    variant style
+
                 -- Measured at the UI size, drawn with the face for the device size.
                 layoutFace =
-                    face (sansSize fontSize)
+                    face v (sansSize fontSize)
 
                 drawFace =
-                    face (sansSize fontSize * s)
+                    face v (sansSize fontSize * s)
             in
             List.indexedMap
                 (\lineIndex line ->
@@ -475,7 +508,7 @@ clippedText uiScale color font clip string position =
                         baseline =
                             (y + lineIndex * height + layoutFace.ascent) * s
                     in
-                    sansPens s layoutFace drawFace line
+                    sansPens s v.kerning layoutFace drawFace line
                         |> List.concatMap
                             (\( pen, glyph ) ->
                                 if glyph.w == 0 then
@@ -504,18 +537,18 @@ doubles their rounding, which leaves uneven gaps; the font's unrounded advances 
 glyphs touch at 1x.)
 
 -}
-sansPens : Int -> NotoSans.Face -> NotoSans.Face -> String -> List ( Int, NotoSans.Glyph )
-sansPens s layoutFace drawFace line =
+sansPens : Int -> Dict ( Char, Char ) Int -> NotoSans.Face -> NotoSans.Face -> String -> List ( Int, NotoSans.Glyph )
+sansPens s kerning layoutFace drawFace line =
     if s == 1 then
-        layoutSans layoutFace line |> Tuple.first |> List.map (\( at, _, glyph ) -> ( (at + 32) // 64, glyph ))
+        layoutSans kerning layoutFace line |> Tuple.first |> List.map (\( at, _, glyph ) -> ( (at + 32) // 64, glyph ))
 
     else
         let
             target =
-                Tuple.second (layoutSans layoutFace line) * s
+                Tuple.second (layoutSans kerning layoutFace line) * s
 
             ( placed, end ) =
-                layoutSans drawFace line
+                layoutSans kerning drawFace line
         in
         List.map
             (\( at, _, glyph ) ->
@@ -590,7 +623,7 @@ ellipsisHelper font maxWidth string =
                 Mono _ ->
                     "..."
 
-                Sans _ ->
+                Sans _ _ ->
                     "…"
 
         candidate =

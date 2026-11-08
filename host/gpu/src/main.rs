@@ -67,13 +67,14 @@ varying vec4 v_col;
 void main() {
     vec2 ndc = pos / screen * 2.0 - 1.0;
     gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0); // y grows downwards in Elm's pixels
-    v_uv = uv / vec2(1024.0, 512.0); // ATLAS_W, ATLAS_H
+    v_uv = uv / vec2(1024.0, 2048.0); // ATLAS_W, ATLAS_H
     v_col = col;
 }
 ";
 
 /// The atlas holds coverage only (GL_ALPHA): it scales the colour's alpha.
-// highp where there is one: mediump can be half a texel out across a 1024 pixel atlas.
+// highp where there is one: mediump can be half a texel out across a 1024 pixel atlas
+// (and a whole one across its 2048 rows).
 const FS: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else

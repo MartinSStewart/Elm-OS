@@ -396,7 +396,7 @@ shownText style text =
                 Sprite.Mono _ ->
                     "*"
 
-                Sprite.Sans _ ->
+                Sprite.Sans _ _ ->
                     "•"
             )
 

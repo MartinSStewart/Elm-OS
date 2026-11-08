@@ -1077,14 +1077,14 @@ em n =
 
 bodyFont : Sprite.Font
 bodyFont =
-    Sprite.Sans Sprite.Small
+    Sprite.Sans Sprite.Regular Sprite.Small
 
 
 {-| For titles and the temperature: the next size up.
 -}
 headingFont : Sprite.Font
 headingFont =
-    Sprite.Sans Sprite.Big
+    Sprite.Sans Sprite.Regular Sprite.Big
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
@@ -2199,6 +2199,14 @@ aboutPage model =
                             ++ "Text is in Noto Sans (SIL Open Font License). "
                             ++ "Weather: open-meteo.com, location: geojs.io."
                         )
+                    )
+                , Ui.row { spacing = 12, padding = Ui.noPadding }
+                    (List.map (\( style, name ) -> Ui.text (Sprite.Sans style Sprite.Small) name)
+                        [ ( Sprite.Regular, "Regular" )
+                        , ( Sprite.Bold, "Bold" )
+                        , ( Sprite.Italic, "Italic" )
+                        , ( Sprite.BoldItalic, "Bold Italic" )
+                        ]
                     )
                 , t ""
                 , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")

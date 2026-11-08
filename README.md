@@ -25,7 +25,7 @@ enforced by the type system. See the
 - What you did survives a restart or a power cut: open windows, the editor's text, the
   calculator, the clipboard. See "Saving the Model" below.
 
-The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`) drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
+The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`): regular, bold, italic and bold italic, each drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
 
 ## Build and run in QEMU
 

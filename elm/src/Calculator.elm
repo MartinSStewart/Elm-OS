@@ -29,7 +29,7 @@ import Color
 import Coord exposing (Coord)
 import Keyboard
 import Quantity
-import Sprite exposing (Font(..), FontSize(..))
+import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
 import Units exposing (UiPixels)
 
@@ -613,12 +613,12 @@ buttonSize =
 
 bigFont : Font
 bigFont =
-    Sans Big
+    Sans Regular Big
 
 
 smallFont : Font
 smallFont =
-    Sans Small
+    Sans Regular Small
 
 
 {-| Four buttons and the gaps between them.
