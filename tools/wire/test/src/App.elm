@@ -107,8 +107,6 @@ config : Persist.Config Model Msg
 config =
     { init = init
     , update = \_ model -> ( model, [] )
-    , draw = \_ _ -> []
-    , resume = identity
     , fromHost = \_ -> NoOp
     , subscriptions = \_ -> Sub.none
     , httpAnswered = \_ -> Nothing

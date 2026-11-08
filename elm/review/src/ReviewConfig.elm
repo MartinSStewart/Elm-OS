@@ -53,7 +53,8 @@ rules : List Rule
 rules =
     [ ExposeAllRecordFields.rule
     , NoStaleReferences.rule
-    , NoUnused.CustomTypeConstructors.rule []
+    -- Sprite's font styles (Bold, Italic, BoldItalic) are kept for when the UI uses them.
+    , NoUnused.CustomTypeConstructors.rule [] |> Review.Rule.ignoreErrorsForFiles [ "src/Sprite.elm" ]
     , NoUnused.Patterns.rule
     , Docs.ReviewAtDocs.rule
     , NoConfusingPrefixOperator.rule

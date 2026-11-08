@@ -1,6 +1,6 @@
 """Boot Elm OS headless in QEMU, drive it through QMP, and check the screen.
 
-Passes when the triangle follows the mouse and a key press changes its colour, and
+Passes when the cursor follows the mouse, the toolbar's windows open, and
 (except with --usb) when Elm OS joins the simulated wifi network and fetches the
 weather, from a stand-in server here rather than the internet. With --usb the machine
 is a desktop without wifi: a wired Intel e1000e card, which must get an address.
@@ -188,14 +188,13 @@ def near(c, want, tol=40):
     return all(abs(a - b) <= tol for a, b in zip(c, want))
 
 
-GREEN = (76, 204, 115)
 if usb:
     # On the stick, /init's messages go to the screen, not the serial port (a laptop
-    # has none), so wait for Elm's scene instead: the dark triangle at the bottom.
+    # has none), so wait for Elm's scene instead: the toolbar's buttons at the top left.
     end = time.time() + 180
     while True:
         shot = screen()
-        if near(pixel(shot, shot[0] * 19 // 20, shot[1] * 49 // 50), (31, 36, 51), tol=15):
+        if any(near(pixel(shot, x, y), (199, 185, 175), tol=25) for x in range(0, 120, 2) for y in (20, 40)):
             break
         if time.time() > end:
             fail("Elm OS never drew its scene")
@@ -251,16 +250,6 @@ time.sleep(1)
 if not all(near(c, fill) for c in cursor_at(screen(), 0.25 + 200 * s / w, 0.25)):
     fail("a 100-count mouse flick didn't move the cursor 200 UI pixels")
 
-# A key press changes the colour of the big triangle at the bottom.
-mx, my = int(0.95 * w), int(0.98 * h)  # clear of the overlay, even on a 640 px screen
-before = pixel(screen(), mx, my)
-cmd("send-key", keys=[{"type": "qcode", "data": "a"}])
-time.sleep(1)
-c = pixel(screen(), mx, my)
-print(f"triangle {before}, after a key press {c}")
-if not near(before, (31, 36, 51)) or not near(c, GREEN):
-    fail(f"expected the triangle to turn from dark blue to green after a key press, got {before} then {c}")
-
 
 def save_png(shot, path):
     w, h, px = shot
@@ -293,8 +282,7 @@ if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), to
     fail("the About button did not open and close the about page")
 
 # The Calculator button (after About) opens the calculator under the toolbar, with the
-# keyboard going to it: 6 * 7 on the number pad, then Enter. The triangle stays green,
-# because the keys went to the calculator.
+# keyboard going to it: 6 * 7 on the number pad, then Enter.
 calc_title = (12 * s, 49 * s)
 click(110 * s / w, 20 * s / h)
 time.sleep(1)
@@ -305,13 +293,11 @@ time.sleep(1)
 shot = screen()
 save_png(shot, f"{ROOT}/build/calculator.png")
 digits = sum(1 for x in range(18 * s, 210 * s) for y in range(84 * s, 140 * s) if max(pixel(shot, x, y)) < 60)
-print(f"calculator: panel {pixel(shot, *calc_title)}, {digits} dark pixels in its display, triangle {pixel(shot, mx, my)}")
+print(f"calculator: panel {pixel(shot, *calc_title)}, {digits} dark pixels in its display")
 if not near(pixel(shot, *calc_title), (220, 210, 199), tol=10):
     fail("the Calculator button did not open the calculator (build/calculator.png)")
 if digits < 20:
     fail(f"the calculator's display is empty ({digits} dark pixels; build/calculator.png)")
-if not near(pixel(shot, mx, my), GREEN):
-    fail("keys typed into the calculator changed the triangle's colour")
 click(110 * s / w, 20 * s / h)
 time.sleep(1)
 if near(pixel(screen(), *calc_title), (220, 210, 199), tol=10):

@@ -226,9 +226,22 @@ def snapshot_text():
 
 def editor_text(snap):
     """The text editor's text in a snapshot ([format, version, modelHash, msgHash, next,
-    model], see Persist.elm): Model is a record encoded as an array, in Main.Model's field order; `editor` is the 32nd field (TextInputMultiline.Model:
-    [input, scroll], TextInput.Model: [current, undo, redo], State: [cursor, size, text])."""
-    return snap[5][31][0][0][2]
+    model], see Persist.elm): Model is a record encoded as an array, in Main.Model's field
+    order (MODEL_FIELDS); then `editor` (TextInputMultiline.Model: [input, scroll],
+    TextInput.Model: [current, undo, redo], State: [cursor, size, text])."""
+    return snap[5][MODEL_FIELDS.index("editor")][0][0][2]
+
+
+def model_fields():
+    """Main.Model's field names, in order, from elm/src/Main.elm."""
+    source = open(f"{ROOT}/elm/src/Main.elm").read()
+    body = source[source.index("type alias Model ="):]
+    body = body[:body.index("\n    }")]
+    body = re.sub(r"--[^\n]*", "", body)
+    return re.findall(r"[{,]\s*([a-z][A-Za-z0-9_]*)\s*:", body)
+
+
+MODEL_FIELDS = model_fields()
 
 
 boot()

@@ -96,7 +96,7 @@ bootWith httpInFlight disk messages =
 -}
 direct : List String -> Main.Model
 direct messages =
-    List.foldl (\json model -> Tuple.first (Main.persistConfig.update (hostMsg json) model)) (Main.persistConfig.resume Main.persistConfig.init) messages
+    List.foldl (\json model -> Tuple.first (Main.persistConfig.update (hostMsg json) model)) Main.persistConfig.init messages
 
 
 restored : Disk -> Main.Model
@@ -186,8 +186,9 @@ suite =
                 Expect.all
                     [ \_ -> Just (restored disk2) |> Expect.equal second
 
-                    -- The restart forgot the last boot's wifi.
-                    , \_ -> Maybe.map (\m -> m.wifiStatus.ssid) second |> Expect.equal (Just "")
+                    -- Nothing is reset on a restart: the last boot's wifi is there until
+                    -- the host says otherwise.
+                    , \_ -> Maybe.map (\m -> m.wifiStatus.ssid) second |> Expect.equal (Just "Home")
                     ]
                     ()
             )

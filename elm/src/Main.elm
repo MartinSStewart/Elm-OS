@@ -1,9 +1,8 @@
 module Main exposing (Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
 
-{-| Elm OS: a mouse cursor, a triangle whose colour changes with each key press (or the
-"Next colour" button), a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
+{-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
-password, join it), and the weather once either is connected, and a calculator
+password, join it; networks joined before are joined again by themselves), and the weather once either is connected, and a calculator
 (Calculator.elm) that opens from the toolbar.
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
@@ -318,6 +317,7 @@ init =
     , wired = []
     , selected = Nothing
     , password = TextInput.init
+    , savedWifiPasswords = Dict.empty
     , showPassword = False
     , weather = NoWeather
     , geoUrl = Weather.defaultGeoUrl
@@ -392,31 +392,31 @@ step event model =
 
         HttpResponse id result ->
             let
-                model2 : Model
-                model2 =
+                afterHttp : Model
+                afterHttp =
                     gotHttp id result model
             in
-            case model2.weather of
+            case afterHttp.weather of
                 LoadingForecast place ->
                     case model.weather of
                         FindingPlace ->
                             -- Now that we know where we are, ask for the forecast there.
-                            ( model2, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
+                            ( afterHttp, [ Effect.get "forecast" (Weather.forecastUrl model.weatherUrl place) ] )
 
                         _ ->
-                            ( model2, [] )
+                            ( afterHttp, [] )
 
                 NoWeather ->
-                    ( model2, [] )
+                    ( afterHttp, [] )
 
                 FindingPlace ->
-                    ( model2, [] )
+                    ( afterHttp, [] )
 
                 GotWeather _ _ ->
-                    ( model2, [] )
+                    ( afterHttp, [] )
 
                 WeatherFailed _ ->
-                    ( model2, [] )
+                    ( afterHttp, [] )
 
         Mouse x y ->
             let
@@ -519,10 +519,10 @@ step event model =
             ( { model | wifiDevice = device, scanning = device /= Wifi.NoCard && model.scanning }, [] )
 
         WifiScan networks ->
-            ( { model | networks = networks, scanning = False }, [] )
+            reconnect { model | networks = networks, scanning = False }
 
         WifiStatus status ->
-            whenOnline model { model | wifiStatus = status }
+            whenOnline model { model | wifiStatus = status, savedWifiPasswords = savePassword status model }
 
         WiredLinks links ->
             whenOnline model { model | wired = links }
@@ -545,6 +545,61 @@ step event model =
               }
             , []
             )
+
+
+{-| Once a network the user picked is joined, its password is kept, so it can be
+joined again without asking (`reconnect`).
+-}
+savePassword : Wifi.Status -> Model -> Dict String String
+savePassword status model =
+    case model.selected of
+        Just network ->
+            if status.state == Wifi.Connected && network.ssid == status.ssid then
+                Dict.insert network.ssid
+                    (if needsPassword network then
+                        model.password.current.text
+
+                     else
+                        ""
+                    )
+                    model.savedWifiPasswords
+
+            else
+                model.savedWifiPasswords
+
+        Nothing ->
+            model.savedWifiPasswords
+
+
+{-| After a scan, while wifi is idle (as after a restart), join the strongest network
+there is a saved password for. Not after a failure: a saved password that has stopped
+working would be tried again after every scan, every 30 seconds.
+-}
+reconnect : Model -> ( Model, List Effect )
+reconnect model =
+    let
+        known : List ( Wifi.Network, String )
+        known =
+            List.filterMap
+                (\network -> Dict.get network.ssid model.savedWifiPasswords |> Maybe.map (Tuple.pair network))
+                model.networks
+                |> List.sortBy (\( network, _ ) -> negate network.signal)
+    in
+    case known of
+        ( network, password ) :: _ ->
+            if model.wifiStatus.state == Wifi.Idle then
+                ( { model
+                    | weather = weatherWithoutWifi model
+                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+                  }
+                , [ Effect.WifiConnect { ssid = network.ssid, password = password } ]
+                )
+
+            else
+                ( model, [] )
+
+        [] ->
+            ( model, [] )
 
 
 {-| Fetches the weather when the computer has just got onto a network, by cable or wifi.
