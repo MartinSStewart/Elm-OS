@@ -168,7 +168,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 - Elm uses no effect packages besides `Time`: everything Elm sends goes out as bytes on
   one port, `Effect.toHost`: the `Effect`s (cursor colour, wifi scan/connect/disconnect,
   power, HTTP, files) as JSON, and each frame's scene as triangles, each message
-  starting with a byte saying which. Everything comes back on `Effect.fromHost`. HTTP runs in the host with ureq and rustls, checking
+  starting with a byte saying which. Everything comes back the same way, as bytes on `Effect.fromHost` (each message a kind byte and JSON). HTTP runs in the host with ureq and rustls, checking
   certificates against Mozilla's CA list compiled in from `webpki-roots`, so there is no
   OpenSSL, libcurl or CA bundle in the image. eco's runtime still references libcurl, so the
   host provides stubs that fail cleanly.

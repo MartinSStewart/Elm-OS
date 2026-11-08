@@ -6,6 +6,7 @@ port module Effect exposing
     , PowerAction(..)
     , messages
     , fromHost
+    , readFromHost
     , get
     , toCmd
     )
@@ -23,8 +24,9 @@ Each message starts with a byte saying what it holds (host/protocol/src/link.rs)
     of numbers in it, so it isn't JSON: eco hands the host these bytes without
     encoding, copying or parsing anything
 
-The host answers and reports on one port too, `fromHost`: input events, frames,
-wifi, HTTP responses. Main.elm decodes those.
+The host answers and reports on one port too, `fromHost`, also as `Bytes`: input
+events, frames, wifi, HTTP responses. Each message is the byte 3 and then one JSON
+message in UTF-8 (`readFromHost`). Main.elm decodes those.
 
 The host's side of both is in host/protocol, as Rust types, with an example of every
 message (host/protocol/examples.json). elm/tests/ProtocolTest.elm checks these encoders
@@ -33,6 +35,7 @@ and the decoders against the same examples, so the two sides can't drift apart.
 -}
 
 import Bytes exposing (Bytes)
+import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color exposing (Color)
 import Json.Decode as D
@@ -44,7 +47,36 @@ import Units exposing (DevicePixels, UiScale)
 port toHost : Bytes -> Cmd msg
 
 
-port fromHost : (D.Value -> msg) -> Sub msg
+port fromHostBytes : (Bytes -> msg) -> Sub msg
+
+
+{-| Each message from the host, as JSON.
+-}
+fromHost : (D.Value -> msg) -> Sub msg
+fromHost toMsg =
+    fromHostBytes (\bytes -> toMsg (readFromHost bytes))
+
+
+{-| A message from the host: its kind byte (3, host/protocol/src/link.rs's
+FROM_HOST), then JSON in UTF-8. Anything else is `null`, which the decoders turn into
+a logged "isn't as expected" (Main.hostInput).
+-}
+readFromHost : Bytes -> D.Value
+readFromHost bytes =
+    BD.decode
+        (BD.unsignedInt8
+            |> BD.andThen
+                (\kind ->
+                    if kind == 3 then
+                        BD.string (Bytes.width bytes - 1)
+
+                    else
+                        BD.fail
+                )
+        )
+        bytes
+        |> Maybe.andThen (\text -> Result.toMaybe (D.decodeString D.value text))
+        |> Maybe.withDefault E.null
 
 
 type Effect

@@ -13,7 +13,8 @@
 //!   toHost   (bytes): Elm -> host, written as eco calls us. Elm starts each message
 //!            with its kind (link::TO_HOST for JSON effects, link::RENDER for
 //!            triangles; elm/src/Effect.elm), and the rest is the payload
-//!   fromHost (JSON): host -> Elm, read by a thread of ours and given to eco
+//!   fromHost (bytes): host -> Elm, read by a thread of ours and given to eco: the
+//!            kind (link::FROM_HOST) and then the JSON
 //!
 //! When the host closes the socket, the program exits.
 
@@ -22,7 +23,7 @@
 mod link;
 mod no_curl;
 
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr};
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
@@ -46,7 +47,13 @@ type BytesCallback = extern "C" fn(data: *const u8, length: usize, user: *mut c_
 
 // eco's port API (include/eco/eco_embed.h in eco's bundle).
 extern "C" {
-    fn eco_port_send(port: *const c_char, json_utf8: *const c_char) -> c_int;
+    fn eco_port_send_bytes(
+        port: *const c_char,
+        data: *const u8,
+        length: usize,
+        release: Option<extern "C" fn(*mut c_void)>,
+        ctx: *mut c_void,
+    ) -> c_int;
     fn eco_port_subscribe_bytes(port: *const c_char, cb: BytesCallback, user: *mut c_void) -> c_int;
 }
 
@@ -98,10 +105,12 @@ fn write(kind: u8, payload: &[u8]) {
 fn from_host(mut stream: UnixStream) {
     loop {
         match link::read_message(&mut stream) {
-            Ok((link::FROM_HOST, json)) => match CString::new(json) {
-                Ok(json) => send(&json),
-                Err(_) => log!("a message from the host with a NUL in it"),
-            },
+            Ok((link::FROM_HOST, json)) => {
+                let mut message = Vec::with_capacity(1 + json.len());
+                message.push(link::FROM_HOST);
+                message.extend_from_slice(&json);
+                send(&message);
+            }
             Ok((kind, _)) => log!("a message of kind {kind} from the host"),
             Err(e) => {
                 log!("the host has gone ({e}); exiting");
@@ -113,15 +122,19 @@ fn from_host(mut stream: UnixStream) {
 
 /// Sends one message on `fromHost`. Until Elm has registered its ports, which it does
 /// as it starts, eco refuses: wait for it (only this thread sends, so in order).
-fn send(json: &CStr) {
+fn send(message: &[u8]) {
     for _ in 0..10_000 {
-        // SAFETY: both are NUL-terminated strings that outlive the call.
-        if unsafe { eco_port_send(c"fromHost".as_ptr(), json.as_ptr()) } == 0 {
+        // SAFETY: a static NUL-terminated name, and bytes eco copies before returning
+        // (no release function).
+        let sent = unsafe {
+            eco_port_send_bytes(c"fromHostBytes".as_ptr(), message.as_ptr(), message.len(), None, std::ptr::null_mut())
+        };
+        if sent == 0 {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    log!("Elm didn't take {:.200}", json.to_string_lossy());
+    log!("Elm didn't take {:.200}", String::from_utf8_lossy(message));
 }
 
 /// Calls `f` with the bytes of each value Elm sends on the bytes port `port`, on Elm's

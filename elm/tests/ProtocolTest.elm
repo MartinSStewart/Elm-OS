@@ -8,6 +8,7 @@ tests run (make elm-tests).
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
+import Bytes.Encode as BE
 import Color
 import Dict exposing (Dict)
 import Effect exposing (Effect)
@@ -83,11 +84,16 @@ logging that it couldn't.
 -}
 readsHostMessage : String -> Expect.Expectation
 readsHostMessage text =
-    case D.decodeString D.value text of
-        Err _ ->
-            Expect.fail ("examples.json has bad JSON: " ++ text)
+    let
+        -- As host/link hands it to Elm: the kind byte, then the JSON.
+        value =
+            Effect.readFromHost (fromHostMessage 3 text)
+    in
+    case D.decodeValue (D.null ()) value of
+        Ok () ->
+            Expect.fail ("not read as JSON from bytes: " ++ text)
 
-        Ok value ->
+        Err _ ->
             case Persist.fromHost Main.persistConfig value of
                 Persist.AppMsg msg ->
                     Main.persistConfig.update msg Main.persistConfig.init
@@ -105,6 +111,11 @@ readsHostMessage text =
 
                 _ ->
                     Expect.pass
+
+
+fromHostMessage : Int -> String -> Bytes
+fromHostMessage kind text =
+    BE.encode (BE.sequence [ BE.unsignedInt8 kind, BE.string text ])
 
 
 {-| Bytes as lower-case hex.
@@ -182,6 +193,12 @@ suite =
             )
         , describe "every message the host sends is read"
             (List.map (\text -> test text (\_ -> readsHostMessage text)) ProtocolExamples.fromHost)
+        , test "a message from the host of another kind is null"
+            (\_ ->
+                Effect.readFromHost (fromHostMessage 1 "{}")
+                    |> D.decodeValue (D.null ())
+                    |> Expect.equal (Ok ())
+            )
         , test "a message from the host that can't be read is logged, and nothing else happens"
             (\_ ->
                 [ """{"t":"noSuchMessage"}""", """{"t":"mouse","x":"left"}""", """[1,2]""" ]

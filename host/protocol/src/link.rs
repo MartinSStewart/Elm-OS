@@ -13,7 +13,8 @@ use std::io::{self, Read, Write};
 pub const TO_HOST: u8 = 1;
 /// Elm -> host: the scene, as triangles (protocol::read_render).
 pub const RENDER: u8 = 2;
-/// Host -> Elm: one JSON message for Elm's `fromHost` port.
+/// Host -> Elm: one JSON message, which host/link gives Elm's `fromHostBytes` port
+/// with this kind byte in front (elm/src/Effect.elm).
 pub const FROM_HOST: u8 = 3;
 
 /// No message is anywhere near this long; a longer one means the stream is broken.
