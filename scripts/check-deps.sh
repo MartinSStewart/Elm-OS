@@ -59,17 +59,17 @@ case "$mode" in
       eco_missing=1
     fi
     if ! command -v "${ECO:-eco}" >/dev/null 2>&1; then
-      echo "Missing: eco. Download the x86_64-linux-musl bundle from"
-      echo "  https://github.com/eco-lang/eco-compiler/releases"
-      echo "and put its bin/ directory on your PATH (or run make with ECO=/path/to/eco)."
+      # make installs the pinned eco itself, so this is only an ECO=... that isn't there.
+      echo "Missing: eco (${ECO:-eco}). Run make without ECO=... to use the eco that"
+      echo "versions.mk pins, which make installs for this repository."
       eco_missing=1
     elif [ -n "$ECO_RUNTIME" ] && [ ! -f "$ECO_RUNTIME/mimalloc.o" ]; then
       # Every 0.2.0 bundle ships mimalloc.o; 0.1.0 didn't. A 0.2.0 eco binary with a 0.1.0
       # runtime compiles fine but fails the final link with undefined eco_* symbols.
       echo "Your eco runtime in $ECO_RUNTIME looks like eco 0.1.0 (no mimalloc.o),"
       echo "but this needs 0.2.0. Usually that means a newer eco was copied over an old"
-      echo "install. Delete the old install and extract a fresh v0.2.0-rc3 (or newer)"
-      echo "x86_64-linux-musl bundle from https://github.com/eco-lang/eco-compiler/releases"
+      echo "install. Run make without ECO=... to use the eco versions.mk pins, or extract a fresh"
+      echo "x86_64-linux-musl bundle from https://github.com/eco-lang/eco-compiler/releases."
       eco_missing=1
     fi
     ;;

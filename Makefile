@@ -21,6 +21,7 @@
 #   make check      the tests that don't boot anything: review, review-tests, elm-tests,
 #                   test-wire, protocol-tests (CI runs these, then test and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
+#   make eco        install the eco versions.mk pins (any make does) and print where it is
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
 #                   the same commit gives the same bytes on any machine (make docker TARGET=all)
 #
@@ -31,17 +32,32 @@
 # state (elm/src/Persist.elm), so it comes back the next time. Delete the file to
 # start afresh. The tests use their own empty copy.
 #
-# Needs (`make check-deps` checks them): eco (https://github.com/eco-lang/eco-compiler/releases, the
-# x86_64-linux-musl bundle), musl-gcc, a C toolchain for the kernel, cpio,
-# qemu-system-x86_64, and a Linux source tree in $(KERNEL_SRC).
+# Needs (`make check-deps` checks them): musl-gcc, a C toolchain for the kernel, cpio,
+# qemu-system-x86_64, and a Linux source tree in $(KERNEL_SRC). eco is installed by make.
 
-ECO        ?= eco
+include versions.mk
+# eco, the Elm compiler: the version versions.mk pins, installed (on the first `make`, or
+# after ECO_VER changes) into ECO_DIR by tools/install-eco.sh. Your own eco, if you have
+# one, isn't replaced or used: other projects may need another version. Every rule here
+# runs this copy, and it goes first on PATH for the tools they start (elm-review,
+# elm-test). `make ECO=/path/to/eco` uses another eco instead and installs nothing.
+ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)
+ifeq ($(origin ECO),undefined)
+ECO        := $(ECO_DIR)/bin/eco
+export PATH := $(ECO_DIR)/bin:$(PATH)
+# Not for the goals that don't need eco.
+ifneq ($(filter-out clean refresh check-fresh check-run-deps usb-write docker,$(or $(MAKECMDGOALS),all)),)
+$(shell tools/install-eco.sh $(ECO_VER) $(ECO_SHA256) $(ECO_DIR))
+ifneq ($(.SHELLSTATUS),0)
+$(error Couldn't install eco $(ECO_VER) into $(ECO_DIR); see above)
+endif
+endif
+endif
 # Find eco's runtime the same way eco does: $ECO_RUNTIME_DIR if set, otherwise
 # lib/eco-runtime next to the real eco binary (following symlinks). If this picks a
 # different bundle from the one that compiled elm.o, the link fails with undefined eco_* symbols.
 ECO_BIN    := $(realpath $(shell command -v $(ECO)))
 RT         ?= $(or $(ECO_RUNTIME_DIR),$(abspath $(dir $(ECO_BIN))/../lib/eco-runtime))
-include versions.mk
 KERNEL_SRC ?= linux
 # Linux's stable releases (6.12.1 onwards) are only in the stable tree, not Linus's.
 KERNEL_GIT ?= https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
@@ -67,7 +83,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -87,15 +103,21 @@ check-fresh:
 DOCKER ?= docker
 TARGET ?= usb
 docker:
-	$(DOCKER) build $(DOCKER_BUILD_FLAGS) -t elmos-build tools/build-env
+	$(DOCKER) build $(DOCKER_BUILD_FLAGS) -t elmos-build \
+	  --build-arg ECO_URL=https://github.com/eco-lang/eco-compiler/releases/download/v$(ECO_VER)/eco-$(ECO_VER)-x86_64-linux-musl.tar.gz \
+	  --build-arg ECO_SHA256=$(ECO_SHA256) tools/build-env
 	mkdir -p build-docker/home
 	$(DOCKER) run --rm --network host --user $$(id -u):$$(id -g) \
 	  -e HTTPS_PROXY -e HTTP_PROXY -e https_proxy -e http_proxy -e NO_PROXY -e GUIDA_REGISTRY \
 	  -e HOME=/elmos/build-docker/home -e CARGO_HOME=/elmos/build-docker/home/.cargo \
 	  -v $(CURDIR):/elmos -w /elmos $(DOCKER_RUN_FLAGS) elmos-build \
-	  make BUILD=build-docker $(TARGET)
+	  make BUILD=build-docker ECO=/opt/eco/bin/eco $(TARGET)
 	@[ ! -f build-docker/elmos-usb.img ] || { sha256sum build-docker/elmos-usb.img; \
 	  echo "$$(cat build-docker/elmos-usb.img.sha256)  up to the data partition (the debug overlay's hash)"; }
+
+# Installs the pinned eco (done above, as make starts) and prints its bin directory.
+eco:
+	@echo $(dir $(ECO_BIN))
 
 # Fail early, with install hints, if a tool is missing. These are order-only
 # prerequisites below, so they run first but never force a rebuild.

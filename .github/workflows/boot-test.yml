@@ -25,22 +25,16 @@ jobs:
         # host/rust-toolchain.toml picks the Rust version; add the target to that one.
         run: cd host && rustup target add x86_64-unknown-linux-musl
 
-      - name: Cache eco's bundle
+      - name: Cache eco
+        # make installs the eco versions.mk pins (tools/install-eco.sh) into ~/.cache/elm-os.
         uses: actions/cache@v4
         with:
-          path: eco.tar.gz
-          key: eco-0.2.0-rc3
+          path: ~/.cache/elm-os
+          key: eco-${{ hashFiles('versions.mk', 'tools/install-eco.sh') }}
 
       - name: Install eco
-        run: |
-          # Downloaded once, then cached. GitHub's release downloads sometimes answer
-          # 504 for minutes at a time: retry for up to about 10 minutes, and check it's
-          # the bundle tools/build-env/Dockerfile pins.
-          [ -s eco.tar.gz ] || curl -fsSL --retry 20 --retry-delay 30 --retry-all-errors -o eco.tar.gz \
-            https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
-          echo "02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca  eco.tar.gz" | sha256sum -c
-          sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
-          echo /opt/eco/bin >> "$GITHUB_PATH"
+        # Downloaded once, then cached. On PATH too, for the debugging step below.
+        run: make -s eco >> "$GITHUB_PATH"
 
       - name: Cache Elm packages
         # eco downloads them from GitHub, which is sometimes down: the last good set is

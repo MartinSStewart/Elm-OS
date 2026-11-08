@@ -8,6 +8,11 @@ KERNEL_VER := v6.12.115
 HOSTAP_VER := 2.12
 WPA_SUPPLICANT_SHA256 := 08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6
 HOSTAPD_SHA256 := f43502561c28ba47ab77e18e1a973d07361c68cc8b14178e619bd5796b70eabd
+# eco, the Elm compiler: the x86_64-linux-musl bundle of this release, and its SHA-256.
+# `make` installs it into ECO_DIR (see the Makefile). `make refresh` doesn't move it:
+# change both lines by hand.
+ECO_VER := 0.2.0-rc3
+ECO_SHA256 := 02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca
 
 # When `make refresh` last ran (seconds since 1970). `make` warns when it's 30 days old.
 REFRESHED := 1793970461

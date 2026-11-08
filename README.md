@@ -30,8 +30,10 @@ The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI fr
 
 You need Linux on x86_64 with:
 
-- eco v0.2.0-rc3 or newer: the `x86_64-linux-musl` bundle from the
-  [eco releases](https://github.com/eco-lang/eco-compiler/releases) (a pre-release), with its `bin/` on your `PATH`
+- nothing for eco, the Elm compiler: `make` downloads the release `versions.mk` pins
+  (`ECO_VER`, checked against `ECO_SHA256`) into `~/.cache/elm-os/eco-<version>` and uses
+  only that copy, so an eco you already have (another version, for other projects) is
+  neither used nor replaced. `make ECO=/path/to/eco` uses another eco instead
 - Rust (via [rustup](https://rustup.rs)) with the musl target: `rustup target add x86_64-unknown-linux-musl`
 - `musl-gcc`, the kernel build tools, `curl`, `sha256sum`, `cpio`, `python3`, `readelf` and `qemu-system-x86_64`
   (plus `qemu-system-modules-opengl` for the GPU in QEMU)
