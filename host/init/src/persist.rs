@@ -46,6 +46,7 @@ enum Op {
     Append { path: PathBuf, text: String },
     Write { path: PathBuf, text: String },
     Flush(Sender<()>),
+    Run(Box<dyn FnOnce(&mut Writer) + Send>),
 }
 
 fn queue() -> &'static Mutex<Option<Sender<Op>>> {
@@ -63,6 +64,7 @@ pub fn start() {
                 *queue().lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                 rx
             });
+            set_mounted(mounted);
             // elm.rs fills in the HTTP requests in flight for each program it sends this to.
             elm::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()), http_in_flight: Vec::new() });
             if let Some(rx) = rx {
@@ -70,6 +72,73 @@ pub fn start() {
             }
         })
         .expect("start the persist thread");
+}
+
+/// Whether the data disk is mounted, once the persist thread knows: waits for it.
+pub fn wait_mounted() -> bool {
+    let (lock, ready) = mounted_state();
+    let mut known = lock.lock().unwrap_or_else(|e| e.into_inner());
+    while known.is_none() {
+        known = ready.wait(known).unwrap_or_else(|e| e.into_inner());
+    }
+    known.unwrap()
+}
+
+fn mounted_state() -> &'static (Mutex<Option<bool>>, std::sync::Condvar) {
+    static MOUNTED: OnceLock<(Mutex<Option<bool>>, std::sync::Condvar)> = OnceLock::new();
+    MOUNTED.get_or_init(|| (Mutex::new(None), std::sync::Condvar::new()))
+}
+
+fn set_mounted(mounted: bool) {
+    let (lock, ready) = mounted_state();
+    *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(mounted);
+    ready.notify_all();
+}
+
+/// Runs `f` on the writing thread, after the writes queued before it and with them
+/// all fsynced, so it sees the disk as Elm left it. None without a data disk, or if
+/// it takes over 10 seconds.
+pub fn on_disk<R: Send + 'static>(f: impl FnOnce(&mut Disk) -> R + Send + 'static) -> Option<R> {
+    let (tx, rx) = mpsc::channel();
+    let op = Op::Run(Box::new(move |w: &mut Writer| {
+        w.sync();
+        let _ = tx.send(f(&mut Disk(w)));
+    }));
+    if !send(op) {
+        return None;
+    }
+    rx.recv_timeout(Duration::from_secs(10)).ok()
+}
+
+/// The data disk, for the host's own files (programs.rs, elm.rs): paths relative to /data.
+pub struct Disk<'a>(&'a mut Writer);
+
+impl Disk<'_> {
+    pub fn path(name: &str) -> PathBuf {
+        Path::new(MOUNT_POINT).join(name)
+    }
+    pub fn read(&self, name: &str) -> Option<String> {
+        std::fs::read_to_string(Self::path(name)).ok()
+    }
+    /// Replaces the file atomically, as writeFile does. False if it failed, after which
+    /// nothing more is written until the next boot.
+    pub fn write(&mut self, name: &str, text: &str) -> bool {
+        if !self.0.failed {
+            self.0.write(&Self::path(name), text);
+        }
+        !self.0.failed
+    }
+    pub fn remove(&mut self, name: &str) {
+        let path = Self::path(name);
+        if let Some(f) = self.0.open.remove(&path) {
+            let _ = f.sync_data();
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            if let Some(dir) = path.parent() {
+                let _ = File::open(dir).and_then(|d| d.sync_all());
+            }
+        }
+    }
 }
 
 pub fn append_file(path: String, text: String) {
@@ -156,7 +225,9 @@ fn mount(dev: &str) -> bool {
         CString::new(MOUNT_POINT).unwrap(),
         CString::new("ext4").unwrap(),
     );
-    let flags = libc::MS_NOATIME | libc::MS_NODEV | libc::MS_NOSUID | libc::MS_NOEXEC;
+    // Not noexec: the Elm programs the host installs are in /data/programs (programs.rs).
+    // Elm's own files can't be run: it writes text, without the executable bit.
+    let flags = libc::MS_NOATIME | libc::MS_NODEV | libc::MS_NOSUID;
     // SAFETY: plain C strings. ext4 replays its journal here if the power went last time.
     let ok = unsafe { libc::mount(src.as_ptr(), dir.as_ptr(), fs.as_ptr(), flags, std::ptr::null()) } == 0;
     if ok {
@@ -198,6 +269,7 @@ impl Writer {
                     self.sync();
                     let _ = done.send(());
                 }
+                Some(Op::Run(f)) => f(&mut self),
                 None => {}
             }
             if self.sync_due.is_some_and(|due| Instant::now() >= due) {
@@ -239,7 +311,7 @@ impl Writer {
             f.write_all(text.as_bytes())?;
             f.sync_all()?;
             std::fs::rename(&tmp, path)?;
-            File::open(MOUNT_POINT)?.sync_all()
+            File::open(path.parent().unwrap_or(Path::new(MOUNT_POINT)))?.sync_all()
         })();
         match result {
             Ok(()) => {

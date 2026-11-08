@@ -239,8 +239,32 @@ Evergreen does, so a Model saved by an older build is migrated rather than lost:
    migration together.
 
 A build reads a snapshot of any earlier version by running the migrations one after another.
-Old versions cost /init a little (version 1's codecs are about 50 KB). `make test-wire`
+Old versions cost the Elm program a little (version 1's codecs are about 50 KB). `make test-wire`
 checks a migration from version 1 to 2 of its own test program (`tools/wire/test/src/Evergreen`).
+Version 2 of Elm OS's own Model added `upgradingTo` (below); a Model saved by a version 1 build
+was checked to come back in a version 2 one, migrated.
+
+### Switching builds without restarting
+
+Builds of the Elm program can live on the data disk, in `/data/programs/<name>/elm`, and
+`/data/programs/current` names the one to run (without it, the initramfs's
+`/usr/lib/elmos/elm`). The host (`host/init/src/elm.rs`, `programs.rs`) replaces the running
+program with another build, without restarting the computer:
+
+1. It sends `{"t":"switching","to":NAME}`. The program shows "Upgrade to NAME in progress" in
+   the bottom right corner, takes a snapshot, and answers `switchReady`. Everything else the host
+   would send waits.
+2. It stops the program, keeps a copy of the snapshot, and starts the new build, which migrates
+   the snapshot if its Model is a newer version. Wifi, the data disk and HTTP requests carry on.
+3. Once the new build draws a frame it becomes `current`. If it exits first, or draws nothing for
+   30 s, the host puts the snapshot copy back and starts the old build again. A build on the
+   disk that fails to draw three times running is given up on, for the built-in one, until the
+   next boot.
+
+For now a switch starts when `/data/programs/next` names a build at boot (the host removes it
+first, so a failing build isn't retried). Fetching new builds from CI comes later. A build can
+only be switched away from if it knows `switching`: those from before this change don't.
+`make test-switch` checks a switch, and going back from a build that fails.
 
 ### Encoders and decoders (tools/wire)
 

@@ -54,6 +54,9 @@ type Input
     | NetConfig { geoUrl : String, weatherUrl : String }
     | System SystemInfo
     | BootInfo BootInfo.Input
+      -- The host is about to replace this program with a newer build (named by the
+      -- string): show it, and answer once the snapshot is written.
+    | Switching String
 
 
 type alias SystemInfo =
@@ -148,6 +151,9 @@ decodeInput =
                         D.map3 SystemInfo (D.field "kernel" D.string) (D.field "cpu" D.string) (D.field "commit" D.string)
                             |> D.map System
 
+                    "switching" ->
+                        D.map Switching (D.field "to" D.string)
+
                     "netConfig" ->
                         D.map2 (\geo weather -> NetConfig { geoUrl = geo, weatherUrl = weather })
                             (D.field "geoUrl" D.string)
@@ -239,6 +245,7 @@ type alias Model =
     , confirmPower : Maybe PowerAction
     , editor : TextInputMultiline.Model
     , editorOpen : Bool
+    , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     }
 
 
@@ -321,6 +328,7 @@ init =
     , confirmPower = Nothing
     , editor = TextInputMultiline.init
     , editorOpen = False
+    , upgradingTo = Nothing
     }
 
 
@@ -525,6 +533,11 @@ step event model =
 
         BootInfo bootInput ->
             BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })
+
+        Switching build ->
+            -- Persist writes the snapshot before SwitchReady goes to the host. The
+            -- notice shows on the frame the host asks for after it.
+            ( { model | upgradingTo = Just build }, [ Effect.SwitchReady ] )
 
         NetConfig urls ->
             ( { model
@@ -1101,6 +1114,13 @@ screenUi model =
 
                     else
                         []
+                   )
+                ++ (case model.upgradingTo of
+                        Just build ->
+                            [ upgradeNotice model build ]
+
+                        Nothing ->
+                            []
                    )
         , borderAndFill = Ui.NoBorderOrFill
         }
@@ -2050,6 +2070,23 @@ calculatorWindow model =
 toolbarHeight : Int
 toolbarHeight =
     8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodyFont)
+
+
+{-| In the bottom right corner while the host switches to a newer build. The new build
+starts without it (`resume`).
+-}
+upgradeNotice : Model -> String -> Ui.Element UiId
+upgradeNotice model build =
+    Ui.bottomRight { size = uiSize model }
+        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+            (Ui.el
+                { padding = Ui.paddingXY 10 6
+                , inFront = []
+                , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+                }
+                (Ui.text bodyFont ("Upgrade to " ++ build ++ " in progress"))
+            )
+        )
 
 
 aboutPage : Model -> Ui.Element UiId

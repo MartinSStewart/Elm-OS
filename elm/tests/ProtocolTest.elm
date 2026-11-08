@@ -51,6 +51,7 @@ effects =
     , Effect.AppendFile { path = "/data/log", text = "5 12345678 [0,1]\n" }
     , Effect.WriteFile { path = "/data/snapshot", text = "" }
     , Effect.Log "couldn't read a message from the host"
+    , Effect.SwitchReady
     ]
 
 

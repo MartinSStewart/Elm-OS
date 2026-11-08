@@ -18,7 +18,8 @@
     {"t": "writeSys", "path": "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor", "text": "performance"},
     {"t": "appendFile", "path": "/data/log", "text": "5 12345678 [0,1]\n"},
     {"t": "writeFile", "path": "/data/snapshot", "text": ""},
-    {"t": "log", "text": "couldn't read a message from the host"}
+    {"t": "log", "text": "couldn't read a message from the host"},
+    {"t": "switchReady"}
   ],
   "fromHost": [
     {"t": "screen", "w": 1280, "h": 800},
@@ -42,6 +43,7 @@
     {"t": "netConfig", "geoUrl": "http://10.0.2.2:8000/geo", "weatherUrl": "http://10.0.2.2:8000/weather"},
     {"t": "dataDisk", "path": "/data", "httpInFlight": ["weather"]},
     {"t": "dataDisk", "path": null, "httpInFlight": []},
+    {"t": "switching", "to": "3f2a9c1"},
     {"t": "httpResponse", "id": "weather", "status": 200, "body": "{}"},
     {"t": "httpError", "id": "weather", "error": "timeout", "message": "the server took too long"},
     {"t": "httpError", "id": "weather", "error": "badUrl", "message": "no host"},

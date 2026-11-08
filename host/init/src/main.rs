@@ -37,6 +37,7 @@ mod http;
 mod input;
 mod net;
 mod persist;
+mod programs;
 mod raster;
 mod stats;
 mod sys;

@@ -18,6 +18,22 @@
 //!   - The data disk message lists the HTTP requests the host is still working on, or
 //!     has an answer for that it hasn't delivered: their answers are coming, so
 //!     Persist.elm doesn't report them as cut off.
+//!
+//! Which build runs is up to programs.rs: the one in the initramfs, or one on the data
+//! disk. `switch_to` replaces the running program with another build without
+//! restarting the computer:
+//!
+//!   1. It sends the program {"t":"switching","to":NAME}. The program writes a
+//!      snapshot and answers {"t":"switchReady"} (Persist.elm), and shows "Upgrade
+//!      to NAME in progress" on the one more frame it gets. Everything else waits.
+//!   2. It stops the program, keeps a copy of its snapshot, and starts the new build,
+//!      which migrates the snapshot if its Model's types are newer (Evergreen).
+//!   3. Once the new build has drawn a frame, it is the current one (programs/current).
+//!      If it exits first, or draws nothing for 30 seconds, the snapshot copy is put
+//!      back and the old build started again.
+//!
+//! A build on the data disk that fails to draw its first frame three times running
+//! is given up on until the next boot, for the built-in one.
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -30,12 +46,15 @@ use std::time::{Duration, Instant};
 
 use protocol::{link, ToElm};
 
-/// Where the initramfs has the Elm program.
-const PROGRAM: &str = "/usr/lib/elmos/elm";
+use crate::programs::{self, Build};
 /// Events kept for a program that isn't running, at most.
 const MAX_QUEUE: usize = 10_000;
 /// A program that ran this long before exiting counts as having worked.
 const RAN_WELL: Duration = Duration::from_secs(30);
+/// How long a new build has to draw its first frame.
+const FIRST_FRAME_WITHIN: Duration = Duration::from_secs(30);
+/// How long a program has to answer "switching".
+const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
 
 /// The messages that describe how things are, of which only the newest matters, in
 /// the order a new program gets them: the screen first, as Elm expects.
@@ -64,13 +83,14 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Dir { .. }
         | ToElm::Files { .. }
         | ToElm::Bytes { .. }
-        | ToElm::Sha256 { .. } => return None,
+        | ToElm::Sha256 { .. }
+        | ToElm::Switching { .. } => return None,
     })
 }
 
 /// Only worth sending to the program running now.
 fn only_now(msg: &ToElm) -> bool {
-    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. })
+    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. })
 }
 
 fn http_answer(msg: &ToElm) -> Option<&str> {
@@ -92,6 +112,24 @@ struct State {
     /// Requests started and not yet answered to a program, by id.
     http_in_flight: Vec<String>,
     dropped: usize,
+    /// The build running now, or to start next.
+    build: Build,
+    /// Whether the program running now has drawn a frame.
+    drawn: bool,
+    /// Frames it has drawn, for the switch to wait on.
+    renders: u64,
+    switch: Option<Switch>,
+    /// While switching: only frames go to the program.
+    holding: bool,
+}
+
+struct Switch {
+    from: Build,
+    to: String,
+    /// The program answered "switching" (its number).
+    ready: Option<u64>,
+    /// The new build has been started.
+    started: bool,
 }
 
 struct Link {
@@ -172,12 +210,24 @@ fn encode(s: &State, msg: &ToElm) -> String {
 fn writer() {
     loop {
         let mut s = state();
-        while s.to_elm.is_none() || s.queue.is_empty() {
+        let next = loop {
+            if s.to_elm.is_some() {
+                let found = if s.holding {
+                    s.queue.iter().position(|m| matches!(m, ToElm::Frame { .. }))
+                } else if s.queue.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                };
+                if let Some(i) = found {
+                    break i;
+                }
+            }
             s = link().ready.wait(s).unwrap_or_else(|e| e.into_inner());
-        }
+        };
         let stream = s.to_elm.clone().unwrap();
         let program = s.program;
-        let msg = s.queue.pop_front().unwrap();
+        let msg = s.queue.remove(next).unwrap();
         let json = encode(&s, &msg);
         drop(s);
 
@@ -223,14 +273,23 @@ pub fn start() {
 
 /// Starts the Elm program, reads what it sends until it exits, and starts it again.
 fn supervise() {
+    // Which build runs depends on the data disk, and the program waits for it anyway.
+    let mounted = crate::persist::wait_mounted();
+    if mounted {
+        state().build = programs::current();
+    }
     let mut failures = 0u32;
+    let mut undrawn = 0u32;
     loop {
+        let build = state().build.clone();
         let started = Instant::now();
-        match spawn() {
+        let mut drawn = false;
+        match spawn(&build) {
             Ok((mut child, stream)) => {
                 let program = connect(&stream, child.id());
-                read(stream);
-                disconnect(program);
+                log!("host", "running {}", programs::describe(&build));
+                read(stream, program);
+                drawn = disconnect(program);
                 let status = child.wait();
                 log!(
                     "host",
@@ -250,7 +309,18 @@ fn supervise() {
                     std::process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1));
                 }
             }
-            Err(e) => log!("host", "couldn't start the Elm program {PROGRAM}: {e}"),
+            Err(e) => log!("host", "couldn't start {} ({}): {e}", programs::describe(&build), programs::path(&build).display()),
+        }
+        if after_switch(&build, drawn) {
+            failures = 0;
+            undrawn = 0;
+            continue; // start the other build at once
+        }
+        undrawn = if drawn { 0 } else { undrawn + 1 };
+        if undrawn >= 3 && build.is_some() {
+            log!("host", "{} didn't draw a frame three times running; running the built-in build until the next boot", programs::describe(&build));
+            state().build = None;
+            undrawn = 0;
         }
         failures = if started.elapsed() >= RAN_WELL { 0 } else { failures + 1 };
         // 0.1 s, doubling while it keeps failing, up to 10 s.
@@ -262,12 +332,163 @@ fn supervise() {
     }
 }
 
+/// After a program of `build` exited: true if that was part of a switch, and the
+/// next build (state.build) should start now.
+fn after_switch(build: &Build, drawn: bool) -> bool {
+    let mut s = state();
+    let Some(switch) = &s.switch else { return false };
+    if !switch.started {
+        if s.build == *build {
+            return false; // it exited by itself while being asked
+        }
+        // The old program, stopped by switch_to, which set state.build to the new
+        // build: wait while it keeps a copy of the snapshot (or gives up and sets
+        // state.build back), so the new build can't rewrite it first.
+        drop(s);
+        wait_until(Duration::from_secs(20), |s| match &s.switch {
+            Some(w) if !w.started => None,
+            _ => Some(()),
+        });
+        return true;
+    }
+    if drawn {
+        return false; // the switch was done; this is an ordinary exit
+    }
+    // The new build failed before its first frame: back to the old one, as it was.
+    let switch = s.switch.take().unwrap();
+    s.build = switch.from.clone();
+    s.holding = false;
+    drop(s);
+    log!("host", "build {} failed before drawing a frame; going back to {}", switch.to, programs::describe(&switch.from));
+    if !programs::roll_back() {
+        log!("host", "couldn't put back the snapshot from before the switch");
+    }
+    true
+}
+
+/// Replaces the running program with build `name` (see the top). Returns once the new
+/// build has drawn its first frame, or the old one is back.
+pub fn switch_to(name: String) {
+    let from = {
+        let mut s = state();
+        if s.switch.is_some() || s.to_elm.is_none() || !s.drawn {
+            log!("host", "not switching to build {name}: the running program isn't ready for it");
+            return;
+        }
+        if !programs::exists(&name) {
+            log!("host", "not switching to build {name}: it isn't in /data/programs");
+            return;
+        }
+        s.switch = Some(Switch { from: s.build.clone(), to: name.clone(), ready: None, started: false });
+        s.build.clone()
+    };
+    log!("host", "switching from {} to build {name}", programs::describe(&from));
+    send(&ToElm::Switching { to: name.clone() });
+
+    // 1. The snapshot, then one more frame for the notice.
+    let old = wait_until(SWITCH_READY_WITHIN, |s| s.switch.as_ref().and_then(|w| w.ready));
+    let Some(old) = old else {
+        log!("host", "the program didn't answer \"switching\"; starting it again instead");
+        let mut s = state();
+        s.switch = None;
+        stop(&s);
+        return;
+    };
+    let renders = {
+        let mut s = state();
+        s.holding = true;
+        s.renders
+    };
+    link().ready.notify_all();
+    wait_until(Duration::from_secs(1), |s| (s.renders > renders || s.program != old).then_some(()));
+
+    // 2. Stop it, keep its snapshot, and start the new build.
+    {
+        let mut s = state();
+        s.build = Some(name.clone());
+        stop(&s);
+    }
+    wait_until(Duration::from_secs(10), |s| (s.program != old || s.to_elm.is_none()).then_some(()));
+    if !programs::keep_snapshot() {
+        log!("host", "couldn't keep a copy of the snapshot; not switching");
+        let mut s = state();
+        s.build = from;
+        s.switch = None;
+        s.holding = false;
+        return; // the supervisor starts the old build again
+    }
+    state().switch.as_mut().unwrap().started = true;
+    link().ready.notify_all();
+
+    // 3. Its first frame, or back to the old build (after_switch).
+    let new = wait_until(Duration::from_secs(10), |s| (s.program != old && s.to_elm.is_some()).then_some(s.program));
+    let drawn = wait_until(FIRST_FRAME_WITHIN, |s| {
+        if s.switch.is_none() {
+            Some(false) // rolled back
+        } else if new.is_some_and(|n| s.program == n) && s.drawn {
+            Some(true)
+        } else {
+            None
+        }
+    });
+    match drawn {
+        Some(true) => {
+            state().switch = None;
+            if programs::set_current(&Some(name.clone())) {
+                log!("host", "switched to build {name}");
+            } else {
+                log!("host", "switched to build {name}, but couldn't save that; the next boot runs {}", programs::describe(&from));
+            }
+            programs::drop_kept_snapshot();
+        }
+        Some(false) => {}
+        None => {
+            log!("host", "build {name} drew nothing for {} s; stopping it", FIRST_FRAME_WITHIN.as_secs());
+            stop(&state()); // after_switch rolls back
+        }
+    }
+}
+
+/// Waits for `f` to give something, up to `limit`.
+fn wait_until<T>(limit: Duration, f: impl Fn(&State) -> Option<T>) -> Option<T> {
+    let until = Instant::now() + limit;
+    let mut s = state();
+    loop {
+        if let Some(t) = f(&s) {
+            return Some(t);
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        s = link().ready.wait_timeout(s, left.min(Duration::from_millis(100))).unwrap_or_else(|e| e.into_inner()).0;
+    }
+}
+
+/// Kills the program running now; the supervisor notices.
+fn stop(s: &State) {
+    if let Some(pid) = s.pid {
+        // SAFETY: a signal to our own child.
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
+}
+
+/// Program number `program` answered "switching": its snapshot is on its way to the disk.
+pub fn switch_ready(program: u64) {
+    let mut s = state();
+    if let Some(switch) = s.switch.as_mut() {
+        switch.ready = Some(program);
+    }
+    drop(s);
+    link().ready.notify_all();
+}
+
 /// Starts the program with its end of a new socket as fd 3 (ELMOS_HOST_FD).
-fn spawn() -> std::io::Result<(std::process::Child, UnixStream)> {
+fn spawn(build: &Build) -> std::io::Result<(std::process::Child, UnixStream)> {
     // Both ends are close-on-exec, so no other child of ours gets one.
     let (ours, theirs) = UnixStream::pair()?;
     let fd = theirs.as_raw_fd();
-    let mut command = Command::new(PROGRAM);
+    let mut command = Command::new(programs::path(build));
     command.env("ELMOS_HOST_FD", "3");
     // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
@@ -295,6 +516,8 @@ fn connect(stream: &UnixStream, pid: u32) -> u64 {
     s.pid = Some(pid);
     s.to_elm = Some(Arc::new(stream.try_clone().expect("clone the socket to Elm")));
     s.dropped = 0;
+    s.drawn = false;
+    s.holding = false;
     s.queue.retain(|m| !only_now(m));
     let latest: Vec<ToElm> = s.latest.iter().flatten().cloned().collect();
     for msg in latest.into_iter().rev() {
@@ -303,24 +526,57 @@ fn connect(stream: &UnixStream, pid: u32) -> u64 {
     let program = s.program;
     drop(s);
     link().ready.notify_all();
-    log!("host", "started the Elm program (process {pid})");
     crate::effects::connected(program);
     program
 }
 
-fn disconnect(program: u64) {
+/// Whether it drew a frame.
+fn disconnect(program: u64) -> bool {
     let mut s = state();
     if s.program == program {
         s.to_elm = None;
         s.pid = None;
     }
+    let drawn = s.drawn;
+    drop(s);
+    link().ready.notify_all();
+    drawn
+}
+
+/// The program drew a frame: on the first one of the first program, the switch to a
+/// build waiting in programs/next starts.
+fn first_frame(program: u64) {
+    let mut s = state();
+    s.renders += 1;
+    if s.drawn || s.program != program {
+        return;
+    }
+    s.drawn = true;
+    let boot = program == 1;
+    drop(s);
+    link().ready.notify_all();
+    if boot {
+        std::thread::Builder::new()
+            .name("switch".into())
+            .spawn(|| {
+                if let Some(name) = programs::take_next() {
+                    switch_to(name);
+                }
+            })
+            .ok();
+    }
 }
 
 /// Hands what the program sends to the host thread (effects.rs) until it closes.
-fn read(mut stream: UnixStream) {
+fn read(mut stream: UnixStream, program: u64) {
     loop {
         match link::read_message(&mut stream) {
-            Ok((kind, payload)) => crate::effects::from_elm(kind, payload),
+            Ok((kind, payload)) => {
+                if kind == link::RENDER {
+                    first_frame(program);
+                }
+                crate::effects::from_elm(kind, payload)
+            }
             Err(e) => {
                 // A crash resets the connection rather than closing it.
                 if !matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset) {

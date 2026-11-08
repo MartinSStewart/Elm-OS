@@ -53,7 +53,8 @@ writes files; what goes in them is decided here.
     then the requests it is still answering are listed in `httpInFlight`, and
     their answers come as usual.
   - A snapshot is taken at start (once the log is replayed), when the log reaches
-    `snapshotAfterBytes`, and before powering off or restarting.
+    `snapshotAfterBytes`, before powering off or restarting, and before the host
+    replaces this program with a newer build (`Effect.SwitchReady`).
 
 Until the host has said whether there is a disk, and while it is being read, Msgs
 wait (and nothing is drawn), so nothing happens to a Model that is about to be
@@ -357,7 +358,7 @@ live config codecs msg app saving pending =
                 logged =
                     { s | next = s.next + 1, logBytes = s.logBytes + utf8Length entry }
             in
-            if logged.logBytes >= snapshotAfterBytes || List.any isPower effects then
+            if logged.logBytes >= snapshotAfterBytes || List.any endsThisRun effects then
                 -- The snapshot has this Msg in it, so it needn't be logged too.
                 ( Running next (Saving { logged | logBytes = 0 }) nextPending, snapshotEffects codecs next nextPending logged ++ effects ++ drawn )
 
@@ -402,10 +403,17 @@ trackRequests config msg effects pending =
         effects
 
 
-isPower : Effect -> Bool
-isPower effect =
+{-| Effects after which this program stops: powering off or restarting, or the host
+replacing it with a newer build. A snapshot is written before them, so nothing in
+the log needs replaying (a newer build couldn't replay it: Msgs aren't migrated).
+-}
+endsThisRun : Effect -> Bool
+endsThisRun effect =
     case effect of
         Effect.Power _ ->
+            True
+
+        Effect.SwitchReady ->
             True
 
         _ ->

@@ -6,6 +6,7 @@
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make test-persist  boot twice with a power cut between: the Model must come back
+#   make test-switch   switch to another build of the Elm program without restarting
 #   make measure-frames  how long Elm takes to answer a frame, in QEMU (MEASURE_GPU=1 for virgl)
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
@@ -86,7 +87,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE eco atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist measure-frames
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -534,6 +535,11 @@ test-gpu: all $(BUILD)/data-empty.img | check-run-deps
 
 test-persist: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-persist.py
+
+# Switching to another build of the Elm program without restarting, and going back
+# from one that fails (see the script).
+test-switch: all $(BUILD)/data-empty.img | check-run-deps
+	python3 scripts/test-switch.py
 
 # How fast Elm answers frames, on the desktop in QEMU (see the script).
 measure-frames: all $(BUILD)/data-empty.img | check-run-deps

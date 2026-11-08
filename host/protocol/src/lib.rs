@@ -76,6 +76,9 @@ pub enum Effect {
     WriteFile { path: String, text: String },
     /// A line for the serial console / log, from Elm.
     Log { text: String },
+    /// The answer to `ToElm::Switching`: the snapshot is written (the effects before
+    /// this one), so the host can stop this program and start the new one.
+    SwitchReady,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -159,6 +162,10 @@ pub enum ToElm {
     Bytes { path: String, offset: u64, hex: Option<String> },
     /// Hex, null if the file is shorter than asked or can't be read.
     Sha256 { path: String, hex: Option<String> },
+    /// The host is about to replace this program with build `to` (elm.rs): take a
+    /// snapshot and answer `Effect::SwitchReady`. After that answer, this program gets
+    /// one more frame (to show it is upgrading) and nothing else.
+    Switching { to: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -279,9 +286,10 @@ mod tests {
             Effect::AppendFile { .. } => "appendFile",
             Effect::WriteFile { .. } => "writeFile",
             Effect::Log { .. } => "log",
+            Effect::SwitchReady => "switchReady",
         }
     }
-    const EFFECT_TAGS: usize = 14;
+    const EFFECT_TAGS: usize = 15;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -307,9 +315,10 @@ mod tests {
             ToElm::Files { .. } => "files",
             ToElm::Bytes { .. } => "bytes",
             ToElm::Sha256 { .. } => "sha256",
+            ToElm::Switching { .. } => "switching",
         }
     }
-    const TO_ELM_TAGS: usize = 22;
+    const TO_ELM_TAGS: usize = 23;
 
     #[test]
     fn reads_the_render_example() {

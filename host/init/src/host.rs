@@ -254,6 +254,7 @@ impl Host {
                 Effect::AppendFile { path, text } => persist::append_file(path, text),
                 Effect::WriteFile { path, text } => persist::write_file(path, text),
                 Effect::Log { text } => log!("elm", "{}", text),
+                Effect::SwitchReady => elm::switch_ready(self.program),
             }
         }
         if cursor_dirty {

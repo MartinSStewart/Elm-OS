@@ -81,6 +81,10 @@ type Effect
       -- A line for the host's log (the serial console), such as why a message from the
       -- host couldn't be read.
     | Log String
+      -- The answer to the host's "switching" (it is about to replace this program
+      -- with a newer build, host/init/src/elm.rs): the snapshot is written. Persist
+      -- writes one before it.
+    | SwitchReady
 
 
 type PowerAction
@@ -251,4 +255,8 @@ encode effect =
 
         Log text ->
             E.object [ ( "t", E.string "log" ), ( "text", E.string text ) ]
+                |> OnToHost
+
+        SwitchReady ->
+            E.object [ ( "t", E.string "switchReady" ) ]
                 |> OnToHost

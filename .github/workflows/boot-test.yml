@@ -79,6 +79,9 @@ jobs:
       - name: Power cuts and restarts keep the Model
         run: make test-persist
 
+      - name: Switching to another build without restarting
+        run: make test-switch
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

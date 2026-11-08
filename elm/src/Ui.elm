@@ -8,6 +8,7 @@ module Ui exposing
     , TextInputData
     , TextInputMultilineData
     , bottomLeft
+    , bottomRight
     , button
     , center
     , colorText
@@ -436,6 +437,11 @@ topRight data =
 bottomLeft : { size : Coord UiPixels } -> Element id -> Element id
 bottomLeft data =
     align 0 2 data.size
+
+
+bottomRight : { size : Coord UiPixels } -> Element id -> Element id
+bottomRight data =
+    align 2 2 data.size
 
 
 size : Element id -> Coord UiPixels
