@@ -42,6 +42,15 @@ jobs:
           sudo mkdir -p /opt/eco && sudo tar -xzf eco.tar.gz -C /opt/eco
           echo /opt/eco/bin >> "$GITHUB_PATH"
 
+      - name: Cache Elm packages
+        # eco downloads them from GitHub, which is sometimes down: the last good set is
+        # kept, and a change to any elm.json starts from it.
+        uses: actions/cache@v4
+        with:
+          path: ~/.eco/0.2.0/packages
+          key: eco-packages-${{ hashFiles('elm/elm.json', 'elm/review/elm.json', 'tools/wire/elm.json') }}
+          restore-keys: eco-packages-
+
       - name: Cache the kernel tree
         uses: actions/cache@v4
         with:
