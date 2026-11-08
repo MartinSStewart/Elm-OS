@@ -440,6 +440,7 @@ pub fn switch_to(name: String) -> bool {
                 log!("host", "switched to build {name}, but couldn't save that; the next boot runs {}", programs::describe(&from));
             }
             programs::drop_kept_snapshot();
+            programs::remove_all_but(&Some(name.clone()));
             true
         }
         Some(false) => false,

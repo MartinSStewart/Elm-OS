@@ -165,3 +165,20 @@ pub fn install(name: &str, program: &[u8], manifest: &str) -> std::io::Result<()
     std::fs::rename(&part, dir.join("elm"))?;
     std::fs::File::open(&dir)?.sync_all()
 }
+
+/// Removes every build on the disk but `keep` (the data partition holds only a few:
+/// a build is about 9 MB). The built-in one is in the initramfs, so it's always there.
+pub fn remove_all_but(keep: &Build) {
+    let Ok(entries) = std::fs::read_dir(persist::Disk::path("programs")) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.path().is_dir() || keep.as_deref() == Some(name.as_str()) {
+            continue;
+        }
+        match std::fs::remove_dir_all(entry.path()) {
+            Ok(()) => log!("host", "removed build {name} from the disk"),
+            Err(e) => log!("host", "couldn't remove build {name}: {e}"),
+        }
+    }
+    let _ = std::fs::File::open(persist::Disk::path("programs")).and_then(|d| d.sync_all());
+}

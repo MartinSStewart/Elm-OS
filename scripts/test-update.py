@@ -92,6 +92,14 @@ def wait_for(text, timeout=300):
         time.sleep(0.5)
 
 
+# A build left from before, which must be gone once the host has switched (a build is
+# about 9 MB and the USB stick's data partition is 32 MiB).
+part = os.path.join(tmp, "part.img")
+subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", "count=32", "status=none"], check=True)
+for c in ["mkdir programs", "mkdir programs/old", f"write {ROOT}/build/host-version programs/old/elm"]:
+    subprocess.run(["debugfs", "-w", "-R", c, part], check=True, capture_output=True)
+subprocess.run(["dd", f"if={part}", f"of={disk}", "bs=1M", "seek=1", "conv=notrunc", "status=none"], check=True)
+
 qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
      "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
@@ -128,5 +136,8 @@ subprocess.run(["e2fsck", "-fy", part], capture_output=True)
 current = subprocess.run(["debugfs", "-R", "cat /programs/current", part], capture_output=True).stdout
 if current != f"{GOOD[:12]}\n".encode():
     fail(f"programs/current is {current!r}, not {GOOD[:12]}")
+listing = subprocess.run(["debugfs", "-R", "ls -l /programs", part], capture_output=True, text=True).stdout
+if " old" in listing or GOOD[:12] not in listing:
+    fail(f"after the switch programs/ should hold only build {GOOD[:12]}:\n{listing}")
 print(f"followed deployed to build {GOOD[:12]}: downloaded, checked, switched, and current")
 print("PASS")

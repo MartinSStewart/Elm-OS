@@ -124,6 +124,9 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
 
     // 4. Download it, and switch.
     if !programs::exists(name) {
+        // Room for it: only the running build stays (a build is about 9 MB, and the
+        // stick's data partition is 32 MiB).
+        programs::remove_all_but(&running);
         log!("update", "downloading build {name}");
         let program = get(&format!("{base}/elm"), MAX_PROGRAM)?;
         if hex(ring::digest::digest(&ring::digest::SHA256, &program).as_ref()) != sha {
@@ -133,6 +136,7 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
     }
     if !elm::switch_to(name.to_owned()) && elm::running_build().as_deref() != Some(name) {
         given_up.insert(name.to_owned());
+        programs::remove_all_but(&elm::running_build());
     }
     Ok(())
 }
