@@ -1322,7 +1322,6 @@ persistConfig : Persist.Config Model Msg
 persistConfig =
     { init = init
     , update = update
-    , resume = resume
     , fromHost = \json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput
 
     -- An idle eco program exits; a timer keeps the event loop alive. It also paces
@@ -1348,85 +1347,6 @@ httpAnswered msg =
 
         Tick ->
             Nothing
-
-
-{-| After a restart, the Model as it was (Persist.elm) becomes this boot's: what the
-user did stays (which windows are open, what is in them, the clipboard, the colour),
-and what the last boot's hardware and network said is forgotten, because the host
-says it again.
--}
-resume : Model -> Model
-resume saved =
-    { init
-        | colorIndex = saved.colorIndex
-        , clipboard = saved.clipboard
-        , focus =
-            case saved.focus of
-                Just EditorInput ->
-                    saved.focus
-
-                Just EditorWindow ->
-                    saved.focus
-
-                Just (CalculatorUiId _) ->
-                    saved.focus
-
-                Just RefreshButton ->
-                    Nothing
-
-                Just (NetworkButton _) ->
-                    Nothing
-
-                Just PasswordInput ->
-                    Nothing
-
-                Just ShowPasswordButton ->
-                    Nothing
-
-                Just ConnectButton ->
-                    Nothing
-
-                Just DisconnectButton ->
-                    Nothing
-
-                Just WeatherButton ->
-                    Nothing
-
-                Just AboutButton ->
-                    Nothing
-
-                Just CloseAboutButton ->
-                    Nothing
-
-                Just CalculatorButton ->
-                    Nothing
-
-                Just PowerOffButton ->
-                    Nothing
-
-                Just RestartButton ->
-                    Nothing
-
-                Just ConfirmPowerButton ->
-                    Nothing
-
-                Just CancelPowerButton ->
-                    Nothing
-
-                Just EditorButton ->
-                    Nothing
-
-                Just CloseEditorButton ->
-                    Nothing
-
-                Nothing ->
-                    Nothing
-        , aboutOpen = saved.aboutOpen
-        , calculator = saved.calculator
-        , calculatorOpen = saved.calculatorOpen
-        , editor = saved.editor
-        , editorOpen = saved.editorOpen
-    }
 
 
 
@@ -2147,14 +2067,6 @@ aboutPage model =
                             ++ "Text is in Noto Sans (SIL Open Font License). "
                             ++ "Weather: open-meteo.com, location: geojs.io."
                         )
-                    )
-                , Ui.row { spacing = 12, padding = Ui.noPadding }
-                    (List.map (\( style, name ) -> Ui.text (Sprite.Sans style Sprite.Small) name)
-                        [ ( Sprite.Regular, "Regular" )
-                        , ( Sprite.Bold, "Bold" )
-                        , ( Sprite.Italic, "Italic" )
-                        , ( Sprite.BoldItalic, "Bold Italic" )
-                        ]
                     )
                 , t ""
                 , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")

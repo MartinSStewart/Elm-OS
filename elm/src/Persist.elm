@@ -76,7 +76,6 @@ import Json.Encode as E
 type alias Config model msg =
     { init : model
     , update : msg -> model -> ( model, List Effect )
-    , resume : model -> model
     , fromHost : D.Value -> msg
     , subscriptions : model -> Sub msg
 
@@ -296,7 +295,15 @@ update config codecs msg model =
                     in
                     -- Requests that were cut off are answered first, then the Msgs
                     -- that waited. The snapshot has them all, so they needn't be logged.
-                    case runEarly config codecs (early ++ List.reverse (List.map config.httpInterrupted interrupted)) (config.resume restored.model) NotSaving restored.pending of
+                    case
+                        runEarly
+                            config
+                            codecs
+                            (early ++ List.reverse (List.map config.httpInterrupted interrupted))
+                            restored.model
+                            NotSaving
+                            restored.pending
+                    of
                         ( Running app _ pending, effects ) ->
                             ( Running app (Saving saving) pending, notes ++ kept ++ snapshotEffects codecs app pending saving ++ effects )
 
