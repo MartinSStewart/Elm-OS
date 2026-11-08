@@ -385,8 +385,7 @@ step event model =
                                     model.frameIntervals
                     }
             in
-            -- Drawn by `draw`, which replaying the log skips.
-            ( next, [] )
+            ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
             let
@@ -1322,7 +1321,6 @@ persistConfig : Persist.Config Model Msg
 persistConfig =
     { init = init
     , update = update
-    , draw = draw
     , resume = resume
     , fromHost = \json -> D.decodeValue decodeInput json |> Result.mapError D.errorToString |> GotInput
 
@@ -1349,19 +1347,6 @@ httpAnswered msg =
 
         Tick ->
             Nothing
-
-
-{-| Drawing a frame takes a while, so it isn't part of `update`: replaying the saved Msgs
-after a restart only needs the Model.
--}
-draw : Msg -> Model -> List Effect
-draw msg model =
-    case msg of
-        GotInput (Ok (Frame _)) ->
-            [ Effect.Render (view model) ]
-
-        _ ->
-            []
 
 
 {-| After a restart, the Model as it was (Persist.elm) becomes this boot's: what the

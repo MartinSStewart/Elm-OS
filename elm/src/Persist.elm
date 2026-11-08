@@ -6,8 +6,8 @@ module Persist exposing
     , appModel
     , crc32
     , frame
-    , hash
     , fromHost
+    , hash
     , init
     , program
     , restore
@@ -76,10 +76,6 @@ import Json.Encode as E
 type alias Config model msg =
     { init : model
     , update : msg -> model -> ( model, List Effect )
-
-    -- Effects that only matter live, such as drawing the frame, which are expensive
-    -- to work out and so aren't worked out when replaying the log.
-    , draw : msg -> model -> List Effect
     , resume : model -> model
     , fromHost : D.Value -> msg
     , subscriptions : model -> Sub msg
@@ -316,6 +312,7 @@ update config codecs msg model =
                 Running _ _ _ ->
                     ( model, [] )
 
+
 runEarly : Config model msg -> Codecs model msg -> List msg -> model -> Saving -> List String -> ( Model model msg, List Effect )
 runEarly config codecs early app saving pending =
     List.foldr
@@ -342,13 +339,10 @@ live config codecs msg app saving pending =
 
         ( nextPending, effects ) =
             trackRequests config msg sent pending
-
-        drawn =
-            config.draw msg next
     in
     case saving of
         NotSaving ->
-            ( Running next saving nextPending, effects ++ drawn )
+            ( Running next saving nextPending, effects )
 
         Saving s ->
             let
@@ -360,11 +354,11 @@ live config codecs msg app saving pending =
             in
             if logged.logBytes >= snapshotAfterBytes || List.any endsThisRun effects then
                 -- The snapshot has this Msg in it, so it needn't be logged too.
-                ( Running next (Saving { logged | logBytes = 0 }) nextPending, snapshotEffects codecs next nextPending logged ++ effects ++ drawn )
+                ( Running next (Saving { logged | logBytes = 0 }) nextPending, snapshotEffects codecs next nextPending logged ++ effects )
 
             else
                 ( Running next (Saving logged) nextPending
-                , Effect.AppendFile { path = s.dir ++ "/log", text = entry } :: effects ++ drawn
+                , Effect.AppendFile { path = s.dir ++ "/log", text = entry } :: effects
                 )
 
 
@@ -378,6 +372,7 @@ apart from the other's.
 trackRequests : Config model msg -> msg -> List Effect -> List String -> ( List String, List Effect )
 trackRequests config msg effects pending =
     let
+        answered : List String
         answered =
             case config.httpAnswered msg of
                 Just id ->
@@ -391,7 +386,15 @@ trackRequests config msg effects pending =
             case effect of
                 Effect.Http request ->
                     if List.member request.id waiting then
-                        ( waiting, kept ++ [ Effect.Log ("persist: didn't send HTTP request " ++ request.id ++ ", since one with that id is still waiting for its answer") ] )
+                        ( waiting
+                        , kept
+                            ++ [ Effect.Log
+                                    ("persist: didn't send HTTP request "
+                                        ++ request.id
+                                        ++ ", since one with that id is still waiting for its answer"
+                                    )
+                               ]
+                        )
 
                     else
                         ( waiting ++ [ request.id ], kept ++ [ effect ] )
@@ -627,7 +630,8 @@ replay config codecs entries state =
                             ( model, effects ) =
                                 config.update msg state.model
                         in
-                        replay config codecs
+                        replay config
+                            codecs
                             rest
                             { state
                                 | model = model
