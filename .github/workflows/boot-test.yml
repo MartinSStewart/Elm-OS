@@ -1,10 +1,11 @@
 name: Tests
 
-# Every push, on every branch (work happens on feature branches, not only in pull
-# requests), and by hand from the Actions tab.
+# Only pushes to main (a run takes long, so feature branches and pull requests are
+# skipped). To test another branch, run it by hand from the Actions tab
+# (workflow_dispatch, "Use workflow from"); publishing still happens only on main.
 on:
   push:
-  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
