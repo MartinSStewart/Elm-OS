@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl -sS -X POST https://at-chat.app/_r/notify-admins *)"
+      "Bash(scripts/notify.sh *)",
+      "Bash(./scripts/notify.sh *)"
     ]
   }
 }
