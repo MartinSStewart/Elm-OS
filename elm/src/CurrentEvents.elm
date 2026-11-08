@@ -3,9 +3,11 @@ module CurrentEvents exposing
     , Day
     , Inline(..)
     , Item(..)
+    , NewsState(..)
     , Topic
     , decoder
     , lastDays
+    , newsPage
     , parseWikitext
     , request
     )
@@ -28,9 +30,12 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 
 -}
 
+import Color
 import Effect
 import Json.Decode as D
+import Sprite
 import Time
+import Ui
 
 
 {-| A day in UTC, as Wikipedia files its pages. `month` is 1 to 12.
@@ -64,6 +69,49 @@ type Inline
     | WikiLink { article : String, label : String }
       -- To a news site: the story's source, with a label like "(Reuters)".
     | ExternalLink { url : String, label : String }
+
+
+type NewsState
+    = NewsNotRequested
+    | LoadingNews
+    | LoadedNews (List Day)
+    | NewsFailed String
+
+
+newsPage : NewsState -> Ui.Element id
+newsPage news =
+    Ui.el
+        { padding = Ui.paddingXY 12 10
+        , inFront = []
+        , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+        }
+        (Ui.column
+            { spacing = 0, padding = Ui.noPadding }
+            [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) "Wikipedia: Current events"
+            , case news of
+                NewsNotRequested ->
+                    Ui.none
+
+                LoadingNews ->
+                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
+
+                LoadedNews days ->
+                    List.map
+                        (\{ date, topics } ->
+                            monthName date.month
+                                ++ " "
+                                ++ String.fromInt date.day
+                                ++ ", "
+                                ++ String.fromInt date.year
+                                |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Big)
+                        )
+                        days
+                        |> Ui.column { spacing = 16, padding = Ui.noPadding }
+
+                NewsFailed string ->
+                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
+            ]
+        )
 
 
 url : String
@@ -101,7 +149,7 @@ request id dates =
         }
 
 
-{-| "Portal:Current_events/2026_November_8", ready to go in a URL.
+{-| "Portal:Current\_events/2026\_November\_8", ready to go in a URL.
 -}
 pageTitle : Date -> String
 pageTitle date =
@@ -517,7 +565,7 @@ wikiLink inside trail =
         ]
 
 
-{-| [https://example.com/story (Source)], where the label is optional.
+{-| [<https://example.com/story> (Source)][https://example.com/story (Source)], where the label is optional.
 -}
 externalLink : String -> Inline
 externalLink inside =

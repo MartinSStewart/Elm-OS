@@ -264,13 +264,6 @@ type WeatherState
     | WeatherFailed String
 
 
-type NewsState
-    = NewsNotRequested
-    | LoadingNews
-    | LoadedNews (List CurrentEvents.Day)
-    | NewsFailed String
-
-
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
 saved and sent elsewhere later.
 -}
@@ -1189,7 +1182,9 @@ screenUi model =
                         []
                    )
                 ++ (if model.newsOpen then
-                        [ newsPage model ]
+                        Ui.topRight
+                            { size = uiSize model }
+                            (CurrentEvents.newsPage model.news)
 
                     else
                         []
@@ -2065,35 +2060,6 @@ upgradeNotice model build =
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
                 (Ui.text bodyFont ("Upgrade to " ++ build ++ " in progress"))
-            )
-        )
-
-
-newsPage : Model -> Ui.Element UiId
-newsPage model =
-    Ui.topRight
-        { size = uiSize model }
-        (Ui.el
-            { padding = Ui.paddingXY 12 10
-            , inFront = []
-            , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-            }
-            (Ui.column
-                { spacing = 0, padding = Ui.noPadding }
-                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) "Wikipedia: Current events"
-                , case model.news of
-                    NewsNotRequested ->
-                        Ui.none
-
-                    LoadingNews ->
-                        Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
-
-                    LoadedNews days ->
-                        Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loaded"
-
-                    NewsFailed string ->
-                        Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
-                ]
             )
         )
 
