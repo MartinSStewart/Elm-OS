@@ -94,6 +94,10 @@ type alias Module =
     , source : String
     , file : File
     , types : Dict String ( List String, Body )
+
+    -- The types each module in the source directory exposes (packages' modules
+    -- aren't in it).
+    , exposures : Dict String (Set String)
     }
 
 
@@ -155,8 +159,19 @@ config's names.
 withModules : Options -> List SourceFile -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
 withModules options files next =
     let
+        parsedFiles =
+            List.map parseFile files
+
+        -- Which types each of our own modules exposes, so that an `exposing (..)`
+        -- import only counts for the types its module really exposes.
+        exposures =
+            parsedFiles
+                |> List.filterMap Result.toMaybe
+                |> List.map (\( _, file ) -> moduleExposes file)
+                |> Dict.fromList
+
         parsed =
-            List.map parseModule files
+            List.map (Result.map (toModule exposures)) parsedFiles
 
         parseErrors =
             List.filterMap
@@ -335,12 +350,12 @@ keyName ( m, n ) =
 -- PARSING
 
 
-parseModule : SourceFile -> Result String Module
-parseModule { path, source } =
-    case Elm.Parser.parse source of
+parseFile : SourceFile -> Result String ( SourceFile, File )
+parseFile sourceFile =
+    case Elm.Parser.parse sourceFile.source of
         Err deadEnds ->
             Err
-                (path
+                (sourceFile.path
                     ++ ": couldn't parse it"
                     ++ (case deadEnds of
                             first :: _ ->
@@ -352,71 +367,120 @@ parseModule { path, source } =
                 )
 
         Ok raw ->
-            let
-                file =
-                    Elm.Processing.process Elm.Processing.init raw
+            Ok ( sourceFile, Elm.Processing.process Elm.Processing.init raw )
 
-                -- Resolving a name only needs to know which names the module's own
-                -- types have, so they come first.
-                names =
-                    file.declarations
-                        |> List.filterMap
-                            (\decl ->
-                                case Node.value decl of
-                                    CustomTypeDeclaration t ->
-                                        Just ( Node.value t.name, ( [], Custom [] ) )
 
-                                    AliasDeclaration a ->
-                                        Just ( Node.value a.name, ( [], Custom [] ) )
+{-| A module's name, and the types it exposes.
+-}
+moduleExposes : File -> ( String, Set String )
+moduleExposes file =
+    let
+        definition =
+            Node.value file.moduleDefinition
 
-                                    _ ->
-                                        Nothing
-                            )
-                        |> Dict.fromList
+        declared =
+            file.declarations
+                |> List.filterMap
+                    (\decl ->
+                        case Node.value decl of
+                            CustomTypeDeclaration t ->
+                                Just (Node.value t.name)
 
-                withNames =
-                    { name = String.join "." (Module.moduleName (Node.value file.moduleDefinition))
-                    , path = path
-                    , source = source
-                    , file = file
-                    , types = names
-                    }
+                            AliasDeclaration a ->
+                                Just (Node.value a.name)
 
-                types =
-                    file.declarations
-                        |> List.filterMap
-                            (\decl ->
-                                case Node.value decl of
-                                    CustomTypeDeclaration t ->
-                                        Just
-                                            ( Node.value t.name
-                                            , ( List.map Node.value t.generics
-                                              , Custom
-                                                    (List.map
-                                                        (\c ->
-                                                            ( Node.value (Node.value c).name
-                                                            , List.map (Node.value >> canonical withNames) (Node.value c).arguments
-                                                            )
-                                                        )
-                                                        t.constructors
+                            _ ->
+                                Nothing
+                    )
+    in
+    ( String.join "." (Module.moduleName definition)
+    , case Module.exposingList definition of
+        All _ ->
+            Set.fromList declared
+
+        Explicit items ->
+            items
+                |> List.filterMap
+                    (\item ->
+                        case Node.value item of
+                            TypeOrAliasExpose n ->
+                                Just n
+
+                            TypeExpose t ->
+                                Just t.name
+
+                            _ ->
+                                Nothing
+                    )
+                |> Set.fromList
+    )
+
+
+toModule : Dict String (Set String) -> ( SourceFile, File ) -> Module
+toModule exposures ( { path, source }, file ) =
+    let
+        -- Resolving a name only needs to know which names the module's own
+        -- types have, so they come first.
+        names =
+            file.declarations
+                |> List.filterMap
+                    (\decl ->
+                        case Node.value decl of
+                            CustomTypeDeclaration t ->
+                                Just ( Node.value t.name, ( [], Custom [] ) )
+
+                            AliasDeclaration a ->
+                                Just ( Node.value a.name, ( [], Custom [] ) )
+
+                            _ ->
+                                Nothing
+                    )
+                |> Dict.fromList
+
+        withNames =
+            { name = String.join "." (Module.moduleName (Node.value file.moduleDefinition))
+            , path = path
+            , source = source
+            , file = file
+            , types = names
+            , exposures = exposures
+            }
+
+        types =
+            file.declarations
+                |> List.filterMap
+                    (\decl ->
+                        case Node.value decl of
+                            CustomTypeDeclaration t ->
+                                Just
+                                    ( Node.value t.name
+                                    , ( List.map Node.value t.generics
+                                      , Custom
+                                            (List.map
+                                                (\c ->
+                                                    ( Node.value (Node.value c).name
+                                                    , List.map (Node.value >> canonical withNames) (Node.value c).arguments
                                                     )
-                                              )
+                                                )
+                                                t.constructors
                                             )
+                                      )
+                                    )
 
-                                    AliasDeclaration a ->
-                                        Just
-                                            ( Node.value a.name
-                                            , ( List.map Node.value a.generics
-                                              , Alias (canonical withNames (Node.value a.typeAnnotation))
-                                              )
-                                            )
+                            AliasDeclaration a ->
+                                Just
+                                    ( Node.value a.name
+                                    , ( List.map Node.value a.generics
+                                      , Alias (canonical withNames (Node.value a.typeAnnotation))
+                                      )
+                                    )
 
-                                    _ ->
-                                        Nothing
-                            )
-                        |> Dict.fromList
-            in
-            Ok { withNames | types = types }
+                            _ ->
+                                Nothing
+                    )
+                |> Dict.fromList
+    in
+    { withNames | types = types }
 
 
 canonical : Module -> TypeAnnotation -> Ty
@@ -472,7 +536,7 @@ resolve m qualifier name =
             firstJust
                 [ \() ->
                     imports
-                        |> List.filter (\i -> exposesType name (Maybe.map Node.value i.exposingList))
+                        |> List.filter (\i -> exposesType m.exposures name (String.join "." (Node.value i.moduleName)) (Maybe.map Node.value i.exposingList))
                         |> List.head
                         |> Maybe.map (\i -> String.join "." (Node.value i.moduleName))
                 , \() ->
@@ -509,17 +573,23 @@ resolve m qualifier name =
             ]
 
 
-{-| Whether an import's `exposing` list names the type. `exposing (..)` counts as
-yes: the compiler has already checked that the name means something.
+{-| Whether an import's `exposing` list names the type. For `exposing (..)` it's
+whether the module exposes it; a package's module (one we don't have the source
+of) counts as yes, as the compiler checks the name means something.
 -}
-exposesType : String -> Maybe Exposing -> Bool
-exposesType name exposing_ =
+exposesType : Dict String (Set String) -> String -> String -> Maybe Exposing -> Bool
+exposesType exposures name moduleName exposing_ =
     case exposing_ of
         Nothing ->
             False
 
         Just (All _) ->
-            True
+            case Dict.get moduleName exposures of
+                Just exposed ->
+                    Set.member name exposed
+
+                Nothing ->
+                    True
 
         Just (Explicit items) ->
             List.any
@@ -639,6 +709,49 @@ bodyTypes body =
 -- WHICH TYPES ARE NEEDED
 
 
+{-| Why a type's name means nothing, and where a type of that name is. This is a
+mistake the compiler would also stop at; tools/wire just runs first.
+-}
+unknownTypeError : Dict Key Def -> String -> String
+unknownTypeError defs written =
+    let
+        name =
+            List.reverse (String.split "." written) |> List.head |> Maybe.withDefault written
+
+        candidates =
+            Dict.keys defs
+                |> List.filter (\( _, n ) -> n == name)
+                |> List.map Tuple.first
+    in
+    "can't tell which type "
+        ++ written
+        ++ " is: the module that uses it doesn't define it, and none of its imports expose it"
+        ++ (case candidates of
+                [] ->
+                    ""
+
+                _ ->
+                    ". "
+                        ++ String.join " and " candidates
+                        ++ " "
+                        ++ (if List.length candidates == 1 then
+                                "defines"
+
+                            else
+                                "define"
+                           )
+                        ++ " a "
+                        ++ name
+                        ++ (case candidates of
+                                [ only ] ->
+                                    ": write " ++ only ++ "." ++ name ++ ", or import " ++ only ++ " exposing (" ++ name ++ ")"
+
+                                _ ->
+                                    ""
+                           )
+           )
+
+
 reach : Dict Key Def -> Dict Key (List Bool) -> List ( Key, String ) -> Set Key -> List String -> ( Set Key, List String )
 reach defs used queue seen errors =
     case queue of
@@ -708,7 +821,7 @@ walk defs used path ty ( found, errors ) =
             ( found, (path ++ ": an extensible record ({ r | ... }) can't be saved; use a plain record") :: errors )
 
         TUnknown name ->
-            ( found, (path ++ ": can't tell which type " ++ name ++ " is") :: errors )
+            ( found, (path ++ ": " ++ unknownTypeError defs name) :: errors )
 
 
 userRefs : Dict Key Def -> List Ty -> Set Key

@@ -9,6 +9,7 @@ import Json.Encode
 import Persist
 import Quantity exposing (Quantity)
 import Set exposing (Set)
+import Sub.Everything exposing (..)
 import Sub.Things as Things exposing (Opaque, Tree(..))
 import Time
 
@@ -60,6 +61,7 @@ type Msg
     | Set Model
     | Many Int String (List Msg)
     | Inline { x : Int, y : ( Int, Int ) }
+    | Paint Colour
 
 
 init : Model
@@ -100,7 +102,7 @@ sample =
 
 sampleMsg : Msg
 sampleMsg =
-    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) } ]
+    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green ]
 
 
 config : Persist.Config Model Msg
