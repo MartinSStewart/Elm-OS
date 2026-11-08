@@ -15,6 +15,8 @@
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
 #   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
+#   make migration  after changing the Model's types: freeze them as the next version
+#                   (elm/src/Evergreen/V<n>) and write the migration to fill in (Evergreen/Migrate)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
 #   make check      the tests that don't boot anything: review, review-tests, elm-tests,
 #                   test-wire, protocol-tests (CI runs these, then test and test-persist)
@@ -65,7 +67,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE atlas review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE atlas migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -205,11 +207,19 @@ $(BUILD)/elm.o: $(BUILD)/wire/.done | check-deps
 WIRE_FLAGS := --runtime tools/wire/Wire.elm --entry ElmOs \
               --config Main.persistConfig --model Main.Model --msg Main.Msg
 
-$(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(wildcard elm/src/*.elm $(wildcard elm/src/*/*.elm))
+$(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(shell find elm/src -name "*.elm")
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
 	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS)
 	touch $@
+
+# Every commit that changes the types the Model is made of adds a version of them:
+# a frozen copy in elm/src/Evergreen/V<n>, and the migration from version n - 1 in
+# elm/src/Evergreen/Migrate/V<n>.elm, so a Model saved by an older build is migrated
+# rather than lost. The build stops when the types changed without one. This writes
+# both; the migration says `Unimplemented` wherever it needs someone to fill it in.
+migration: $(BUILD)/wire-tool
+	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes
 
 # tools/wire is an Elm program too (eco/system and elm-syntax). eco 0.2 crashes linking
 # it (`eco make --output=<exe>`), so it's compiled to an object and linked here, the
@@ -222,7 +232,8 @@ $(BUILD)/wire-tool.o: tools/wire/elm.json $(wildcard tools/wire/src/*.elm) | che
 # (tools/wire/test), whose generated code must compile and read back what it writes.
 test-wire: $(BUILD)/wire-tool | check-deps
 	rm -rf $(BUILD)/wire-test && mkdir -p $(BUILD)/wire-test/in
-	cp -r elm/src/. tools/wire/test/src/. $(BUILD)/wire-test/in/ && rm $(BUILD)/wire-test/in/Main.elm
+	cp -r elm/src/. $(BUILD)/wire-test/in/ && rm -r $(BUILD)/wire-test/in/Main.elm $(BUILD)/wire-test/in/Evergreen
+	cp -r tools/wire/test/src/. $(BUILD)/wire-test/in/
 	cp -r elm/elm.json tools/wire/test/tests $(BUILD)/wire-test/
 	$(BUILD)/wire-tool --src $(BUILD)/wire-test/in --out $(BUILD)/wire-test/src --runtime tools/wire/Wire.elm \
 	  --entry ElmOs --config App.config --model App.Model --msg App.Msg

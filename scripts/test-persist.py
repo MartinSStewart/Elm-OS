@@ -225,10 +225,10 @@ def snapshot_text():
 
 
 def editor_text(snap):
-    """The text editor's text in a snapshot: Model is a record encoded as an array, in
-    Main.Model's field order; `editor` is the 32nd field (TextInputMultiline.Model:
+    """The text editor's text in a snapshot ([format, version, modelHash, msgHash, next,
+    model], see Persist.elm): Model is a record encoded as an array, in Main.Model's field order; `editor` is the 32nd field (TextInputMultiline.Model:
     [input, scroll], TextInput.Model: [current, undo, redo], State: [cursor, size, text])."""
-    return snap[2][31][0][0][2]
+    return snap[5][31][0][0][2]
 
 
 boot()
@@ -261,9 +261,9 @@ print("power cut after typing")
 log = disk_file("log")
 logged = entries(log, "log")
 first_snap = snapshot_text()
-print(f"disk: snapshot {len(json.dumps(first_snap))} bytes (Model shape {first_snap[0]}), log {len(logged)} entries, "
+print(f"disk: snapshot {len(json.dumps(first_snap))} bytes (Model version {first_snap[1]}), log {len(logged)} entries, "
       f"numbered {logged[0][0]}..{logged[-1][0]}")
-if [e[0] for e in logged] != list(range(first_snap[1], first_snap[1] + len(logged))):
+if [e[0] for e in logged] != list(range(first_snap[4], first_snap[4] + len(logged))):
     fail("the log's entries aren't numbered on from the snapshot's")
 
 # ---- 2. a torn write at the end of the log, then boot

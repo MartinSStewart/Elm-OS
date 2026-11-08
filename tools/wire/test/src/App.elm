@@ -1,4 +1,4 @@
-module App exposing (Model, Msg, config, init, sample, sampleMsg)
+module App exposing (Kind(..), Model, Msg, config, init, sample, sampleMsg)
 
 {-| A program whose Model and Msg have every kind of type tools/wire handles.
 -}
@@ -37,7 +37,18 @@ type alias Model =
     , box : Things.Box String
     , labelled : Things.Labelled Pixels
     , order : Order
+    , kind : Kind
+    , kinds : List Kind
+    , kindDict : Dict String (Maybe Kind)
     }
+
+
+{-| Version 1 (tools/wire/test/src/Evergreen/V1) had a Gamma String, and no Delta.
+-}
+type Kind
+    = Alpha
+    | Beta Int
+    | Delta
 
 
 type Pixels
@@ -81,6 +92,9 @@ sample =
     , box = Things.box "boxed"
     , labelled = Things.labelled 3
     , order = GT
+    , kind = Beta 2
+    , kinds = [ Alpha, Delta ]
+    , kindDict = Dict.fromList [ ( "a", Just Alpha ), ( "b", Nothing ) ]
     }
 
 

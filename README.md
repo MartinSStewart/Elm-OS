@@ -136,7 +136,8 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `elm/src/` | The Elm program (`Main.elm`), UI framework, sprite encoding, wifi panel and weather |
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
 | `elm/src/Persist.elm` | Saving the Model: Msg log, snapshots, replay at start |
-| `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build |
+| `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
+| `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
 | `host/init/` | Rust host, linked into `/init`: mounts `/dev`, `/proc` and `/sys`, reads evdev, runs effects, CPU renderer, HTTP |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
@@ -201,8 +202,28 @@ host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying
   A snapshot goes to a new file, which is fsynced and renamed over the old one. Appends are
   fsynced within a second (a USB stick is slow to fsync and wears), so a power cut loses at most
   the last second.
-- **Changing types:** the snapshot carries a hash of the Model's and Msg's types. A build with
-  different types starts afresh rather than misreading the old data.
+- **Changing types:** see "Versions and migrations" below. The snapshot says which version of
+  the Model's types wrote it, and an older one is migrated. Msgs are never migrated: a log
+  written by a build with a different Msg type is skipped. A snapshot that can't be read is
+  kept as `/data/snapshot-unreadable` and the Model starts afresh.
+
+### Versions and migrations
+
+Every commit that changes the types the Model is made of adds a version of them, as Lamdera's
+Evergreen does, so a Model saved by an older build is migrated rather than lost:
+
+1. Change the types, and build: `make` stops and lists what changed since the newest version.
+2. `make migration` freezes the types as version n+1 (`elm/src/Evergreen/V<n+1>/`, copies of
+   the types only; never edit them) and writes `elm/src/Evergreen/Migrate/V<n+1>.elm`, a function
+   from version n's Model to version n+1's. It writes all it can (fields and variants that are
+   still there, through Lists, Dicts, Maybes and the like); where it can't (a new field, a variant
+   that's gone, a type that changed) it writes `Unimplemented`, which doesn't compile.
+3. Replace each `Unimplemented`, build, and commit the change, the frozen types and the
+   migration together.
+
+A build reads a snapshot of any earlier version by running the migrations one after another.
+Old versions cost /init a little (version 1's codecs are about 50 KB). `make test-wire`
+checks a migration from version 1 to 2 of its own test program (`tools/wire/test/src/Evergreen`).
 
 ### Encoders and decoders (tools/wire)
 
@@ -217,8 +238,8 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   `src/Main.elm` and the line numbers of the real file. The generated code is readable: look at
   the end of any module in `build/wire/src`.
 - It also writes `build/wire/src/ElmOs.elm`, the program's `main`: `Persist.program
-  Main.persistConfig` with the codecs, and a description of every type they cover (its hash
-  goes in the snapshot).
+  Main.persistConfig` with the codecs, a description of every type they cover (its hash
+  goes in the snapshot), and the migrations from each earlier version.
 - It handles records, custom types, tuples, type variables, recursive types, `Int`, `Float`
   (NaN and infinities too), `String`, `Char`, `Bool`, `Order`, `List`, `Array`, `Set`, `Dict`,
   `Maybe`, `Result`, elm-units' `Quantity`, `Time.Posix` and `Json.Encode.Value`. It stops the
@@ -236,8 +257,9 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
 - Networking is IPv4 only. Wifi: Intel cards only, no WPA3-only networks, no 802.1X or captive portals, US keyboard layout, and
   wifi passwords aren't remembered across reboots.
 - Saving: the whole Model is rewritten at each snapshot, so it suits a small Model (the text
-  editor's undo history, up to 500 copies of the text, is in it too). A change to the Model's
-  or Msg's types loses what was saved; tools/wire could write migrations later, as Lamdera does.
+  editor's undo history, up to 500 copies of the text, is in it too). Msgs logged since the
+  last snapshot are lost when the Msg type or the Model's version changes, since only the Model
+  is migrated (a restart or power-off takes a snapshot first, so only a power cut loses any).
   The encoders and decoders make `/init` about 0.8 MB bigger.
 - Frames are sent as JSON because eco's ports can't carry `Bytes` yet, which costs time on
   large scenes.

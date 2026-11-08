@@ -44,6 +44,13 @@ import Simplify
 
 config : List Rule
 config =
+    -- elm/src/Evergreen is frozen copies of old types, and the migrations between
+    -- them, which tools/wire writes (`make migration`).
+    List.map (Review.Rule.ignoreErrorsForDirectories [ "src/Evergreen/" ]) rules
+
+
+rules : List Rule
+rules =
     [ ExposeAllRecordFields.rule
     , NoStaleReferences.rule
     , NoUnused.CustomTypeConstructors.rule []

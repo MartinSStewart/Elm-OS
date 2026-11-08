@@ -37,6 +37,9 @@ type alias Flags =
     , out : String
     , runtime : String
     , options : Generate.Options
+
+    -- `--freeze yes`: freeze the Model's types as a new version instead (`make migration`).
+    , freeze : Bool
     }
 
 
@@ -54,13 +57,25 @@ run env =
                 (elmFiles f.src "" |> Task.andThen (List.map (\p -> readText (f.src ++ "/" ++ p) |> Task.map (Generate.SourceFile p)) >> Task.sequence))
                 |> Task.andThen
                     (\( runtime, sources ) ->
-                        case Generate.generate f.options sources of
-                            Err problems ->
-                                Task.succeed problems
+                        if f.freeze then
+                            case Generate.freeze f.options sources of
+                                Err problems ->
+                                    Task.succeed problems
 
-                            Ok outputs ->
-                                writeAll f.out ({ path = "Wire.elm", source = runtime } :: outputs)
-                                    |> Task.map (\_ -> [])
+                                Ok outputs ->
+                                    outputs
+                                        |> List.map (\file -> writeIfChanged f.src file |> Task.andThen (\_ -> Stream.logLine ("wire: wrote " ++ f.src ++ "/" ++ file.path) env.stdout))
+                                        |> Task.sequence
+                                        |> Task.map (\_ -> [])
+
+                        else
+                            case Generate.generate f.options sources of
+                                Err problems ->
+                                    Task.succeed problems
+
+                                Ok outputs ->
+                                    writeAll f.out ({ path = "Wire.elm", source = runtime } :: outputs)
+                                        |> Task.map (\_ -> [])
                     )
                 |> Task.onError (\e -> Task.succeed [ FileSystem.errorToString e ])
                 |> Task.andThen
@@ -110,6 +125,7 @@ flags args =
                                     , out = out
                                     , runtime = runtime
                                     , options = { entry = entry, config = config, model = model, msg = msg }
+                                    , freeze = Dict.get "freeze" d == Just "yes"
                                     }
                                 )
                                 (need d "config")

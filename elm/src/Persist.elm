@@ -6,6 +6,7 @@ module Persist exposing
     , appModel
     , crc32
     , frame
+    , hash
     , fromHost
     , init
     , program
@@ -38,9 +39,12 @@ writes files; what goes in them is decided here.
     written to a new file and then renamed over the old one (the host makes that
     atomic), and the log is emptied after it, so if the power goes in between, the log's
     entries that the snapshot already has are skipped by their numbers.
-  - A snapshot is `[shape, n, model]`, where shape is a hash of the Model's and the
-    Msg's types (`Codecs.shape`). A build whose types differ starts afresh rather than
-    misread them.
+  - A snapshot is `[format, version, modelHash, msgHash, n, model]`. `version` is
+    the version of the Model's types (elm/src/Evergreen, see tools/wire), and the
+    hashes are of the Model's and the Msg's types. A snapshot of an earlier version
+    is migrated to this build's; the log is only replayed when it was written by a
+    build with the same Msg type, since Msgs are never migrated. A snapshot that
+    can't be read is kept as `snapshot-unreadable`, and the Model starts afresh.
   - A snapshot is taken at start (once the log is replayed), when the log reaches
     `snapshotAfterBytes`, and before powering off or restarting.
 
@@ -75,15 +79,26 @@ type alias Config model msg =
 
 
 {-| How the Model and the Msgs are written down. tools/wire writes these (as the
-`codecs` of build/wire/src/ElmOs.elm) from the types themselves; `shape` describes
-the types, so a build whose types differ doesn't misread what an older one saved.
+`codecs` of build/wire/src/ElmOs.elm) from the types themselves, along with the
+migrations from each earlier version of the Model's types.
 -}
 type alias Codecs model msg =
     { encodeModel : model -> E.Value
     , modelDecoder : D.Decoder model
     , encodeMsg : msg -> E.Value
     , msgDecoder : D.Decoder msg
-    , shape : String
+
+    -- The newest version of the Model's types in elm/src/Evergreen, which these
+    -- codecs read and write.
+    , version : Int
+    , modelShape : String
+    , msgShape : String
+
+    -- The shape of the Model's types in each version.
+    , versionShape : Int -> Maybe String
+
+    -- A Model saved by version n, as version n + 1 would have saved it.
+    , migrate : Int -> D.Value -> Maybe D.Value
     }
 
 
@@ -246,11 +261,22 @@ update config codecs msg model =
 
                         saving =
                             { dir = dir, next = restored.next, logBytes = 0 }
+
+                        kept =
+                            case restored.unreadable of
+                                Just text ->
+                                    [ Effect.WriteFile { path = dir ++ "/snapshot-unreadable", text = text } ]
+
+                                Nothing ->
+                                    []
+
+                        notes =
+                            List.map (\note -> Effect.Log ("persist: " ++ note)) restored.notes
                     in
                     -- The snapshot has the Msgs that waited, so they needn't be logged.
                     case runEarly config codecs early (config.resume restored.model) NotSaving of
                         ( Running app _, effects ) ->
-                            ( Running app (Saving saving), snapshotEffects codecs app saving ++ effects )
+                            ( Running app (Saving saving), notes ++ kept ++ snapshotEffects codecs app saving ++ effects )
 
                         ( WaitingForDisk _, _ ) as other ->
                             other
@@ -327,67 +353,184 @@ snapshotEffects : Codecs model msg -> model -> { a | dir : String, next : Int } 
 snapshotEffects codecs app { dir, next } =
     [ Effect.WriteFile
         { path = dir ++ "/snapshot"
-        , text = frame (E.encode 0 (E.list identity [ E.string (shapeHash codecs), E.int next, codecs.encodeModel app ]))
+        , text =
+            frame
+                (E.encode 0
+                    (E.list identity
+                        [ E.string snapshotFormat
+                        , E.int codecs.version
+                        , E.string (hash codecs.modelShape)
+                        , E.string (hash codecs.msgShape)
+                        , E.int next
+                        , codecs.encodeModel app
+                        ]
+                    )
+                )
         }
     , Effect.WriteFile { path = dir ++ "/log", text = "" }
     ]
 
 
-{-| Changes whenever the Model's or the Msg's type does (or this file's format).
+{-| Changes whenever this file's format does.
 -}
-shapeHash : Codecs model msg -> String
-shapeHash codecs =
-    hex8 (crc32 ("elmos-persist-2 " ++ codecs.shape))
+snapshotFormat : String
+snapshotFormat =
+    "elmos-persist-3"
+
+
+hash : String -> String
+hash shape =
+    hex8 (crc32 shape)
 
 
 
 -- RESTORING
 
 
-{-| The Model from the snapshot and the log, and the number the next log entry gets.
-Starts from `init` when there is no snapshot, or it can't be read. Replays the log
-until its first entry that is missing, cut short, or doesn't decode.
+type alias Restored model =
+    { model : model
+
+    -- The number the next log entry gets.
+    , next : Int
+    , replayed : Int
+
+    -- What happened, for the host's log.
+    , notes : List String
+
+    -- A snapshot that couldn't be read, to keep rather than write over.
+    , unreadable : Maybe String
+    }
+
+
+{-| The Model from the snapshot and the log. Starts from `init` when there is no
+snapshot, or it can't be read. A snapshot saved by an earlier version of the
+Model's types is migrated to this one. The log is replayed, up to its first entry
+that is missing, cut short, or doesn't decode, when it was written by a build with
+the same Msg type (and the same version of the Model); otherwise its Msgs can't be
+read (the Msg type is never migrated), and it is skipped.
 -}
-restore : Config model msg -> Codecs model msg -> { snapshot : Maybe String, log : Maybe String } -> { model : model, next : Int, replayed : Int }
+restore : Config model msg -> Codecs model msg -> { snapshot : Maybe String, log : Maybe String } -> Restored model
 restore config codecs files =
-    case Maybe.map (readSnapshot codecs) files.snapshot of
-        Just (Just ( app, next )) ->
-            let
-                entries =
-                    Maybe.map unframe files.log |> Maybe.withDefault []
-            in
-            replay config codecs entries { model = app, next = next, replayed = 0 }
+    let
+        entries =
+            Maybe.map unframe files.log |> Maybe.withDefault []
 
-        _ ->
-            { model = config.init, next = 0, replayed = 0 }
+        fresh notes unreadable =
+            { model = config.init, next = 0, replayed = 0, notes = notes, unreadable = unreadable }
+    in
+    case files.snapshot of
+        Nothing ->
+            fresh [] Nothing
+
+        Just "" ->
+            fresh [] Nothing
+
+        Just text ->
+            case readSnapshot codecs text of
+                Ok snapshot ->
+                    if snapshot.version == codecs.version && snapshot.msgHash == hash codecs.msgShape then
+                        replay config codecs entries { model = snapshot.model, next = snapshot.next, replayed = 0, notes = snapshot.notes, unreadable = Nothing }
+
+                    else
+                        -- Numbered past the log's entries, which mustn't be replayed
+                        -- even if the power goes before the log is emptied.
+                        { model = snapshot.model
+                        , next = List.foldl (\payload n -> max n (entryNumber payload + 1)) snapshot.next entries
+                        , replayed = 0
+                        , notes =
+                            snapshot.notes
+                                ++ (if List.isEmpty entries then
+                                        []
+
+                                    else
+                                        [ "skipped " ++ String.fromInt (List.length entries) ++ " logged Msgs, which an older build wrote" ]
+                                   )
+                        , unreadable = Nothing
+                        }
+
+                Err problem ->
+                    fresh [ problem ++ "; starting afresh, and keeping it as snapshot-unreadable" ] (Just text)
 
 
-readSnapshot : Codecs model msg -> String -> Maybe ( model, Int )
+type alias Snapshot model =
+    { version : Int
+    , msgHash : String
+    , next : Int
+    , model : model
+    , notes : List String
+    }
+
+
+readSnapshot : Codecs model msg -> String -> Result String (Snapshot model)
 readSnapshot codecs text =
     case unframe text of
         [ payload ] ->
-            D.decodeString
-                (D.map3 (\hash next app -> ( hash, next, app ))
-                    (D.index 0 D.string)
-                    (D.index 1 D.int)
-                    (D.index 2 D.value)
-                )
-                payload
-                |> Result.toMaybe
-                |> Maybe.andThen
-                    (\( hash, next, json ) ->
-                        if hash == shapeHash codecs then
-                            D.decodeValue codecs.modelDecoder json |> Result.toMaybe |> Maybe.map (\app -> ( app, next ))
-
-                        else
-                            Nothing
+            case
+                D.decodeString
+                    (D.map6 (\format version modelHash msgHash next json -> { format = format, version = version, modelHash = modelHash, msgHash = msgHash, next = next, json = json })
+                        (D.index 0 D.string)
+                        (D.index 1 D.int)
+                        (D.index 2 D.string)
+                        (D.index 3 D.string)
+                        (D.index 4 D.int)
+                        (D.index 5 D.value)
                     )
+                    payload
+                    |> Result.toMaybe
+            of
+                Nothing ->
+                    Err "the snapshot isn't in this build's format"
+
+                Just s ->
+                    if s.format /= snapshotFormat then
+                        Err "the snapshot isn't in this build's format"
+
+                    else if s.version > codecs.version then
+                        Err ("the snapshot is of version " ++ String.fromInt s.version ++ " of the Model, newer than this build's " ++ String.fromInt codecs.version)
+
+                    else if Maybe.map hash (codecs.versionShape s.version) /= Just s.modelHash then
+                        Err ("the snapshot's Model isn't of the types that version " ++ String.fromInt s.version ++ " has here")
+
+                    else
+                        case migrateFrom codecs s.version s.json |> Maybe.andThen (\json -> D.decodeValue codecs.modelDecoder json |> Result.toMaybe) of
+                            Just model ->
+                                Ok
+                                    { version = s.version
+                                    , msgHash = s.msgHash
+                                    , next = s.next
+                                    , model = model
+                                    , notes =
+                                        if s.version == codecs.version then
+                                            []
+
+                                        else
+                                            [ "migrated the Model from version " ++ String.fromInt s.version ++ " to " ++ String.fromInt codecs.version ]
+                                    }
+
+                            Nothing ->
+                                Err ("the snapshot's Model (version " ++ String.fromInt s.version ++ ") couldn't be read or migrated")
 
         _ ->
-            Nothing
+            Err "the snapshot is damaged"
 
 
-replay : Config model msg -> Codecs model msg -> List String -> { model : model, next : Int, replayed : Int } -> { model : model, next : Int, replayed : Int }
+{-| A Model saved by `version`, as this build's version would have saved it.
+-}
+migrateFrom : Codecs model msg -> Int -> D.Value -> Maybe D.Value
+migrateFrom codecs version json =
+    if version >= codecs.version then
+        Just json
+
+    else
+        codecs.migrate version json |> Maybe.andThen (migrateFrom codecs (version + 1))
+
+
+entryNumber : String -> Int
+entryNumber payload =
+    D.decodeString (D.index 0 D.int) payload |> Result.withDefault -1
+
+
+replay : Config model msg -> Codecs model msg -> List String -> Restored model -> Restored model
 replay config codecs entries state =
     case entries of
         [] ->
@@ -403,9 +546,10 @@ replay config codecs entries state =
                     else if n == state.next then
                         replay config codecs
                             rest
-                            { model = Tuple.first (config.update msg state.model)
-                            , next = n + 1
-                            , replayed = state.replayed + 1
+                            { state
+                                | model = Tuple.first (config.update msg state.model)
+                                , next = n + 1
+                                , replayed = state.replayed + 1
                             }
 
                     else
