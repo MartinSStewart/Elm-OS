@@ -125,6 +125,7 @@ type Element id
 
 type BorderAndFill
     = NoBorderOrFill
+    | FillOnly Color
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
 
 
@@ -766,6 +767,9 @@ borderAndFillView scale position borderAndFill size2 =
     case borderAndFill of
         NoBorderOrFill ->
             []
+
+        FillOnly fillColor ->
+            Sprite.rectangle fillColor position size2 |> Sprite.toDevice scale
 
         BorderAndFill { borderWidth, borderColor, fillColor } ->
             Sprite.rectangle borderColor position size2

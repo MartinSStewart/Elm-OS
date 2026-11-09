@@ -1169,7 +1169,7 @@ screenUi model =
                 ++ (if model.newsOpen then
                         [ Ui.topRight
                             { size = uiSize model }
-                            (News.newsPage model.news)
+                            (News.view model.news)
                         ]
 
                     else

@@ -7,9 +7,9 @@ module News exposing
     , Topic
     , decoder
     , lastDays
-    , newsPage
     , parseWikitext
     , request
+    , view
     )
 
 {-| Wikipedia's "Portal:Current events": what happened in the world, day by day.
@@ -79,8 +79,8 @@ type NewsState
     | NewsFailed String
 
 
-newsPage : NewsState -> Ui.Element id
-newsPage news =
+view : NewsState -> Ui.Element id
+view news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -100,13 +100,18 @@ newsPage news =
                     List.map
                         (\{ date, topics } ->
                             Ui.column
-                                { spacing = 8, padding = Ui.noPadding }
+                                { spacing = 0, padding = Ui.noPadding }
                                 [ monthName date.month
                                     ++ " "
                                     ++ String.fromInt date.day
                                     ++ ", "
                                     ++ String.fromInt date.year
                                     |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                                    |> Ui.el
+                                        { padding = Ui.paddingXY 12 4
+                                        , inFront = []
+                                        , borderAndFill = Ui.FillOnly (Color.rgb 0.6 0.9 0.6)
+                                        }
                                 , List.map
                                     (\topic ->
                                         Ui.column
@@ -126,7 +131,7 @@ newsPage news =
                                             ]
                                     )
                                     topics
-                                    |> Ui.column { spacing = 8, padding = Ui.noPadding }
+                                    |> Ui.column { spacing = 8, padding = Ui.paddingXY 12 4 }
                                 ]
                         )
                         days
