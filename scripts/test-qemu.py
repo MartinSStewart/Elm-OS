@@ -15,6 +15,8 @@ QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128)
 """
 import hashlib, http.server, json, os, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
+import toolbar
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
 qmp_path, serial_path = os.path.join(tmp, "qmp.sock"), os.path.join(tmp, "serial.log")
@@ -267,24 +269,39 @@ def click(fx, fy):
     time.sleep(0.5)
 
 
+# The toolbar's buttons, found on screen (scripts/toolbar.py), so a new button doesn't
+# move the test's clicks.
+first = screen()
+try:
+    BUTTONS = toolbar.buttons(first, s)
+except RuntimeError as e:
+    save_png(first, f"{ROOT}/build/screenshot.png")
+    fail(f"{e} (build/screenshot.png)")
+
+
+def press(name):
+    x, y = BUTTONS[name]
+    click(x / w, y / h)
+
+
 # The About button (top left) opens the about page in the middle of the screen; a
 # second click closes it.
 middle = (w // 2, h // 2 - 60 * s)
-before = pixel(screen(), *middle)
-click(30 * s / w, 20 * s / h)
+before = pixel(first, *middle)
+press("About")
 time.sleep(1)
 opened = pixel(screen(), *middle)
-click(30 * s / w, 20 * s / h)
+press("About")
 time.sleep(1)
 closed = pixel(screen(), *middle)
 print(f"about page: {before}, open {opened}, closed {closed}")
 if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
     fail("the About button did not open and close the about page")
 
-# The Calculator button (after About) opens the calculator under the toolbar, with the
+# The Calculator button opens the calculator under the toolbar, with the
 # keyboard going to it: 6 * 7 on the number pad, then Enter.
 calc_title = (12 * s, 49 * s)
-click(110 * s / w, 20 * s / h)
+press("Calculator")
 time.sleep(1)
 for key in ["kp_6", "kp_multiply", "kp_7", "ret"]:
     cmd("send-key", keys=[{"type": "qcode", "data": key}])
@@ -298,7 +315,7 @@ if not near(pixel(shot, *calc_title), (220, 210, 199), tol=10):
     fail("the Calculator button did not open the calculator (build/calculator.png)")
 if digits < 20:
     fail(f"the calculator's display is empty ({digits} dark pixels; build/calculator.png)")
-click(110 * s / w, 20 * s / h)
+press("Calculator")
 time.sleep(1)
 if near(pixel(screen(), *calc_title), (220, 210, 199), tol=10):
     fail("a second click on the Calculator button did not close the calculator")

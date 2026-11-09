@@ -8,3 +8,4 @@ elm/review/elm-stuff/
 host/target/
 tools/wire/eco-stuff/
 tools/wire/elm-stuff/
+__pycache__/
