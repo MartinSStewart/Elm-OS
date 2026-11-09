@@ -10,7 +10,8 @@
 //!   2. If GitHub says the running build's commit is newer than `deployed` (CI hasn't
 //!      finished with it yet), nothing either.
 //!   3. The release's manifest.json: its host version must be this host's
-//!      (/etc/elmos/host-version), or the build needs the USB stick flashed again; and
+//!      (/etc/elmos/host-version), or the build needs the USB stick flashed again (Elm
+//!      shows that: ToElm::ReflashNeeded); and
 //!      its Model version mustn't be older than the running build's, since a Model
 //!      can't be migrated backwards.
 //!   4. Download its `elm`, check its SHA-256, put it on the disk (programs.rs), and
@@ -106,6 +107,8 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
     let host_version = std::fs::read_to_string("/etc/elmos/host-version").unwrap_or_default();
     if manifest.get("hostVersion").and_then(|v| v.as_str()) != Some(host_version.trim()) {
         given_up.insert(name.to_owned());
+        // On screen too: this log goes nowhere a user sees on a real computer.
+        elm::send(&protocol::ToElm::ReflashNeeded { build: name.to_owned() });
         return Err(format!(
             "build {name} is deployed, but it changes the host: flash the USB stick again to run it"
         ));

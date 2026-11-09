@@ -58,7 +58,7 @@ const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
 
 /// The messages that describe how things are, of which only the newest matters, in
 /// the order a new program gets them: the screen first, as Elm expects.
-const LATEST_KINDS: usize = 11;
+const LATEST_KINDS: usize = 12;
 
 fn latest_slot(msg: &ToElm) -> Option<usize> {
     Some(match msg {
@@ -73,6 +73,7 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         ToElm::NetConfig { .. } => 8,
         ToElm::DataDisk { .. } => 9,
         ToElm::Mouse { .. } => 10,
+        ToElm::ReflashNeeded { .. } => 11,
         ToElm::Frame { .. }
         | ToElm::Button { .. }
         | ToElm::Wheel { .. }

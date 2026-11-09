@@ -181,6 +181,10 @@ pub enum ToElm {
     /// snapshot and answer `Effect::SwitchReady`. After that answer, this program gets
     /// one more frame (to show it is upgrading) and nothing else.
     Switching { to: String },
+    /// The newest deployed build (update.rs) is for another host version, so this
+    /// computer can't switch to it: its USB stick needs flashing again. Sent again to
+    /// each program the host starts.
+    ReflashNeeded { build: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -335,9 +339,10 @@ mod tests {
             ToElm::Bytes { .. } => "bytes",
             ToElm::Sha256 { .. } => "sha256",
             ToElm::Switching { .. } => "switching",
+            ToElm::ReflashNeeded { .. } => "reflashNeeded",
         }
     }
-    const TO_ELM_TAGS: usize = 23;
+    const TO_ELM_TAGS: usize = 24;
 
     #[test]
     fn reads_the_render_example() {

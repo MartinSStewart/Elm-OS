@@ -68,6 +68,8 @@ type ToElm
     | Sha256 String (Maybe String)
       -- The host is about to replace this program with this build (Main.elm).
     | Switching String
+      -- The newest deployed build, which needs the USB stick flashed again (Main.elm).
+    | ReflashNeeded String
 
 
 type HttpFailure
@@ -174,6 +176,9 @@ decoder =
 
                     22 ->
                         BD.map Switching P.decodeString
+
+                    23 ->
+                        BD.map ReflashNeeded P.decodeString
 
                     _ ->
                         BD.fail
