@@ -1913,7 +1913,7 @@ otherModules defs version self =
 
 packageModules : List String
 packageModules =
-    [ "Array", "Dict", "Set", "Quantity", "Time", "Json.Encode", "Json.Decode" ]
+    [ "Array", "Dict", "Set", "Quantity", "Date", "Time", "Json.Encode", "Json.Decode" ]
 
 
 {-| The modules in `candidates` that `body` refers to (`Module.name`).
@@ -2534,7 +2534,7 @@ fixed ty =
 
         TNamed ( moduleName, _ ) args ->
             not (isFrozen moduleName)
-                && List.member moduleName [ "Basics", "List", "Maybe", "Result", "String", "Char", "Array", "Dict", "Set", "Quantity", "Time", "Json.Encode", "Json.Decode" ]
+                && List.member moduleName [ "Basics", "List", "Maybe", "Result", "String", "Char", "Array", "Dict", "Set", "Quantity", "Date", "Time", "Json.Encode", "Json.Decode" ]
                 && List.all fixed args
 
         _ ->
