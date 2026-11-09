@@ -1359,6 +1359,7 @@ badge font gpu =
                  else
                     Color.rgb 1 0.6 0.1
                 )
+                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
                 Coord.origin
                 size
         }
@@ -1677,7 +1678,12 @@ wiredRows model =
         divider =
             Ui.quads
                 { size = ( width, Units.uiPixels 6 )
-                , triangles = Sprite.rectangle Color.outlineColor (Coord.xy 0 2) ( width, Units.uiPixels 2 )
+                , triangles =
+                    Sprite.rectangle
+                        Color.outlineColor
+                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
+                        (Coord.xy 0 2)
+                        ( width, Units.uiPixels 2 )
                 }
     in
     case model.wired of
@@ -1782,6 +1788,7 @@ signalBars dbm =
                  else
                     Color.outlineColor
                 )
+                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
                 (Coord.xy (i * 4) (18 - h))
                 (Coord.xy 3 h)
     in
@@ -1823,7 +1830,12 @@ weatherRows model =
         divider =
             Ui.quads
                 { size = ( width, Units.uiPixels 6 )
-                , triangles = Sprite.rectangle Color.outlineColor (Coord.xy 0 2) ( width, Units.uiPixels 2 )
+                , triangles =
+                    Sprite.rectangle
+                        Color.outlineColor
+                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
+                        (Coord.xy 0 2)
+                        ( width, Units.uiPixels 2 )
                 }
 
         degrees value =

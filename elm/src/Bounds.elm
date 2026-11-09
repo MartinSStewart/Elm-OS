@@ -5,11 +5,11 @@ import Quantity
 import Units exposing (UiPixels)
 
 
-type alias Bounds =
-    { topLeft : Coord UiPixels, bottomRight : Coord UiPixels }
+type alias Bounds units =
+    { topLeft : Coord units, bottomRight : Coord units }
 
 
-intersection : Bounds -> Bounds -> Maybe Bounds
+intersection : Bounds units -> Bounds units -> Maybe (Bounds units)
 intersection a b =
     let
         ( Quantity.Quantity aLeft, Quantity.Quantity aTop ) =

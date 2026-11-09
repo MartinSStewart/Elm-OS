@@ -26,6 +26,7 @@ the ends, text wider than the box scrolls to keep the cursor in view, and a pass
 shows dots.
 -}
 
+import Bounds exposing (Bounds)
 import Color
 import Coord exposing (Coord)
 import Keyboard
@@ -510,8 +511,8 @@ scroll style state =
     max 0 (caretX (carets style state) state.cursorPosition - innerWidth style)
 
 
-view : UiScale -> Style -> Coord UiPixels -> Bool -> Bool -> State -> List (Triangle DevicePixels)
-view scale style offset hasFocus isValid current =
+view : UiScale -> Bounds UiPixels -> Style -> Coord UiPixels -> Bool -> Bool -> State -> List (Triangle DevicePixels)
+view scale viewport style offset hasFocus isValid current =
     let
         positions =
             carets style current
@@ -548,6 +549,7 @@ view scale style offset hasFocus isValid current =
                  else
                     Color.outlineColor
                 )
+                viewport
                 offset
                 (size style)
                 ++ Sprite.rectangle
@@ -557,6 +559,7 @@ view scale style offset hasFocus isValid current =
                      else
                         Color.fillColor3
                     )
+                    viewport
                     (Coord.xy (x + padding) (y + padding))
                     (Coord.xy (boxWidth - 2 * padding) (boxHeight - 2 * padding))
                 ++ (if current.cursorSize == 0 || not hasFocus then
@@ -565,13 +568,16 @@ view scale style offset hasFocus isValid current =
                     else
                         Sprite.rectangle
                             (Color.rgb255 170 210 255)
+                            viewport
                             (Coord.xy (max clip.left selectionStart) (y + padding))
                             (Coord.xy (min clip.right selectionEnd - max clip.left selectionStart) height)
                    )
 
         caret =
             if hasFocus then
-                Sprite.rectangle Color.black
+                Sprite.rectangle
+                    Color.black
+                    viewport
                     (Coord.xy (textLeft + caretX positions current.cursorPosition - caretWidth style) (y + padding))
                     (Coord.xy (caretWidth style) height)
 
@@ -583,7 +589,7 @@ view scale style offset hasFocus isValid current =
             scale
             Color.black
             style.font
-            { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 100000 ) }
+            { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }
             (shownText style current.text)
             (Coord.xy textLeft (y + padding))
         ++ Sprite.toDevice scale caret

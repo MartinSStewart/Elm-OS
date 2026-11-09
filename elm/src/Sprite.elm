@@ -172,9 +172,19 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     ]
 
 
-rectangle : Color -> Coord units -> Coord units -> List (Triangle units)
-rectangle color position size =
-    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 250, 250 ) ( 4, 4 )
+rectangle : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
+rectangle color clip position size =
+    clippedSprite
+        color
+        { left = Coord.x clip.topLeft |> Quantity.unwrap
+        , right = Coord.x clip.bottomRight |> Quantity.unwrap
+        , top = Coord.y clip.topLeft |> Quantity.unwrap
+        , bottom = Coord.y clip.bottomRight |> Quantity.unwrap
+        }
+        (Coord.toTuple position)
+        (Coord.toTuple size)
+        ( 250, 250 )
+        ( 4, 4 )
 
 
 {-| The mouse cursor with its tip at the given point: a black outline around a fill of
@@ -428,7 +438,7 @@ caretPositions font string =
 
 {-| Text at a position (its top left). '\\n' starts a new line.
 -}
-text : UiScale -> Color -> Font -> Bounds -> String -> Coord UiPixels -> List (Triangle DevicePixels)
+text : UiScale -> Color -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
 text uiScale color font clip string position =
     let
         s =
@@ -438,7 +448,11 @@ text uiScale color font clip string position =
             Coord.toTuple position
 
         deviceClip =
-            { left = Quantity.unwrap (Coord.x clip.topLeft) * s, right = Quantity.unwrap (Coord.x clip.bottomRight) * s }
+            { left = Quantity.unwrap (Coord.x clip.topLeft) * s
+            , right = Quantity.unwrap (Coord.x clip.bottomRight) * s
+            , top = Quantity.unwrap (Coord.y clip.topLeft) * s
+            , bottom = Quantity.unwrap (Coord.y clip.bottomRight) * s
+            }
 
         height =
             lineHeightRaw font
@@ -551,30 +565,36 @@ sansPens s kerning layoutFace drawFace line =
 
 clippedSprite :
     Color
-    -> { left : Int, right : Int }
+    -> { left : Int, right : Int, top : Int, bottom : Int }
     -> ( Int, Int )
     -> ( Int, Int )
     -> ( Int, Int )
     -> ( Int, Int )
     -> List (Triangle units)
-clippedSprite color { left, right } ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
+clippedSprite color { left, right, top, bottom } ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     let
         shownLeft =
             max x left
 
         shownRight =
             min (x + w) right
+
+        shownTop =
+            max y top
+
+        shownBottom =
+            min (y + h) bottom
     in
-    if shownRight <= shownLeft then
+    if shownRight <= shownLeft || shownBottom <= shownTop then
         []
 
     else
         sprite
             color
-            ( shownLeft, y )
-            ( shownRight - shownLeft, h )
-            ( tx + (shownLeft - x) * tw // w, ty )
-            ( (shownRight - shownLeft) * tw // w, th )
+            ( shownLeft, shownTop )
+            ( shownRight - shownLeft, shownBottom - shownTop )
+            ( tx + (shownLeft - x) * tw // w, ty + (shownTop - y) * th // h )
+            ( (shownRight - shownLeft) * tw // w, (shownBottom - shownTop) * th // h )
 
 
 {-| The size of text: its widest line by its lines.
