@@ -735,12 +735,12 @@ focused ids, on a screen with the given UI scale. A parent draws before its chil
 `inFront` elements after the child.
 -}
 view : UiScale -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view scale maybeHover focus ( screenWidth, screenHeight ) element =
+view scale maybeHover focus screenSize element =
     viewList
         scale
         maybeHover
         focus
-        { topLeft = Coord.origin, bottomRight = ( Units.toUi scale screenWidth, Units.toUi scale screenHeight ) }
+        { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
