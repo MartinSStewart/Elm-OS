@@ -14,6 +14,7 @@ module Wire exposing
     , decodeOrder
     , decodePosix
     , decodeQuantity
+    , decodeDate
     , decodeResult
     , decodeSet
     , decodeString
@@ -33,6 +34,7 @@ module Wire exposing
     , encodeOrder
     , encodePosix
     , encodeQuantity
+    , encodeDate
     , encodeRecord
     , encodeResult
     , encodeSet
@@ -56,6 +58,7 @@ import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 import Quantity exposing (Quantity)
+import Date exposing (Date)
 import Set exposing (Set)
 import Time
 
@@ -185,6 +188,11 @@ encodeTuple3 encA encB encC ( a, b, c ) =
 encodeQuantity : (number -> Value) -> Quantity number units -> Value
 encodeQuantity enc quantity =
     enc (Quantity.unwrap quantity)
+
+
+encodeDate : Date -> Value
+encodeDate date =
+    E.int (Date.toRataDie date)
 
 
 encodePosix : Time.Posix -> Value
@@ -354,6 +362,11 @@ decodeTuple3 decA decB decC =
 decodeQuantity : Decoder number -> Decoder (Quantity number units)
 decodeQuantity dec =
     D.map Quantity.unsafe dec
+
+
+decodeDate : Decoder Date
+decodeDate =
+    D.map Date.fromRataDie D.int
 
 
 decodePosix : Decoder Time.Posix

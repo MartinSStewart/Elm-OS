@@ -4,7 +4,6 @@ module Sprite exposing
     , Style(..)
     , Triangle
     , caretPositions
-    , clippedText
     , cursor
     , ellipsis
     , encoder
@@ -36,6 +35,7 @@ than blown up pixels.
 
 -}
 
+import Bounds exposing (Bounds)
 import Bytes exposing (Endianness(..))
 import Bytes.Encode as BE
 import Color exposing (Color)
@@ -172,9 +172,19 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     ]
 
 
-rectangle : Color -> Coord units -> Coord units -> List (Triangle units)
-rectangle color position size =
-    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 250, 250 ) ( 4, 4 )
+rectangle : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
+rectangle color clip position size =
+    clippedSprite
+        color
+        { left = Coord.x clip.topLeft |> Quantity.unwrap
+        , right = Coord.x clip.bottomRight |> Quantity.unwrap
+        , top = Coord.y clip.topLeft |> Quantity.unwrap
+        , bottom = Coord.y clip.bottomRight |> Quantity.unwrap
+        }
+        (Coord.toTuple position)
+        (Coord.toTuple size)
+        ( 250, 250 )
+        ( 4, 4 )
 
 
 {-| The mouse cursor with its tip at the given point: a black outline around a fill of
@@ -428,22 +438,8 @@ caretPositions font string =
 
 {-| Text at a position (its top left). '\\n' starts a new line.
 -}
-text : UiScale -> Color -> Font -> String -> Coord UiPixels -> List (Triangle DevicePixels)
-text scale color font string position =
-    clippedText scale color font Nothing string position
-
-
-{-| Text, leaving out whatever falls outside the columns `left` to `right`.
--}
-clippedText :
-    UiScale
-    -> Color
-    -> Font
-    -> Maybe { left : Quantity Int UiPixels, right : Quantity Int UiPixels }
-    -> String
-    -> Coord UiPixels
-    -> List (Triangle DevicePixels)
-clippedText uiScale color font clip string position =
+text : UiScale -> Color -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
+text uiScale color font clip string position =
     let
         s =
             Units.scaleInt uiScale
@@ -452,7 +448,11 @@ clippedText uiScale color font clip string position =
             Coord.toTuple position
 
         deviceClip =
-            Maybe.map (\c -> { left = Quantity.unwrap c.left * s, right = Quantity.unwrap c.right * s }) clip
+            { left = Quantity.unwrap (Coord.x clip.topLeft) * s
+            , right = Quantity.unwrap (Coord.x clip.bottomRight) * s
+            , top = Quantity.unwrap (Coord.y clip.topLeft) * s
+            , bottom = Quantity.unwrap (Coord.y clip.bottomRight) * s
+            }
 
         height =
             lineHeightRaw font
@@ -563,32 +563,38 @@ sansPens s kerning layoutFace drawFace line =
             placed
 
 
-{-| A sprite cut to the screen columns `left` to `right`. The atlas rectangle is cut by
-the same fraction, which is exact when it isn't scaled.
--}
-clippedSprite : Color -> Maybe { left : Int, right : Int } -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> List (Triangle units)
-clippedSprite color clip ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
-    case clip of
-        Nothing ->
-            sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th )
+clippedSprite :
+    Color
+    -> { left : Int, right : Int, top : Int, bottom : Int }
+    -> ( Int, Int )
+    -> ( Int, Int )
+    -> ( Int, Int )
+    -> ( Int, Int )
+    -> List (Triangle units)
+clippedSprite color { left, right, top, bottom } ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
+    let
+        shownLeft =
+            max x left
 
-        Just { left, right } ->
-            let
-                shownLeft =
-                    max x left
+        shownRight =
+            min (x + w) right
 
-                shownRight =
-                    min (x + w) right
-            in
-            if shownRight <= shownLeft then
-                []
+        shownTop =
+            max y top
 
-            else
-                sprite color
-                    ( shownLeft, y )
-                    ( shownRight - shownLeft, h )
-                    ( tx + (shownLeft - x) * tw // w, ty )
-                    ( (shownRight - shownLeft) * tw // w, th )
+        shownBottom =
+            min (y + h) bottom
+    in
+    if shownRight <= shownLeft || shownBottom <= shownTop then
+        []
+
+    else
+        sprite
+            color
+            ( shownLeft, shownTop )
+            ( shownRight - shownLeft, shownBottom - shownTop )
+            ( tx + (shownLeft - x) * tw // w, ty + (shownTop - y) * th // h )
+            ( (shownRight - shownLeft) * tw // w, (shownBottom - shownTop) * th // h )
 
 
 {-| The size of text: its widest line by its lines.

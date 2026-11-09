@@ -122,6 +122,7 @@ builtins =
         , ( ( "Maybe", "Maybe" ), Builtin "Wire.encodeMaybe" "Wire.decodeMaybe" [ 0 ] )
         , ( ( "Result", "Result" ), Builtin "Wire.encodeResult" "Wire.decodeResult" [ 0, 1 ] )
         , ( ( "Quantity", "Quantity" ), Builtin "Wire.encodeQuantity" "Wire.decodeQuantity" [ 0 ] )
+        , ( ( "Date", "Date" ), Builtin "Wire.encodeDate" "Wire.decodeDate" [] )
         , ( ( "Time", "Posix" ), Builtin "Wire.encodePosix" "Wire.decodePosix" [] )
         , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
         , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
@@ -1910,9 +1911,28 @@ otherModules defs version self =
         |> List.filter (\m -> m /= self)
 
 
+{-| The packages' modules whose types tools/wire knows how to write (`builtins`), apart
+from the ones `packageRef` writes bare. Taken from `builtins` so that a type added
+there is imported by the frozen modules that use it; a list kept by hand here once
+left `import Date` out of a frozen module.
+-}
 packageModules : List String
 packageModules =
-    [ "Array", "Dict", "Set", "Quantity", "Time", "Json.Encode", "Json.Decode" ]
+    builtinModules |> List.filter (\m -> not (List.member m bareModules))
+
+
+{-| Every module that has a type in `builtins`.
+-}
+builtinModules : List String
+builtinModules =
+    Dict.keys builtins |> List.map Tuple.first |> Set.fromList |> Set.toList
+
+
+{-| The modules whose types every module can name bare.
+-}
+bareModules : List String
+bareModules =
+    [ "Basics", "List", "Maybe", "Result", "String", "Char" ]
 
 
 {-| The modules in `candidates` that `body` refers to (`Module.name`).
@@ -1945,7 +1965,7 @@ frozenRef defs version self ( moduleName, name ) =
 -}
 packageRef : Key -> String
 packageRef ( moduleName, name ) =
-    if List.member moduleName [ "Basics", "List", "Maybe", "Result", "String", "Char" ] then
+    if List.member moduleName bareModules then
         name
 
     else
@@ -2533,7 +2553,7 @@ fixed ty =
 
         TNamed ( moduleName, _ ) args ->
             not (isFrozen moduleName)
-                && List.member moduleName [ "Basics", "List", "Maybe", "Result", "String", "Char", "Array", "Dict", "Set", "Quantity", "Time", "Json.Encode", "Json.Decode" ]
+                && List.member moduleName builtinModules
                 && List.all fixed args
 
         _ ->

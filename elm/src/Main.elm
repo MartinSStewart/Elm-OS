@@ -15,6 +15,7 @@ import BootInfo
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Date
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import HostMessage
@@ -254,6 +255,7 @@ type alias Model =
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
+    , newsScroll : Quantity Int UiPixels
     }
 
 
@@ -341,6 +343,7 @@ init =
     , editorOpen = False
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
+    , newsScroll = Quantity.zero
     }
 
 
@@ -531,7 +534,7 @@ step event model =
                     ( { model | editor = TextInputMultiline.wheel (editorStyle model) clicks model.editor }, [] )
 
                 _ ->
-                    ( model, [] )
+                    ( { model | newsScroll = model.newsScroll |> Quantity.plus (Units.uiPixels (clicks * 50)) }, [] )
 
         Key code down repeat ->
             if Keyboard.isShift code then
@@ -761,12 +764,23 @@ click id model =
                     not model.newsOpen
             in
             case ( isOpen, model.news ) of
-                ( _, LoadingNews ) ->
+                ( _, LoadingNews _ ) ->
                     ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
 
                 ( True, _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing, news = LoadingNews }
-                    , [ News.request "news" [ { year = 2026, month = 10, day = 4 } ] ]
+                    ( { model
+                        | newsOpen = isOpen
+                        , editorOpen = False
+                        , focus = Nothing
+                        , news =
+                            case model.news of
+                                LoadedNews days ->
+                                    LoadingNews (Just days)
+
+                                _ ->
+                                    LoadingNews Nothing
+                      }
+                    , [ News.request "news" [ Date.fromCalendarDate 2026 Time.Nov 9, Date.fromCalendarDate 2026 Time.Nov 8 ] ]
                     )
 
                 ( False, _ ) ->
@@ -1084,7 +1098,7 @@ view model =
         hovered =
             Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
-    Ui.view (uiScale model) hovered model.focus ui
+    Ui.view (uiScale model) hovered model.focus model.screenSize ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however
@@ -1145,7 +1159,7 @@ when it is open, and the text editor or the about page in the middle when one is
 screenUi : Model -> Ui.Element UiId
 screenUi model =
     Ui.el
-        { padding = Ui.noPadding
+        { padding = { topLeft = Coord.origin, bottomRight = uiSize model }
         , inFront =
             [ overlay model, networkPanel model, toolbar model ]
                 ++ (if model.editorOpen then
@@ -1169,7 +1183,7 @@ screenUi model =
                 ++ (if model.newsOpen then
                         [ Ui.topRight
                             { size = uiSize model }
-                            (News.view model.news)
+                            (News.view model.newsScroll model.news)
                         ]
 
                     else
@@ -1345,6 +1359,7 @@ badge font gpu =
                  else
                     Color.rgb 1 0.6 0.1
                 )
+                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
                 Coord.origin
                 size
         }
@@ -1663,7 +1678,12 @@ wiredRows model =
         divider =
             Ui.quads
                 { size = ( width, Units.uiPixels 6 )
-                , triangles = Sprite.rectangle Color.outlineColor (Coord.xy 0 2) ( width, Units.uiPixels 2 )
+                , triangles =
+                    Sprite.rectangle
+                        Color.outlineColor
+                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
+                        (Coord.xy 0 2)
+                        ( width, Units.uiPixels 2 )
                 }
     in
     case model.wired of
@@ -1768,6 +1788,7 @@ signalBars dbm =
                  else
                     Color.outlineColor
                 )
+                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
                 (Coord.xy (i * 4) (18 - h))
                 (Coord.xy 3 h)
     in
@@ -1809,7 +1830,12 @@ weatherRows model =
         divider =
             Ui.quads
                 { size = ( width, Units.uiPixels 6 )
-                , triangles = Sprite.rectangle Color.outlineColor (Coord.xy 0 2) ( width, Units.uiPixels 2 )
+                , triangles =
+                    Sprite.rectangle
+                        Color.outlineColor
+                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
+                        (Coord.xy 0 2)
+                        ( width, Units.uiPixels 2 )
                 }
 
         degrees value =

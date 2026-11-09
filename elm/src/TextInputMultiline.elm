@@ -25,6 +25,7 @@ TextInput's. Lines don't wrap: the box scrolls sideways to keep the cursor in vi
 
 -}
 
+import Bounds exposing (Bounds)
 import Color
 import Coord exposing (Coord)
 import Keyboard
@@ -67,6 +68,7 @@ historyLimit =
 limitHistory : TextInput.Model -> TextInput.Model
 limitHistory input =
     { input | undoHistory = List.take historyLimit input.undoHistory }
+
 
 
 -- LINES
@@ -161,6 +163,7 @@ cursorX style state =
     caretX (carets style (lineAt (lines state.text) line)) column
 
 
+
 -- WORDS
 
 
@@ -209,6 +212,7 @@ wordEnd text index =
             countWhile isSpace after
     in
     index + spaces + countWhile (\char -> not (isSpace char)) (List.drop spaces after)
+
 
 
 -- EDITING
@@ -403,6 +407,7 @@ wheel style clicks model =
     { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks) }
 
 
+
 -- MOUSE
 
 
@@ -463,6 +468,7 @@ mouseDownMove style mousePosition position model =
         |> scrollToCursor style
 
 
+
 -- VIEW
 
 
@@ -512,8 +518,8 @@ scrollX style state =
     max 0 (cursorX style state - innerWidth style)
 
 
-view : UiScale -> Style -> Coord UiPixels -> Bool -> Int -> TextInput.State -> List (Triangle DevicePixels)
-view scale style offset hasFocus scroll state =
+view : UiScale -> Bounds UiPixels -> Style -> Coord UiPixels -> Bool -> Int -> TextInput.State -> List (Triangle DevicePixels)
+view scale viewport style offset hasFocus scroll state =
     let
         ls =
             lines state.text
@@ -556,6 +562,7 @@ view scale style offset hasFocus scroll state =
                  else
                     Color.outlineColor
                 )
+                viewport
                 offset
                 (size style)
                 ++ Sprite.rectangle
@@ -565,6 +572,7 @@ view scale style offset hasFocus scroll state =
                      else
                         Color.fillColor3
                     )
+                    viewport
                     (Coord.xy (x + padding) (y + padding))
                     (Coord.xy (boxWidth - 2 * padding) (boxHeight - 2 * padding))
 
@@ -610,6 +618,7 @@ view scale style offset hasFocus scroll state =
                             else
                                 Sprite.rectangle
                                     (Color.rgb255 170 210 255)
+                                    viewport
                                     (Coord.xy (max clip.left left) (top l.line))
                                     (Coord.xy (min clip.right right - max clip.left left) height)
                         )
@@ -619,7 +628,9 @@ view scale style offset hasFocus scroll state =
 
         caret =
             if hasFocus && cursorLine >= scroll && cursorLine < scroll + style.lines then
-                Sprite.rectangle Color.black
+                Sprite.rectangle
+                    Color.black
+                    viewport
                     (Coord.xy
                         (textLeft + caretX (carets style (lineAt ls cursorLine)) cursorColumn - caretWidth style)
                         (top cursorLine)
@@ -637,7 +648,9 @@ view scale style offset hasFocus scroll state =
 
         scrollBar =
             if lineCount > style.lines then
-                Sprite.rectangle Color.outlineColor
+                Sprite.rectangle
+                    Color.outlineColor
+                    viewport
                     (Coord.xy (x + boxWidth - padding - scrollBarWidth) (y + padding + trackHeight * scroll // lineCount))
                     (Coord.xy scrollBarWidth (max 4 (trackHeight * style.lines // lineCount)))
 
@@ -647,10 +660,11 @@ view scale style offset hasFocus scroll state =
     Sprite.toDevice scale (box ++ selection)
         ++ List.concatMap
             (\l ->
-                Sprite.clippedText scale
+                Sprite.text
+                    scale
                     Color.black
                     style.font
-                    (Just { left = Units.uiPixels clip.left, right = Units.uiPixels clip.right })
+                    { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }
                     l.text
                     (Coord.xy textLeft (top l.line))
             )

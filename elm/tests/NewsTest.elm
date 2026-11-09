@@ -1,5 +1,6 @@
 module NewsTest exposing (suite)
 
+import Date exposing (Date)
 import Effect
 import Expect
 import Json.Decode as D
@@ -93,8 +94,8 @@ suite =
                     ]}}"""
                     |> Expect.equal
                         (Ok
-                            [ { date = { year = 2026, month = 11, day = 8 }, topics = [] }
-                            , { date = { year = 2026, month = 10, day = 31 }
+                            [ { date = date 2026 11 8, topics = [] }
+                            , { date = date 2026 10 31
                               , topics = [ { heading = "Sports", items = [ item [ Text "Someone wins." ] [] ] } ]
                               }
                             ]
@@ -105,14 +106,14 @@ suite =
                 -- 2026-11-01T12:00:00Z
                 News.lastDays 3 (Time.millisToPosix 1793534400000)
                     |> Expect.equal
-                        [ { year = 2026, month = 11, day = 1 }
-                        , { year = 2026, month = 10, day = 31 }
-                        , { year = 2026, month = 10, day = 30 }
+                        [ date 2026 11 1
+                        , date 2026 10 31
+                        , date 2026 10 30
                         ]
             )
         , test "the request"
             (\_ ->
-                News.request "news" [ { year = 2026, month = 11, day = 8 }, { year = 2026, month = 11, day = 7 } ]
+                News.request "news" [ date 2026 11 8, date 2026 11 7 ]
                     |> Expect.equal
                         (Effect.Http
                             { id = "news"
@@ -125,3 +126,8 @@ suite =
                         )
             )
         ]
+
+
+date : Int -> Int -> Int -> Date
+date year month dayOfMonth =
+    Date.fromCalendarDate year (Date.numberToMonth month) dayOfMonth

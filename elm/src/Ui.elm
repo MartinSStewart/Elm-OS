@@ -3,7 +3,6 @@ module Ui exposing
     , ButtonData
     , Element(..)
     , InputType(..)
-    , Padding
     , RowColumn
     , TextInputData
     , TextInputMultilineData
@@ -29,12 +28,14 @@ module Ui exposing
     , quads
     , row
     , selectableButton
+    , size
     , text
     , textInput
     , textInputMultiline
     , topLeft
     , topRight
     , view
+    , viewport
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -56,6 +57,7 @@ for now: underlined text and sprites from town-collab's texture.
 
 -}
 
+import Bounds exposing (Bounds)
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Quantity exposing (Quantity)
@@ -67,14 +69,14 @@ import Units exposing (DevicePixels, UiPixels, UiScale)
 
 type alias RowColumn =
     { spacing : Int
-    , padding : Padding
+    , padding : Bounds UiPixels
     , cachedSize : Coord UiPixels
     }
 
 
 type alias ButtonData id =
     { id : id
-    , padding : Padding
+    , padding : Bounds UiPixels
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     , borderAndFillHover : BorderAndFill
@@ -112,7 +114,7 @@ type Element id
     | Row RowColumn (List (Element id))
     | Column RowColumn (List (Element id))
     | Single
-        { padding : Padding
+        { padding : Bounds UiPixels
         , borderAndFill : BorderAndFill
         , inFront : List (Element id)
         , cachedSize : Coord UiPixels
@@ -121,6 +123,7 @@ type Element id
         (Element id)
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
+    | Viewport { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } (Element id)
 
 
 type BorderAndFill
@@ -129,16 +132,12 @@ type BorderAndFill
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
 
 
-type alias Padding =
-    { topLeft : Coord UiPixels, bottomRight : Coord UiPixels }
-
-
-noPadding : Padding
+noPadding : Bounds UiPixels
 noPadding =
     { topLeft = Coord.origin, bottomRight = Coord.origin }
 
 
-paddingXY : Int -> Int -> Padding
+paddingXY : Int -> Int -> Bounds UiPixels
 paddingXY x y =
     { topLeft = Coord.xy x y, bottomRight = Coord.xy x y }
 
@@ -194,7 +193,7 @@ none =
     Empty
 
 
-button : { id : id, padding : Padding } -> Element id -> Element id
+button : { id : id, padding : Bounds UiPixels } -> Element id -> Element id
 button data child =
     customButton
         { id = data.id
@@ -228,7 +227,7 @@ defaultButtonBorderAndFillHover =
 
 customButton :
     { id : id
-    , padding : Padding
+    , padding : Bounds UiPixels
     , inFront : List (Element id)
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
@@ -248,7 +247,7 @@ customButton data child =
         child
 
 
-selectableButton : { id : id, padding : Padding } -> Bool -> Element id -> Element id
+selectableButton : { id : id, padding : Bounds UiPixels } -> Bool -> Element id -> Element id
 selectableButton data isSelected child =
     let
         fill =
@@ -272,12 +271,12 @@ selectableButton data isSelected child =
 -- LAYOUT
 
 
-paddedSize : Padding -> Element id -> Coord UiPixels
+paddedSize : Bounds UiPixels -> Element id -> Coord UiPixels
 paddedSize padding child =
     Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (size child)
 
 
-row : { spacing : Int, padding : Padding } -> List (Element id) -> Element id
+row : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
 row data children =
     let
         children2 =
@@ -286,7 +285,7 @@ row data children =
     Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize data children2 } children2
 
 
-column : { spacing : Int, padding : Padding } -> List (Element id) -> Element id
+column : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
 column data children =
     let
         children2 =
@@ -295,7 +294,7 @@ column data children =
     Column { spacing = data.spacing, padding = data.padding, cachedSize = columnSize data children2 } children2
 
 
-el : { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+el : { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
 el data child =
     Single
         { padding = data.padding
@@ -310,7 +309,7 @@ el data child =
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId : id -> { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
 elWithId id data child =
     Single
         { padding = data.padding
@@ -320,6 +319,11 @@ elWithId id data child =
         , id = Just id
         }
         child
+
+
+viewport : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } -> Element id -> Element id
+viewport =
+    Viewport
 
 
 {-| Change the ids, so a module's UI can sit in a bigger one with its own id type.
@@ -369,6 +373,9 @@ map f element =
 
         Empty ->
             Empty
+
+        Viewport data child ->
+            Viewport data (map f child)
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
@@ -475,8 +482,16 @@ size element =
         Empty ->
             Coord.origin
 
+        Viewport data child ->
+            viewportSize data child
 
-rowSize : { a | spacing : Int, padding : Padding } -> List (Element id) -> Coord UiPixels
+
+viewportSize : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } -> Element id -> Coord UiPixels
+viewportSize data child =
+    ( Coord.x (size child), data.viewportHeight )
+
+
+rowSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Coord UiPixels
 rowSize data children =
     let
         ( w, h ) =
@@ -494,7 +509,7 @@ rowSize data children =
         )
 
 
-columnSize : { a | spacing : Int, padding : Padding } -> List (Element id) -> Coord UiPixels
+columnSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Coord UiPixels
 columnSize data children =
     let
         ( w, h ) =
@@ -627,6 +642,13 @@ hoverHelper hovers point position element =
         Empty ->
             hovers
 
+        Viewport data child ->
+            if contains point position (viewportSize data child) then
+                hoverHelper hovers point (Coord.plus ( Quantity.zero, data.scrollOffset ) position) child
+
+            else
+                hovers
+
 
 type InputType id
     = ButtonType { data : ButtonData id, position : Coord UiPixels, size : Coord UiPixels }
@@ -685,6 +707,9 @@ findInputHelper id position element =
         Empty ->
             Nothing
 
+        Viewport data child ->
+            findInputHelper id (Coord.plus ( Quantity.zero, data.scrollOffset ) position) child
+
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
 findFirst f list =
@@ -709,71 +734,95 @@ findFirst f list =
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 -}
-view : UiScale -> Maybe id -> Maybe id -> Element id -> List (Triangle DevicePixels)
-view scale maybeHover focus element =
-    viewList scale maybeHover focus Coord.origin element
+view : UiScale -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view scale maybeHover focus ( screenWidth, screenHeight ) element =
+    viewList
+        scale
+        maybeHover
+        focus
+        { topLeft = Coord.origin, bottomRight = ( Units.toUi scale screenWidth, Units.toUi scale screenHeight ) }
+        Coord.origin
+        element
 
 
-viewList : UiScale -> Maybe id -> Maybe id -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
-viewList scale maybeHover focus position element =
-    case element of
-        TextInput data ->
-            TextInput.view scale data.style position (focus == Just data.id) data.isValid data.state
+viewList : UiScale -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
+viewList scale maybeHover focus viewport2 position element =
+    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (size element) } of
+        Just viewport3 ->
+            case element of
+                TextInput data ->
+                    TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state
 
-        TextInputMultiline data ->
-            TextInputMultiline.view scale data.style position (focus == Just data.id) data.scroll data.state
+                TextInputMultiline data ->
+                    TextInputMultiline.view scale viewport3 data.style position (focus == Just data.id) data.scroll data.state
 
-        Text data ->
-            Sprite.text scale data.color data.font data.text position
+                Text data ->
+                    Sprite.text scale data.color data.font viewport3 data.text position
 
-        Button data child ->
-            borderAndFillView scale
-                position
-                (if Just data.id == maybeHover then
-                    data.borderAndFillHover
+                Button data child ->
+                    borderAndFillView
+                        scale
+                        viewport3
+                        position
+                        (if Just data.id == maybeHover then
+                            data.borderAndFillHover
 
-                 else if Just data.id == focus then
-                    data.borderAndFillFocus
+                         else if Just data.id == focus then
+                            data.borderAndFillFocus
 
-                 else
-                    data.borderAndFill
-                )
-                data.cachedSize
-                ++ viewList scale maybeHover focus (Coord.plus data.padding.topLeft position) child
-                ++ List.concatMap (viewList scale maybeHover focus position) data.inFront
+                         else
+                            data.borderAndFill
+                        )
+                        data.cachedSize
+                        ++ viewList scale maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList scale maybeHover focus viewport3 position) data.inFront
 
-        Row data children ->
-            childPositions True data position children
-                |> List.concatMap (\( at, child ) -> viewList scale maybeHover focus at child)
+                Row data children ->
+                    childPositions True data position children
+                        |> List.concatMap (\( at, child ) -> viewList scale maybeHover focus viewport3 at child)
 
-        Column data children ->
-            childPositions False data position children
-                |> List.concatMap (\( at, child ) -> viewList scale maybeHover focus at child)
+                Column data children ->
+                    childPositions False data position children
+                        |> List.concatMap (\( at, child ) -> viewList scale maybeHover focus viewport3 at child)
 
-        Single data child ->
-            borderAndFillView scale position data.borderAndFill data.cachedSize
-                ++ viewList scale maybeHover focus (Coord.plus data.padding.topLeft position) child
-                ++ List.concatMap (viewList scale maybeHover focus position) data.inFront
+                Single data child ->
+                    borderAndFillView scale viewport3 position data.borderAndFill data.cachedSize
+                        ++ viewList scale maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList scale maybeHover focus viewport3 position) data.inFront
 
-        Quads data ->
-            Sprite.move position data.triangles |> Sprite.toDevice scale
+                Quads data ->
+                    Sprite.move position data.triangles |> Sprite.toDevice scale
 
-        Empty ->
+                Empty ->
+                    []
+
+                Viewport data child ->
+                    viewList
+                        scale
+                        maybeHover
+                        focus
+                        viewport3
+                        (Coord.plus ( Quantity.zero, data.scrollOffset ) position)
+                        child
+
+        Nothing ->
             []
 
 
-borderAndFillView : UiScale -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
-borderAndFillView scale position borderAndFill size2 =
+borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
+borderAndFillView scale viewport2 position borderAndFill size2 =
     case borderAndFill of
         NoBorderOrFill ->
             []
 
         FillOnly fillColor ->
-            Sprite.rectangle fillColor position size2 |> Sprite.toDevice scale
+            Sprite.rectangle fillColor viewport2 position size2 |> Sprite.toDevice scale
 
         BorderAndFill { borderWidth, borderColor, fillColor } ->
-            Sprite.rectangle borderColor position size2
-                ++ Sprite.rectangle fillColor
+            Sprite.rectangle borderColor viewport2 position size2
+                ++ Sprite.rectangle
+                    fillColor
+                    viewport2
                     (Coord.plus (Coord.xy borderWidth borderWidth) position)
                     (size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth)))
                 |> Sprite.toDevice scale

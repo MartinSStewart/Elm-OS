@@ -1,6 +1,5 @@
 module News exposing
-    ( Date
-    , Day
+    ( Day
     , Inline(..)
     , Item(..)
     , NewsState(..)
@@ -30,19 +29,16 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 
 -}
 
-import Color
+import Color exposing (Color)
 import Coord
+import Date exposing (Date)
 import Effect
 import Json.Decode as D
+import Quantity exposing (Quantity)
 import Sprite
 import Time
-import Ui
-
-
-{-| A day in UTC, as Wikipedia files its pages. `month` is 1 to 12.
--}
-type alias Date =
-    { year : Int, month : Int, day : Int }
+import Ui exposing (Element)
+import Units exposing (UiPixels)
 
 
 type alias Day =
@@ -74,73 +70,148 @@ type Inline
 
 type NewsState
     = NewsNotRequested
-    | LoadingNews
+    | LoadingNews (Maybe (List Day))
     | LoadedNews (List Day)
     | NewsFailed String
 
 
-view : NewsState -> Ui.Element id
-view news =
+view : Quantity Int UiPixels -> NewsState -> Element id
+view newsScroll news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
         , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
         }
         (Ui.column
-            { spacing = 0, padding = Ui.noPadding }
+            { spacing = 4, padding = Ui.noPadding }
             [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) "Wikipedia: Current events"
             , case news of
                 NewsNotRequested ->
                     Ui.none
 
-                LoadingNews ->
-                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
+                LoadingNews maybeDays ->
+                    case maybeDays of
+                        Just days ->
+                            daysView newsScroll days
+
+                        Nothing ->
+                            Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
 
                 LoadedNews days ->
-                    List.map
-                        (\{ date, topics } ->
-                            Ui.column
-                                { spacing = 0, padding = Ui.noPadding }
-                                [ monthName date.month
-                                    ++ " "
-                                    ++ String.fromInt date.day
-                                    ++ ", "
-                                    ++ String.fromInt date.year
-                                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
-                                    |> Ui.el
-                                        { padding = Ui.paddingXY 12 4
-                                        , inFront = []
-                                        , borderAndFill = Ui.FillOnly (Color.rgb 0.6 0.9 0.6)
-                                        }
-                                , List.map
-                                    (\topic ->
-                                        Ui.column
-                                            { spacing = 8, padding = Ui.noPadding }
-                                            [ Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) topic.heading
-                                            , Ui.el
-                                                { padding = { topLeft = Coord.xy 16 0, bottomRight = Coord.origin }
-                                                , inFront = []
-                                                , borderAndFill = Ui.NoBorderOrFill
-                                                }
-                                                (Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) "Content")
-
-                                            --(Ui.column
-                                            --    { spacing = 8, padding = Ui.noPadding }
-                                            --    topic.items
-                                            --)
-                                            ]
-                                    )
-                                    topics
-                                    |> Ui.column { spacing = 8, padding = Ui.paddingXY 12 4 }
-                                ]
-                        )
-                        days
-                        |> Ui.column { spacing = 16, padding = Ui.noPadding }
+                    daysView newsScroll days
 
                 NewsFailed string ->
                     Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
             ]
         )
+
+
+daysView : Quantity Int UiPixels -> List Day -> Element id
+daysView newsScroll days =
+    List.map
+        (\{ date, topics } ->
+            let
+                body : Element id
+                body =
+                    List.map
+                        (\topic ->
+                            Ui.column
+                                { spacing = 8, padding = Ui.noPadding }
+                                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) topic.heading
+                                , Ui.column
+                                    { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
+                                    (List.map (itemView 140) topic.items)
+                                ]
+                        )
+                        topics
+                        |> Ui.column { spacing = 8, padding = Ui.paddingXY 12 4 }
+            in
+            Ui.column
+                { spacing = 0, padding = Ui.noPadding }
+                [ monthName (Date.month date)
+                    ++ " "
+                    ++ String.fromInt (Date.day date)
+                    ++ ", "
+                    ++ String.fromInt (Date.year date)
+                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                    |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
+                    |> Ui.el
+                        { padding = Ui.paddingXY 12 4
+                        , inFront = []
+                        , borderAndFill = Ui.FillOnly dateColor
+                        }
+                , body
+                ]
+                |> Ui.el
+                    { padding = Ui.paddingXY 4 4
+                    , inFront = []
+                    , borderAndFill =
+                        Ui.BorderAndFill
+                            { borderWidth = 1, borderColor = dateColor, fillColor = Color.fillColor }
+                    }
+        )
+        days
+        |> Ui.column { spacing = 16, padding = Ui.noPadding }
+        |> Ui.viewport { viewportHeight = Quantity.unsafe 400, scrollOffset = newsScroll }
+
+
+dateColor : Color
+dateColor =
+    Color.rgb 0.9 0.95 0.88
+
+
+itemSpacing : number
+itemSpacing =
+    6
+
+
+itemView : Int -> Item -> Element id
+itemView width (Item item) =
+    let
+        inlineText : String
+        inlineText =
+            plainText item.content
+    in
+    Ui.column
+        { spacing = itemSpacing, padding = Ui.noPadding }
+        [ Ui.row
+            { spacing = 6, padding = Ui.noPadding }
+            [ Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) "•"
+            , String.foldl
+                (\char { lastSpace, lastBreak, index, lines } ->
+                    if index - lastBreak > width then
+                        case lastSpace of
+                            Just lastSpace2 ->
+                                { lastSpace = Nothing
+                                , lastBreak = lastSpace2 + 1
+                                , index = index + 1
+                                , lines = String.slice lastBreak (lastSpace2 + 1) inlineText :: lines
+                                }
+
+                            Nothing ->
+                                { lastSpace = Nothing
+                                , lastBreak = index
+                                , index = index + 1
+                                , lines = String.slice lastBreak index inlineText :: lines
+                                }
+
+                    else if char == ' ' then
+                        { lastSpace = Just index, lastBreak = lastBreak, index = index + 1, lines = lines }
+
+                    else
+                        { lastSpace = lastSpace, lastBreak = lastBreak, index = index + 1, lines = lines }
+                )
+                { lastSpace = Nothing, lastBreak = 0, index = 0, lines = [] }
+                inlineText
+                |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
+                |> List.reverse
+                |> String.join "\n"
+                |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+            ]
+        , Ui.column
+            { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }
+            (List.map (itemView (width - 2)) item.children)
+        ]
 
 
 url : String
@@ -183,79 +254,66 @@ request id dates =
 pageTitle : Date -> String
 pageTitle date =
     "Portal:Current_events/"
-        ++ String.fromInt date.year
+        ++ String.fromInt (Date.year date)
         ++ "_"
-        ++ monthName date.month
+        ++ monthName (Date.month date)
         ++ "_"
-        ++ String.fromInt date.day
+        ++ String.fromInt (Date.day date)
 
 
 {-| The `count` days up to and including the one `now` is in (UTC), newest first.
 -}
 lastDays : Int -> Time.Posix -> List Date
 lastDays count now =
+    let
+        date =
+            Date.fromPosix Time.utc now
+    in
     List.range 0 (count - 1)
         |> List.map
             (\daysAgo ->
-                let
-                    time =
-                        Time.millisToPosix (Time.posixToMillis now - daysAgo * 86400000)
-                in
-                { year = Time.toYear Time.utc time
-                , month = monthNumber (Time.toMonth Time.utc time)
-                , day = Time.toDay Time.utc time
-                }
+                Date.add Date.Days -daysAgo date
             )
 
 
-monthNames : List String
-monthNames =
-    [ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" ]
-
-
-monthName : Int -> String
+monthName : Time.Month -> String
 monthName month =
-    List.drop (month - 1) monthNames |> List.head |> Maybe.withDefault "January"
-
-
-monthNumber : Time.Month -> Int
-monthNumber month =
     case month of
         Time.Jan ->
-            1
+            "January"
 
         Time.Feb ->
-            2
+            "February"
 
         Time.Mar ->
-            3
+            "March"
 
         Time.Apr ->
-            4
+            "April"
 
         Time.May ->
-            5
+            "May"
 
         Time.Jun ->
-            6
+            "June"
 
         Time.Jul ->
-            7
+            "July"
 
         Time.Aug ->
-            8
+            "August"
 
         Time.Sep ->
-            9
+            "September"
 
         Time.Oct ->
-            10
+            "October"
 
         Time.Nov ->
-            11
+            "November"
 
         Time.Dec ->
-            12
+            "December"
 
 
 
@@ -267,12 +325,7 @@ monthNumber month =
 decoder : D.Decoder (List Day)
 decoder =
     D.at [ "query", "pages" ] (D.list page)
-        |> D.map (\days -> List.filterMap identity days |> List.sortBy (\day -> -(dateOrder day.date)))
-
-
-dateOrder : Date -> Int
-dateOrder date =
-    (date.year * 12 + date.month) * 31 + date.day
+        |> D.map (\days -> List.filterMap identity days |> List.sortWith (\dayA dayB -> Date.compare dayB.date dayA.date))
 
 
 {-| Nothing for a day with no page.
@@ -295,27 +348,52 @@ parseTitle : String -> Maybe Date
 parseTitle title =
     case String.split "/" title |> List.drop 1 |> List.head |> Maybe.map String.words of
         Just [ year, month, day ] ->
-            Maybe.map3 Date
-                (String.toInt year)
-                (indexOf month monthNames |> Maybe.map ((+) 1))
-                (String.toInt day)
+            let
+                month2 =
+                    case month of
+                        "January" ->
+                            Just Time.Jan
+
+                        "February" ->
+                            Just Time.Feb
+
+                        "March" ->
+                            Just Time.Mar
+
+                        "April" ->
+                            Just Time.Apr
+
+                        "May" ->
+                            Just Time.May
+
+                        "June" ->
+                            Just Time.Jun
+
+                        "July" ->
+                            Just Time.Jul
+
+                        "August" ->
+                            Just Time.Aug
+
+                        "September" ->
+                            Just Time.Sep
+
+                        "October" ->
+                            Just Time.Oct
+
+                        "November" ->
+                            Just Time.Nov
+
+                        "December" ->
+                            Just Time.Dec
+
+                        _ ->
+                            Nothing
+            in
+            Maybe.map3 Date.fromCalendarDate (String.toInt year) month2 (String.toInt day)
 
         _ ->
             Nothing
-
-
-indexOf : a -> List a -> Maybe Int
-indexOf x list =
-    case list of
-        [] ->
-            Nothing
-
-        first :: rest ->
-            if first == x then
-                Just 0
-
-            else
-                indexOf x rest |> Maybe.map ((+) 1)
 
 
 
