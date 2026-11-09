@@ -3,12 +3,12 @@ module TextInput exposing
     , OutMsg(..)
     , State
     , Style
+    , deleteSelection
     , init
+    , insertText
     , keyMsg
     , mouseDown
     , mouseDownMove
-    , deleteSelection
-    , insertText
     , paste
     , pushState
     , replaceState
@@ -579,10 +579,11 @@ view scale style offset hasFocus isValid current =
                 []
     in
     Sprite.toDevice scale box
-        ++ Sprite.clippedText scale
+        ++ Sprite.text
+            scale
             Color.black
             style.font
-            (Just { left = Units.uiPixels clip.left, right = Units.uiPixels clip.right })
+            { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 100000 ) }
             (shownText style current.text)
             (Coord.xy textLeft (y + padding))
         ++ Sprite.toDevice scale caret

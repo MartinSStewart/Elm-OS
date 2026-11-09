@@ -69,6 +69,7 @@ limitHistory input =
     { input | undoHistory = List.take historyLimit input.undoHistory }
 
 
+
 -- LINES
 
 
@@ -161,6 +162,7 @@ cursorX style state =
     caretX (carets style (lineAt (lines state.text) line)) column
 
 
+
 -- WORDS
 
 
@@ -209,6 +211,7 @@ wordEnd text index =
             countWhile isSpace after
     in
     index + spaces + countWhile (\char -> not (isSpace char)) (List.drop spaces after)
+
 
 
 -- EDITING
@@ -403,6 +406,7 @@ wheel style clicks model =
     { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks) }
 
 
+
 -- MOUSE
 
 
@@ -461,6 +465,7 @@ mouseDownMove style mousePosition position model =
         , goalX = Nothing
     }
         |> scrollToCursor style
+
 
 
 -- VIEW
@@ -647,10 +652,11 @@ view scale style offset hasFocus scroll state =
     Sprite.toDevice scale (box ++ selection)
         ++ List.concatMap
             (\l ->
-                Sprite.clippedText scale
+                Sprite.text
+                    scale
                     Color.black
                     style.font
-                    (Just { left = Units.uiPixels clip.left, right = Units.uiPixels clip.right })
+                    { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 100000 ) }
                     l.text
                     (Coord.xy textLeft (top l.line))
             )

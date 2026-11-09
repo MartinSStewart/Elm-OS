@@ -34,10 +34,11 @@ import Coord
 import Date exposing (Date)
 import Effect
 import Json.Decode as D
-import Quantity
+import Quantity exposing (Quantity)
 import Sprite
 import Time
 import Ui exposing (Element)
+import Units exposing (UiPixels)
 
 
 type alias Day =
@@ -69,13 +70,13 @@ type Inline
 
 type NewsState
     = NewsNotRequested
-    | LoadingNews
+    | LoadingNews (Maybe (List Day))
     | LoadedNews (List Day)
     | NewsFailed String
 
 
-view : NewsState -> Ui.Element id
-view news =
+view : Quantity Int UiPixels -> NewsState -> Ui.Element id
+view newsScroll news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -88,59 +89,70 @@ view news =
                 NewsNotRequested ->
                     Ui.none
 
-                LoadingNews ->
-                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
+                LoadingNews maybeDays ->
+                    case maybeDays of
+                        Just days ->
+                            daysView newsScroll days
+
+                        Nothing ->
+                            Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
 
                 LoadedNews days ->
-                    List.map
-                        (\{ date, topics } ->
-                            let
-                                body : Element id
-                                body =
-                                    List.map
-                                        (\topic ->
-                                            Ui.column
-                                                { spacing = 8, padding = Ui.noPadding }
-                                                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) topic.heading
-                                                , Ui.column
-                                                    { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
-                                                    (List.map (itemView 140) topic.items)
-                                                ]
-                                        )
-                                        topics
-                                        |> Ui.column { spacing = 8, padding = Ui.paddingXY 12 4 }
-                            in
-                            Ui.column
-                                { spacing = 0, padding = Ui.noPadding }
-                                [ monthName (Date.month date)
-                                    ++ " "
-                                    ++ String.fromInt (Date.day date)
-                                    ++ ", "
-                                    ++ String.fromInt (Date.year date)
-                                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
-                                    |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
-                                    |> Ui.el
-                                        { padding = Ui.paddingXY 12 4
-                                        , inFront = []
-                                        , borderAndFill = Ui.FillOnly dateColor
-                                        }
-                                , body
-                                ]
-                                |> Ui.el
-                                    { padding = Ui.paddingXY 4 4
-                                    , inFront = []
-                                    , borderAndFill =
-                                        Ui.BorderAndFill
-                                            { borderWidth = 1, borderColor = dateColor, fillColor = Color.fillColor }
-                                    }
-                        )
-                        days
-                        |> Ui.column { spacing = 16, padding = Ui.noPadding }
+                    daysView newsScroll days
 
                 NewsFailed string ->
                     Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
             ]
         )
+
+
+daysView : Quantity Int UiPixels -> List Day -> Element id
+daysView newsScroll days =
+    List.map
+        (\{ date, topics } ->
+            let
+                body : Element id
+                body =
+                    List.map
+                        (\topic ->
+                            Ui.column
+                                { spacing = 8, padding = Ui.noPadding }
+                                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) topic.heading
+                                , Ui.column
+                                    { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
+                                    (List.map (itemView 140) topic.items)
+                                ]
+                        )
+                        topics
+                        |> Ui.column { spacing = 8, padding = Ui.paddingXY 12 4 }
+            in
+            Ui.column
+                { spacing = 0, padding = Ui.noPadding }
+                [ monthName (Date.month date)
+                    ++ " "
+                    ++ String.fromInt (Date.day date)
+                    ++ ", "
+                    ++ String.fromInt (Date.year date)
+                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                    |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
+                    |> Ui.el
+                        { padding = Ui.paddingXY 12 4
+                        , inFront = []
+                        , borderAndFill = Ui.FillOnly dateColor
+                        }
+                , body
+                ]
+                |> Ui.el
+                    { padding = Ui.paddingXY 4 4
+                    , inFront = []
+                    , borderAndFill =
+                        Ui.BorderAndFill
+                            { borderWidth = 1, borderColor = dateColor, fillColor = Color.fillColor }
+                    }
+        )
+        days
+        |> Ui.column { spacing = 16, padding = Ui.noPadding }
+        |> Ui.viewport { viewportHeight = Quantity.unsafe 400, scrollOffset = newsScroll }
 
 
 dateColor : Color
@@ -156,21 +168,9 @@ itemSpacing =
 itemView : Int -> Item -> Element id
 itemView width (Item item) =
     let
+        inlineText : String
         inlineText =
-            List.map
-                (\inline ->
-                    case inline of
-                        Text text ->
-                            text
-
-                        WikiLink record ->
-                            record.label
-
-                        ExternalLink record ->
-                            record.label
-                )
-                item.content
-                |> String.concat
+            plainText item.content
     in
     Ui.column
         { spacing = itemSpacing, padding = Ui.noPadding }

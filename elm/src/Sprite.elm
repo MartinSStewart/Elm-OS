@@ -4,7 +4,6 @@ module Sprite exposing
     , Style(..)
     , Triangle
     , caretPositions
-    , clippedText
     , cursor
     , ellipsis
     , encoder
@@ -36,6 +35,7 @@ than blown up pixels.
 
 -}
 
+import Bounds exposing (Bounds)
 import Bytes exposing (Endianness(..))
 import Bytes.Encode as BE
 import Color exposing (Color)
@@ -428,22 +428,8 @@ caretPositions font string =
 
 {-| Text at a position (its top left). '\\n' starts a new line.
 -}
-text : UiScale -> Color -> Font -> String -> Coord UiPixels -> List (Triangle DevicePixels)
-text scale color font string position =
-    clippedText scale color font Nothing string position
-
-
-{-| Text, leaving out whatever falls outside the columns `left` to `right`.
--}
-clippedText :
-    UiScale
-    -> Color
-    -> Font
-    -> Maybe { left : Quantity Int UiPixels, right : Quantity Int UiPixels }
-    -> String
-    -> Coord UiPixels
-    -> List (Triangle DevicePixels)
-clippedText uiScale color font clip string position =
+text : UiScale -> Color -> Font -> Bounds -> String -> Coord UiPixels -> List (Triangle DevicePixels)
+text uiScale color font clip string position =
     let
         s =
             Units.scaleInt uiScale
@@ -452,7 +438,7 @@ clippedText uiScale color font clip string position =
             Coord.toTuple position
 
         deviceClip =
-            Maybe.map (\c -> { left = Quantity.unwrap c.left * s, right = Quantity.unwrap c.right * s }) clip
+            { left = Quantity.unwrap (Coord.x clip.topLeft) * s, right = Quantity.unwrap (Coord.x clip.bottomRight) * s }
 
         height =
             lineHeightRaw font
@@ -563,32 +549,32 @@ sansPens s kerning layoutFace drawFace line =
             placed
 
 
-{-| A sprite cut to the screen columns `left` to `right`. The atlas rectangle is cut by
-the same fraction, which is exact when it isn't scaled.
--}
-clippedSprite : Color -> Maybe { left : Int, right : Int } -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> List (Triangle units)
-clippedSprite color clip ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
-    case clip of
-        Nothing ->
-            sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th )
+clippedSprite :
+    Color
+    -> { left : Int, right : Int }
+    -> ( Int, Int )
+    -> ( Int, Int )
+    -> ( Int, Int )
+    -> ( Int, Int )
+    -> List (Triangle units)
+clippedSprite color { left, right } ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
+    let
+        shownLeft =
+            max x left
 
-        Just { left, right } ->
-            let
-                shownLeft =
-                    max x left
+        shownRight =
+            min (x + w) right
+    in
+    if shownRight <= shownLeft then
+        []
 
-                shownRight =
-                    min (x + w) right
-            in
-            if shownRight <= shownLeft then
-                []
-
-            else
-                sprite color
-                    ( shownLeft, y )
-                    ( shownRight - shownLeft, h )
-                    ( tx + (shownLeft - x) * tw // w, ty )
-                    ( (shownRight - shownLeft) * tw // w, th )
+    else
+        sprite
+            color
+            ( shownLeft, y )
+            ( shownRight - shownLeft, h )
+            ( tx + (shownLeft - x) * tw // w, ty )
+            ( (shownRight - shownLeft) * tw // w, th )
 
 
 {-| The size of text: its widest line by its lines.

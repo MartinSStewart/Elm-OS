@@ -1,5 +1,7 @@
 module Coord exposing
     ( Coord
+    , componentMax
+    , componentMin
     , minus
     , origin
     , plus
@@ -80,3 +82,13 @@ toDevice scale ( px, py ) =
 toUi : UiScale -> Coord DevicePixels -> Coord UiPixels
 toUi scale ( px, py ) =
     ( Units.toUi scale px, Units.toUi scale py )
+
+
+componentMin : Coord a -> Coord a -> Coord a
+componentMin ( ax, ay ) ( bx, by ) =
+    ( Quantity.min ax bx, Quantity.min ay by )
+
+
+componentMax : Coord a -> Coord a -> Coord a
+componentMax ( ax, ay ) ( bx, by ) =
+    ( Quantity.max ax bx, Quantity.max ay by )
