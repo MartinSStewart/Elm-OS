@@ -2,7 +2,6 @@ module Bounds exposing (Bounds, intersection)
 
 import Coord exposing (Coord)
 import Quantity
-import Units exposing (UiPixels)
 
 
 type alias Bounds units =

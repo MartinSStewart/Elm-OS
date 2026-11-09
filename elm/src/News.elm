@@ -75,7 +75,7 @@ type NewsState
     | NewsFailed String
 
 
-view : Quantity Int UiPixels -> NewsState -> Ui.Element id
+view : Quantity Int UiPixels -> NewsState -> Element id
 view newsScroll news =
     Ui.el
         { padding = Ui.paddingXY 12 10
@@ -272,7 +272,7 @@ lastDays count now =
     List.range 0 (count - 1)
         |> List.map
             (\daysAgo ->
-                Date.add Date.Days daysAgo date
+                Date.add Date.Days -daysAgo date
             )
 
 
@@ -325,7 +325,7 @@ monthName month =
 decoder : D.Decoder (List Day)
 decoder =
     D.at [ "query", "pages" ] (D.list page)
-        |> D.map (\days -> List.filterMap identity days |> List.sortWith (\dayA dayB -> Date.compare dayA.date dayB.date))
+        |> D.map (\days -> List.filterMap identity days |> List.sortWith (\dayA dayB -> Date.compare dayB.date dayA.date))
 
 
 {-| Nothing for a day with no page.
@@ -394,20 +394,6 @@ parseTitle title =
 
         _ ->
             Nothing
-
-
-indexOf : a -> List a -> Maybe Int
-indexOf x list =
-    case list of
-        [] ->
-            Nothing
-
-        first :: rest ->
-            if first == x then
-                Just 0
-
-            else
-                indexOf x rest |> Maybe.map ((+) 1)
 
 
 

@@ -6,6 +6,8 @@ and migrated. Don't change them.
 
 -}
 
+import Date
+
 
 type alias Day =
     { date : Date.Date
