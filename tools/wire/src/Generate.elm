@@ -122,6 +122,7 @@ builtins =
         , ( ( "Maybe", "Maybe" ), Builtin "Wire.encodeMaybe" "Wire.decodeMaybe" [ 0 ] )
         , ( ( "Result", "Result" ), Builtin "Wire.encodeResult" "Wire.decodeResult" [ 0, 1 ] )
         , ( ( "Quantity", "Quantity" ), Builtin "Wire.encodeQuantity" "Wire.decodeQuantity" [ 0 ] )
+        , ( ( "Date", "Date" ), Builtin "Wire.encodeDate" "Wire.decodeDate" [ 0 ] )
         , ( ( "Time", "Posix" ), Builtin "Wire.encodePosix" "Wire.decodePosix" [] )
         , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
         , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )

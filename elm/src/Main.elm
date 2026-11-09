@@ -15,6 +15,7 @@ import BootInfo
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Date
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import HostMessage
@@ -766,7 +767,7 @@ click id model =
 
                 ( True, _ ) ->
                     ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing, news = LoadingNews }
-                    , [ News.request "news" [ { year = 2026, month = 10, day = 4 } ] ]
+                    , [ News.request "news" [ Date.fromCalendarDate 2026 Time.Nov 9, Date.fromCalendarDate 2026 Time.Nov 8 ] ]
                     )
 
                 ( False, _ ) ->

@@ -29,6 +29,7 @@ module Ui exposing
     , quads
     , row
     , selectableButton
+    , size
     , text
     , textInput
     , textInputMultiline
