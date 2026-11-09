@@ -10,7 +10,8 @@
 //!   2. If GitHub says the running build's commit is newer than `deployed` (CI hasn't
 //!      finished with it yet), nothing either.
 //!   3. The release's manifest.json: its host version must be this host's
-//!      (/etc/elmos/host-version), or the build needs the USB stick flashed again; and
+//!      (/etc/elmos/host-version), or the build needs the USB stick flashed again (Elm
+//!      shows that: ToElm::ReflashNeeded); and
 //!      its Model version mustn't be older than the running build's, since a Model
 //!      can't be migrated backwards.
 //!   4. Download its `elm`, check its SHA-256, put it on the disk (programs.rs), and
@@ -23,7 +24,7 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::{elm, persist, programs};
@@ -85,6 +86,10 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
         return Ok(()); // up to date
     }
     if given_up.contains(name) {
+        if needs_flash(name) {
+            // Again, for a program started since (it starts without the notice).
+            elm::send(&protocol::ToElm::ReflashNeeded { build: name.to_owned() });
+        }
         return Ok(());
     }
 
@@ -106,6 +111,10 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
     let host_version = std::fs::read_to_string("/etc/elmos/host-version").unwrap_or_default();
     if manifest.get("hostVersion").and_then(|v| v.as_str()) != Some(host_version.trim()) {
         given_up.insert(name.to_owned());
+        // On screen too, since this log goes nowhere a user sees on a real computer;
+        // again at each check while it is the deployed build (see above).
+        *NEEDS_FLASH.lock().unwrap_or_else(|e| e.into_inner()) = Some(name.to_owned());
+        elm::send(&protocol::ToElm::ReflashNeeded { build: name.to_owned() });
         return Err(format!(
             "build {name} is deployed, but it changes the host: flash the USB stick again to run it"
         ));
@@ -139,6 +148,13 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
         programs::remove_all_but(&elm::running_build());
     }
     Ok(())
+}
+
+/// The last deployed build found to need the USB stick flashed again.
+static NEEDS_FLASH: Mutex<Option<String>> = Mutex::new(None);
+
+fn needs_flash(name: &str) -> bool {
+    NEEDS_FLASH.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(name)
 }
 
 fn hex(bytes: &[u8]) -> String {

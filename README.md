@@ -293,10 +293,13 @@ older than the running one's (a Model can't be migrated backwards). Only the USB
 `make test-update` checks this against a stand-in for GitHub. `main` itself is never held back,
 since there are no pull requests; `deployed` is what has passed.
 
-`hostVersion` is a SHA-256 of everything on the computer's side of Elm OS (the host, kernel
-options, pinned versions; `tools/host-version.sh`), also in the initramfs as
-`/etc/elmos/host-version`. A computer can only switch to a build with its own host version;
-a commit that changes the host needs the USB stick flashed again.
+`hostVersion` is a SHA-256 of the protocol between the Elm program and the host (the messages
+and their framing in `host/protocol`, without comments or tests; `tools/host-version.sh`), also
+in the initramfs as `/etc/elmos/host-version`. A computer can only switch to a build with its
+own host version: a commit that changes the protocol needs the USB stick flashed again, and the
+Elm program then says so in the bottom right corner. Other host, kernel or wpa_supplicant
+changes don't stop a computer from taking new builds, but it keeps its old host until the stick
+is flashed again.
 
 To roll back a bad build, move `deployed` back yourself:
 `git push --force origin <good commit>:deployed`. The next commit on `main` that passes moves it

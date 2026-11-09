@@ -59,6 +59,8 @@ type Input
       -- The host is about to replace this program with a newer build (named by the
       -- string): show it, and answer once the snapshot is written.
     | Switching String
+      -- The newest deployed build needs the USB stick flashed again (host/init/src/update.rs).
+    | ReflashNeeded String
 
 
 type alias SystemInfo =
@@ -193,6 +195,9 @@ toInput message =
         HostMessage.Switching build ->
             Ok (Switching build)
 
+        HostMessage.ReflashNeeded build ->
+            Ok (ReflashNeeded build)
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -248,6 +253,7 @@ type alias Model =
     , editor : TextInputMultiline.Model
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
+    , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     }
 
 
@@ -334,6 +340,7 @@ init =
     , editor = TextInputMultiline.init
     , editorOpen = False
     , upgradingTo = Nothing
+    , reflashNeeded = Nothing
     }
 
 
@@ -373,8 +380,18 @@ step : Input -> Model -> ( Model, List Effect )
 step event model =
     case event of
         Screen w h ->
-            -- The host's first message: it is listening for effects now.
-            ( { model | screenSize = Coord.xy w h, mouse = Coord.xy (w // 2) (h // 2) }, BootInfo.start )
+            -- The host's first message to each program it starts: it is listening for
+            -- effects now. The notices are about the program before this one (the
+            -- Model is the one it saved); the host sends ReflashNeeded again if it
+            -- still applies.
+            ( { model
+                | screenSize = Coord.xy w h
+                , mouse = Coord.xy (w // 2) (h // 2)
+                , upgradingTo = Nothing
+                , reflashNeeded = Nothing
+              }
+            , BootInfo.start
+            )
 
         Frame time ->
             let
@@ -575,6 +592,9 @@ step event model =
             -- Persist writes the snapshot before SwitchReady goes to the host. The
             -- notice shows on the frame the host asks for after it.
             ( { model | upgradingTo = Just build }, [ Effect.SwitchReady ] )
+
+        ReflashNeeded build ->
+            ( { model | reflashNeeded = Just build }, [] )
 
         NetConfig urls ->
             ( { model
@@ -1157,10 +1177,15 @@ screenUi model =
                    )
                 ++ (case model.upgradingTo of
                         Just build ->
-                            [ upgradeNotice model build ]
+                            [ notice model ("Upgrade to " ++ build ++ " in progress") ]
 
                         Nothing ->
-                            []
+                            case model.reflashNeeded of
+                                Just build ->
+                                    [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
+
+                                Nothing ->
+                                    []
                    )
         , borderAndFill = Ui.NoBorderOrFill
         }
@@ -2013,11 +2038,12 @@ toolbarHeight =
     8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodyFont)
 
 
-{-| In the bottom right corner while the host switches to a newer build. The new build
-starts without it (`resume`).
+{-| In the bottom right corner: while the host switches to a newer build, or when the
+newest build needs the USB stick flashed again. The next program starts without it
+(`Screen`).
 -}
-upgradeNotice : Model -> String -> Ui.Element UiId
-upgradeNotice model build =
+notice : Model -> String -> Ui.Element UiId
+notice model text =
     Ui.bottomRight { size = uiSize model }
         (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
@@ -2025,7 +2051,7 @@ upgradeNotice model build =
                 , inFront = []
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
-                (Ui.text bodyFont ("Upgrade to " ++ build ++ " in progress"))
+                (Ui.text bodyFont text)
             )
         )
 
