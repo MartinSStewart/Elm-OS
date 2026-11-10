@@ -37,11 +37,10 @@ import Date exposing (Date)
 import Dict exposing (Dict)
 import Effect
 import Json.Decode as D
-import Quantity exposing (Quantity)
+import Quantity
 import Sprite
 import Time
-import Ui exposing (Element, ElementState(..), ViewportModel)
-import Units exposing (UiPixels)
+import Ui exposing (Element, ElementState(..))
 
 
 type alias Day =

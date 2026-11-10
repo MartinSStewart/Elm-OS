@@ -29,7 +29,7 @@ import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
 import Time
-import Ui exposing (Element(..), ElementState(..), ViewportModel)
+import Ui exposing (ElementState(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
 import Wifi
@@ -254,7 +254,7 @@ type alias Model =
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
-    , uiState : Dict String Ui.ElementState
+    , uiState : Dict String ElementState
     }
 
 
@@ -939,7 +939,7 @@ click model id =
         CalculatorUiId Calculator.Panel ->
             ( { model | focus = Just (CalculatorUiId Calculator.Panel) }, [] )
 
-        NewsUiId uiId ->
+        NewsUiId _ ->
             ( model, [] )
 
 
@@ -1176,7 +1176,7 @@ dragSelect focus position model =
         CloseEditorButton ->
             model
 
-        NewsUiId uiId ->
+        NewsUiId _ ->
             model
 
 

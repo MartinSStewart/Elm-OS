@@ -34,7 +34,6 @@ module Ui exposing
     , paddingXY
     , quads
     , row
-    , scroll
     , selectableButton
     , size
     , text
@@ -238,35 +237,35 @@ onMouseDown onClick relativePositionToUi cursor id idString element uiState =
             in
             ( Dict.insert idString (TextInputMultilineState state3) uiState, Nothing )
 
-        Text record ->
+        Text _ ->
             ( uiState, Nothing )
 
-        Button buttonData _ ->
+        Button _ _ ->
             ( uiState, onClick id |> Just )
 
-        Row rowColumn elements ->
+        Row _ _ ->
             ( uiState, Nothing )
 
-        Column rowColumn elements ->
+        Column _ _ ->
             ( uiState, Nothing )
 
-        Single record _ ->
+        Single _ _ ->
             ( uiState, Nothing )
 
-        Quads record ->
+        Quads _ ->
             ( uiState, Nothing )
 
         Empty ->
             ( uiState, Nothing )
 
-        Viewport record _ ->
+        Viewport _ _ ->
             ( uiState, Nothing )
 
 
 onWheel : comparable -> Int -> Element id -> Dict comparable ElementState -> Dict comparable ElementState
 onWheel id clicks element uiState =
     case element of
-        TextInput textInput2 ->
+        TextInput _ ->
             uiState
 
         TextInputMultiline textInput2 ->
@@ -286,22 +285,22 @@ onWheel id clicks element uiState =
             Dict.insert id (TextInputMultilineState state3) uiState
 
         -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
-        Text record ->
+        Text _ ->
             uiState
 
-        Button buttonData _ ->
+        Button _ _ ->
             uiState
 
-        Row rowColumn elements ->
+        Row _ _ ->
             uiState
 
-        Column rowColumn elements ->
+        Column _ _ ->
             uiState
 
-        Single record _ ->
+        Single _ _ ->
             uiState
 
-        Quads record ->
+        Quads _ ->
             uiState
 
         Empty ->
@@ -335,14 +334,14 @@ scroll : Int -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportMo
 scroll clicks size2 data model =
     { model
         | target =
-            Quantity.plus (Units.uiPixels (clicks * 100)) model.target
+            Quantity.plus (Units.uiPixels (clicks * 150)) model.target
                 |> Quantity.clamp (Coord.y size2 |> Quantity.minus data.viewportHeight |> Quantity.negate) Quantity.zero
     }
 
 
 scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
 scrollBaseSpeed =
-    Quantity.rate (Units.uiPixels 600) Duration.second
+    Quantity.rate (Units.uiPixels 1000) Duration.second
 
 
 type BorderAndFill
