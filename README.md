@@ -3,7 +3,7 @@
 This project is an exploration of the following ideas: 
 * Applications are just Elm functions. Permission and data access is managed via Elm's type system instead of a userspace/kernel boundary.
 * Elm OS and all apps written for it are in a monorepo and compiled together. The entire OS should be type safe.
-* One GUI framework for all apps
+* A single UI framework. Can we make the UI simple enough to make it practical for a typical user (without AI assistance) to edit/create UIs within the OS without losing too many modern features?
 * No terminal or command line
 * No web browser, no JS, no CSS. Apps are instead designed for websites with a basic HTML renderer as a fallback
 * Hot reloading for Elm OS updates. Unless an update changes the UI, the user should not notice when an upgrade happens.
