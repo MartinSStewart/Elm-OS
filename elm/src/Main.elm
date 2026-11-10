@@ -17,6 +17,7 @@ import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
 import Dict exposing (Dict)
+import Duration exposing (Duration)
 import Effect exposing (Effect)
 import HostMessage
 import Json.Decode as D
@@ -28,7 +29,7 @@ import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
 import Time
-import Ui
+import Ui exposing (ViewportModel)
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
 import Wifi
@@ -236,7 +237,6 @@ type alias Model =
     , wifiStatus : Wifi.Status
     , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
     , selected : Maybe Wifi.Network
-    , password : TextInput.Model
     , -- save passwords here for networks that have been connected to before
       savedWifiPasswords : Dict String String
     , showPassword : Bool
@@ -251,11 +251,10 @@ type alias Model =
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
-    , editor : TextInputMultiline.Model
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
-    , newsScroll : Quantity Int UiPixels
+    , uiState : Dict String Ui.ElementState
     }
 
 
@@ -325,7 +324,6 @@ init =
     , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
     , wired = []
     , selected = Nothing
-    , password = TextInput.init
     , savedWifiPasswords = Dict.empty
     , showPassword = False
     , weather = NoWeather
@@ -339,12 +337,75 @@ init =
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
-    , editor = TextInputMultiline.init
     , editorOpen = False
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
-    , newsScroll = Quantity.zero
+    , uiState = Dict.empty
     }
+
+
+idToString : UiId -> String
+idToString uiId =
+    case uiId of
+        RefreshButton ->
+            "RefreshButton"
+
+        NetworkButton string ->
+            "NetworkButton_" ++ string
+
+        PasswordInput ->
+            "PasswordInput"
+
+        ShowPasswordButton ->
+            "ShowPasswordButton"
+
+        ConnectButton ->
+            "ConnectButton"
+
+        DisconnectButton ->
+            "DisconnectButton"
+
+        WeatherButton ->
+            "WeatherButton"
+
+        AboutButton ->
+            "AboutButton"
+
+        NewsButton ->
+            "NewsButton"
+
+        CloseAboutButton ->
+            "CloseAboutButton"
+
+        CalculatorButton ->
+            "CalculatorButton"
+
+        PowerOffButton ->
+            "PowerOffButton"
+
+        RestartButton ->
+            "RestartButton"
+
+        ConfirmPowerButton ->
+            "ConfirmPowerButton"
+
+        CancelPowerButton ->
+            "CancelPowerButton"
+
+        CalculatorUiId uiId2 ->
+            "CalculatorUiId_" ++ Calculator.idToString uiId2
+
+        EditorButton ->
+            "EditorButton"
+
+        EditorInput ->
+            "EditorInput"
+
+        EditorWindow ->
+            "EditorWindow"
+
+        CloseEditorButton ->
+            "CloseEditorButton"
 
 
 {-| How many frame intervals the average and maximum are over.
@@ -398,6 +459,15 @@ step event model =
 
         Frame time ->
             let
+                elapsedTime : Duration
+                elapsedTime =
+                    case model.lastFrame of
+                        Just lastFrame ->
+                            time - lastFrame |> Duration.milliseconds
+
+                        Nothing ->
+                            Quantity.zero
+
                 next =
                     { model
                         | lastFrame = Just time
@@ -409,6 +479,7 @@ step event model =
 
                                 Nothing ->
                                     model.frameIntervals
+                        , uiState = Ui.onAnimationFrame elapsedTime model.uiState
                     }
             in
             ( next, [ Effect.Render (\() -> view model) ] )
@@ -497,12 +568,16 @@ step event model =
                     ( moved, [] )
 
         Button 0 True ->
-            case Ui.hover (uiMouse model) (screenUi model) of
-                ( PasswordInput, { relativePositionToUi } ) :: _ ->
+            let
+                cursor =
+                    uiMouse model
+            in
+            case Ui.hover cursor (screenUi model) of
+                ( id, { relativePositionToUi, ui } ) :: _ ->
                     ( { model
-                        | focus = Just PasswordInput
+                        | focus = Just id
                         , selectingText = True
-                        , password = TextInput.mouseDown (passwordStyle model) (uiMouse model) relativePositionToUi model.password
+                        , uiState = Ui.onMouseDown relativePositionToUi cursor (idToString id) ui model.uiState
                       }
                     , []
                     )
@@ -529,12 +604,16 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case Ui.hover (uiMouse model) (screenUi model) of
+            let
+                ui =
+                    screenUi model
+            in
+            case Ui.hover (uiMouse model) ui of
                 ( EditorInput, _ ) :: _ ->
                     ( { model | editor = TextInputMultiline.wheel (editorStyle model) clicks model.editor }, [] )
 
                 _ ->
-                    ( { model | newsScroll = model.newsScroll |> Quantity.plus (Units.uiPixels (clicks * 50)) }, [] )
+                    ( { model | newsScroll = Ui.scroll clicks model.newsScroll }, [] )
 
         Key code down repeat ->
             if Keyboard.isShift code then

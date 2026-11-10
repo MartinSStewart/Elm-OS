@@ -40,7 +40,7 @@ type alias UiScale =
     Quantity Int (Rate DevicePixels UiPixels)
 
 
-uiPixels : Int -> Quantity Int UiPixels
+uiPixels : number -> Quantity number UiPixels
 uiPixels =
     Quantity
 

@@ -37,7 +37,7 @@ import Json.Decode as D
 import Quantity exposing (Quantity)
 import Sprite
 import Time
-import Ui exposing (Element)
+import Ui exposing (Element, ViewportModel)
 import Units exposing (UiPixels)
 
 
@@ -75,7 +75,7 @@ type NewsState
     | NewsFailed String
 
 
-view : Quantity Int UiPixels -> NewsState -> Element id
+view : ViewportModel -> NewsState -> Element id
 view newsScroll news =
     Ui.el
         { padding = Ui.paddingXY 12 10
@@ -106,7 +106,7 @@ view newsScroll news =
         )
 
 
-daysView : Quantity Int UiPixels -> List Day -> Element id
+daysView : ViewportModel -> List Day -> Element id
 daysView newsScroll days =
     List.map
         (\{ date, topics } ->
@@ -152,7 +152,7 @@ daysView newsScroll days =
         )
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
-        |> Ui.viewport { viewportHeight = Quantity.unsafe 400, scrollOffset = newsScroll }
+        |> Ui.viewport newsScroll { viewportHeight = Quantity.unsafe 400 }
 
 
 dateColor : Color

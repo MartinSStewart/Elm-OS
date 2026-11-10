@@ -2,10 +2,12 @@ module Ui exposing
     ( BorderAndFill(..)
     , ButtonData
     , Element(..)
+    , ElementState(..)
     , InputType(..)
     , RowColumn
     , TextInputData
     , TextInputMultilineData
+    , ViewportModel
     , bottomLeft
     , bottomRight
     , button
@@ -19,14 +21,17 @@ module Ui exposing
     , elWithId
     , findInput
     , hover
+    , initViewportModel
     , leftAndRight
     , map
     , minWidth
     , noPadding
     , none
+    , onAnimationFrame
     , paddingXY
     , quads
     , row
+    , scroll
     , selectableButton
     , size
     , text
@@ -36,7 +41,7 @@ module Ui exposing
     , topRight
     , view
     , viewport
-    )
+    , onMouseDown)
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
 drawing textured triangles for the render port instead of WebGL meshes.
@@ -60,7 +65,9 @@ for now: underlined text and sprites from town-collab's texture.
 import Bounds exposing (Bounds)
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Quantity exposing (Quantity)
+import Dict exposing (Dict)
+import Duration exposing (Duration, Seconds)
+import Quantity exposing (Quantity, Rate)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -123,7 +130,125 @@ type Element id
         (Element id)
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
-    | Viewport { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } (Element id)
+    | Viewport { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } (Element id)
+
+
+type ElementState
+    = TextInputState TextInput.Model
+    | TextInputMultilineState TextInputMultiline.Model
+    | ViewportState ViewportModel
+
+
+type alias ViewportModel =
+    { offset : Quantity Float UiPixels
+    , target : Quantity Int UiPixels
+    }
+
+
+onAnimationFrame : Duration -> Dict id ElementState -> Dict id ElementState
+onAnimationFrame timeElapsed uiState =
+    Dict.map
+        (\_ value ->
+            case value of
+                TextInputState _ ->
+                    value
+
+                TextInputMultilineState _ ->
+                    value
+
+                ViewportState model ->
+                    let
+                        distance : Quantity Float UiPixels
+                        distance =
+                            Quantity.for timeElapsed scrollBaseSpeed
+                                |> Quantity.plus (diff |> Quantity.minus (Quantity.multiplyBy (0.1 ^ Duration.inSeconds timeElapsed) diff))
+
+                        target : Quantity Float UiPixels
+                        target =
+                            Quantity.toFloatQuantity model.target
+
+                        diff : Quantity Float UiPixels
+                        diff =
+                            target |> Quantity.minus model.offset |> Quantity.abs
+                    in
+                    { model
+                        | offset =
+                            if diff |> Quantity.lessThan distance then
+                                target
+
+                            else if model.offset |> Quantity.lessThan target then
+                                Quantity.plus distance model.offset
+
+                            else
+                                model.offset |> Quantity.minus distance
+                    }
+                        |> ViewportState
+        )
+        uiState
+
+
+onMouseDown : Coord UiPixels -> Coord UiPixels -> String -> Element id -> Dict String ElementState -> Dict String ElementState
+onMouseDown relativePositionToUi cursor id element uiState =
+    case element of
+        TextInput textInput2 ->
+            let
+                state3 =   TextInput.mouseDown
+                                           textInput2.style
+                                           cursor
+                                           relativePositionToUi
+                                           (case Dict.get id uiState of
+                                               Just (TextInputState state2) ->
+                                                   state2
+
+                                               _ ->
+                                                   TextInput.init
+                                           )
+            in
+
+
+                 Dict.insert id (TextInputState state3) uiState
+
+        TextInputMultiline textInputMultilineData ->
+
+
+        Text record ->uiState
+
+
+        Button buttonData element ->uiState
+
+
+        Row rowColumn elements ->uiState
+
+
+        Column rowColumn elements ->uiState
+
+
+        Single record element ->uiState
+
+
+        Quads record ->uiState
+
+
+        Empty ->uiState
+
+
+        Viewport record element ->
+
+
+
+initViewportModel : ViewportModel
+initViewportModel =
+    { offset = Quantity.zero, target = Quantity.zero }
+
+
+scroll : Int -> ViewportModel -> ViewportModel
+scroll clicks model =
+    { model | target = Quantity.plus (Units.uiPixels (clicks * 50)) model.target |> Quantity.min Quantity.zero }
+
+
+scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
+scrollBaseSpeed =
+    Quantity.rate (Units.uiPixels 300) Duration.second
 
 
 type BorderAndFill
@@ -321,9 +446,9 @@ elWithId id data child =
         child
 
 
-viewport : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } -> Element id -> Element id
-viewport =
-    Viewport
+viewport : ViewportModel -> { viewportHeight : Quantity Int UiPixels } -> Element id -> Element id
+viewport model { viewportHeight } =
+    Viewport { viewportHeight = viewportHeight, scrollOffset = model.offset }
 
 
 {-| Change the ids, so a module's UI can sit in a bigger one with its own id type.
@@ -486,7 +611,7 @@ size element =
             viewportSize data child
 
 
-viewportSize : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } -> Element id -> Coord UiPixels
+viewportSize : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
 viewportSize data child =
     ( Coord.x (size child), data.viewportHeight )
 
@@ -644,7 +769,11 @@ hoverHelper hovers point position element =
 
         Viewport data child ->
             if contains point position (viewportSize data child) then
-                hoverHelper hovers point (Coord.plus ( Quantity.zero, data.scrollOffset ) position) child
+                hoverHelper
+                    hovers
+                    point
+                    (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
+                    child
 
             else
                 hovers
@@ -708,7 +837,7 @@ findInputHelper id position element =
             Nothing
 
         Viewport data child ->
-            findInputHelper id (Coord.plus ( Quantity.zero, data.scrollOffset ) position) child
+            findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -802,7 +931,7 @@ viewList scale maybeHover focus viewport2 position element =
                         maybeHover
                         focus
                         viewport3
-                        (Coord.plus ( Quantity.zero, data.scrollOffset ) position)
+                        (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                         child
 
         Nothing ->
