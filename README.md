@@ -1,31 +1,14 @@
 # Elm OS
 
-A minimal Linux kernel that boots straight into one Elm program.
+This project is an exploration of the following ideas: 
+* Applications are just Elm functions. Permission and data access is managed via Elm's type system instead of a userspace/kernel boundary.
+* Elm OS and all apps written for it are in a monorepo and compiled together. The entire OS should be type safe.
+* A single UI framework. Can we make the UI simple enough to make it practical for a typical user (without AI assistance) to edit/create UIs within the OS without losing too many modern features?
+* No terminal or command line
+* No web browser, no JS, no CSS. Apps are instead designed for websites with a basic HTML renderer as a fallback
+* Hot reloading for Elm OS updates. Unless an update changes the UI, the user should not notice when an upgrade happens.
 
-The Elm program is compiled to native code with [eco](https://github.com/eco-lang/eco-compiler)
-and runs as its own process, `/usr/lib/elmos/elm`, under a small Rust host that runs as `/init`
-(PID 1). The host starts the Elm program and starts it again if it exits or crashes, keeping the
-screen, network, data disk and pending requests in the meantime. The host passes keyboard, mouse, wifi and system events to Elm over a port, and Elm answers
-over one output port with effects: textured triangles that the GPU draws (OpenGL ES through Mesa), or the CPU when there
-is no usable GPU, wifi commands, HTTP requests, power off.
-
-The long-term plan is that every "app" is Elm code compiled into the OS, with permissions
-enforced by the type system. See the
-[architecture doc](https://claude.ai/artifact/LbMrwWbmizcvvRpoYC7dV9) for the design.
-
-## What it does today
-
-- A triangle follows the mouse, grows while a button is held, and changes colour on any key.
-- A debug overlay (bottom left) shows frame timings, which renderer is drawing, CPU load and
-  memory, the SHA-256 of the build that booted, the battery, and how long the boot took
-  (from the kernel starting to the first frame, plus the firmware's time on real PCs).
-- A network panel (top right) shows wired Ethernet (plug in a cable and it gets an address) and joins wifi networks (WPA2 personal, including WPA2/WPA3 mixed, or open), then shows the local weather.
-- Buttons (top left) open an about page, a calculator and a text editor, and restart or power
-  off the computer.
-- What you did survives a restart or a power cut: open windows, the editor's text, the
-  calculator, the clipboard. See "Saving the Model" below.
-
-The UI uses [town-collab](https://github.com/MartinSStewart/town-collab)'s UI framework, with text in [Noto Sans](https://notofonts.github.io) (SIL Open Font License, `host/common/src/noto-sans-OFL.txt`): regular, bold, italic and bold italic, each drawn at 16, 24, 32 and 48 px by `tools/make-noto-sans.py`. The debug overlay keeps town-collab's pixel font.
+_The remaining text in this readme is AI generated. So is 99% of the code in this project._
 
 ## Build and run in QEMU
 

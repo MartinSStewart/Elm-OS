@@ -8,6 +8,7 @@ module Calculator exposing
     , expression
     , format
     , fromKeyboard
+    , idToString
     , init
     , press
     , view
@@ -32,6 +33,7 @@ import Quantity
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
 import Units exposing (UiPixels)
+
 
 
 -- MODEL
@@ -85,6 +87,7 @@ init =
 maxDigits : Int
 maxDigits =
     12
+
 
 
 -- UPDATE
@@ -329,6 +332,7 @@ apply operator a b =
         Just result
 
 
+
 -- SHOWING NUMBERS
 
 
@@ -499,6 +503,7 @@ trimZeros text =
         text
 
 
+
 -- KEYBOARD
 
 
@@ -592,6 +597,7 @@ fromKeyboard key =
             Nothing
 
 
+
 -- VIEW
 
 
@@ -599,6 +605,19 @@ type UiId
     = KeyButton Key
     | CloseButton
     | Panel
+
+
+idToString : UiId -> String
+idToString uiId =
+    case uiId of
+        KeyButton _ ->
+            "KeyButton"
+
+        CloseButton ->
+            "CloseButton"
+
+        Panel ->
+            "Panel"
 
 
 spacing : Int

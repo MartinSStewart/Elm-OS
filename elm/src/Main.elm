@@ -17,6 +17,7 @@ import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
 import Dict exposing (Dict)
+import Duration exposing (Duration)
 import Effect exposing (Effect)
 import HostMessage
 import Json.Decode as D
@@ -28,7 +29,7 @@ import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
 import Time
-import Ui
+import Ui exposing (ElementState(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
 import Wifi
@@ -236,7 +237,6 @@ type alias Model =
     , wifiStatus : Wifi.Status
     , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
     , selected : Maybe Wifi.Network
-    , password : TextInput.Model
     , -- save passwords here for networks that have been connected to before
       savedWifiPasswords : Dict String String
     , showPassword : Bool
@@ -251,11 +251,10 @@ type alias Model =
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
-    , editor : TextInputMultiline.Model
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
-    , newsScroll : Quantity Int UiPixels
+    , uiState : Dict String ElementState
     }
 
 
@@ -301,6 +300,7 @@ type UiId
     | EditorInput
     | EditorWindow
     | CloseEditorButton
+    | NewsUiId News.UiId
 
 
 init : Model
@@ -325,7 +325,6 @@ init =
     , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
     , wired = []
     , selected = Nothing
-    , password = TextInput.init
     , savedWifiPasswords = Dict.empty
     , showPassword = False
     , weather = NoWeather
@@ -339,12 +338,78 @@ init =
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
-    , editor = TextInputMultiline.init
     , editorOpen = False
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
-    , newsScroll = Quantity.zero
+    , uiState = Dict.empty
     }
+
+
+idToString : UiId -> String
+idToString uiId =
+    case uiId of
+        RefreshButton ->
+            "RefreshButton"
+
+        NetworkButton string ->
+            "NetworkButton_" ++ string
+
+        PasswordInput ->
+            "PasswordInput"
+
+        ShowPasswordButton ->
+            "ShowPasswordButton"
+
+        ConnectButton ->
+            "ConnectButton"
+
+        DisconnectButton ->
+            "DisconnectButton"
+
+        WeatherButton ->
+            "WeatherButton"
+
+        AboutButton ->
+            "AboutButton"
+
+        NewsButton ->
+            "NewsButton"
+
+        CloseAboutButton ->
+            "CloseAboutButton"
+
+        CalculatorButton ->
+            "CalculatorButton"
+
+        PowerOffButton ->
+            "PowerOffButton"
+
+        RestartButton ->
+            "RestartButton"
+
+        ConfirmPowerButton ->
+            "ConfirmPowerButton"
+
+        CancelPowerButton ->
+            "CancelPowerButton"
+
+        CalculatorUiId uiId2 ->
+            "CalculatorUiId_" ++ Calculator.idToString uiId2
+
+        EditorButton ->
+            "EditorButton"
+
+        EditorInput ->
+            "EditorInput"
+
+        EditorWindow ->
+            "EditorWindow"
+
+        CloseEditorButton ->
+            "CloseEditorButton"
+
+        NewsUiId uiId2 ->
+            News.idToString uiId2
 
 
 {-| How many frame intervals the average and maximum are over.
@@ -398,6 +463,15 @@ step event model =
 
         Frame time ->
             let
+                elapsedTime : Duration
+                elapsedTime =
+                    case model.lastFrame of
+                        Just lastFrame ->
+                            time - lastFrame |> Duration.milliseconds
+
+                        Nothing ->
+                            Quantity.zero
+
                 next =
                     { model
                         | lastFrame = Just time
@@ -409,6 +483,7 @@ step event model =
 
                                 Nothing ->
                                     model.frameIntervals
+                        , uiState = Ui.onAnimationFrame elapsedTime model.uiState
                     }
             in
             ( next, [ Effect.Render (\() -> view model) ] )
@@ -497,27 +572,22 @@ step event model =
                     ( moved, [] )
 
         Button 0 True ->
-            case Ui.hover (uiMouse model) (screenUi model) of
-                ( PasswordInput, { relativePositionToUi } ) :: _ ->
-                    ( { model
-                        | focus = Just PasswordInput
-                        , selectingText = True
-                        , password = TextInput.mouseDown (passwordStyle model) (uiMouse model) relativePositionToUi model.password
-                      }
-                    , []
-                    )
+            let
+                cursor =
+                    uiMouse model
+            in
+            case Ui.hover cursor (screenUi model) of
+                ( id, { relativePositionToUi, ui } ) :: _ ->
+                    let
+                        ( uiState, maybeModelAndEffects ) =
+                            Ui.onMouseDown (click model) relativePositionToUi cursor id (idToString id) ui model.uiState
+                    in
+                    case maybeModelAndEffects of
+                        Just ( model2, effects ) ->
+                            ( { model2 | focus = Just id, selectingText = True, uiState = uiState }, effects )
 
-                ( EditorInput, { relativePositionToUi } ) :: _ ->
-                    ( { model
-                        | focus = Just EditorInput
-                        , selectingText = True
-                        , editor = TextInputMultiline.mouseDown (editorStyle model) (uiMouse model) relativePositionToUi model.editor
-                      }
-                    , []
-                    )
-
-                ( id, _ ) :: _ ->
-                    click id model
+                        Nothing ->
+                            ( { model | focus = Just id, selectingText = True, uiState = uiState }, [] )
 
                 [] ->
                     ( { model | pressed = True, focus = Nothing }, [] )
@@ -530,11 +600,11 @@ step event model =
 
         Wheel clicks ->
             case Ui.hover (uiMouse model) (screenUi model) of
-                ( EditorInput, _ ) :: _ ->
-                    ( { model | editor = TextInputMultiline.wheel (editorStyle model) clicks model.editor }, [] )
+                ( id, { ui } ) :: _ ->
+                    ( { model | uiState = Ui.onWheel (idToString id) clicks ui model.uiState }, [] )
 
                 _ ->
-                    ( { model | newsScroll = model.newsScroll |> Quantity.plus (Units.uiPixels (clicks * 50)) }, [] )
+                    ( model, [] )
 
         Key code down repeat ->
             if Keyboard.isShift code then
@@ -618,7 +688,12 @@ savePassword status model =
             if status.state == Wifi.Connected && network.ssid == status.ssid then
                 Dict.insert network.ssid
                     (if needsPassword network then
-                        model.password.current.text
+                        case Dict.get (idToString PasswordInput) model.uiState of
+                            Just (TextInputState password) ->
+                                password.current.text
+
+                            _ ->
+                                ""
 
                      else
                         ""
@@ -705,8 +780,8 @@ fetchWeather model =
     ( { model | weather = FindingPlace }, [ Effect.get Effect.GeoRequest model.geoUrl ] )
 
 
-click : UiId -> Model -> ( Model, List Effect )
-click id model =
+click : Model -> UiId -> ( Model, List Effect )
+click model id =
     case id of
         RefreshButton ->
             ( { model | scanning = True, focus = Nothing }, [ Effect.WifiScan ] )
@@ -716,12 +791,17 @@ click id model =
                 Just network ->
                     ( { model
                         | selected = Just network
-                        , password =
-                            if Maybe.map .ssid model.selected == Just ssid then
-                                model.password
+                        , uiState =
+                            Dict.update
+                                (idToString id)
+                                (\maybe ->
+                                    if Maybe.map .ssid model.selected == Just ssid then
+                                        maybe
 
-                            else
-                                TextInput.init
+                                    else
+                                        TextInput.init |> TextInputState |> Just
+                                )
+                                model.uiState
                         , focus =
                             if needsPassword network then
                                 Just PasswordInput
@@ -859,6 +939,9 @@ click id model =
         CalculatorUiId Calculator.Panel ->
             ( { model | focus = Just (CalculatorUiId Calculator.Panel) }, [] )
 
+        NewsUiId _ ->
+            ( model, [] )
+
 
 {-| Keys go to the calculator after a click on it, until a click somewhere else.
 -}
@@ -892,7 +975,12 @@ connect model =
             let
                 password =
                     if needsPassword network then
-                        model.password.current.text
+                        case Dict.get (idToString PasswordInput) model.uiState of
+                            Just (TextInputState password2) ->
+                                password2.current.text
+
+                            _ ->
+                                ""
 
                     else
                         ""
@@ -914,9 +1002,6 @@ needsPassword network =
     network.security /= Wifi.Open
 
 
-{-| A key for the password box. Elm OS has no system clipboard yet, so Ctrl+C and Ctrl+X
-copy into one of its own for Ctrl+V, and only while the password is shown.
--}
 typeKey : Keyboard.Key -> Model -> ( Model, List Effect )
 typeKey key model =
     case ( model.ctrl, key ) of
@@ -927,15 +1012,47 @@ typeKey key model =
             ( { model | focus = Nothing }, [] )
 
         ( True, Keyboard.Character "v" ) ->
-            ( { model | password = TextInput.paste model.clipboard model.password |> limitPassword }, [] )
+            ( { model
+                | uiState =
+                    Dict.update
+                        (idToString PasswordInput)
+                        (\maybe ->
+                            TextInput.paste
+                                model.clipboard
+                                (case maybe of
+                                    Just (TextInputState password) ->
+                                        password
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> limitPassword
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+              }
+            , []
+            )
 
         _ ->
             let
                 ( password, outMsg ) =
-                    TextInput.keyMsg model.ctrl model.shift key model.password
+                    TextInput.keyMsg
+                        model.ctrl
+                        model.shift
+                        key
+                        (case Dict.get (idToString PasswordInput) model.uiState of
+                            Just (TextInputState password2) ->
+                                password2
+
+                            _ ->
+                                TextInput.init
+                        )
             in
             ( { model
-                | password = limitPassword password
+                | uiState =
+                    Dict.insert (idToString PasswordInput) (TextInputState (limitPassword password)) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -959,10 +1076,51 @@ dragSelect : UiId -> Coord UiPixels -> Model -> Model
 dragSelect focus position model =
     case focus of
         PasswordInput ->
-            { model | password = TextInput.mouseDownMove (passwordStyle model) (uiMouse model) position model.password }
+            { model
+                | uiState =
+                    Dict.update
+                        (idToString PasswordInput)
+                        (\maybe ->
+                            TextInput.mouseDownMove
+                                (passwordStyle model)
+                                (uiMouse model)
+                                position
+                                (case maybe of
+                                    Just (TextInputState password) ->
+                                        password
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> limitPassword
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+            }
 
         EditorInput ->
-            { model | editor = TextInputMultiline.mouseDownMove (editorStyle model) (uiMouse model) position model.editor }
+            { model
+                | uiState =
+                    Dict.update
+                        (idToString EditorInput)
+                        (\maybe ->
+                            TextInputMultiline.mouseDownMove
+                                (editorStyle model)
+                                (uiMouse model)
+                                position
+                                (case maybe of
+                                    Just (TextInputMultilineState editor) ->
+                                        editor
+
+                                    _ ->
+                                        TextInputMultiline.init
+                                )
+                                |> TextInputMultilineState
+                                |> Just
+                        )
+                        model.uiState
+            }
 
         RefreshButton ->
             model
@@ -1018,6 +1176,9 @@ dragSelect focus position model =
         CloseEditorButton ->
             model
 
+        NewsUiId _ ->
+            model
+
 
 {-| A key for the text editor. Its copies go in the same clipboard as the password box's.
 -}
@@ -1028,15 +1189,45 @@ editorKey key model =
             { model | focus = Nothing }
 
         ( True, Keyboard.Character "v" ) ->
-            { model | editor = TextInputMultiline.paste (editorStyle model) model.clipboard model.editor }
+            { model
+                | uiState =
+                    Dict.update
+                        (idToString EditorInput)
+                        (\maybe ->
+                            TextInputMultiline.paste
+                                (editorStyle model)
+                                model.clipboard
+                                (case maybe of
+                                    Just (TextInputMultilineState editor) ->
+                                        editor
+
+                                    _ ->
+                                        TextInputMultiline.init
+                                )
+                                |> TextInputMultilineState
+                                |> Just
+                        )
+                        model.uiState
+            }
 
         _ ->
             let
                 ( editor, outMsg ) =
-                    TextInputMultiline.keyMsg (editorStyle model) model.ctrl model.shift key model.editor
+                    TextInputMultiline.keyMsg
+                        (editorStyle model)
+                        model.ctrl
+                        model.shift
+                        key
+                        (case Dict.get (idToString EditorInput) model.uiState of
+                            Just (TextInputMultilineState editor2) ->
+                                editor2
+
+                            _ ->
+                                TextInputMultiline.init
+                        )
             in
             { model
-                | editor = editor
+                | uiState = Dict.insert (idToString EditorInput) (TextInputMultilineState editor) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -1183,7 +1374,8 @@ screenUi model =
                 ++ (if model.newsOpen then
                         [ Ui.topRight
                             { size = uiSize model }
-                            (News.view model.newsScroll model.news)
+                            (News.view model.uiState model.news)
+                            |> Ui.map NewsUiId
                         ]
 
                     else
@@ -1808,7 +2000,13 @@ passwordInput model =
         { id = PasswordInput
         , style = passwordStyle model
         , isValid = True
-        , state = model.password.current
+        , state =
+            case Dict.get (idToString PasswordInput) model.uiState of
+                Just (TextInputState textInput) ->
+                    textInput
+
+                _ ->
+                    TextInput.init
         }
 
 
@@ -2230,8 +2428,17 @@ editorWindow model =
         style =
             editorStyle model
 
+        textInput : TextInputMultiline.Model
+        textInput =
+            case Dict.get (idToString EditorInput) model.uiState of
+                Just (TextInputMultilineState editor) ->
+                    editor
+
+                _ ->
+                    TextInputMultiline.init
+
         state =
-            model.editor.input.current
+            textInput.input.current
 
         ( line, column ) =
             TextInputMultiline.lineAndColumn state.text state.cursorPosition
@@ -2266,8 +2473,7 @@ editorWindow model =
                 , Ui.textInputMultiline
                     { id = EditorInput
                     , style = style
-                    , scroll = model.editor.scroll
-                    , state = state
+                    , state = textInput
                     }
                 , Ui.leftAndRight style.width
                     (t status)

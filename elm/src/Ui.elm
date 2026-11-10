@@ -2,10 +2,13 @@ module Ui exposing
     ( BorderAndFill(..)
     , ButtonData
     , Element(..)
+    , ElementState(..)
     , InputType(..)
     , RowColumn
     , TextInputData
     , TextInputMultilineData
+    , ViewportData
+    , ViewportModel
     , bottomLeft
     , bottomRight
     , button
@@ -19,11 +22,15 @@ module Ui exposing
     , elWithId
     , findInput
     , hover
+    , initViewportModel
     , leftAndRight
     , map
     , minWidth
     , noPadding
     , none
+    , onAnimationFrame
+    , onMouseDown
+    , onWheel
     , paddingXY
     , quads
     , row
@@ -60,7 +67,9 @@ for now: underlined text and sprites from town-collab's texture.
 import Bounds exposing (Bounds)
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Quantity exposing (Quantity)
+import Dict exposing (Dict)
+import Duration exposing (Duration, Seconds)
+import Quantity exposing (Quantity, Rate)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -89,15 +98,14 @@ type alias TextInputData id =
     { id : id
     , style : TextInput.Style
     , isValid : Bool
-    , state : TextInput.State
+    , state : TextInput.Model
     }
 
 
 type alias TextInputMultilineData id =
     { id : id
     , style : TextInputMultiline.Style
-    , scroll : Int
-    , state : TextInput.State
+    , state : TextInputMultiline.Model
     }
 
 
@@ -123,7 +131,217 @@ type Element id
         (Element id)
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
-    | Viewport { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } (Element id)
+    | Viewport (ViewportData id) (Element id)
+
+
+type alias ViewportData id =
+    { id : id, viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels }
+
+
+type ElementState
+    = TextInputState TextInput.Model
+    | TextInputMultilineState TextInputMultiline.Model
+    | ViewportState ViewportModel
+
+
+type alias ViewportModel =
+    { offset : Quantity Float UiPixels
+    , target : Quantity Int UiPixels
+    }
+
+
+onAnimationFrame : Duration -> Dict id ElementState -> Dict id ElementState
+onAnimationFrame timeElapsed uiState =
+    Dict.map
+        (\_ value ->
+            case value of
+                TextInputState _ ->
+                    value
+
+                TextInputMultilineState _ ->
+                    value
+
+                ViewportState model ->
+                    let
+                        distance : Quantity Float UiPixels
+                        distance =
+                            Quantity.for timeElapsed scrollBaseSpeed
+                                |> Quantity.plus (diff |> Quantity.minus (Quantity.multiplyBy (0.1 ^ Duration.inSeconds timeElapsed) diff))
+
+                        target : Quantity Float UiPixels
+                        target =
+                            Quantity.toFloatQuantity model.target
+
+                        diff : Quantity Float UiPixels
+                        diff =
+                            target |> Quantity.minus model.offset |> Quantity.abs
+                    in
+                    { model
+                        | offset =
+                            if diff |> Quantity.lessThan distance then
+                                target
+
+                            else if model.offset |> Quantity.lessThan target then
+                                Quantity.plus distance model.offset
+
+                            else
+                                model.offset |> Quantity.minus distance
+                    }
+                        |> ViewportState
+        )
+        uiState
+
+
+onMouseDown :
+    (id -> a)
+    -> Coord UiPixels
+    -> Coord UiPixels
+    -> id
+    -> String
+    -> Element id
+    -> Dict String ElementState
+    -> ( Dict String ElementState, Maybe a )
+onMouseDown onClick relativePositionToUi cursor id idString element uiState =
+    case element of
+        TextInput textInput2 ->
+            let
+                state3 =
+                    TextInput.mouseDown
+                        textInput2.style
+                        cursor
+                        relativePositionToUi
+                        (case Dict.get idString uiState of
+                            Just (TextInputState state2) ->
+                                state2
+
+                            _ ->
+                                TextInput.init
+                        )
+            in
+            ( Dict.insert idString (TextInputState state3) uiState, Nothing )
+
+        TextInputMultiline textInput2 ->
+            let
+                state3 =
+                    TextInputMultiline.mouseDown
+                        textInput2.style
+                        cursor
+                        relativePositionToUi
+                        (case Dict.get idString uiState of
+                            Just (TextInputMultilineState state2) ->
+                                state2
+
+                            _ ->
+                                TextInputMultiline.init
+                        )
+            in
+            ( Dict.insert idString (TextInputMultilineState state3) uiState, Nothing )
+
+        Text _ ->
+            ( uiState, Nothing )
+
+        Button _ _ ->
+            ( uiState, onClick id |> Just )
+
+        Row _ _ ->
+            ( uiState, Nothing )
+
+        Column _ _ ->
+            ( uiState, Nothing )
+
+        Single _ _ ->
+            ( uiState, Nothing )
+
+        Quads _ ->
+            ( uiState, Nothing )
+
+        Empty ->
+            ( uiState, Nothing )
+
+        Viewport _ _ ->
+            ( uiState, Nothing )
+
+
+onWheel : comparable -> Int -> Element id -> Dict comparable ElementState -> Dict comparable ElementState
+onWheel id clicks element uiState =
+    case element of
+        TextInput _ ->
+            uiState
+
+        TextInputMultiline textInput2 ->
+            let
+                state3 =
+                    TextInputMultiline.wheel
+                        textInput2.style
+                        clicks
+                        (case Dict.get id uiState of
+                            Just (TextInputMultilineState state2) ->
+                                state2
+
+                            _ ->
+                                TextInputMultiline.init
+                        )
+            in
+            Dict.insert id (TextInputMultilineState state3) uiState
+
+        -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
+        Text _ ->
+            uiState
+
+        Button _ _ ->
+            uiState
+
+        Row _ _ ->
+            uiState
+
+        Column _ _ ->
+            uiState
+
+        Single _ _ ->
+            uiState
+
+        Quads _ ->
+            uiState
+
+        Empty ->
+            uiState
+
+        Viewport data element2 ->
+            let
+                state3 : ViewportModel
+                state3 =
+                    scroll
+                        clicks
+                        (size element2)
+                        data
+                        (case Dict.get id uiState of
+                            Just (ViewportState state2) ->
+                                state2
+
+                            _ ->
+                                initViewportModel
+                        )
+            in
+            Dict.insert id (ViewportState state3) uiState
+
+
+initViewportModel : ViewportModel
+initViewportModel =
+    { offset = Quantity.zero, target = Quantity.zero }
+
+
+scroll : Int -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
+scroll clicks size2 data model =
+    { model
+        | target =
+            Quantity.plus (Units.uiPixels (clicks * 150)) model.target
+                |> Quantity.clamp (Coord.y size2 |> Quantity.minus data.viewportHeight |> Quantity.negate) Quantity.zero
+    }
+
+
+scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
+scrollBaseSpeed =
+    Quantity.rate (Units.uiPixels 1000) Duration.second
 
 
 type BorderAndFill
@@ -172,14 +390,14 @@ colorText color font =
 -- TEXT INPUTS
 
 
-textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.State } -> Element id
+textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.Model } -> Element id
 textInput =
     TextInput
 
 
 {-| A text box with many lines, showing `style.lines` of them from line `scroll`.
 -}
-textInputMultiline : { id : id, style : TextInputMultiline.Style, scroll : Int, state : TextInput.State } -> Element id
+textInputMultiline : { id : id, style : TextInputMultiline.Style, state : TextInputMultiline.Model } -> Element id
 textInputMultiline =
     TextInputMultiline
 
@@ -321,9 +539,9 @@ elWithId id data child =
         child
 
 
-viewport : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } -> Element id -> Element id
-viewport =
-    Viewport
+viewport : { id : id, viewportHeight : Quantity Int UiPixels, model : ViewportModel } -> Element id -> Element id
+viewport { id, viewportHeight, model } =
+    Viewport { id = id, viewportHeight = viewportHeight, scrollOffset = model.offset }
 
 
 {-| Change the ids, so a module's UI can sit in a bigger one with its own id type.
@@ -335,7 +553,7 @@ map f element =
             TextInput { id = f data.id, style = data.style, isValid = data.isValid, state = data.state }
 
         TextInputMultiline data ->
-            TextInputMultiline { id = f data.id, style = data.style, scroll = data.scroll, state = data.state }
+            TextInputMultiline { id = f data.id, style = data.style, state = data.state }
 
         Text data ->
             Text data
@@ -375,7 +593,9 @@ map f element =
             Empty
 
         Viewport data child ->
-            Viewport data (map f child)
+            Viewport
+                { id = f data.id, viewportHeight = data.viewportHeight, scrollOffset = data.scrollOffset }
+                (map f child)
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
@@ -486,7 +706,7 @@ size element =
             viewportSize data child
 
 
-viewportSize : { viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Int UiPixels } -> Element id -> Coord UiPixels
+viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
 viewportSize data child =
     ( Coord.x (size child), data.viewportHeight )
 
@@ -644,7 +864,11 @@ hoverHelper hovers point position element =
 
         Viewport data child ->
             if contains point position (viewportSize data child) then
-                hoverHelper hovers point (Coord.plus ( Quantity.zero, data.scrollOffset ) position) child
+                hoverHelper
+                    (( data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
+                    point
+                    (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
+                    child
 
             else
                 hovers
@@ -708,7 +932,7 @@ findInputHelper id position element =
             Nothing
 
         Viewport data child ->
-            findInputHelper id (Coord.plus ( Quantity.zero, data.scrollOffset ) position) child
+            findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -735,12 +959,12 @@ focused ids, on a screen with the given UI scale. A parent draws before its chil
 `inFront` elements after the child.
 -}
 view : UiScale -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view scale maybeHover focus ( screenWidth, screenHeight ) element =
+view scale maybeHover focus screenSize element =
     viewList
         scale
         maybeHover
         focus
-        { topLeft = Coord.origin, bottomRight = ( Units.toUi scale screenWidth, Units.toUi scale screenHeight ) }
+        { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
@@ -751,10 +975,17 @@ viewList scale maybeHover focus viewport2 position element =
         Just viewport3 ->
             case element of
                 TextInput data ->
-                    TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state
+                    TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state.current
 
                 TextInputMultiline data ->
-                    TextInputMultiline.view scale viewport3 data.style position (focus == Just data.id) data.scroll data.state
+                    TextInputMultiline.view
+                        scale
+                        viewport3
+                        data.style
+                        position
+                        (focus == Just data.id)
+                        data.state.scroll
+                        data.state.input.current
 
                 Text data ->
                     Sprite.text scale data.color data.font viewport3 data.text position
@@ -802,7 +1033,7 @@ viewList scale maybeHover focus viewport2 position element =
                         maybeHover
                         focus
                         viewport3
-                        (Coord.plus ( Quantity.zero, data.scrollOffset ) position)
+                        (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                         child
 
         Nothing ->
