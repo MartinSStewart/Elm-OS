@@ -4,7 +4,9 @@ module News exposing
     , Item(..)
     , NewsState(..)
     , Topic
+    , UiId(..)
     , decoder
+    , idToString
     , lastDays
     , parseWikitext
     , request
@@ -32,12 +34,13 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 import Color exposing (Color)
 import Coord
 import Date exposing (Date)
+import Dict exposing (Dict)
 import Effect
 import Json.Decode as D
 import Quantity exposing (Quantity)
 import Sprite
 import Time
-import Ui exposing (Element, ViewportModel)
+import Ui exposing (Element, ElementState(..), ViewportModel)
 import Units exposing (UiPixels)
 
 
@@ -75,8 +78,19 @@ type NewsState
     | NewsFailed String
 
 
-view : ViewportModel -> NewsState -> Element id
-view newsScroll news =
+type UiId
+    = NewsViewport
+
+
+idToString : UiId -> String
+idToString id =
+    case id of
+        NewsViewport ->
+            "newsViewport"
+
+
+view : Dict String ElementState -> NewsState -> Element UiId
+view uiState news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -92,13 +106,13 @@ view newsScroll news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            daysView newsScroll days
+                            daysView uiState days
 
                         Nothing ->
                             Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
 
                 LoadedNews days ->
-                    daysView newsScroll days
+                    daysView uiState days
 
                 NewsFailed string ->
                     Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
@@ -106,8 +120,8 @@ view newsScroll news =
         )
 
 
-daysView : ViewportModel -> List Day -> Element id
-daysView newsScroll days =
+daysView : Dict String ElementState -> List Day -> Element UiId
+daysView uiState days =
     List.map
         (\{ date, topics } ->
             let
@@ -152,7 +166,17 @@ daysView newsScroll days =
         )
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
-        |> Ui.viewport newsScroll { viewportHeight = Quantity.unsafe 400 }
+        |> Ui.viewport
+            { id = NewsViewport
+            , viewportHeight = Quantity.unsafe 1000
+            , model =
+                case Dict.get (idToString NewsViewport) uiState of
+                    Just (ViewportState viewport) ->
+                        viewport
+
+                    _ ->
+                        Ui.initViewportModel
+            }
 
 
 dateColor : Color
