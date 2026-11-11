@@ -2,7 +2,6 @@ module HackerNews exposing
     ( HackerNewsState(..)
     , Model
     , UiId
-    , decoder
     , gotRequest
     , idToString
     , init
@@ -11,20 +10,16 @@ module HackerNews exposing
     )
 
 import Effect exposing (Effect, HttpRequestId(..))
+import Html.Parser
 import Json.Decode
 import News exposing (NewsState(..))
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
 
 
-getNews : Effect
-getNews =
-    Effect.get HackerNewsRequest "https://hacker-news.firebaseio.com/v0/topstories.json"
-
-
-decoder : Json.Decode.Decoder (List Int)
-decoder =
-    Json.Decode.list Json.Decode.int
+getNewsList : Effect
+getNewsList =
+    Effect.get HackerNewsRequest "https://news.ycombinator.com/"
 
 
 type UiId
@@ -59,7 +54,7 @@ onClick model =
                         _ ->
                             Loading Nothing
               }
-            , [ getNews ]
+            , [ getNewsList ]
             )
 
         ( False, _ ) ->
@@ -74,8 +69,8 @@ type alias Model =
 
 type HackerNewsState
     = NotLoading
-    | Loading (Maybe (List Int))
-    | Loaded (List Int)
+    | Loading (Maybe String)
+    | Loaded String
     | LoadFailed Effect.HttpError
 
 
@@ -84,11 +79,15 @@ init =
     { data = NotLoading, isOpen = False }
 
 
-gotRequest : Result Effect.HttpError (List Int) -> Model -> Model
+gotRequest : Result Effect.HttpError { status : Int, body : String } -> Model -> Model
 gotRequest result model =
     case result of
         Ok data ->
-            { model | data = Loaded data }
+            if data.status >= 200 && data.status < 300 then
+                { model | data = Loaded data.body }
+
+            else
+                { model | data = LoadFailed (Effect.BadBody data) }
 
         Err error ->
             { model | data = LoadFailed error }
@@ -100,11 +99,21 @@ view idMap uiState model =
         NotLoading ->
             Ui.Empty
 
-        Loading _ ->
-            Ui.text (Sans Regular Small) "Loading..."
+        Loading maybe ->
+            case maybe of
+                Just data ->
+                    loadedView data
 
-        Loaded _ ->
-            Ui.text (Sans Regular Small) "Loaded"
+                Nothing ->
+                    Ui.text (Sans Regular Small) "Loading..."
+
+        Loaded data ->
+            loadedView data
 
         LoadFailed httpError ->
             Ui.text (Sans Regular Small) "Error"
+
+
+loadedView : String -> Element id
+loadedView data =
+    Ui.text (Sans Regular Small) data

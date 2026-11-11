@@ -561,7 +561,7 @@ step event model =
                             )
 
                         Effect.HackerNewsRequest ->
-                            ( { model | hackerNews = HackerNews.gotRequest (decoded HackerNews.decoder) model.hackerNews }
+                            ( { model | hackerNews = HackerNews.gotRequest result model.hackerNews }
                             , []
                             )
 
