@@ -35,6 +35,7 @@ import Color exposing (Color)
 import Coord
 import Date exposing (Date)
 import Dict
+import Duration
 import Effect
 import Json.Decode as D
 import Quantity
@@ -74,7 +75,7 @@ type NewsState
     = NewsNotRequested
     | LoadingNews (Maybe (List Day))
     | LoadedNews (List Day)
-    | NewsFailed String
+    | NewsFailed Effect.HttpError
 
 
 type UiId
@@ -114,7 +115,7 @@ view idMap uiState news =
                     daysView idMap uiState days
 
                 NewsFailed string ->
-                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
+                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) (Effect.httpErrorToString string)
             ]
         )
 
@@ -268,7 +269,7 @@ request id dates =
             -- and may refuse ones that don't.
             [ ( "User-Agent", "ElmOS/0.1 (https://github.com/MartinSStewart/Elm-OS)" ) ]
         , body = ""
-        , timeoutMs = Just 30000
+        , timeoutMs = Just (Duration.seconds 30)
         }
 
 

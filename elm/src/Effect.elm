@@ -7,6 +7,7 @@ port module Effect exposing
     , encode
     , fromHost
     , get
+    , httpErrorToString
     , message
     , stringToHttpRequestId
     , toCmd
@@ -34,6 +35,7 @@ decoder give the same bytes as the host's, so the two sides can't drift apart.
 import Bytes exposing (Bytes)
 import Bytes.Encode as BE
 import Color exposing (Color)
+import Duration exposing (Duration)
 import Postcard
 import Sprite exposing (Triangle)
 import Units exposing (DevicePixels, UiScale)
@@ -96,7 +98,7 @@ type alias HttpRequest =
     , url : String
     , headers : List ( String, String )
     , body : String
-    , timeoutMs : Maybe Float
+    , timeoutMs : Maybe Duration
     }
 
 
@@ -110,17 +112,46 @@ type HttpError
       -- A restart or a power cut came before the answer (Persist.elm). Whether the
       -- server got the request is unknown, as with a Timeout.
     | Interrupted
+    | BadBody { status : Int, body : String }
+    | FailedToDecodeBody String
 
 
 get : HttpRequestId -> String -> Effect
 get id url =
-    Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just 30000 }
+    Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just (Duration.seconds 30) }
+
+
+httpErrorToString : HttpError -> String
+httpErrorToString error =
+    case error of
+        BadUrl url ->
+            "Bad URL " ++ url
+
+        Timeout ->
+            "The server took too long"
+
+        NetworkError _ ->
+            "Couldn't reach the server"
+
+        Interrupted ->
+            "A restart came before the answer"
+
+        BadBody { status } ->
+            if status >= 200 && status < 300 then
+                "Didn't understand the server's answer"
+
+            else
+                "The server answered " ++ String.fromInt status
+
+        FailedToDecodeBody string ->
+            string
 
 
 type HttpRequestId
     = GeoRequest
     | ForecastRequest
     | NewsRequest
+    | HackerNewsRequest
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -135,6 +166,9 @@ httpRequestIdToString request =
         NewsRequest ->
             "news"
 
+        HackerNewsRequest ->
+            "hackernews"
+
 
 stringToHttpRequestId : String -> Maybe HttpRequestId
 stringToHttpRequestId string =
@@ -147,6 +181,9 @@ stringToHttpRequestId string =
 
         "news" ->
             Just NewsRequest
+
+        "hackernews" ->
+            Just HackerNewsRequest
 
         _ ->
             Nothing
@@ -214,7 +251,7 @@ encode effect =
                 , Postcard.string request.url
                 , Postcard.list (\( name, value ) -> BE.sequence [ Postcard.string name, Postcard.string value ]) request.headers
                 , Postcard.string request.body
-                , Postcard.maybe Postcard.float64 request.timeoutMs
+                , Postcard.maybe (\a -> Duration.inMilliseconds a |> Postcard.float64) request.timeoutMs
                 ]
 
         ListDir path ->

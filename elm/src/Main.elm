@@ -18,7 +18,8 @@ import Coord exposing (Coord)
 import Date
 import Dict exposing (Dict)
 import Duration exposing (Duration)
-import Effect exposing (Effect)
+import Effect exposing (Effect, HttpError(..))
+import HackerNews
 import HostMessage
 import Json.Decode as D
 import Keyboard exposing (Key(..))
@@ -247,6 +248,7 @@ type alias Model =
     , aboutOpen : Bool
     , newsOpen : Bool
     , news : NewsState
+    , hackerNews : HackerNews.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
@@ -268,7 +270,7 @@ type WeatherState
     | FindingPlace
     | LoadingForecast Weather.Place
     | GotWeather Weather.Place Weather.Forecast
-    | WeatherFailed String
+    | WeatherFailed Effect.HttpError
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -289,6 +291,7 @@ type UiId
     | WeatherButton
     | AboutButton
     | NewsButton
+    | HackerNewsButton
     | CloseAboutButton
     | CalculatorButton
     | PowerOffButton
@@ -301,6 +304,7 @@ type UiId
     | EditorWindow
     | CloseEditorButton
     | NewsUiId News.UiId
+    | HackerNewsUiId HackerNews.UiId
 
 
 init : Model
@@ -334,6 +338,7 @@ init =
     , aboutOpen = False
     , newsOpen = False
     , news = NewsNotRequested
+    , hackerNews = HackerNews.init
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
@@ -375,6 +380,9 @@ idToString uiId =
         NewsButton ->
             "NewsButton"
 
+        HackerNewsButton ->
+            "HackerNewsButton"
+
         CloseAboutButton ->
             "CloseAboutButton"
 
@@ -410,6 +418,9 @@ idToString uiId =
 
         NewsUiId uiId2 ->
             News.idToString uiId2
+
+        HackerNewsUiId uiId2 ->
+            HackerNews.idToString uiId2
 
 
 {-| How many frame intervals the average and maximum are over.
@@ -492,18 +503,19 @@ step event model =
             case Effect.stringToHttpRequestId id of
                 Just id2 ->
                     let
-                        decoded : D.Decoder value -> Result (Result Effect.HttpError Int) value
+                        decoded : D.Decoder value -> Result Effect.HttpError value
                         decoded decoder =
                             case result of
                                 Ok response ->
                                     if response.status >= 200 && response.status < 300 then
-                                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
+                                        D.decodeString decoder response.body
+                                            |> Result.mapError (\error -> FailedToDecodeBody (D.errorToString error))
 
                                     else
-                                        Err (Ok response.status)
+                                        Err (BadBody response)
 
                                 Err error ->
-                                    Err (Err error)
+                                    Err error
                     in
                     case id2 of
                         Effect.GeoRequest ->
@@ -516,7 +528,7 @@ step event model =
                                             )
 
                                         Err error ->
-                                            ( { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+                                            ( { model | weather = WeatherFailed error }
                                             , []
                                             )
 
@@ -531,7 +543,7 @@ step event model =
                                             { model | weather = GotWeather place forecast }
 
                                         Err error ->
-                                            { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+                                            { model | weather = WeatherFailed error }
 
                                 _ ->
                                     model
@@ -544,7 +556,12 @@ step event model =
                                     { model | news = LoadedNews data }
 
                                 Err error ->
-                                    { model | news = NewsFailed ("Loading news: " ++ Weather.errorText error) }
+                                    { model | news = NewsFailed error }
+                            , []
+                            )
+
+                        Effect.HackerNewsRequest ->
+                            ( { model | hackerNews = HackerNews.gotRequest (decoded HackerNews.decoder) model.hackerNews }
                             , []
                             )
 
@@ -844,12 +861,11 @@ click model id uiState =
             in
             case ( isOpen, model.news ) of
                 ( _, LoadingNews _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False }, [] )
+                    ( { model | newsOpen = isOpen }, [] )
 
                 ( True, _ ) ->
                     ( { model
                         | newsOpen = isOpen
-                        , editorOpen = False
                         , news =
                             case model.news of
                                 LoadedNews days ->
@@ -946,6 +962,16 @@ click model id uiState =
             ( { model | uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState }, [] )
 
         NewsUiId _ ->
+            ( model, [] )
+
+        HackerNewsButton ->
+            let
+                ( hackerNews, effects ) =
+                    HackerNews.onClick model.hackerNews
+            in
+            ( { model | hackerNews = hackerNews }, effects )
+
+        HackerNewsUiId uiId ->
             ( model, [] )
 
 
@@ -1145,6 +1171,9 @@ dragSelect focus position model =
         NewsButton ->
             model
 
+        HackerNewsButton ->
+            model
+
         CloseAboutButton ->
             model
 
@@ -1176,6 +1205,9 @@ dragSelect focus position model =
             model
 
         NewsUiId _ ->
+            model
+
+        HackerNewsUiId uiId ->
             model
 
 
@@ -1374,6 +1406,15 @@ screenUi model =
                         [ Ui.topRight
                             { size = uiSize model }
                             (News.view NewsUiId model.uiState model.news)
+                        ]
+
+                    else
+                        []
+                   )
+                ++ (if model.hackerNews.isOpen then
+                        [ Ui.topRight
+                            { size = uiSize model }
+                            (HackerNews.view HackerNewsUiId model.uiState model.hackerNews)
                         ]
 
                     else
@@ -2053,7 +2094,7 @@ weatherRows model =
 
         WeatherFailed error ->
             [ divider
-            , Ui.colorText Color.errorColor font (Sprite.wrap font width error)
+            , Ui.colorText Color.errorColor font (Sprite.wrap font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
@@ -2229,6 +2270,7 @@ toolbar model =
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "News")
+                    , Ui.selectableButton { id = HackerNewsButton, padding = small } model.newsOpen (t "Hacker news")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")

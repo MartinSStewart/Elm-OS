@@ -1038,7 +1038,18 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         data.state.input.current
 
                 Text data ->
-                    Sprite.text scale data.color data.font viewport3 data.text position
+                    (if showUiBorder then
+                        borderAndFillView
+                            scale
+                            viewport3
+                            position
+                            (BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 })
+                            data.cachedSize
+
+                     else
+                        []
+                    )
+                        ++ Sprite.text scale data.color data.font viewport3 data.text position
 
                 Button data child ->
                     borderAndFillView
