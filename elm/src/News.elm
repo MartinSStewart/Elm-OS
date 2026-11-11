@@ -34,7 +34,7 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 import Color exposing (Color)
 import Coord
 import Date exposing (Date)
-import Dict exposing (Dict)
+import Dict
 import Effect
 import Json.Decode as D
 import Quantity

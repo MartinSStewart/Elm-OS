@@ -608,7 +608,7 @@ step event model =
 
         Key code down repeat ->
             let
-                key : Keyboard.Key
+                key : Key
                 key =
                     Keyboard.fromCode model.shift code
             in
@@ -1001,7 +1001,7 @@ needsPassword network =
     network.security /= Wifi.Open
 
 
-typeKey : Keyboard.Key -> Model -> ( Model, List Effect )
+typeKey : Key -> Model -> ( Model, List Effect )
 typeKey key model =
     case ( model.ctrl, key ) of
         ( False, Keyboard.Enter ) ->
@@ -1181,7 +1181,7 @@ dragSelect focus position model =
 
 {-| A key for the text editor. Its copies go in the same clipboard as the password box's.
 -}
-editorKey : Keyboard.Key -> Model -> Model
+editorKey : Key -> Model -> Model
 editorKey key model =
     case ( model.ctrl, key ) of
         ( False, Keyboard.Escape ) ->
