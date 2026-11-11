@@ -230,7 +230,6 @@ type alias Model =
     , ctrl : Bool
     , clipboard : String
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
-    , focus : Maybe UiId
     , wifiDevice : Wifi.Device
     , networks : List Wifi.Network
     , scanning : Bool
@@ -254,7 +253,7 @@ type alias Model =
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
-    , uiState : Dict String ElementState
+    , uiState : Ui.Model UiId
     , showUiBorders : Bool
     }
 
@@ -319,7 +318,6 @@ init =
     , ctrl = False
     , clipboard = ""
     , selectingText = False
-    , focus = Nothing
     , wifiDevice = Wifi.Unknown
     , networks = []
     , scanning = True
@@ -342,7 +340,7 @@ init =
     , editorOpen = False
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
-    , uiState = Dict.empty
+    , uiState = Ui.init
     , showUiBorders = False
     }
 
@@ -558,7 +556,7 @@ step event model =
                 moved =
                     { model | mouse = Coord.xy x y }
             in
-            case ( model.selectingText, model.focus ) of
+            case ( model.selectingText, model.uiState.focus ) of
                 ( True, Just focus ) ->
                     case Ui.findInput focus (screenUi model) of
                         Just (Ui.TextInputType { position }) ->
@@ -586,13 +584,13 @@ step event model =
                     in
                     case maybeModelAndEffects of
                         Just ( model2, effects ) ->
-                            ( { model2 | focus = Just id, selectingText = True, uiState = uiState }, effects )
+                            ( { model2 | selectingText = True }, effects )
 
                         Nothing ->
-                            ( { model | focus = Just id, selectingText = True, uiState = uiState }, [] )
+                            ( { model | selectingText = True, uiState = uiState }, [] )
 
                 [] ->
-                    ( { model | pressed = True, focus = Nothing }, [] )
+                    ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
 
         Button 0 False ->
             ( { model | pressed = False, selectingText = False }, [] )
@@ -617,7 +615,7 @@ step event model =
             if model.ctrl && model.shift && key == Character "Q" && down then
                 ( { model | showUiBorders = not model.showUiBorders }, [] )
 
-            else if Keyboard.isShift (Debug.log "code" code) then
+            else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
 
             else if Keyboard.isCtrl code then
@@ -626,10 +624,10 @@ step event model =
             else if not down then
                 ( model, [] )
 
-            else if model.focus == Just PasswordInput then
+            else if model.uiState.focus == Just PasswordInput then
                 typeKey key model
 
-            else if model.focus == Just EditorInput then
+            else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
 
             else if calculatorFocused model then
@@ -698,7 +696,7 @@ savePassword status model =
             if status.state == Wifi.Connected && network.ssid == status.ssid then
                 Dict.insert network.ssid
                     (if needsPassword network then
-                        case Dict.get (idToString PasswordInput) model.uiState of
+                        case Dict.get (idToString PasswordInput) model.uiState.uiState of
                             Just (TextInputState password) ->
                                 password.current.text
 
@@ -790,11 +788,11 @@ fetchWeather model =
     ( { model | weather = FindingPlace }, [ Effect.get Effect.GeoRequest model.geoUrl ] )
 
 
-click : Model -> UiId -> ( Model, List Effect )
-click model id =
+click : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
+click model id uiState =
     case id of
         RefreshButton ->
-            ( { model | scanning = True, focus = Nothing }, [ Effect.WifiScan ] )
+            ( { model | scanning = True }, [ Effect.WifiScan ] )
 
         NetworkButton ssid ->
             case List.filter (\n -> n.ssid == ssid) model.networks |> List.head of
@@ -802,22 +800,14 @@ click model id =
                     ( { model
                         | selected = Just network
                         , uiState =
-                            Dict.update
-                                (idToString id)
-                                (\maybe ->
-                                    if Maybe.map .ssid model.selected == Just ssid then
-                                        maybe
+                            Ui.setFocus
+                                (if needsPassword network then
+                                    Just PasswordInput
 
-                                    else
-                                        TextInput.init |> TextInputState |> Just
+                                 else
+                                    Nothing
                                 )
-                                model.uiState
-                        , focus =
-                            if needsPassword network then
-                                Just PasswordInput
-
-                            else
-                                Nothing
+                                uiState
                       }
                     , []
                     )
@@ -826,7 +816,7 @@ click model id =
                     ( model, [] )
 
         PasswordInput ->
-            ( { model | focus = Just PasswordInput }, [] )
+            ( { model | uiState = Ui.setFocus (Just PasswordInput) uiState }, [] )
 
         ShowPasswordButton ->
             ( { model | showPassword = not model.showPassword }, [] )
@@ -837,16 +827,15 @@ click model id =
         DisconnectButton ->
             ( { model
                 | weather = weatherWithoutWifi model
-                , focus = Nothing
               }
             , [ Effect.WifiDisconnect ]
             )
 
         WeatherButton ->
-            fetchWeather { model | focus = Nothing }
+            fetchWeather model
 
         AboutButton ->
-            ( { model | aboutOpen = not model.aboutOpen, editorOpen = False, focus = Nothing }, [] )
+            ( { model | aboutOpen = not model.aboutOpen, editorOpen = False }, [] )
 
         NewsButton ->
             let
@@ -855,13 +844,12 @@ click model id =
             in
             case ( isOpen, model.news ) of
                 ( _, LoadingNews _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
+                    ( { model | newsOpen = isOpen, editorOpen = False }, [] )
 
                 ( True, _ ) ->
                     ( { model
                         | newsOpen = isOpen
                         , editorOpen = False
-                        , focus = Nothing
                         , news =
                             case model.news of
                                 LoadedNews days ->
@@ -874,31 +862,34 @@ click model id =
                     )
 
                 ( False, _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False, focus = Nothing }, [] )
+                    ( { model | newsOpen = isOpen, editorOpen = False }, [] )
 
         EditorButton ->
             ( { model
                 | editorOpen = not model.editorOpen
                 , aboutOpen = False
-                , focus =
-                    if model.editorOpen then
-                        Nothing
+                , uiState =
+                    Ui.setFocus
+                        (if model.editorOpen then
+                            Nothing
 
-                    else
-                        Just EditorInput
+                         else
+                            Just EditorInput
+                        )
+                        uiState
               }
             , []
             )
 
         EditorInput ->
-            ( { model | focus = Just EditorInput }, [] )
+            ( model, [] )
 
         EditorWindow ->
             -- A click on the window around the text still types into it.
-            ( { model | focus = Just EditorInput }, [] )
+            ( { model | uiState = Ui.setFocus (Just EditorInput) uiState }, [] )
 
         CloseEditorButton ->
-            ( { model | editorOpen = False, focus = Nothing }, [] )
+            ( { model | editorOpen = False }, [] )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
@@ -908,13 +899,18 @@ click model id =
                 ( closeCalculator model, [] )
 
             else
-                ( { model | calculatorOpen = True, focus = Just (CalculatorUiId Calculator.Panel) }, [] )
+                ( { model
+                    | calculatorOpen = True
+                    , uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState
+                  }
+                , []
+                )
 
         PowerOffButton ->
-            ( { model | confirmPower = Just PowerOff, focus = Nothing }, [] )
+            ( { model | confirmPower = Just PowerOff }, [] )
 
         RestartButton ->
-            ( { model | confirmPower = Just Restart, focus = Nothing }, [] )
+            ( { model | confirmPower = Just Restart }, [] )
 
         CancelPowerButton ->
             ( { model | confirmPower = Nothing }, [] )
@@ -941,13 +937,13 @@ click model id =
         CalculatorUiId (Calculator.KeyButton key) ->
             ( { model
                 | calculator = Calculator.press key model.calculator
-                , focus = Just (CalculatorUiId Calculator.Panel)
+                , uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState
               }
             , []
             )
 
         CalculatorUiId Calculator.Panel ->
-            ( { model | focus = Just (CalculatorUiId Calculator.Panel) }, [] )
+            ( { model | uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState }, [] )
 
         NewsUiId _ ->
             ( model, [] )
@@ -957,7 +953,7 @@ click model id =
 -}
 calculatorFocused : Model -> Bool
 calculatorFocused model =
-    case model.focus of
+    case model.uiState.focus of
         Just (CalculatorUiId _) ->
             model.calculatorOpen
 
@@ -969,12 +965,6 @@ closeCalculator : Model -> Model
 closeCalculator model =
     { model
         | calculatorOpen = False
-        , focus =
-            if calculatorFocused model then
-                Nothing
-
-            else
-                model.focus
     }
 
 
@@ -985,7 +975,7 @@ connect model =
             let
                 password =
                     if needsPassword network then
-                        case Dict.get (idToString PasswordInput) model.uiState of
+                        case Dict.get (idToString PasswordInput) model.uiState.uiState of
                             Just (TextInputState password2) ->
                                 password2.current.text
 
@@ -996,8 +986,7 @@ connect model =
                         ""
             in
             ( { model
-                | focus = Nothing
-                , weather = weatherWithoutWifi model
+                | weather = weatherWithoutWifi model
                 , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
               }
             , [ Effect.WifiConnect { ssid = network.ssid, password = password } ]
@@ -1019,12 +1008,12 @@ typeKey key model =
             connect model
 
         ( False, Keyboard.Escape ) ->
-            ( { model | focus = Nothing }, [] )
+            ( { model | uiState = Ui.setFocus Nothing model.uiState }, [] )
 
         ( True, Keyboard.Character "v" ) ->
             ( { model
                 | uiState =
-                    Dict.update
+                    Ui.updateElement
                         (idToString PasswordInput)
                         (\maybe ->
                             TextInput.paste
@@ -1052,7 +1041,7 @@ typeKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case Dict.get (idToString PasswordInput) model.uiState of
+                        (case Dict.get (idToString PasswordInput) model.uiState.uiState of
                             Just (TextInputState password2) ->
                                 password2
 
@@ -1062,7 +1051,7 @@ typeKey key model =
             in
             ( { model
                 | uiState =
-                    Dict.insert (idToString PasswordInput) (TextInputState (limitPassword password)) model.uiState
+                    Ui.insertElement (idToString PasswordInput) (TextInputState (limitPassword password)) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -1088,7 +1077,7 @@ dragSelect focus position model =
         PasswordInput ->
             { model
                 | uiState =
-                    Dict.update
+                    Ui.updateElement
                         (idToString PasswordInput)
                         (\maybe ->
                             TextInput.mouseDownMove
@@ -1112,7 +1101,7 @@ dragSelect focus position model =
         EditorInput ->
             { model
                 | uiState =
-                    Dict.update
+                    Ui.updateElement
                         (idToString EditorInput)
                         (\maybe ->
                             TextInputMultiline.mouseDownMove
@@ -1196,12 +1185,12 @@ editorKey : Keyboard.Key -> Model -> Model
 editorKey key model =
     case ( model.ctrl, key ) of
         ( False, Keyboard.Escape ) ->
-            { model | focus = Nothing }
+            { model | uiState = Ui.setFocus Nothing model.uiState }
 
         ( True, Keyboard.Character "v" ) ->
             { model
                 | uiState =
-                    Dict.update
+                    Ui.updateElement
                         (idToString EditorInput)
                         (\maybe ->
                             TextInputMultiline.paste
@@ -1228,7 +1217,7 @@ editorKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case Dict.get (idToString EditorInput) model.uiState of
+                        (case Dict.get (idToString EditorInput) model.uiState.uiState of
                             Just (TextInputMultilineState editor2) ->
                                 editor2
 
@@ -1237,7 +1226,7 @@ editorKey key model =
                         )
             in
             { model
-                | uiState = Dict.insert (idToString EditorInput) (TextInputMultilineState editor) model.uiState
+                | uiState = Ui.insertElement (idToString EditorInput) (TextInputMultilineState editor) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -1299,7 +1288,7 @@ view model =
         hovered =
             Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
-    Ui.view (uiScale model) model.showUiBorders hovered model.focus model.screenSize ui
+    Ui.view (uiScale model) model.showUiBorders hovered model.uiState.focus model.screenSize ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however
@@ -1384,8 +1373,7 @@ screenUi model =
                 ++ (if model.newsOpen then
                         [ Ui.topRight
                             { size = uiSize model }
-                            (News.view model.uiState model.news)
-                            |> Ui.map NewsUiId
+                            (News.view NewsUiId model.uiState model.news)
                         ]
 
                     else
@@ -2011,7 +1999,7 @@ passwordInput model =
         , style = passwordStyle model
         , isValid = True
         , state =
-            case Dict.get (idToString PasswordInput) model.uiState of
+            case Dict.get (idToString PasswordInput) model.uiState.uiState of
                 Just (TextInputState textInput) ->
                     textInput
 
@@ -2440,7 +2428,7 @@ editorWindow model =
 
         textInput : TextInputMultiline.Model
         textInput =
-            case Dict.get (idToString EditorInput) model.uiState of
+            case Dict.get (idToString EditorInput) model.uiState.uiState of
                 Just (TextInputMultilineState editor) ->
                     editor
 

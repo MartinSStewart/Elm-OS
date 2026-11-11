@@ -4,6 +4,7 @@ module Ui exposing
     , Element(..)
     , ElementState(..)
     , InputType(..)
+    , Model
     , RowColumn
     , TextInputData
     , TextInputMultilineData
@@ -22,7 +23,9 @@ module Ui exposing
     , elWithId
     , findInput
     , hover
+    , init
     , initViewportModel
+    , insertElement
     , leftAndRight
     , map
     , minWidth
@@ -35,12 +38,14 @@ module Ui exposing
     , quads
     , row
     , selectableButton
+    , setFocus
     , size
     , text
     , textInput
     , textInputMultiline
     , topLeft
     , topRight
+    , updateElement
     , view
     , viewport
     )
@@ -144,64 +149,97 @@ type ElementState
     | ViewportState ViewportModel
 
 
+type alias Model id =
+    { focus : Maybe id
+    , uiState : Dict String ElementState
+    }
+
+
+init : Model id
+init =
+    { focus = Nothing, uiState = Dict.empty }
+
+
 type alias ViewportModel =
     { offset : Quantity Float UiPixels
     , target : Quantity Int UiPixels
     }
 
 
-onAnimationFrame : Duration -> Dict id ElementState -> Dict id ElementState
-onAnimationFrame timeElapsed uiState =
-    Dict.map
-        (\_ value ->
-            case value of
-                TextInputState _ ->
-                    value
+setFocus : Maybe id -> Model id -> Model id
+setFocus maybe model =
+    { model | focus = maybe }
 
-                TextInputMultilineState _ ->
-                    value
 
-                ViewportState model ->
-                    let
-                        distance : Quantity Float UiPixels
-                        distance =
-                            Quantity.for timeElapsed scrollBaseSpeed
-                                |> Quantity.plus (diff |> Quantity.minus (Quantity.multiplyBy (0.1 ^ Duration.inSeconds timeElapsed) diff))
+onAnimationFrame : Duration -> Model id -> Model id
+onAnimationFrame timeElapsed model =
+    { model
+        | uiState =
+            Dict.map
+                (\_ value ->
+                    case value of
+                        TextInputState _ ->
+                            value
 
-                        target : Quantity Float UiPixels
-                        target =
-                            Quantity.toFloatQuantity model.target
+                        TextInputMultilineState _ ->
+                            value
 
-                        diff : Quantity Float UiPixels
-                        diff =
-                            target |> Quantity.minus model.offset |> Quantity.abs
-                    in
-                    { model
-                        | offset =
-                            if diff |> Quantity.lessThan distance then
-                                target
+                        ViewportState viewport2 ->
+                            let
+                                distance : Quantity Float UiPixels
+                                distance =
+                                    Quantity.plus
+                                        (Quantity.for timeElapsed scrollBaseSpeed)
+                                        (diff
+                                            |> Quantity.minus
+                                                (Quantity.multiplyBy (0.05 ^ Duration.inSeconds timeElapsed) diff)
+                                        )
 
-                            else if model.offset |> Quantity.lessThan target then
-                                Quantity.plus distance model.offset
+                                target : Quantity Float UiPixels
+                                target =
+                                    Quantity.toFloatQuantity viewport2.target
 
-                            else
-                                model.offset |> Quantity.minus distance
-                    }
-                        |> ViewportState
-        )
-        uiState
+                                diff : Quantity Float UiPixels
+                                diff =
+                                    target |> Quantity.minus viewport2.offset |> Quantity.abs
+                            in
+                            { viewport2
+                                | offset =
+                                    if diff |> Quantity.lessThan distance then
+                                        target
+
+                                    else if viewport2.offset |> Quantity.lessThan target then
+                                        Quantity.plus distance viewport2.offset
+
+                                    else
+                                        viewport2.offset |> Quantity.minus distance
+                            }
+                                |> ViewportState
+                )
+                model.uiState
+    }
+
+
+insertElement : String -> ElementState -> Model id -> Model id
+insertElement id state model =
+    { model | uiState = Dict.insert id state model.uiState }
+
+
+updateElement : String -> (Maybe ElementState -> Maybe ElementState) -> Model id -> Model id
+updateElement id state model =
+    { model | uiState = Dict.update id state model.uiState }
 
 
 onMouseDown :
-    (id -> a)
+    (id -> Model id -> a)
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
     -> String
     -> Element id
-    -> Dict String ElementState
-    -> ( Dict String ElementState, Maybe a )
-onMouseDown onClick relativePositionToUi cursor id idString element uiState =
+    -> Model id
+    -> ( Model id, Maybe a )
+onMouseDown onClick relativePositionToUi cursor id idString element model =
     case element of
         TextInput textInput2 ->
             let
@@ -210,7 +248,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element uiState =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case Dict.get idString uiState of
+                        (case Dict.get idString model.uiState of
                             Just (TextInputState state2) ->
                                 state2
 
@@ -218,7 +256,12 @@ onMouseDown onClick relativePositionToUi cursor id idString element uiState =
                                 TextInput.init
                         )
             in
-            ( Dict.insert idString (TextInputState state3) uiState, Nothing )
+            ( { model
+                | uiState = Dict.insert idString (TextInputState state3) model.uiState
+                , focus = Just id
+              }
+            , Nothing
+            )
 
         TextInputMultiline textInput2 ->
             let
@@ -227,7 +270,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element uiState =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case Dict.get idString uiState of
+                        (case Dict.get idString model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
 
@@ -235,38 +278,43 @@ onMouseDown onClick relativePositionToUi cursor id idString element uiState =
                                 TextInputMultiline.init
                         )
             in
-            ( Dict.insert idString (TextInputMultilineState state3) uiState, Nothing )
+            ( { model
+                | uiState = Dict.insert idString (TextInputMultilineState state3) model.uiState
+                , focus = Just id
+              }
+            , Nothing
+            )
 
         Text _ ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
         Button _ _ ->
-            ( uiState, onClick id |> Just )
+            ( { model | focus = Nothing }, onClick id { model | focus = Nothing } |> Just )
 
         Row _ _ ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
         Column _ _ ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
         Single _ _ ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
         Quads _ ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
         Empty ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
         Viewport _ _ ->
-            ( uiState, Nothing )
+            ( { model | focus = Nothing }, Nothing )
 
 
-onWheel : comparable -> Int -> Element id -> Dict comparable ElementState -> Dict comparable ElementState
-onWheel id clicks element uiState =
+onWheel : String -> Int -> Element id -> Model id -> Model id
+onWheel id clicks element model =
     case element of
         TextInput _ ->
-            uiState
+            model
 
         TextInputMultiline textInput2 ->
             let
@@ -274,7 +322,7 @@ onWheel id clicks element uiState =
                     TextInputMultiline.wheel
                         textInput2.style
                         clicks
-                        (case Dict.get id uiState of
+                        (case Dict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
 
@@ -282,29 +330,29 @@ onWheel id clicks element uiState =
                                 TextInputMultiline.init
                         )
             in
-            Dict.insert id (TextInputMultilineState state3) uiState
+            { model | uiState = Dict.insert id (TextInputMultilineState state3) model.uiState }
 
         -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
         Text _ ->
-            uiState
+            model
 
         Button _ _ ->
-            uiState
+            model
 
         Row _ _ ->
-            uiState
+            model
 
         Column _ _ ->
-            uiState
+            model
 
         Single _ _ ->
-            uiState
+            model
 
         Quads _ ->
-            uiState
+            model
 
         Empty ->
-            uiState
+            model
 
         Viewport data element2 ->
             let
@@ -314,7 +362,7 @@ onWheel id clicks element uiState =
                         clicks
                         (size element2)
                         data
-                        (case Dict.get id uiState of
+                        (case Dict.get id model.uiState of
                             Just (ViewportState state2) ->
                                 state2
 
@@ -322,7 +370,7 @@ onWheel id clicks element uiState =
                                 initViewportModel
                         )
             in
-            Dict.insert id (ViewportState state3) uiState
+            { model | uiState = Dict.insert id (ViewportState state3) model.uiState }
 
 
 initViewportModel : ViewportModel
@@ -346,6 +394,7 @@ scrollBaseSpeed =
 
 type BorderAndFill
     = NoBorderOrFill
+    | BorderOnly { borderWidth : Int, borderColor : Color }
     | FillOnly Color
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
 
@@ -1025,7 +1074,10 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         (if showUiBorder then
                             case data.borderAndFill of
                                 NoBorderOrFill ->
-                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = Color.fillColor3 }
+                                    BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 }
+
+                                BorderOnly _ ->
+                                    BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 }
 
                                 FillOnly fillColor ->
                                     BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = fillColor }
@@ -1065,6 +1117,32 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
     case borderAndFill of
         NoBorderOrFill ->
             []
+
+        BorderOnly { borderWidth, borderColor } ->
+            let
+                verticalSize =
+                    Coord.xy borderWidth (Coord.yRaw size2)
+
+                horizontalSize =
+                    Coord.xy (Coord.xRaw size2) borderWidth
+            in
+            Sprite.rectangle borderColor viewport2 position verticalSize
+                ++ Sprite.rectangle borderColor
+                    viewport2
+                    (Coord.plus
+                        ( Coord.x size2 |> Quantity.minus (Units.uiPixels borderWidth), Quantity.zero )
+                        position
+                    )
+                    verticalSize
+                ++ Sprite.rectangle borderColor viewport2 position horizontalSize
+                ++ Sprite.rectangle borderColor
+                    viewport2
+                    (Coord.plus
+                        ( Quantity.zero, Coord.y size2 |> Quantity.minus (Units.uiPixels borderWidth) )
+                        position
+                    )
+                    horizontalSize
+                |> Sprite.toDevice scale
 
         FillOnly fillColor ->
             Sprite.rectangle fillColor viewport2 position size2 |> Sprite.toDevice scale
