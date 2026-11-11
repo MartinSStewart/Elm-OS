@@ -21,7 +21,7 @@ import Duration exposing (Duration)
 import Effect exposing (Effect)
 import HostMessage
 import Json.Decode as D
-import Keyboard
+import Keyboard exposing (Key(..))
 import News exposing (NewsState(..))
 import Persist
 import Quantity exposing (Quantity)
@@ -255,6 +255,7 @@ type alias Model =
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Dict String ElementState
+    , showUiBorders : Bool
     }
 
 
@@ -342,6 +343,7 @@ init =
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
     , uiState = Dict.empty
+    , showUiBorders = False
     }
 
 
@@ -607,7 +609,15 @@ step event model =
                     ( model, [] )
 
         Key code down repeat ->
-            if Keyboard.isShift code then
+            let
+                key : Keyboard.Key
+                key =
+                    Keyboard.fromCode model.shift code
+            in
+            if model.ctrl && model.shift && key == Character "Q" && down then
+                ( { model | showUiBorders = not model.showUiBorders }, [] )
+
+            else if Keyboard.isShift (Debug.log "code" code) then
                 ( { model | shift = down }, [] )
 
             else if Keyboard.isCtrl code then
@@ -617,19 +627,19 @@ step event model =
                 ( model, [] )
 
             else if model.focus == Just PasswordInput then
-                typeKey (Keyboard.fromCode model.shift code) model
+                typeKey key model
 
             else if model.focus == Just EditorInput then
-                ( editorKey (Keyboard.fromCode model.shift code) model, [] )
+                ( editorKey key model, [] )
 
             else if calculatorFocused model then
-                case ( model.ctrl, Calculator.fromKeyboard (Keyboard.fromCode model.shift code) ) of
-                    ( False, Just key ) ->
-                        if repeat && key /= Calculator.Backspace then
+                case ( model.ctrl, Calculator.fromKeyboard key ) of
+                    ( False, Just key2 ) ->
+                        if repeat && key2 /= Calculator.Backspace then
                             ( model, [] )
 
                         else
-                            ( { model | calculator = Calculator.press key model.calculator }, [] )
+                            ( { model | calculator = Calculator.press key2 model.calculator }, [] )
 
                     _ ->
                         ( model, [] )
@@ -1289,7 +1299,7 @@ view model =
         hovered =
             Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
-    Ui.view (uiScale model) hovered model.focus model.screenSize ui
+    Ui.view (uiScale model) model.showUiBorders hovered model.focus model.screenSize ui
         ++ Sprite.cursor
             (if Maybe.map .hardwareCursor model.renderer == Just True then
                 -- The host moves the real cursor; this orange one trails it by however

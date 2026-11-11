@@ -958,10 +958,11 @@ findFirst f list =
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 -}
-view : UiScale -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view scale maybeHover focus screenSize element =
+view : UiScale -> Bool -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view scale showUiBorder maybeHover focus screenSize element =
     viewList
         scale
+        showUiBorder
         maybeHover
         focus
         { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
@@ -969,8 +970,8 @@ view scale maybeHover focus screenSize element =
         element
 
 
-viewList : UiScale -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
-viewList scale maybeHover focus viewport2 position element =
+viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
+viewList scale showUiBorder maybeHover focus viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (size element) } of
         Just viewport3 ->
             case element of
@@ -1005,21 +1006,39 @@ viewList scale maybeHover focus viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale maybeHover focus viewport3 position) data.inFront
+                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
 
                 Row data children ->
                     childPositions True data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale maybeHover focus viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
 
                 Column data children ->
                     childPositions False data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale maybeHover focus viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
 
                 Single data child ->
-                    borderAndFillView scale viewport3 position data.borderAndFill data.cachedSize
-                        ++ viewList scale maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale maybeHover focus viewport3 position) data.inFront
+                    borderAndFillView
+                        scale
+                        viewport3
+                        position
+                        (if showUiBorder then
+                            case data.borderAndFill of
+                                NoBorderOrFill ->
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = Color.fillColor3 }
+
+                                FillOnly fillColor ->
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = fillColor }
+
+                                BorderAndFill data2 ->
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = data2.fillColor }
+
+                         else
+                            data.borderAndFill
+                        )
+                        data.cachedSize
+                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
 
                 Quads data ->
                     Sprite.move position data.triangles |> Sprite.toDevice scale
@@ -1030,6 +1049,7 @@ viewList scale maybeHover focus viewport2 position element =
                 Viewport data child ->
                     viewList
                         scale
+                        showUiBorder
                         maybeHover
                         focus
                         viewport3
