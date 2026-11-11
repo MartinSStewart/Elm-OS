@@ -34,7 +34,7 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 import Color exposing (Color)
 import Coord
 import Date exposing (Date)
-import Dict exposing (Dict)
+import Dict
 import Effect
 import Json.Decode as D
 import Quantity
@@ -88,8 +88,8 @@ idToString id =
             "newsViewport"
 
 
-view : Dict String ElementState -> NewsState -> Element UiId
-view uiState news =
+view : (UiId -> id) -> Ui.Model id -> NewsState -> Element id
+view idMap uiState news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -105,13 +105,13 @@ view uiState news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            daysView uiState days
+                            daysView idMap uiState days
 
                         Nothing ->
                             Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
 
                 LoadedNews days ->
-                    daysView uiState days
+                    daysView idMap uiState days
 
                 NewsFailed string ->
                     Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
@@ -119,8 +119,8 @@ view uiState news =
         )
 
 
-daysView : Dict String ElementState -> List Day -> Element UiId
-daysView uiState days =
+daysView : (UiId -> id) -> Ui.Model id -> List Day -> Element id
+daysView idMap uiState days =
     List.map
         (\{ date, topics } ->
             let
@@ -166,10 +166,10 @@ daysView uiState days =
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
         |> Ui.viewport
-            { id = NewsViewport
+            { id = idMap NewsViewport
             , viewportHeight = Quantity.unsafe 1000
             , model =
-                case Dict.get (idToString NewsViewport) uiState of
+                case Dict.get (idToString NewsViewport) uiState.uiState of
                     Just (ViewportState viewport) ->
                         viewport
 

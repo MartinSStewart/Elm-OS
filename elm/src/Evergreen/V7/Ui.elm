@@ -6,6 +6,7 @@ and migrated. Don't change them.
 
 -}
 
+import Dict
 import Evergreen.V7.TextInput
 import Evergreen.V7.TextInputMultiline
 import Evergreen.V7.Units
@@ -16,6 +17,12 @@ type ElementState
     = TextInputState Evergreen.V7.TextInput.Model
     | TextInputMultilineState Evergreen.V7.TextInputMultiline.Model
     | ViewportState ViewportModel
+
+
+type alias Model id =
+    { focus : Maybe id
+    , uiState : Dict.Dict String ElementState
+    }
 
 
 type alias ViewportModel =

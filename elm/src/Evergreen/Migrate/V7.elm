@@ -1,6 +1,6 @@
 module Evergreen.Migrate.V7 exposing (model)
 
-{-| How a Model saved by version 6 becomes one of version 7 (changed: Main.Model, Main.UiId; new: News.UiId, Ui.ElementState, Ui.ViewportModel).
+{-| How a Model saved by version 6 becomes one of version 7 (changed: Main.Model, Main.UiId; new: News.UiId, Ui.ElementState, Ui.Model, Ui.ViewportModel).
 
 tools/wire (`make migration`) wrote this. Where it couldn't tell what to do, it
 wrote `Unimplemented`, which doesn't compile: replace each one. The rest is
@@ -48,7 +48,6 @@ migrate_Main_Model old =
     , ctrl = old.ctrl
     , clipboard = old.clipboard
     , selectingText = old.selectingText
-    , focus = Maybe.map migrate_Main_UiId old.focus
     , wifiDevice = migrate_Wifi_Device old.wifiDevice
     , networks = List.map migrate_Wifi_Network old.networks
     , scanning = old.scanning
@@ -71,7 +70,8 @@ migrate_Main_Model old =
     , editorOpen = old.editorOpen
     , upgradingTo = old.upgradingTo
     , reflashNeeded = old.reflashNeeded
-    , uiState = Dict.empty
+    , uiState = { focus = Nothing, uiState = Dict.empty }
+    , showUiBorders = False
     }
 
 
@@ -140,70 +140,6 @@ migrate_Main_SystemStats old =
     , elmMs = old.elmMs
     , drawMs = old.drawMs
     }
-
-
-migrate_Main_UiId : Evergreen.V6.Main.UiId -> Evergreen.V7.Main.UiId
-migrate_Main_UiId old =
-    case old of
-        Evergreen.V6.Main.RefreshButton ->
-            Evergreen.V7.Main.RefreshButton
-
-        Evergreen.V6.Main.NetworkButton w3_x0 ->
-            Evergreen.V7.Main.NetworkButton w3_x0
-
-        Evergreen.V6.Main.PasswordInput ->
-            Evergreen.V7.Main.PasswordInput
-
-        Evergreen.V6.Main.ShowPasswordButton ->
-            Evergreen.V7.Main.ShowPasswordButton
-
-        Evergreen.V6.Main.ConnectButton ->
-            Evergreen.V7.Main.ConnectButton
-
-        Evergreen.V6.Main.DisconnectButton ->
-            Evergreen.V7.Main.DisconnectButton
-
-        Evergreen.V6.Main.WeatherButton ->
-            Evergreen.V7.Main.WeatherButton
-
-        Evergreen.V6.Main.AboutButton ->
-            Evergreen.V7.Main.AboutButton
-
-        Evergreen.V6.Main.NewsButton ->
-            Evergreen.V7.Main.NewsButton
-
-        Evergreen.V6.Main.CloseAboutButton ->
-            Evergreen.V7.Main.CloseAboutButton
-
-        Evergreen.V6.Main.CalculatorButton ->
-            Evergreen.V7.Main.CalculatorButton
-
-        Evergreen.V6.Main.PowerOffButton ->
-            Evergreen.V7.Main.PowerOffButton
-
-        Evergreen.V6.Main.RestartButton ->
-            Evergreen.V7.Main.RestartButton
-
-        Evergreen.V6.Main.ConfirmPowerButton ->
-            Evergreen.V7.Main.ConfirmPowerButton
-
-        Evergreen.V6.Main.CancelPowerButton ->
-            Evergreen.V7.Main.CancelPowerButton
-
-        Evergreen.V6.Main.CalculatorUiId w3_x0 ->
-            Evergreen.V7.Main.CalculatorUiId (migrate_Calculator_UiId w3_x0)
-
-        Evergreen.V6.Main.EditorButton ->
-            Evergreen.V7.Main.EditorButton
-
-        Evergreen.V6.Main.EditorInput ->
-            Evergreen.V7.Main.EditorInput
-
-        Evergreen.V6.Main.EditorWindow ->
-            Evergreen.V7.Main.EditorWindow
-
-        Evergreen.V6.Main.CloseEditorButton ->
-            Evergreen.V7.Main.CloseEditorButton
 
 
 migrate_Main_WeatherState : Evergreen.V6.Main.WeatherState -> Evergreen.V7.Main.WeatherState
@@ -351,19 +287,6 @@ migrate_Calculator_Operator old =
             Evergreen.V7.Calculator.Divide
 
 
-migrate_Calculator_UiId : Evergreen.V6.Calculator.UiId -> Evergreen.V7.Calculator.UiId
-migrate_Calculator_UiId old =
-    case old of
-        Evergreen.V6.Calculator.KeyButton w3_x0 ->
-            Evergreen.V7.Calculator.KeyButton (migrate_Calculator_Key w3_x0)
-
-        Evergreen.V6.Calculator.CloseButton ->
-            Evergreen.V7.Calculator.CloseButton
-
-        Evergreen.V6.Calculator.Panel ->
-            Evergreen.V7.Calculator.Panel
-
-
 migrate_Weather_Forecast : Evergreen.V6.Weather.Forecast -> Evergreen.V7.Weather.Forecast
 migrate_Weather_Forecast old =
     { temperature = old.temperature
@@ -442,31 +365,6 @@ migrate_Wired_State old =
 
         Evergreen.V6.Wired.Failed ->
             Evergreen.V7.Wired.Failed
-
-
-migrate_Calculator_Key : Evergreen.V6.Calculator.Key -> Evergreen.V7.Calculator.Key
-migrate_Calculator_Key old =
-    case old of
-        Evergreen.V6.Calculator.Digit w3_x0 ->
-            Evergreen.V7.Calculator.Digit w3_x0
-
-        Evergreen.V6.Calculator.Point ->
-            Evergreen.V7.Calculator.Point
-
-        Evergreen.V6.Calculator.Operator w3_x0 ->
-            Evergreen.V7.Calculator.Operator (migrate_Calculator_Operator w3_x0)
-
-        Evergreen.V6.Calculator.Equals ->
-            Evergreen.V7.Calculator.Equals
-
-        Evergreen.V6.Calculator.Negate ->
-            Evergreen.V7.Calculator.Negate
-
-        Evergreen.V6.Calculator.Backspace ->
-            Evergreen.V7.Calculator.Backspace
-
-        Evergreen.V6.Calculator.Clear ->
-            Evergreen.V7.Calculator.Clear
 
 
 migrate_Weather_Day : Evergreen.V6.Weather.Day -> Evergreen.V7.Weather.Day

@@ -32,7 +32,6 @@ type alias Model =
     , ctrl : Bool
     , clipboard : String
     , selectingText : Bool
-    , focus : Maybe UiId
     , wifiDevice : Evergreen.V7.Wifi.Device
     , networks : List Evergreen.V7.Wifi.Network
     , scanning : Bool
@@ -55,7 +54,8 @@ type alias Model =
     , editorOpen : Bool
     , upgradingTo : Maybe String
     , reflashNeeded : Maybe String
-    , uiState : Dict.Dict String Evergreen.V7.Ui.ElementState
+    , uiState : Evergreen.V7.Ui.Model UiId
+    , showUiBorders : Bool
     }
 
 
