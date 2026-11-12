@@ -124,10 +124,10 @@ goDown (Loc t p) =
         Comment _ ->
             Nothing
 
-        Element _ _ [] ->
+        Tag _ _ [] ->
             Nothing
 
-        Element tag attrs (t1 :: trees) ->
+        Tag tag attrs (t1 :: trees) ->
             Just (Loc t1 (PNode tag attrs [] p trees))
 
 
@@ -170,7 +170,7 @@ goUp (Loc t p) =
             Nothing
 
         PNode tag attrs left up right ->
-            Just (Loc (Element tag attrs (List.reverse left ++ (t :: right))) up)
+            Just (Loc (Tag tag attrs (List.reverse left ++ (t :: right))) up)
 
 
 {-| Move into the node at the next available depth-first position.
@@ -302,7 +302,7 @@ hasAttr : String -> (Loc -> Bool)
 hasAttr key =
     \loc ->
         case toNode loc of
-            Element _ attrs _ ->
+            Tag _ attrs _ ->
                 List.any (\( k, _ ) -> String.toLower k == String.toLower key) attrs
 
             _ ->
@@ -356,7 +356,7 @@ classEq target_ =
                 String.toLower target_
         in
         case toNode loc of
-            Element _ attrs _ ->
+            Tag _ attrs _ ->
                 let
                     help : List ( String, String ) -> Bool
                     help subattrs =
@@ -406,7 +406,7 @@ tagEq : String -> (Loc -> Bool)
 tagEq tag =
     \loc ->
         case toNode loc of
-            Element t _ _ ->
+            Tag t _ _ ->
                 t == tag
 
             _ ->
@@ -431,7 +431,7 @@ attrEq key val =
     -- TODO: Do I need to downcase attr keys?
     \loc ->
         case toNode loc of
-            Element _ allAttrs _ ->
+            Tag _ allAttrs _ ->
                 let
                     help : List ( String, String ) -> Bool
                     help attrs =
@@ -455,7 +455,7 @@ attrEq key val =
 getAttrsByKey : String -> Node -> List ( String, String )
 getAttrsByKey key node =
     case node of
-        Element _ attrs _ ->
+        Tag _ attrs _ ->
             List.filter (\( k, _ ) -> k == key) attrs
 
         _ ->
@@ -698,7 +698,7 @@ insertDown newNode (Loc t p) =
         Comment _ ->
             Nothing
 
-        Element tag attrs kids ->
+        Tag tag attrs kids ->
             Just (Loc newNode (PNode tag attrs [] p kids))
 
 
@@ -722,7 +722,7 @@ delete (Loc _ p) =
 
         PNode tag attrs [] up [] ->
             -- Parent has no more children
-            Just (Loc (Element tag attrs []) up)
+            Just (Loc (Tag tag attrs []) up)
 
 
 {-| Is there another solution?

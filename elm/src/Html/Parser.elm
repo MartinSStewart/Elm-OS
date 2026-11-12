@@ -70,7 +70,7 @@ An element (e.g. `<div foo="bar">hello</div>`) can have attributes and child nod
 type Node
     = Text String
     | Comment String
-    | Element String (List ( String, String )) (List Node)
+    | Tag String (List ( String, String )) (List Node)
 
 
 {-| Configure the parser. Use the config constructors to create a config object.
@@ -136,7 +136,7 @@ Here is an example of providing a small subset of commonly-seen character refere
         |> customCharRefs
 
     run config "<span>&male; &amp; &female;</span>"
-        == Ok (Element "span" [] [Text "&male; & &female;"])
+        == Ok (Tag "span" [] [Text "&male; & &female;"])
 
 Notice that character references missing from the lookup table are simply parsed as text.
 
@@ -152,8 +152,8 @@ The html fragment can have multiple top-level nodes.
 
     run allCharRefs "<div>hi</div><div>bye</div>"
         == Ok
-            [ Element "div" [] [ Text "hi" ]
-            , Element "div" [] [ Text "bye" ]
+            [ Tag "div" [] [ Text "hi" ]
+            , Tag "div" [] [ Text "bye" ]
             ]
 
 -}
@@ -244,16 +244,16 @@ document cfg =
                     (\nodes ->
                         case nodes of
                             [] ->
-                                Element "html" [] []
+                                Tag "html" [] []
 
-                            ((Element "html" _ _) as root) :: [] ->
+                            ((Tag "html" _ _) as root) :: [] ->
                                 root
 
                             other :: [] ->
-                                Element "html" [] [ other ]
+                                Tag "html" [] [ other ]
 
                             _ ->
-                                Element "html" [] nodes
+                                Tag "html" [] nodes
                     )
            )
 
@@ -517,20 +517,20 @@ element cfg =
             (\( tag, attrs, end ) ->
                 case end of
                     SelfClose ->
-                        succeed (Element tag attrs [])
+                        succeed (Tag tag attrs [])
 
                     NoClose ->
                         if tag == "script" then
-                            succeed (Element tag attrs)
+                            succeed (Tag tag attrs)
                                 |= consumeJavascriptUntilClosingTag
 
                         else if isVoidTag tag then
                             -- Void element expects no closing tag
-                            succeed (Element tag attrs [])
+                            succeed (Tag tag attrs [])
 
                         else if List.member tag escapableRawTextTags then
                             -- Raw text elemements consume text until they find their own closing tag
-                            succeed (Element tag attrs)
+                            succeed (Tag tag attrs)
                                 |= (loop [] <|
                                         \acc ->
                                             oneOf
@@ -547,7 +547,7 @@ element cfg =
 
                         else if isAutoclosingTag tag then
                             -- Autoclosing tag is automatically closed by an opening tag of the same name
-                            succeed (Element tag attrs)
+                            succeed (Tag tag attrs)
                                 |= (succeed identity
                                         |= zeroOrMore
                                             (if tag == "head" then
@@ -568,7 +568,7 @@ element cfg =
 
                         else
                             -- Normal elements parse all nodes as children until their closing tag
-                            succeed (Element tag attrs)
+                            succeed (Tag tag attrs)
                                 |= (loop [] <|
                                         \acc ->
                                             oneOf
@@ -813,7 +813,7 @@ openTagToString tag attrs =
 
 {-| Convert an html node into a non-pretty string.
 
-    nodeToString (Element "a" [] [ Text "hi" ])
+    nodeToString (Tag "a" [] [ Text "hi" ])
         == "<a>hi</a>"
 
 -}
@@ -826,7 +826,7 @@ nodeToString node_ =
         Comment s ->
             "<!--" ++ s ++ "-->"
 
-        Element tag attrs kids ->
+        Tag tag attrs kids ->
             if isVoidTag tag && List.isEmpty kids then
                 openTagToString tag attrs
 
@@ -843,8 +843,8 @@ nodeToString node_ =
 {-| Convert multiple html nodes into a non-pretty string.
 
     nodesToString
-        [ Element "a" [] [ Text "hi" ]
-        , Element "div" [] [ Element "span" [] [] ]
+        [ Tag "a" [] [ Text "hi" ]
+        , Tag "div" [] [ Tag "span" [] [] ]
         ]
         == "<a>hi</a><div><span></span></div>"
 
@@ -891,7 +891,7 @@ prettyNode_ indent node_ =
             else
                 "\n" ++ pad ++ "<!--" ++ s ++ "-->"
 
-        Element tag attrs kids ->
+        Tag tag attrs kids ->
             String.trim <|
                 String.concat
                     (List.concat
