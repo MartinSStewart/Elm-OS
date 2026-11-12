@@ -1,8 +1,33 @@
+{-
+   MIT License
+
+   Copyright (c) 2022 Dan Neumann
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+-}
+
+
 module Html.Parser exposing
     ( Node(..), Document, Config
     , allCharRefs, noCharRefs, customCharRefs
     , run, runElement, runDocument
-    , nodeToHtml, nodesToHtml, nodeToString, nodesToString, nodeToPrettyString, nodesToPrettyString, documentToString, documentToPrettyString
+    , nodeToString, nodesToString, nodeToPrettyString, nodesToPrettyString, documentToString, documentToPrettyString
     )
 
 {-| Leniently parse html5 documents and fragments and then render them
@@ -26,14 +51,12 @@ into strings or Elm's virtual dom nodes.
 
 # Render
 
-@docs nodeToHtml, nodesToHtml, nodeToString, nodesToString, nodeToPrettyString, nodesToPrettyString, documentToString, documentToPrettyString
+@docs nodeToString, nodesToString, nodeToPrettyString, nodesToPrettyString, documentToString, documentToPrettyString
 
 -}
 
 import Dict exposing (Dict)
 import Hex
-import Html
-import Html.Attributes
 import Html.CharRefs
 import Parser exposing (..)
 import Parser.Extra exposing (..)
@@ -830,46 +853,6 @@ nodesToString : List Node -> String
 nodesToString nodes =
     List.map nodeToString nodes
         |> String.concat
-
-
-{-| Turn a single node into an Elm html node that Elm can render.
--}
-nodeToHtml : Node -> Html.Html msg
-nodeToHtml node_ =
-    case node_ of
-        Text s ->
-            Html.text s
-
-        Comment _ ->
-            Html.text ""
-
-        Element tag attrs kids ->
-            Html.node tag
-                (List.map (\( k, v ) -> Html.Attributes.attribute k v) attrs)
-                (List.map nodeToHtml kids)
-
-
-{-| Turn a multiple html nodes into Elm html that Elm can render.
-
-    view : Html Msg
-    view =
-        Html.div
-            []
-            ("<p>hello world</p>"
-                |> Html.Parser.run Html.Parser.allCharRefs
-                |> Result.map Html.Parser.nodesToHtml
-                |> Result.withDefault [ Html.text "parse error" ]
-            )
-
--}
-nodesToHtml : List Node -> List (Html.Html msg)
-nodesToHtml nodes =
-    List.foldr
-        (\node_ acc ->
-            nodeToHtml node_ :: acc
-        )
-        []
-        nodes
 
 
 {-| Generate a pretty string for a single html node.

@@ -9,12 +9,16 @@ module HackerNews exposing
     , view
     )
 
+import Color
+import Coord
+import Dict
 import Effect exposing (Effect, HttpRequestId(..))
 import Html.Parser
 import Json.Decode
 import News exposing (NewsState(..))
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
+import Units
 
 
 getNewsList : Effect
@@ -69,8 +73,8 @@ type alias Model =
 
 type HackerNewsState
     = NotLoading
-    | Loading (Maybe String)
-    | Loaded String
+    | Loading (Maybe (List String))
+    | Loaded (List String)
     | LoadFailed Effect.HttpError
 
 
@@ -84,7 +88,12 @@ gotRequest result model =
     case result of
         Ok data ->
             if data.status >= 200 && data.status < 300 then
-                { model | data = Loaded data.body }
+                case Html.Parser.run Html.Parser.noCharRefs data.body of
+                    Ok html ->
+                        { model | data = Loaded (getTitles html) }
+
+                    Err error ->
+                        { model | data = LoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }) }
 
             else
                 { model | data = LoadFailed (Effect.BadBody data) }
@@ -93,27 +102,79 @@ gotRequest result model =
             { model | data = LoadFailed error }
 
 
+getTitles : List Html.Parser.Node -> List String
+getTitles html =
+    List.concatMap
+        (\node ->
+            case node of
+                Html.Parser.Comment _ ->
+                    []
+
+                Html.Parser.Text string ->
+                    []
+
+                Html.Parser.Element string list nodes ->
+                    case ( string, list, nodes ) of
+                        ( "span", [ ( "class", "titleline" ) ], (Html.Parser.Element _ _ [ Html.Parser.Text text ]) :: _ ) ->
+                            [ text ]
+
+                        _ ->
+                            getTitles nodes
+        )
+        html
+
+
 view : (UiId -> id) -> Ui.Model id -> Model -> Element id
 view idMap uiState model =
-    case model.data of
-        NotLoading ->
-            Ui.Empty
+    Ui.el
+        { padding = Ui.paddingXY 4 4
+        , inFront = []
+        , borderAndFill =
+            Ui.BorderAndFill
+                { borderWidth = 2
+                , fillColor = Color.fillColor
+                , borderColor = Color.outlineColor
+                }
+        }
+        (case model.data of
+            NotLoading ->
+                Ui.Empty
 
-        Loading maybe ->
-            case maybe of
-                Just data ->
-                    loadedView data
+            Loading maybe ->
+                case maybe of
+                    Just data ->
+                        loadedView data
 
-                Nothing ->
-                    Ui.text (Sans Regular Small) "Loading..."
+                    Nothing ->
+                        Ui.text (Sans Regular Small) "Loading..."
 
-        Loaded data ->
-            loadedView data
+            Loaded data ->
+                loadedView data
 
-        LoadFailed httpError ->
-            Ui.text (Sans Regular Small) "Error"
+            LoadFailed httpError ->
+                Ui.text (Sans Regular Small) (Effect.httpErrorToString httpError)
+        )
 
 
-loadedView : String -> Element id
+loadedView : List String -> Element id
 loadedView data =
-    Ui.text (Sans Regular Small) data
+    Ui.column
+        { spacing = 8, padding = Ui.noPadding }
+        [ Ui.text (Sans Bold Small) "Hacker News"
+        , List.indexedMap
+            (\index value ->
+                Ui.row
+                    { spacing = 8, padding = Ui.noPadding }
+                    [ Ui.right
+                        { width = Ui.size (Ui.text (Sans Regular Small) "00.") |> Coord.x }
+                        (Ui.colorText
+                            Color.lightFont
+                            (Sans Regular Small)
+                            (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
+                        )
+                    , Ui.text (Sans Regular Small) value
+                    ]
+            )
+            data
+            |> Ui.column { spacing = 4, padding = Ui.noPadding }
+        ]

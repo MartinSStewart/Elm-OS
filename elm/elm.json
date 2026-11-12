@@ -1,8 +1,7 @@
 {
     "type": "application",
     "source-directories": [
-        "src",
-        "vendored/danneu/html-parser/2.0.3/src"
+        "src"
     ],
     "elm-version": "0.19.1",
     "dependencies": {

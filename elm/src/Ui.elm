@@ -36,6 +36,7 @@ module Ui exposing
     , onWheel
     , paddingXY
     , quads
+    , right
     , row
     , selectableButton
     , setFocus
@@ -692,13 +693,18 @@ minWidth width child =
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
-leftAndRight width left right =
-    row { spacing = 0, padding = noPadding } [ minWidth (width |> Quantity.minus (Coord.x (size right))) left, right ]
+leftAndRight width left right2 =
+    row { spacing = 0, padding = noPadding } [ minWidth (width |> Quantity.minus (Coord.x (size right2))) left, right2 ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
 center data =
     align 1 1 data.size
+
+
+right : { width : Quantity Int UiPixels } -> Element id -> Element id
+right data element =
+    align 2 1 ( data.width, Coord.y (size element) ) element
 
 
 topLeft : { size : Coord UiPixels } -> Element id -> Element id
