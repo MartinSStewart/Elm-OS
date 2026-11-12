@@ -28,8 +28,8 @@ getNewsList =
 
 
 getPost : PostId -> Effect
-getPost id =
-    Effect.get HackerNewsRequest "https://news.ycombinator.com/item?id=50438261"
+getPost (PostId id) =
+    Effect.get HackerNewsRequest ("https://news.ycombinator.com/item?id=" ++ id)
 
 
 type PostId
@@ -42,6 +42,7 @@ type CommentId
 
 type UiId
     = NewsViewport
+    | NewsPostButton PostId
 
 
 idToString : UiId -> String
@@ -49,6 +50,9 @@ idToString id =
     case id of
         NewsViewport ->
             "hackernewsviewport"
+
+        NewsPostButton (PostId postId) ->
+            "NewsPostButton_" ++ postId
 
 
 onClick : Model -> ( Model, List Effect )
@@ -140,10 +144,10 @@ getTitles nodes =
 
                 H.Tag "tr" attrs [ _, _, H.Tag _ _ ((H.Tag _ _ ((H.Tag _ [ ( "href", href ) ] [ H.Text text ]) :: _)) :: _) ] ->
                     case getAttr "id" attrs of
-                        [ id ] ->
+                        Just id ->
                             [ ( PostId id, text ) ]
 
-                        _ ->
+                        Nothing ->
                             []
 
                 H.Tag _ _ nodes2 ->
@@ -152,7 +156,7 @@ getTitles nodes =
         nodes
 
 
-getAttr : String -> List ( String, String ) -> List String
+getAttr : String -> List ( String, String ) -> Maybe String
 getAttr target attrs =
     List.filterMap
         (\( name, value ) ->
@@ -163,6 +167,7 @@ getAttr target attrs =
                 Nothing
         )
         attrs
+        |> List.head
 
 
 getComments : List H.Node -> List ( CommentId, String )
@@ -195,7 +200,7 @@ getComment node =
         H.Tag "tr" attr [ H.Tag "td" _ [ H.Tag "table" _ [ H.Tag "tbody" _ [ H.Tag "tr" _ ((H.Tag "td" indentAttr _) :: _) ] ] ] ] ->
             case ( getAttr "id" attr, getAttr "indent" indentAttr ) of
                 ( Just id, Just indentation ) ->
-                    Just ( id, indentation )
+                    Just ( CommentId id, indentation )
 
                 _ ->
                     Nothing
@@ -223,21 +228,21 @@ view idMap uiState model =
             Loading maybe ->
                 case maybe of
                     Just data ->
-                        loadedView data
+                        loadedView idMap data
 
                     Nothing ->
                         Ui.text (Sans Regular Small) "Loading..."
 
             Loaded data ->
-                loadedView data
+                loadedView idMap data
 
             LoadFailed httpError ->
                 Ui.text (Sans Regular Small) (Effect.httpErrorToString httpError)
         )
 
 
-loadedView : List ( PostId, String ) -> Element id
-loadedView data =
+loadedView : (UiId -> id) -> List ( PostId, String ) -> Element id
+loadedView idMap data =
     Ui.column
         { spacing = 8, padding = Ui.noPadding }
         [ Ui.text (Sans Bold Small) "Hacker News"
@@ -254,7 +259,14 @@ loadedView data =
                         )
                     , Ui.text (Sans Regular Small) value
                     ]
+                    |> Ui.customButton
+                        { id = idMap (NewsPostButton id)
+                        , padding = Ui.paddingXY 0 2
+                        , inFront = []
+                        , borderAndFill = Ui.NoBorderOrFill
+                        , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.white }
+                        }
             )
             data
-            |> Ui.column { spacing = 4, padding = Ui.noPadding }
+            |> Ui.column { spacing = 0, padding = Ui.noPadding }
         ]
