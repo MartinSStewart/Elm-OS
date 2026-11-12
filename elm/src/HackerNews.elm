@@ -9,6 +9,7 @@ module HackerNews exposing
     , view
     )
 
+import Array exposing (Array)
 import Color
 import Coord
 import Dict
@@ -73,8 +74,8 @@ type alias Model =
 
 type HackerNewsState
     = NotLoading
-    | Loading (Maybe (List String))
-    | Loaded (List String)
+    | Loading (Maybe (List ( String, String )))
+    | Loaded (List ( String, String ))
     | LoadFailed Effect.HttpError
 
 
@@ -102,8 +103,8 @@ gotRequest result model =
             { model | data = LoadFailed error }
 
 
-getTitles : List Html.Parser.Node -> List String
-getTitles html =
+getTitles : List Html.Parser.Node -> List ( String, String )
+getTitles nodes =
     List.concatMap
         (\node ->
             case node of
@@ -113,15 +114,28 @@ getTitles html =
                 Html.Parser.Text string ->
                     []
 
-                Html.Parser.Element string list nodes ->
-                    case ( string, list, nodes ) of
-                        ( "span", [ ( "class", "titleline" ) ], (Html.Parser.Element _ _ [ Html.Parser.Text text ]) :: _ ) ->
-                            [ text ]
+                Html.Parser.Element "tr" attrs [ _, _, Html.Parser.Element _ _ ((Html.Parser.Element _ _ ((Html.Parser.Element _ [ ( "href", href ) ] [ Html.Parser.Text text ]) :: _)) :: _) ] ->
+                    case
+                        List.filterMap
+                            (\( name, value ) ->
+                                if name == "id" then
+                                    Just value
+
+                                else
+                                    Nothing
+                            )
+                            attrs
+                    of
+                        [ id ] ->
+                            [ ( id, text ) ]
 
                         _ ->
-                            getTitles nodes
+                            []
+
+                Html.Parser.Element _ _ nodes2 ->
+                    getTitles nodes2
         )
-        html
+        nodes
 
 
 view : (UiId -> id) -> Ui.Model id -> Model -> Element id
@@ -156,13 +170,13 @@ view idMap uiState model =
         )
 
 
-loadedView : List String -> Element id
+loadedView : List ( String, String ) -> Element id
 loadedView data =
     Ui.column
         { spacing = 8, padding = Ui.noPadding }
         [ Ui.text (Sans Bold Small) "Hacker News"
         , List.indexedMap
-            (\index value ->
+            (\index ( id, value ) ->
                 Ui.row
                     { spacing = 8, padding = Ui.noPadding }
                     [ Ui.right
