@@ -471,11 +471,14 @@ step event model =
 
         Frame time ->
             let
+                -- The host's clock starts again at each boot, but lastFrame is saved with
+                -- the Model, so the first frame after a restart can come "before" the last
+                -- one. A negative (or huge) step would break the animations.
                 elapsedTime : Duration
                 elapsedTime =
                     case model.lastFrame of
                         Just lastFrame ->
-                            time - lastFrame |> Duration.milliseconds
+                            time - lastFrame |> clamp 0 1000 |> Duration.milliseconds
 
                         Nothing ->
                             Quantity.zero

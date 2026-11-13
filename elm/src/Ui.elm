@@ -207,7 +207,10 @@ onAnimationFrame timeElapsed model =
                             in
                             { viewport2
                                 | offset =
-                                    if diff |> Quantity.lessThan distance then
+                                    -- Also mends an offset that a negative frame time made
+                                    -- NaN (NaN is never less than anything), which a saved
+                                    -- Model may still hold.
+                                    if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
                                         target
 
                                     else if viewport2.offset |> Quantity.lessThan target then
