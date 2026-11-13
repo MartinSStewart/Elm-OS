@@ -983,15 +983,20 @@ click model id uiState =
                 ( hackerNews, effects ) =
                     HackerNews.onClick uiId model.hackerNews
             in
-            ( { model | hackerNews = hackerNews }
-            , List.map
-                (\effect ->
+            List.foldl
+                (\effect ( model2, effects2 ) ->
                     case effect of
                         HackerNews.HttpRequest requestId url ->
-                            httpGet (HackerNewsRequest requestId) url
+                            ( model2, httpGet (HackerNewsRequest requestId) url :: effects2 )
+
+                        HackerNews.ResetViewport viewportId ->
+                            ( { model2 | uiState = Ui.updateElement (idToString (HackerNewsUiId viewportId)) (\_ -> Nothing) model2.uiState }
+                            , effects2
+                            )
                 )
+                ( { model | hackerNews = hackerNews }, [] )
                 effects
-            )
+                |> Tuple.mapSecond List.reverse
 
 
 httpGet : HttpRequestId -> String -> Effect

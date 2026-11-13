@@ -1,10 +1,12 @@
 module HackerNews exposing
-    ( CommentsState
+    ( Comment
+    , CommentsState
     , Effect(..)
     , HackerNewsState(..)
     , HttpRequestId(..)
     , Model
-    , PostId
+    , Page
+    , PostId(..)
     , UiId(..)
     , gotHttpRequest
     , httpRequestIdToString
@@ -15,14 +17,21 @@ module HackerNews exposing
     , view
     )
 
+{-| The Hacker News app: the front page's posts, and a page of a post's comments.
+
+The comments are a tree. A comment with replies has a button that shows or hides them,
+and replies are hidden at first under a comment with more than 8 of them.
+
+-}
+
 import Bytes exposing (Bytes)
 import Color
 import Coord exposing (Coord)
-import Dict exposing (Dict)
+import Dict
 import Effect
 import Html.Parser
 import Quantity exposing (Quantity)
-import Sprite exposing (Font(..), FontSize(..), Style(..))
+import Sprite exposing (Font(..), FontSize(..), Segment, Style(..))
 import Ui exposing (Element)
 import Units exposing (UiPixels)
 
@@ -34,7 +43,10 @@ type PostId
 type UiId
     = NewsPostButton PostId
     | OpenButton
+    | PostsViewport
     | CommentsViewport
+    | BackButton
+    | CommentToggle Int
 
 
 idToString : UiId -> String
@@ -46,12 +58,86 @@ idToString id =
         OpenButton ->
             "OpenButton"
 
+        PostsViewport ->
+            "PostsViewport"
+
         CommentsViewport ->
             "CommentsViewport"
+
+        BackButton ->
+            "BackButton"
+
+        CommentToggle index ->
+            "CommentToggle_" ++ String.fromInt index
 
 
 type Effect
     = HttpRequest HttpRequestId String
+      -- Scroll a viewport back to the top.
+    | ResetViewport UiId
+
+
+type alias Model =
+    { data : HackerNewsState
+    , page : Page
+    , isOpen : Bool
+    }
+
+
+type HackerNewsState
+    = NotLoading
+    | Loading (Maybe (List ( PostId, String )))
+    | Loaded (List ( PostId, String ))
+    | LoadFailed Effect.HttpError
+
+
+{-| The list of posts, or one post's comments. Only the open post's comments are kept:
+going back to the list drops them, so the Model doesn't grow with every post read.
+-}
+type Page
+    = PostsPage
+    | CommentsPage { postId : PostId, title : String, comments : CommentsState }
+
+
+type CommentsState
+    = CommentsLoading
+    | CommentsLoaded (List Comment)
+    | CommentsLoadFailed Effect.HttpError
+
+
+{-| A comment and its replies. `index` is its place in the page (from 0), which tells
+the buttons apart; `descendants` counts the replies at every depth under it.
+-}
+type Comment
+    = Comment
+        { index : Int
+        , author : String
+        , content : String
+        , children : List Comment
+        , descendants : Int
+        , isExpanded : Bool
+        }
+
+
+type HttpRequestId
+    = TopPostsRequest
+    | GetPostRequest PostId
+
+
+init : Model
+init =
+    { data = NotLoading, page = PostsPage, isOpen = False }
+
+
+{-| A comment's replies are hidden at first if it has more than this many.
+-}
+maxExpandedChildren : Int
+maxExpandedChildren =
+    8
+
+
+
+-- UPDATE
 
 
 gotHttpRequest : HttpRequestId -> Result Effect.HttpError { status : Int, body : Bytes } -> Model -> Model
@@ -74,23 +160,35 @@ gotHttpRequest requestId result model =
                 Err error ->
                     { model | data = LoadFailed error }
 
-        GetPostRequest (PostId postId) ->
-            case result of
-                Ok data ->
-                    if data.status >= 200 && data.status < 300 then
-                        { model
-                            | comments =
-                                Dict.insert
-                                    postId
-                                    (CommentsLoaded (Effect.bodyToString data.body |> Maybe.withDefault "" |> parseComments))
-                                    model.comments
-                        }
+        GetPostRequest postId ->
+            case model.page of
+                CommentsPage page ->
+                    if page.postId == postId then
+                        let
+                            comments : CommentsState
+                            comments =
+                                case result of
+                                    Ok data ->
+                                        if data.status >= 200 && data.status < 300 then
+                                            Effect.bodyToString data.body
+                                                |> Maybe.withDefault ""
+                                                |> parseComments
+                                                |> CommentsLoaded
+
+                                        else
+                                            CommentsLoadFailed (Effect.badBody data)
+
+                                    Err error ->
+                                        CommentsLoadFailed error
+                        in
+                        { model | page = CommentsPage { page | comments = comments } }
 
                     else
-                        { model | comments = Dict.insert postId (CommentsLoadFailed (Effect.badBody data)) model.comments }
+                        -- The person went on to another post before this one came.
+                        model
 
-                Err error ->
-                    { model | comments = Dict.insert postId (CommentsLoadFailed error) model.comments }
+                PostsPage ->
+                    model
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -145,55 +243,89 @@ onClick uiId model =
                 ( False, _ ) ->
                     ( { model | isOpen = isOpen }, [] )
 
+        PostsViewport ->
+            ( model, [] )
+
         CommentsViewport ->
             ( model, [] )
 
-        NewsPostButton (PostId postId) ->
-            case Dict.get postId model.comments of
-                Just (CommentsLoading _) ->
+        NewsPostButton ((PostId id) as postId) ->
+            ( { model
+                | page =
+                    CommentsPage
+                        { postId = postId
+                        , title = postTitle postId model.data
+                        , comments = CommentsLoading
+                        }
+              }
+            , [ ResetViewport CommentsViewport
+              , HttpRequest (GetPostRequest postId) ("https://news.ycombinator.com/item?id=" ++ id)
+              ]
+            )
+
+        BackButton ->
+            ( { model | page = PostsPage }, [] )
+
+        CommentToggle index ->
+            case model.page of
+                CommentsPage page ->
+                    case page.comments of
+                        CommentsLoaded comments ->
+                            ( { model | page = CommentsPage { page | comments = CommentsLoaded (List.map (toggle index) comments) } }
+                            , []
+                            )
+
+                        CommentsLoading ->
+                            ( model, [] )
+
+                        CommentsLoadFailed _ ->
+                            ( model, [] )
+
+                PostsPage ->
                     ( model, [] )
 
-                Just (CommentsLoaded _) ->
-                    ( { model | comments = Dict.remove postId model.comments }, [] )
 
-                _ ->
-                    ( { model | comments = Dict.insert postId (CommentsLoading Nothing) model.comments }
-                    , [ HttpRequest (GetPostRequest (PostId postId)) ("https://news.ycombinator.com/item?id=" ++ postId) ]
-                    )
+postTitle : PostId -> HackerNewsState -> String
+postTitle postId data =
+    let
+        find : List ( PostId, String ) -> String
+        find posts =
+            List.filter (\( id, _ ) -> id == postId) posts
+                |> List.head
+                |> Maybe.map Tuple.second
+                |> Maybe.withDefault ""
+    in
+    case data of
+        Loaded posts ->
+            find posts
 
+        Loading (Just posts) ->
+            find posts
 
-type alias Model =
-    { data : HackerNewsState
-    , comments : Dict String CommentsState
-    , isOpen : Bool
-    }
+        Loading Nothing ->
+            ""
 
+        NotLoading ->
+            ""
 
-type CommentsState
-    = CommentsLoading (Maybe (List Comment))
-    | CommentsLoaded (List Comment)
-    | CommentsLoadFailed Effect.HttpError
-
-
-type Comment
-    = Comment { content : String, children : List Comment, isExpanded : Bool }
-
-
-type HackerNewsState
-    = NotLoading
-    | Loading (Maybe (List ( PostId, String )))
-    | Loaded (List ( PostId, String ))
-    | LoadFailed Effect.HttpError
+        LoadFailed _ ->
+            ""
 
 
-type HttpRequestId
-    = TopPostsRequest
-    | GetPostRequest PostId
+{-| Shows or hides the replies of the comment with this index. Indexes go up through
+the tree in order, so only one branch is gone down.
+-}
+toggle : Int -> Comment -> Comment
+toggle index (Comment comment) =
+    if comment.index == index then
+        Comment { comment | isExpanded = not comment.isExpanded }
 
+    else if index > comment.index && index <= comment.index + comment.descendants then
+        Comment { comment | children = List.map (toggle index) comment.children }
 
-init : Model
-init =
-    { data = NotLoading, comments = Dict.empty, isOpen = False }
+    else
+        Comment comment
+
 
 
 -- PARSING
@@ -220,9 +352,10 @@ parseTitles html =
 
 
 {-| The comments on a post's page, in a tree. Each is a `<tr class="athing comtr">` with
-an `indent` attribute on its `<td class="ind">`, and its text in a
-`<div class="comment">`, before the reply link. A flagged or deleted comment has no text
-but "[flagged]" or "[deleted]"; it is kept, so the comments under it stay under it.
+an `indent` attribute on its `<td class="ind">`, its author in the first link in its
+`<span class="comhead">`, and its text in a `<div class="comment">`, before the reply
+link. A flagged or deleted comment has no text but "[flagged]" or "[deleted]"; it is
+kept, so the comments under it stay under it.
 -}
 parseComments : String -> List Comment
 parseComments html =
@@ -230,7 +363,19 @@ parseComments html =
         |> Html.Parser.findAll (isElement "tr" "comtr")
         |> List.filterMap
             (\row ->
-                Maybe.map2 Tuple.pair
+                Maybe.map2
+                    (\indent content ->
+                        { indent = indent
+                        , author =
+                            Html.Parser.findAll (isElement "span" "comhead") [ row ]
+                                |> List.concatMap nodeChildren
+                                |> List.filter (isElement "a" "")
+                                |> List.head
+                                |> Maybe.map (\link -> Html.Parser.textContent [ link ] |> String.trim)
+                                |> Maybe.withDefault ""
+                        , content = content
+                        }
+                    )
                     (Html.Parser.findAll (isElement "td" "ind") [ row ]
                         |> List.head
                         |> Maybe.andThen (attribute "indent")
@@ -241,7 +386,8 @@ parseComments html =
                         |> Maybe.map (\comment -> commentText (nodeChildren comment) |> String.trim)
                     )
             )
-        |> buildTree
+        |> buildTree 0
+        |> Tuple.first
 
 
 {-| Whether a node is a tag with this name and class (any class, for "").
@@ -293,7 +439,7 @@ nodeChildren node =
             []
 
 
-{-| A comment's text: a paragraph starts with a space, and the reply link is left out.
+{-| A comment's text: a paragraph starts after an empty line, and the reply link is left out.
 -}
 commentText : List Html.Parser.Node -> String
 commentText nodes =
@@ -301,13 +447,13 @@ commentText nodes =
         (\node ->
             case node of
                 Html.Parser.Text text ->
-                    text
+                    String.replace "\n" " " text
 
                 Html.Parser.Comment _ ->
                     ""
 
                 Html.Parser.Element "p" _ nodes2 ->
-                    " " ++ commentText nodes2
+                    "\n\n" ++ commentText nodes2
 
                 Html.Parser.Element _ attributes nodes2 ->
                     if Html.Parser.getAttribute "class" attributes == Just "reply" then
@@ -320,21 +466,38 @@ commentText nodes =
         |> String.concat
 
 
-{-| Turn a flat list of (indentation, text) into a tree, a comment's children being the deeper ones that follow it.
+{-| Turn a flat list of comments with their indentation into a tree, a comment's
+children being the deeper ones that follow it, numbering them in order from `index`.
+Also gives the index after the last.
 -}
-buildTree : List ( Int, String ) -> List Comment
-buildTree rows =
+buildTree : Int -> List { indent : Int, author : String, content : String } -> ( List Comment, Int )
+buildTree index rows =
     case rows of
         [] ->
-            []
+            ( [], index )
 
-        ( indent, content ) :: rest ->
+        row :: rest ->
             let
-                ( children, siblings ) =
-                    spanWhile (\( rowIndent, _ ) -> rowIndent > indent) rest
+                ( childRows, siblingRows ) =
+                    spanWhile (\next -> next.indent > row.indent) rest
+
+                ( children, afterChildren ) =
+                    buildTree (index + 1) childRows
+
+                ( siblings, afterSiblings ) =
+                    buildTree afterChildren siblingRows
             in
-            Comment { content = content, children = buildTree children, isExpanded = True }
-                :: buildTree siblings
+            ( Comment
+                { index = index
+                , author = row.author
+                , content = row.content
+                , children = children
+                , descendants = afterChildren - index - 1
+                , isExpanded = List.length children <= maxExpandedChildren
+                }
+                :: siblings
+            , afterSiblings
+            )
 
 
 spanWhile : (a -> Bool) -> List a -> ( List a, List a )
@@ -355,34 +518,37 @@ spanWhile predicate list =
                 ( [], list )
 
 
-flattenComments : Int -> List Comment -> List Line -> List Line
-flattenComments depth comments acc =
-    List.foldl
-        (\(Comment comment) acc2 ->
-            if comment.isExpanded then
-                flattenComments (depth + 1) comment.children (CommentLine depth comment.content :: acc2)
-
-            else
-                CommentLine depth comment.content :: acc2
-        )
-        acc
-        comments
-
-
 
 -- VIEW
 --
 -- A big thread has thousands of comments, and laying out all their text every frame
--- took longer than a frame. So everything under the title is a list of one-line rows of
--- known heights in a viewport, and only the rows that are in view get laid out.
+-- took longer than a frame. So everything under the title is a list of rows in a
+-- viewport, and only the rows that are in view get laid out. A comment's height still
+-- means wrapping its text (without drawing it) every frame, for every comment shown,
+-- which is why big branches start collapsed.
 
 
 {-| One row under the title.
 -}
 type Line
     = PostLine Int PostId String
-    | CommentLine Int String
+    | CommentLine Int CommentRow
     | StatusLine String
+
+
+type alias CommentRow =
+    { index : Int
+    , author : String
+    , content : String
+    , lines : Int
+    , replies : Replies
+    }
+
+
+type Replies
+    = NoReplies
+    | Shown
+    | Hidden Int
 
 
 lineHeight : Line -> Int
@@ -391,8 +557,8 @@ lineHeight line =
         PostLine _ _ _ ->
             textHeight + 2 * postPadding
 
-        CommentLine _ _ ->
-            textHeight
+        CommentLine _ comment ->
+            comment.lines * textHeight + commentSpacing
 
         StatusLine _ ->
             textHeight
@@ -408,6 +574,11 @@ postPadding =
     2
 
 
+commentSpacing : Int
+commentSpacing =
+    8
+
+
 windowPadding : Int
 windowPadding =
     4
@@ -416,6 +587,42 @@ windowPadding =
 titleSpacing : Int
 titleSpacing =
     8
+
+
+{-| How wide the window's content is on a screen this big (UI pixels).
+-}
+pageWidth : Coord UiPixels -> Int
+pageWidth screenSize =
+    min 900 (Coord.xRaw screenSize - 2 * windowPadding - 16)
+
+
+indentWidth : Int -> Int
+indentWidth depth =
+    16 * depth
+
+
+{-| Room for the button that shows or hides a comment's replies, left of its text.
+-}
+toggleWidth : Int
+toggleWidth =
+    Sprite.textSize Small (Sans Regular) "[+0000]" |> Coord.xRaw
+
+
+toggleSpacing : Int
+toggleSpacing =
+    4
+
+
+commentTextWidth : Int -> Int -> Int
+commentTextWidth width depth =
+    width - indentWidth depth - toggleWidth - toggleSpacing
+
+
+commentSegments : { a | author : String, content : String } -> List Segment
+commentSegments comment =
+    [ { text = comment.author ++ "  ", color = Color.black, font = Sans Bold }
+    , { text = comment.content, color = Color.lightFont, font = Sans Regular }
+    ]
 
 
 {-| The window, in the top right corner of a screen this big (UI pixels).
@@ -432,40 +639,136 @@ view idMap uiState screenSize model =
                 , borderColor = Color.outlineColor
                 }
         }
-        (case model.data of
-            NotLoading ->
-                Ui.Empty
+        (case model.page of
+            PostsPage ->
+                case model.data of
+                    NotLoading ->
+                        Ui.Empty
 
-            Loading maybe ->
-                case maybe of
-                    Just data ->
-                        loadedView idMap uiState screenSize model.comments data
+                    Loading maybe ->
+                        case maybe of
+                            Just data ->
+                                postsView idMap uiState screenSize data
 
-                    Nothing ->
-                        Ui.text Small (Sans Regular) "Loading..."
+                            Nothing ->
+                                Ui.text Small (Sans Regular) "Loading..."
 
-            Loaded data ->
-                loadedView idMap uiState screenSize model.comments data
+                    Loaded data ->
+                        postsView idMap uiState screenSize data
 
-            LoadFailed httpError ->
-                Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
+                    LoadFailed httpError ->
+                        Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
+
+            CommentsPage page ->
+                commentsView idMap uiState screenSize page
         )
 
 
-loadedView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> Dict String CommentsState -> List ( PostId, String ) -> Element id
-loadedView idMap uiState screenSize comments data =
+postsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> List ( PostId, String ) -> Element id
+postsView idMap uiState screenSize data =
+    Ui.column
+        { spacing = titleSpacing, padding = Ui.noPadding }
+        [ Ui.text Small (Sans Bold) "Hacker News"
+        , List.indexedMap (\index ( postId, title ) -> PostLine index postId title) data
+            |> linesViewport idMap uiState PostsViewport screenSize (pageWidth screenSize) textHeight
+        ]
+
+
+commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> { postId : PostId, title : String, comments : CommentsState } -> Element id
+commentsView idMap uiState screenSize page =
     let
         width : Int
         width =
-            min 900 (Coord.xRaw screenSize - 2 * windowPadding - 16)
+            pageWidth screenSize
 
+        backButton : Element id
+        backButton =
+            Ui.button { id = idMap BackButton, padding = Ui.paddingXY 6 0 } (Ui.text Small (Sans Regular) "< Posts")
+
+        headerSpacing : Int
+        headerSpacing =
+            8
+
+        lines : List Line
+        lines =
+            case page.comments of
+                CommentsLoading ->
+                    [ StatusLine "Loading comments..." ]
+
+                CommentsLoaded comments ->
+                    case flattenComments width 0 comments [] of
+                        [] ->
+                            [ StatusLine "No comments yet." ]
+
+                        reversed ->
+                            List.reverse reversed
+
+                CommentsLoadFailed error ->
+                    [ StatusLine (Effect.httpErrorToString error) ]
+    in
+    Ui.column
+        { spacing = titleSpacing, padding = Ui.noPadding }
+        [ Ui.row
+            { spacing = headerSpacing, padding = Ui.noPadding }
+            [ backButton
+            , Ui.text
+                Small
+                (Sans Bold)
+                (Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) page.title)
+            ]
+        , linesViewport idMap uiState CommentsViewport screenSize width (Coord.yRaw (Ui.size backButton)) lines
+        ]
+
+
+{-| The comments that are shown, as rows, last first.
+-}
+flattenComments : Int -> Int -> List Comment -> List Line -> List Line
+flattenComments width depth comments acc =
+    List.foldl
+        (\(Comment comment) acc2 ->
+            let
+                line : Line
+                line =
+                    CommentLine depth
+                        { index = comment.index
+                        , author = comment.author
+                        , content = comment.content
+                        , lines =
+                            List.length (Sprite.wrapLines Small (Units.uiPixels (commentTextWidth width depth)) (commentSegments comment))
+                        , replies =
+                            if List.isEmpty comment.children then
+                                NoReplies
+
+                            else if comment.isExpanded then
+                                Shown
+
+                            else
+                                Hidden comment.descendants
+                        }
+            in
+            if comment.isExpanded then
+                flattenComments width (depth + 1) comment.children (line :: acc2)
+
+            else
+                line :: acc2
+        )
+        acc
+        comments
+
+
+{-| The rows in a viewport that reaches from below the header (`headerHeight` high) to
+the bottom of the screen.
+-}
+linesViewport : (UiId -> id) -> Ui.Model id -> UiId -> Coord UiPixels -> Int -> Int -> List Line -> Element id
+linesViewport idMap uiState viewportId screenSize width headerHeight lines =
+    let
         viewportHeight : Int
         viewportHeight =
-            Coord.yRaw screenSize - 2 * windowPadding - textHeight - titleSpacing
+            Coord.yRaw screenSize - 2 * windowPadding - headerHeight - titleSpacing
 
         viewportModel : Ui.ViewportModel
         viewportModel =
-            case Dict.get (idToString CommentsViewport) uiState.uiState of
+            case Dict.get (idToString viewportId) uiState.uiState of
                 Just (Ui.ViewportState viewport) ->
                     viewport
 
@@ -476,40 +779,13 @@ loadedView idMap uiState screenSize comments data =
         top : Int
         top =
             -(Quantity.unwrap viewportModel.offset |> floor)
-
-        lines : List Line
-        lines =
-            List.indexedMap
-                (\index ( postId, title ) -> PostLine index postId title :: commentLines postId comments)
-                data
-                |> List.concat
     in
-    Ui.column
-        { spacing = titleSpacing, padding = Ui.noPadding }
-        [ Ui.text Small (Sans Bold) "Hacker News"
-        , visibleLines idMap width top (top + viewportHeight) lines
-            |> Ui.viewport
-                { id = idMap CommentsViewport
-                , viewportHeight = Units.uiPixels viewportHeight
-                , model = viewportModel
-                }
-        ]
-
-
-commentLines : PostId -> Dict String CommentsState -> List Line
-commentLines (PostId postId) comments =
-    case Dict.get postId comments of
-        Nothing ->
-            []
-
-        Just (CommentsLoading _) ->
-            [ StatusLine "Loading comments..." ]
-
-        Just (CommentsLoaded loaded) ->
-            flattenComments 0 loaded [] |> List.reverse
-
-        Just (CommentsLoadFailed error) ->
-            [ StatusLine (Effect.httpErrorToString error) ]
+    visibleLines idMap width top (top + viewportHeight) lines
+        |> Ui.viewport
+            { id = idMap viewportId
+            , viewportHeight = Units.uiPixels viewportHeight
+            , model = viewportModel
+            }
 
 
 {-| All the rows in a column, but with only those between `top` and `bottom` (UI pixels
@@ -585,21 +861,40 @@ lineView idMap width line =
                         , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.white }
                         }
 
-            CommentLine depth content ->
-                let
-                    indent : Int
-                    indent =
-                        16 * (depth + 1)
-                in
+            CommentLine depth comment ->
                 Ui.row
                     { spacing = 0, padding = Ui.noPadding }
-                    [ space indent 0
-                    , Ui.colorText Color.lightFont Small (Sans Regular) (oneLine (width - indent) content)
+                    [ space (indentWidth depth) 0
+                    , Ui.topLeft
+                        { size = Coord.xy (toggleWidth + toggleSpacing) textHeight }
+                        (case comment.replies of
+                            NoReplies ->
+                                Ui.none
+
+                            Shown ->
+                                toggleButton idMap comment.index "[–]"
+
+                            Hidden count ->
+                                toggleButton idMap comment.index ("[+" ++ String.fromInt count ++ "]")
+                        )
+                    , Ui.customTextWrapped Small (Units.uiPixels (commentTextWidth width depth)) (commentSegments comment)
                     ]
 
             StatusLine text ->
                 Ui.text Small (Sans Regular) text
         )
+
+
+toggleButton : (UiId -> id) -> Int -> String -> Element id
+toggleButton idMap index label =
+    Ui.colorText Color.lightFont Small (Sans Regular) label
+        |> Ui.customButton
+            { id = idMap (CommentToggle index)
+            , padding = Ui.noPadding
+            , inFront = []
+            , borderAndFill = Ui.NoBorderOrFill
+            , borderAndFillFocus = Ui.NoBorderOrFill
+            }
 
 
 {-| As much of the text as fits on one line this wide, with "…" if it doesn't all fit.

@@ -18,6 +18,7 @@ module Ui exposing
     , column
     , customButton
     , customText
+    , customTextWrapped
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , el
@@ -35,11 +36,11 @@ module Ui exposing
     , onAnimationFrame
     , onMouseDown
     , onWheel
-    , scrolls
     , paddingXY
     , quads
     , right
     , row
+    , scrolls
     , selectableButton
     , setFocus
     , size
@@ -486,6 +487,14 @@ customText fontSize segments =
         , segments = segments
         , cachedSize = Sprite.customTextSize fontSize segments
         }
+
+
+{-| `customText` with word wrap: lines are broken between words so that none is wider
+than `maxWidth` (see Sprite.wrapLines). '\\n' still starts a new line too.
+-}
+customTextWrapped : Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
+customTextWrapped fontSize maxWidth segments =
+    customText fontSize (Sprite.wrapSegments fontSize maxWidth segments)
 
 
 

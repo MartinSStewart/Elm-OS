@@ -18,6 +18,8 @@ module Sprite exposing
     , toDevice
     , triangle
     , wrap
+    , wrapLines
+    , wrapSegments
     )
 
 {-| Turning things into textured triangles for the render port, after town-collab's Sprite.
@@ -814,3 +816,246 @@ wrap fontSize font maxWidth string =
             []
         |> List.reverse
         |> String.join "\n"
+
+
+{-| Like `wrapLines`, with the lines joined by '\\n' again, ready for `customText`.
+-}
+wrapSegments : FontSize -> Quantity Int UiPixels -> List Segment -> List Segment
+wrapSegments fontSize maxWidth segments =
+    let
+        newline : Segment -> Segment
+        newline segment =
+            { segment | text = "\n" }
+
+        style : Segment
+        style =
+            List.head segments |> Maybe.withDefault { text = "", color = Color.black, font = Sans Regular }
+    in
+    case wrapLines fontSize maxWidth segments of
+        first :: rest ->
+            List.foldl
+                (\line acc -> List.reverse line ++ (newline (List.head acc |> Maybe.withDefault style) :: acc))
+                (List.reverse first)
+                rest
+                |> List.reverse
+
+        [] ->
+            []
+
+
+{-| Segments broken into lines at most `maxWidth` wide: at each '\\n', and at the space
+before a word that would go past the end of the line (that space is left out). A word
+wider than a whole line is broken between characters. Next to each other, segments of
+the same colour and font are joined into one.
+
+Each word is measured once, so this takes time in proportion to the length of the text.
+
+-}
+wrapLines : FontSize -> Quantity Int UiPixels -> List Segment -> List (List Segment)
+wrapLines fontSize maxWidth segments =
+    segmentLines segments
+        |> List.concatMap (wrapLine fontSize (Quantity.unwrap maxWidth * 64))
+
+
+{-| A word and the space before it (Nothing for the first word of a line). A word can
+be made of pieces in different fonts or colours.
+-}
+type alias Word =
+    { space : Maybe Segment, pieces : List Segment }
+
+
+{-| One line (no '\\n' in it) broken into words at its spaces.
+-}
+toWords : List Segment -> List Word
+toWords line =
+    let
+        addPiece : Segment -> Word -> Word
+        addPiece piece word =
+            if String.isEmpty piece.text then
+                word
+
+            else
+                { word | pieces = piece :: word.pieces }
+
+        finish : Word -> Word
+        finish word =
+            { word | pieces = List.reverse word.pieces }
+
+        ( last, done ) =
+            List.foldl
+                (\segment state ->
+                    case String.split " " segment.text of
+                        first :: rest ->
+                            List.foldl
+                                (\part ( word, words ) ->
+                                    ( addPiece { segment | text = part } { space = Just { segment | text = " " }, pieces = [] }
+                                    , finish word :: words
+                                    )
+                                )
+                                (Tuple.mapFirst (addPiece { segment | text = first }) state)
+                                rest
+
+                        [] ->
+                            state
+                )
+                ( { space = Nothing, pieces = [] }, [] )
+                line
+    in
+    List.reverse (finish last :: done)
+
+
+{-| Where the greedy line breaking has got to: the lines done (last first), the
+segments of the current line (last first), and how wide the current line is so far
+(1/64 UI pixels).
+-}
+type alias WrapState =
+    { lines : List (List Segment), current : List Segment, x : Int }
+
+
+wrapLine : FontSize -> Int -> List Segment -> List (List Segment)
+wrapLine fontSize max64 line =
+    let
+        state : WrapState
+        state =
+            List.foldl (placeWord fontSize max64) { lines = [], current = [], x = 0 } (toWords line)
+    in
+    List.reverse (List.reverse state.current :: state.lines)
+
+
+placeWord : FontSize -> Int -> Word -> WrapState -> WrapState
+placeWord fontSize max64 word state =
+    let
+        wordWidth : Int
+        wordWidth =
+            List.foldl (\piece sum -> sum + width64 fontSize piece.font piece.text) 0 word.pieces
+
+        spaceWidth : Int
+        spaceWidth =
+            case word.space of
+                Just space ->
+                    width64 fontSize space.font " "
+
+                Nothing ->
+                    0
+
+        withSpace : List Segment
+        withSpace =
+            case word.space of
+                Just space ->
+                    pushSegment space state.current
+
+                Nothing ->
+                    state.current
+    in
+    if state.x + spaceWidth + wordWidth <= max64 then
+        { state | current = List.foldl pushSegment withSpace word.pieces, x = state.x + spaceWidth + wordWidth }
+
+    else if state.x == 0 then
+        -- Nothing on the line yet, and the word is too wide for it on its own.
+        breakWord fontSize max64 word.pieces state
+
+    else
+        let
+            newLine : WrapState
+            newLine =
+                { lines = List.reverse state.current :: state.lines, current = [], x = 0 }
+        in
+        if wordWidth <= max64 then
+            { newLine | current = List.foldl pushSegment [] word.pieces, x = wordWidth }
+
+        else
+            breakWord fontSize max64 word.pieces newLine
+
+
+{-| A word too wide for a line, put on the current line (which is empty) one character
+at a time, starting a new line whenever the next character won't fit.
+-}
+breakWord : FontSize -> Int -> List Segment -> WrapState -> WrapState
+breakWord fontSize max64 pieces state =
+    List.foldl
+        (\piece state2 ->
+            let
+                ( placed, end ) =
+                    layoutLine fontSize piece.font piece.text
+
+                ends : List Int
+                ends =
+                    List.map Tuple.first (List.drop 1 placed) ++ [ end ]
+            in
+            List.map2 (\( start, char ) charEnd -> ( char, charEnd - start )) placed ends
+                |> List.foldl
+                    (\( char, charWidth ) state3 ->
+                        let
+                            segment : Segment
+                            segment =
+                                { piece | text = String.fromChar char }
+                        in
+                        if state3.x + charWidth > max64 && state3.x > 0 then
+                            { lines = List.reverse state3.current :: state3.lines, current = [ segment ], x = charWidth }
+
+                        else
+                            { state3 | current = pushSegment segment state3.current, x = state3.x + charWidth }
+                    )
+                    state2
+        )
+        state
+        pieces
+
+
+{-| Adds a segment to the end of a line kept last first, joining it to the last one if
+they look the same.
+-}
+pushSegment : Segment -> List Segment -> List Segment
+pushSegment segment line =
+    case line of
+        last :: rest ->
+            if last.color == segment.color && last.font == segment.font then
+                { last | text = last.text ++ segment.text } :: rest
+
+            else
+                segment :: line
+
+        [] ->
+            [ segment ]
+
+
+{-| How far text moves the pen (1/64 UI pixels): `layoutLine`'s end, without making a
+list of where each character goes.
+-}
+width64 : FontSize -> Font -> String -> Int
+width64 fontSize font string =
+    case font of
+        Mono ->
+            String.length string * Tuple.first charSize * monoScale fontSize * 64
+
+        Sans style ->
+            let
+                v : NotoSans.Variant
+                v =
+                    variant style
+
+                f : NotoSans.Face
+                f =
+                    face v (sansSize fontSize)
+
+                missing : NotoSans.Glyph
+                missing =
+                    missingGlyph f
+            in
+            String.foldl
+                (\char ( pen, previous ) ->
+                    let
+                        at : Int
+                        at =
+                            case Dict.get ( previous, char ) v.kerning of
+                                Just k ->
+                                    pen + (k * f.size * 64 + 500) // 1000
+
+                                Nothing ->
+                                    pen
+                    in
+                    ( at + (Dict.get char f.glyphs |> Maybe.withDefault missing).advance, char )
+                )
+                ( 0, ' ' )
+                string
+                |> Tuple.first

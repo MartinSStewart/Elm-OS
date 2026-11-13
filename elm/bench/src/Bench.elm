@@ -87,6 +87,8 @@ steps =
         withTop : HackerNews.Model
         withTop =
             HackerNews.gotHttpRequest HackerNews.TopPostsRequest (response Fixture.top) HackerNews.init
+                |> HackerNews.onClick (HackerNews.NewsPostButton (HackerNews.PostId Fixture.itemId))
+                |> Tuple.first
     in
     case HackerNews.stringToHttpRequestId [ "GetPostRequest", Fixture.itemId ] of
         Nothing ->
