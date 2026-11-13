@@ -632,7 +632,7 @@ measure-frames: all $(BUILD)/data-empty.img | check-run-deps
 #
 # DEV_SIZE sets the window's size (it can be resized too). To start afresh, remove the
 # DEV_DATA directory.
-DEV_SIZE ?= 1280x800
+DEV_SIZE ?= 1920x1080
 DEV_DATA ?= $(BUILD)/dev-data
 DEV_SRC  := $(HOST_SRC) $(shell find host/dev -name '*.rs' -o -name '*.js' -o -name Cargo.toml)
 
