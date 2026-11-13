@@ -52,6 +52,25 @@ Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is
 wifi network to join: **Elm OS test network**, password `password`. `make run` keeps what Elm
 OS saves in `build/data-qemu.img`; delete it to start afresh.
 
+## Work on the Elm code without booting the OS
+
+```sh
+make dev          # the Elm program in a window on your desktop (X11 or Wayland), with Node
+make dev-native   # the same with the native build that goes into Elm OS (slower to rebuild)
+```
+
+`make dev` skips the kernel and QEMU: it runs the Elm program in a window, with
+`build/elmos-dev` (host/dev) standing in for `/init`. It talks the same protocol, draws
+with the same rasteriser and atlas, sends HTTP out for real, and makes up the wifi (join
+**Elm OS test network** with `password`). Each time you save a file in `elm/src` it
+rebuilds the program (eco's JavaScript build: a few seconds) and switches to it with the
+Model carried over, as a switch on Elm OS does. Build errors show in the terminal. The
+Model is kept in `build/dev-data`; remove that directory to start afresh.
+
+The JavaScript build behaves like the native one except for numbers: Ints are 53-bit
+floats there, and `//` and Bitwise work on 32 bits. eco's native crashes and speed
+don't show either, so try a change in `make dev-native` or `make run` before relying on it.
+
 ## Staying up to date
 
 Nothing updates by itself: the kernel tag and the `wpa_supplicant`/`hostapd` release are
@@ -126,12 +145,13 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `elm/src/Persist.elm` | Saving the Model: Msg log, snapshots, replay at start |
 | `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
 | `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
-| `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU renderer, HTTP |
+| `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU rendering, HTTP |
 | `host/link/` | Linked into the Elm program: carries its ports over the socket to `/init` |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
-| `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
+| `host/common/` | Shared: the texture atlas (pixel font, Noto Sans glyphs), the CPU rasteriser, DRM/KMS ioctls |
+| `host/dev/` | `make dev`: stands in for `/init` on your desktop, to run the Elm program in a window |
 | `host/protocol/` | Every message between Elm and the host as Rust types, with an example of each (`examples.json`) that both sides are tested against |
 | `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
 | `versions.mk` | Pinned kernel and hostap versions, updated by `make refresh` |

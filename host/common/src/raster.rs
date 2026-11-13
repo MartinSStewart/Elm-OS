@@ -1,6 +1,7 @@
-//! The CPU rasteriser: draws Elm's textured triangles into the back buffer.
+//! The CPU rasteriser: draws Elm's textured triangles into a back buffer (/init's
+//! dumb buffer when there is no GPU, and the dev runner's window, host/dev).
 
-use common::atlas::{Tri, ATLAS_H, ATLAS_W};
+use crate::atlas::{Tri, ATLAS_H, ATLAS_W};
 
 fn edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (bx - ax) * (py - ay) - (by - ay) * (px - ax)

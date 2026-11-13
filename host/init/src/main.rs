@@ -43,7 +43,6 @@ mod net;
 mod persist;
 mod programs;
 mod update;
-mod raster;
 mod stats;
 mod sys;
 

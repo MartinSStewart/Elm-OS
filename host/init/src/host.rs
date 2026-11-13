@@ -30,7 +30,9 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
-use crate::{elm, error_screen, http, net, persist, raster};
+use common::raster;
+
+use crate::{elm, error_screen, http, net, persist};
 
 /// Elm draws only when asked.
 ///
