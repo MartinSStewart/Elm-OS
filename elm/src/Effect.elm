@@ -116,11 +116,6 @@ type HttpError
     | FailedToDecodeBody String
 
 
-get : HttpRequestId -> String -> Effect
-get id url =
-    Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just (Duration.seconds 30) }
-
-
 httpErrorToString : HttpError -> String
 httpErrorToString error =
     case error of
@@ -145,48 +140,6 @@ httpErrorToString error =
 
         FailedToDecodeBody string ->
             string
-
-
-type HttpRequestId
-    = GeoRequest
-    | ForecastRequest
-    | NewsRequest
-    | HackerNewsRequest
-
-
-httpRequestIdToString : HttpRequestId -> String
-httpRequestIdToString request =
-    case request of
-        GeoRequest ->
-            "geo"
-
-        ForecastRequest ->
-            "forecast"
-
-        NewsRequest ->
-            "news"
-
-        HackerNewsRequest ->
-            "hackernews"
-
-
-stringToHttpRequestId : String -> Maybe HttpRequestId
-stringToHttpRequestId string =
-    case string of
-        "geo" ->
-            Just GeoRequest
-
-        "forecast" ->
-            Just ForecastRequest
-
-        "news" ->
-            Just NewsRequest
-
-        "hackernews" ->
-            Just HackerNewsRequest
-
-        _ ->
-            Nothing
 
 
 toCmd : List Effect -> Cmd msg

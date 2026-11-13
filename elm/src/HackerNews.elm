@@ -1,11 +1,15 @@
 module HackerNews exposing
-    ( HackerNewsState(..)
+    ( Effect(..)
+    , HackerNewsState(..)
+    , HttpRequestId(..)
     , Model
-    , UiId
-    , gotRequest
+    , UiId(..)
+    , gotHttpRequest
+    , httpRequestIdToString
     , idToString
     , init
     , onClick
+    , stringToHttpRequestId
     , view
     )
 
@@ -13,23 +17,13 @@ import Array exposing (Array)
 import Color
 import Coord
 import Dict exposing (Dict)
-import Effect exposing (Effect, HttpRequestId(..))
+import Effect
 import Html.Parser as H
 import Json.Decode
 import News exposing (NewsState(..))
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
 import Units
-
-
-getNewsList : Effect
-getNewsList =
-    Effect.get HackerNewsRequest "https://news.ycombinator.com/"
-
-
-getPost : PostId -> Effect
-getPost (PostId id) =
-    Effect.get HackerNewsRequest ("https://news.ycombinator.com/item?id=" ++ id)
 
 
 type PostId
@@ -43,6 +37,7 @@ type CommentId
 type UiId
     = NewsViewport
     | NewsPostButton PostId
+    | OpenButton
 
 
 idToString : UiId -> String
@@ -54,33 +49,122 @@ idToString id =
         NewsPostButton (PostId postId) ->
             "NewsPostButton_" ++ postId
 
+        OpenButton ->
+            "OpenButton"
 
-onClick : Model -> ( Model, List Effect )
-onClick model =
-    let
-        isOpen =
-            not model.isOpen
-    in
-    case ( isOpen, model.data ) of
-        ( _, Loading _ ) ->
-            ( { model | isOpen = isOpen }, [] )
 
-        ( True, _ ) ->
-            ( { model
-                | isOpen = isOpen
-                , data =
-                    case model.data of
-                        Loaded days ->
-                            Loading (Just days)
+type Effect
+    = HttpRequest HttpRequestId String
 
-                        _ ->
-                            Loading Nothing
-              }
-            , [ getNewsList ]
-            )
 
-        ( False, _ ) ->
-            ( { model | isOpen = isOpen }, [] )
+gotHttpRequest : HttpRequestId -> Result Effect.HttpError { status : Int, body : String } -> Model -> Model
+gotHttpRequest requestId result model =
+    case requestId of
+        TopPostsRequest ->
+            case result of
+                Ok data ->
+                    if data.status >= 200 && data.status < 300 then
+                        case H.run H.noCharRefs data.body of
+                            Ok html ->
+                                { model | data = Loaded (getTitles html) }
+
+                            Err error ->
+                                { model | data = LoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }) }
+
+                    else
+                        { model | data = LoadFailed (Effect.BadBody data) }
+
+                Err error ->
+                    { model | data = LoadFailed error }
+
+        GetPostRequest (PostId postId) ->
+            case result of
+                Ok data ->
+                    if data.status >= 200 && data.status < 300 then
+                        case H.run H.noCharRefs data.body of
+                            Ok html ->
+                                { model | comments = Dict.insert postId (CommentsLoaded (getComments html)) model.comments }
+
+                            Err error ->
+                                { model
+                                    | comments =
+                                        Dict.insert
+                                            postId
+                                            (CommentsLoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }))
+                                            model.comments
+                                }
+
+                    else
+                        { model | comments = Dict.insert postId (CommentsLoadFailed (Effect.BadBody data)) model.comments }
+
+                Err error ->
+                    { model | comments = Dict.insert postId (CommentsLoadFailed error) model.comments }
+
+
+httpRequestIdToString : HttpRequestId -> String
+httpRequestIdToString id =
+    case id of
+        TopPostsRequest ->
+            "TopPostsRequest"
+
+        GetPostRequest (PostId postId) ->
+            "GetPostRequest_" ++ postId
+
+
+stringToHttpRequestId : List String -> Maybe HttpRequestId
+stringToHttpRequestId list =
+    case list of
+        [ "TopPostsRequest" ] ->
+            Just TopPostsRequest
+
+        [ "GetPostRequest", postId ] ->
+            Just (GetPostRequest (PostId postId))
+
+        _ ->
+            Nothing
+
+
+onClick : UiId -> Model -> ( Model, List Effect )
+onClick uiId model =
+    case uiId of
+        OpenButton ->
+            let
+                isOpen =
+                    not model.isOpen
+            in
+            case ( isOpen, model.data ) of
+                ( _, Loading _ ) ->
+                    ( { model | isOpen = isOpen }, [] )
+
+                ( True, _ ) ->
+                    ( { model
+                        | isOpen = isOpen
+                        , data =
+                            case model.data of
+                                Loaded days ->
+                                    Loading (Just days)
+
+                                _ ->
+                                    Loading Nothing
+                      }
+                    , [ HttpRequest TopPostsRequest "https://news.ycombinator.com/" ]
+                    )
+
+                ( False, _ ) ->
+                    ( { model | isOpen = isOpen }, [] )
+
+        NewsViewport ->
+            ( model, [] )
+
+        NewsPostButton (PostId postId) ->
+            case Dict.get postId model.comments of
+                Just (CommentsLoading _) ->
+                    ( model, [] )
+
+                _ ->
+                    ( model
+                    , [ HttpRequest (GetPostRequest (PostId postId)) ("https://news.ycombinator.com/item?id=" ++ postId) ]
+                    )
 
 
 type alias Model =
@@ -91,8 +175,8 @@ type alias Model =
 
 
 type CommentsState
-    = CommentsLoading (Maybe Comment)
-    | CommentsLoaded Comment
+    = CommentsLoading (Maybe (List Comment))
+    | CommentsLoaded (List Comment)
     | CommentsLoadFailed Effect.HttpError
 
 
@@ -107,28 +191,14 @@ type HackerNewsState
     | LoadFailed Effect.HttpError
 
 
+type HttpRequestId
+    = TopPostsRequest
+    | GetPostRequest PostId
+
+
 init : Model
 init =
     { data = NotLoading, comments = Dict.empty, isOpen = False }
-
-
-gotRequest : Result Effect.HttpError { status : Int, body : String } -> Model -> Model
-gotRequest result model =
-    case result of
-        Ok data ->
-            if data.status >= 200 && data.status < 300 then
-                case H.run H.noCharRefs data.body of
-                    Ok html ->
-                        { model | data = Loaded (getTitles html) }
-
-                    Err error ->
-                        { model | data = LoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }) }
-
-            else
-                { model | data = LoadFailed (Effect.BadBody data) }
-
-        Err error ->
-            { model | data = LoadFailed error }
 
 
 getTitles : List H.Node -> List ( PostId, String )
@@ -170,8 +240,13 @@ getAttr target attrs =
         |> List.head
 
 
-getComments : List H.Node -> List ( CommentId, String )
+getComments : List H.Node -> List Comment
 getComments nodes =
+    getCommentsHelper nodes
+
+
+getCommentsHelper : List H.Node -> List ( CommentId, String )
+getCommentsHelper nodes =
     List.concatMap
         (\node ->
             case node of
@@ -186,10 +261,10 @@ getComments nodes =
                         List.filterMap getComment nodes2
 
                     else
-                        getComments nodes2
+                        getCommentsHelper nodes2
 
                 H.Tag _ _ nodes2 ->
-                    getComments nodes2
+                    getCommentsHelper nodes2
         )
         nodes
 

@@ -291,7 +291,6 @@ type UiId
     | WeatherButton
     | AboutButton
     | NewsButton
-    | HackerNewsButton
     | CloseAboutButton
     | CalculatorButton
     | PowerOffButton
@@ -379,9 +378,6 @@ idToString uiId =
 
         NewsButton ->
             "NewsButton"
-
-        HackerNewsButton ->
-            "HackerNewsButton"
 
         CloseAboutButton ->
             "CloseAboutButton"
@@ -500,7 +496,7 @@ step event model =
             ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
-            case Effect.stringToHttpRequestId id of
+            case stringToHttpRequestId id of
                 Just id2 ->
                     let
                         decoded : D.Decoder value -> Result Effect.HttpError value
@@ -518,13 +514,13 @@ step event model =
                                     Err error
                     in
                     case id2 of
-                        Effect.GeoRequest ->
+                        GeoRequest ->
                             case model.weather of
                                 FindingPlace ->
                                     case decoded Weather.decodePlace of
                                         Ok place ->
                                             ( { model | weather = LoadingForecast place }
-                                            , [ Effect.get Effect.ForecastRequest (Weather.forecastUrl model.weatherUrl place) ]
+                                            , [ httpGet ForecastRequest (Weather.forecastUrl model.weatherUrl place) ]
                                             )
 
                                         Err error ->
@@ -535,7 +531,7 @@ step event model =
                                 _ ->
                                     ( model, [] )
 
-                        Effect.ForecastRequest ->
+                        ForecastRequest ->
                             ( case model.weather of
                                 LoadingForecast place ->
                                     case decoded Weather.decodeForecast of
@@ -550,7 +546,7 @@ step event model =
                             , []
                             )
 
-                        Effect.NewsRequest ->
+                        NewsRequest ->
                             ( case decoded News.decoder of
                                 Ok data ->
                                     { model | news = LoadedNews data }
@@ -560,8 +556,8 @@ step event model =
                             , []
                             )
 
-                        Effect.HackerNewsRequest ->
-                            ( { model | hackerNews = HackerNews.gotRequest result model.hackerNews }
+                        HackerNewsRequest request2 ->
+                            ( { model | hackerNews = HackerNews.gotHttpRequest request2 result model.hackerNews }
                             , []
                             )
 
@@ -802,7 +798,7 @@ nonEmpty value default =
 
 fetchWeather : Model -> ( Model, List Effect )
 fetchWeather model =
-    ( { model | weather = FindingPlace }, [ Effect.get Effect.GeoRequest model.geoUrl ] )
+    ( { model | weather = FindingPlace }, [ httpGet GeoRequest model.geoUrl ] )
 
 
 click : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
@@ -964,15 +960,67 @@ click model id uiState =
         NewsUiId _ ->
             ( model, [] )
 
-        HackerNewsButton ->
+        HackerNewsUiId uiId ->
             let
                 ( hackerNews, effects ) =
-                    HackerNews.onClick model.hackerNews
+                    HackerNews.onClick uiId model.hackerNews
             in
-            ( { model | hackerNews = hackerNews }, effects )
+            ( { model | hackerNews = hackerNews }
+            , List.map
+                (\effect ->
+                    case effect of
+                        HackerNews.HttpRequest requestId url ->
+                            httpGet (HackerNewsRequest requestId) url
+                )
+                effects
+            )
 
-        HackerNewsUiId uiId ->
-            ( model, [] )
+
+httpGet : HttpRequestId -> String -> Effect
+httpGet id url =
+    Effect.Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just (Duration.seconds 30) }
+
+
+type HttpRequestId
+    = GeoRequest
+    | ForecastRequest
+    | NewsRequest
+    | HackerNewsRequest HackerNews.HttpRequestId
+
+
+httpRequestIdToString : HttpRequestId -> String
+httpRequestIdToString request =
+    case request of
+        GeoRequest ->
+            "geo"
+
+        ForecastRequest ->
+            "forecast"
+
+        NewsRequest ->
+            "news"
+
+        HackerNewsRequest request2 ->
+            "hackernews_" ++ HackerNews.httpRequestIdToString request2
+
+
+stringToHttpRequestId : String -> Maybe HttpRequestId
+stringToHttpRequestId string =
+    case String.split "_" string of
+        [ "geo" ] ->
+            Just GeoRequest
+
+        [ "forecast" ] ->
+            Just ForecastRequest
+
+        [ "news" ] ->
+            Just NewsRequest
+
+        "hackernews" :: rest ->
+            HackerNews.stringToHttpRequestId rest |> Maybe.map HackerNewsRequest
+
+        _ ->
+            Nothing
 
 
 {-| Keys go to the calculator after a click on it, until a click somewhere else.
@@ -1169,9 +1217,6 @@ dragSelect focus position model =
             model
 
         NewsButton ->
-            model
-
-        HackerNewsButton ->
             model
 
         CloseAboutButton ->
@@ -2270,7 +2315,7 @@ toolbar model =
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "News")
-                    , Ui.selectableButton { id = HackerNewsButton, padding = small } model.newsOpen (t "Hacker news")
+                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } model.newsOpen (t "Hacker news")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
