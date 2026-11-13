@@ -98,7 +98,7 @@ view idMap uiState news =
         }
         (Ui.column
             { spacing = 4, padding = Ui.noPadding }
-            [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) "Wikipedia: Current events"
+            [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
             , case news of
                 NewsNotRequested ->
                     Ui.none
@@ -109,13 +109,13 @@ view idMap uiState news =
                             daysView idMap uiState days
 
                         Nothing ->
-                            Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
+                            Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
 
                 LoadedNews days ->
                     daysView idMap uiState days
 
                 NewsFailed string ->
-                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) (Effect.httpErrorToString string)
+                    Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
             ]
         )
 
@@ -131,7 +131,7 @@ daysView idMap uiState days =
                         (\topic ->
                             Ui.column
                                 { spacing = 8, padding = Ui.noPadding }
-                                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) topic.heading
+                                [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
                                 , Ui.column
                                     { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
                                     (List.map (itemView 140) topic.items)
@@ -147,7 +147,7 @@ daysView idMap uiState days =
                     ++ String.fromInt (Date.day date)
                     ++ ", "
                     ++ String.fromInt (Date.year date)
-                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                    |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
                     |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
                     |> Ui.el
                         { padding = Ui.paddingXY 12 4
@@ -200,7 +200,7 @@ itemView width (Item item) =
         { spacing = itemSpacing, padding = Ui.noPadding }
         [ Ui.row
             { spacing = 6, padding = Ui.noPadding }
-            [ Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) "•"
+            [ Ui.text Sprite.Small (Sprite.Sans Sprite.Regular) "•"
             , String.foldl
                 (\char { lastSpace, lastBreak, index, lines } ->
                     if index - lastBreak > width then
@@ -230,7 +230,7 @@ itemView width (Item item) =
                 |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
                 |> List.reverse
                 |> String.join "\n"
-                |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
             ]
         , Ui.column
             { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }

@@ -382,11 +382,11 @@ deleteSelection state =
     }
 
 
-{-| How a text input looks: its font, its width, and whether it shows a dot for each
+{-| How a text input looks: its font and size, its width, and whether it shows a dot for each
 character instead of the text (for passwords).
 -}
 type alias Style =
-    { font : Sprite.Font, width : Quantity Int UiPixels, masked : Bool }
+    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, masked : Bool }
 
 
 shownText : Style -> String -> String
@@ -394,10 +394,10 @@ shownText style text =
     if style.masked then
         String.repeat (String.length text)
             (case style.font of
-                Sprite.Mono _ ->
+                Sprite.Mono ->
                     "*"
 
-                Sprite.Sans _ _ ->
+                Sprite.Sans _ ->
                     "•"
             )
 
@@ -410,7 +410,7 @@ the start of the text.
 -}
 carets : Style -> State -> List Int
 carets style state =
-    Sprite.caretPositions style.font (shownText style state.text) |> List.map Quantity.unwrap
+    Sprite.caretPositions style.fontSize style.font (shownText style state.text) |> List.map Quantity.unwrap
 
 
 caretX : List Int -> Int -> Int
@@ -425,7 +425,7 @@ caretWidth style =
 
 lineHeight : Style -> Int
 lineHeight style =
-    Sprite.lineHeight style.font |> Quantity.unwrap
+    Sprite.lineHeight style.fontSize |> Quantity.unwrap
 
 
 width : Style -> Int
@@ -588,6 +588,7 @@ view scale viewport style offset hasFocus isValid current =
         ++ Sprite.text
             scale
             Color.black
+            style.fontSize
             style.font
             { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }
             (shownText style current.text)

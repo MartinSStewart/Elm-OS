@@ -1,10 +1,13 @@
 module Sprite exposing
     ( Font(..)
     , FontSize(..)
+    , Segment
     , Style(..)
     , Triangle
     , caretPositions
     , cursor
+    , customText
+    , customTextSize
     , ellipsis
     , encoder
     , lineHeight
@@ -207,18 +210,25 @@ cursor fill scale position =
 -- TEXT
 
 
-{-| Which font text is drawn in:
+{-| Which font text is drawn in. How big it is is a separate `FontSize`, and every font
+takes up the same line height at a given size, so fonts can be mixed on one line
+(`customText`) without the line changing height.
 
-  - `Mono` is town-collab's 10 x 18 pixel font, a monospace "Courier New", one font
-    pixel per UI pixel (`Small`) or two (`Big`). The debug overlay uses it.
   - `Sans` is Noto Sans (what at-chat uses) in a `Style`, 16 UI pixels (`Small`) or 24
     (`Big`), drawn natively at that many device pixels times the UI scale, with
     antialiasing and kerning.
+  - `Mono` is town-collab's 10 x 18 pixel font, a monospace "Courier New", one font
+    pixel per UI pixel (`Small`) or two (`Big`). The debug overlay uses it.
+
+Both sit on the same baseline in a line as tall as the taller of the two needs (see
+`lineMetrics`). Their letters still differ in size, since the pixel font only scales by
+whole numbers: capitals are 9 UI pixels tall in `Mono Small` and 12 in `Sans Small`,
+18 in `Mono Big` and 17 in `Sans Big`.
 
 -}
 type Font
-    = Mono FontSize
-    | Sans Style FontSize
+    = Sans Style
+    | Mono
 
 
 {-| Noto Sans's styles. Each is its own font file, drawn into the atlas at every size,
@@ -231,12 +241,20 @@ type Style
     | BoldItalic
 
 
+{-| How big text is. It sets the line height, which is the same for every font.
+-}
 type FontSize
     = Small
     | Big
 
 
-{-| Font pixels per UI pixel.
+{-| A run of text in one font and colour, for `customText`.
+-}
+type alias Segment =
+    { text : String, color : Color, font : Font }
+
+
+{-| The pixel font's pixels per UI pixel.
 -}
 monoScale : FontSize -> Int
 monoScale fontSize =
@@ -263,6 +281,14 @@ sansSize fontSize =
 charSize : ( Int, Int )
 charSize =
     ( 10, 18 )
+
+
+{-| How far down a pixel font character's 18 rows its baseline is: the row just under
+the bottom of a capital letter.
+-}
+pixelBaseline : Int
+pixelBaseline =
+    14
 
 
 charsPerRow : Int
@@ -304,6 +330,8 @@ charTexturePosition char =
     ( modBy charsPerRow index * Tuple.first charSize, index // charsPerRow * Tuple.second charSize )
 
 
+{-| The Noto Sans file for a style.
+-}
 variant : Style -> NotoSans.Variant
 variant style =
     case style of
@@ -342,35 +370,49 @@ missingGlyph f =
     Dict.get '?' f.glyphs |> Maybe.withDefault { x = 0, y = 0, w = 0, h = 0, left = 0, top = 0, advance = 0 }
 
 
-{-| How tall a line of text is, in UI pixels.
+{-| How far a line's baseline is below its top, and how far its bottom is below the
+baseline, in UI pixels: enough for both Noto Sans (all its styles share these) and the
+pixel font. 18 and 5 at `Small` (Noto Sans's), 28 and 8 at `Big` (the pixel font's
+ascent, Noto Sans's descent).
 -}
-lineHeight : Font -> Quantity Int UiPixels
-lineHeight font =
-    Quantity (lineHeightRaw font)
+lineMetrics : FontSize -> { ascent : Int, descent : Int }
+lineMetrics fontSize =
+    let
+        f =
+            face NotoSans.regular (sansSize fontSize)
+
+        m =
+            monoScale fontSize
+    in
+    { ascent = max f.ascent (pixelBaseline * m)
+    , descent = max f.descent ((Tuple.second charSize - pixelBaseline) * m)
+    }
 
 
-lineHeightRaw : Font -> Int
-lineHeightRaw font =
-    case font of
-        Mono fontSize ->
-            Tuple.second charSize * monoScale fontSize
+{-| How tall a line of text is, in UI pixels. It's the same for every font.
+-}
+lineHeight : FontSize -> Quantity Int UiPixels
+lineHeight fontSize =
+    Quantity (lineHeightRaw fontSize)
 
-        Sans style fontSize ->
-            let
-                f =
-                    face (variant style) (sansSize fontSize)
-            in
-            f.ascent + f.descent
+
+lineHeightRaw : FontSize -> Int
+lineHeightRaw fontSize =
+    let
+        { ascent, descent } =
+            lineMetrics fontSize
+    in
+    ascent + descent
 
 
 {-| Where each character of one line of text starts, in 1/64 UI pixels from the left,
 and where the line ends. Text is laid out with the font at its UI size, so it measures
 the same at every UI scale.
 -}
-layoutLine : Font -> String -> ( List ( Int, Char ), Int )
-layoutLine font string =
+layoutLine : FontSize -> Font -> String -> ( List ( Int, Char ), Int )
+layoutLine fontSize font string =
     case font of
-        Mono fontSize ->
+        Mono ->
             let
                 advance =
                     Tuple.first charSize * monoScale fontSize * 64
@@ -379,7 +421,7 @@ layoutLine font string =
             , String.length string * advance
             )
 
-        Sans style fontSize ->
+        Sans style ->
             let
                 v =
                     variant style
@@ -419,27 +461,73 @@ layoutSans kerning f string =
     ( List.reverse placed, end )
 
 
-textWidthRaw : Font -> String -> Int
-textWidthRaw font string =
-    (Tuple.second (layoutLine font string) + 63) // 64
+{-| Where each segment of one line starts, in 1/64 UI pixels from the left, and where
+the line ends. Each segment is laid out on its own (no kerning across segments).
+-}
+layoutSegments : FontSize -> List Segment -> ( List ( Int, Segment ), Int )
+layoutSegments fontSize segments =
+    List.foldl
+        (\segment ( acc, pen ) ->
+            ( ( pen, segment ) :: acc, pen + Tuple.second (layoutLine fontSize segment.font segment.text) )
+        )
+        ( [], 0 )
+        segments
+        |> Tuple.mapFirst List.reverse
+
+
+{-| Segments broken into lines at each '\\n'.
+-}
+segmentLines : List Segment -> List (List Segment)
+segmentLines segments =
+    let
+        ( current, done ) =
+            List.foldl
+                (\segment state ->
+                    case String.split "\n" segment.text of
+                        first :: rest ->
+                            List.foldl
+                                (\part ( line, lines ) -> ( [ { segment | text = part } ], List.reverse line :: lines ))
+                                (Tuple.mapFirst ((::) { segment | text = first }) state)
+                                rest
+
+                        [] ->
+                            state
+                )
+                ( [], [] )
+                segments
+    in
+    List.reverse (List.reverse current :: done)
+
+
+textWidthRaw : FontSize -> Font -> String -> Int
+textWidthRaw fontSize font string =
+    (Tuple.second (layoutLine fontSize font string) + 63) // 64
 
 
 {-| Where the cursor goes before each character of one line of text, and after the last,
 from its left: one more number than there are characters.
 -}
-caretPositions : Font -> String -> List (Quantity Int UiPixels)
-caretPositions font string =
+caretPositions : FontSize -> Font -> String -> List (Quantity Int UiPixels)
+caretPositions fontSize font string =
     let
         ( placed, end ) =
-            layoutLine font string
+            layoutLine fontSize font string
     in
     List.map (\( at, _ ) -> Quantity ((at + 32) // 64)) placed ++ [ Quantity ((end + 32) // 64) ]
 
 
-{-| Text at a position (its top left). '\\n' starts a new line.
+{-| Text in one colour and font at a position (its top left). '\\n' starts a new line.
 -}
-text : UiScale -> Color -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
-text uiScale color font clip string position =
+text : UiScale -> Color -> FontSize -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
+text uiScale color fontSize font clip string position =
+    customText uiScale fontSize clip [ { text = string, color = color, font = font } ] position
+
+
+{-| Runs of text, each in its own colour and font but all the same size, one after
+another from a position (the top left). '\\n' in any of them starts a new line.
+-}
+customText : UiScale -> FontSize -> Bounds UiPixels -> List Segment -> Coord UiPixels -> List (Triangle DevicePixels)
+customText uiScale fontSize clip segments position =
     let
         s =
             Units.scaleInt uiScale
@@ -455,76 +543,84 @@ text uiScale color font clip string position =
             }
 
         height =
-            lineHeightRaw font
+            lineHeightRaw fontSize
 
-        lines =
-            String.split "\n" string
+        ascent =
+            (lineMetrics fontSize).ascent
     in
-    case font of
-        Mono fontSize ->
+    List.indexedMap
+        (\lineIndex line ->
             let
-                m =
-                    monoScale fontSize * s
-
-                ( charW, charH ) =
-                    charSize
+                top =
+                    y + lineIndex * height
             in
-            List.indexedMap
-                (\lineIndex line ->
-                    String.toList line
-                        |> List.indexedMap
-                            (\i char ->
-                                if char == ' ' then
-                                    []
+            layoutSegments fontSize line
+                |> Tuple.first
+                |> List.concatMap
+                    (\( start, segment ) ->
+                        let
+                            left =
+                                x * s + (start * s + 32) // 64
+                        in
+                        case segment.font of
+                            Mono ->
+                                monoRun s fontSize deviceClip segment.color ( left, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
 
-                                else
-                                    clippedSprite color
-                                        deviceClip
-                                        ( x * s + i * charW * m, (y + lineIndex * height) * s )
-                                        ( charW * m, charH * m )
-                                        (charTexturePosition char)
-                                        charSize
-                            )
-                        |> List.concat
-                )
-                lines
-                |> List.concat
+                            Sans style ->
+                                sansRun s fontSize (variant style) deviceClip segment.color ( left, (top + ascent) * s ) segment.text
+                    )
+        )
+        (segmentLines segments)
+        |> List.concat
 
-        Sans style fontSize ->
-            let
-                v =
-                    variant style
 
-                -- Measured at the UI size, drawn with the face for the device size.
-                layoutFace =
-                    face v (sansSize fontSize)
+{-| One line of the pixel font, from its top left in device pixels.
+-}
+monoRun : Int -> FontSize -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> List (Triangle DevicePixels)
+monoRun s fontSize deviceClip color ( left, top ) string =
+    let
+        m =
+            monoScale fontSize * s
 
-                drawFace =
-                    face v (sansSize fontSize * s)
-            in
-            List.indexedMap
-                (\lineIndex line ->
-                    let
-                        baseline =
-                            (y + lineIndex * height + layoutFace.ascent) * s
-                    in
-                    sansPens s v.kerning layoutFace drawFace line
-                        |> List.concatMap
-                            (\( pen, glyph ) ->
-                                if glyph.w == 0 then
-                                    []
+        ( charW, charH ) =
+            charSize
+    in
+    String.toList string
+        |> List.indexedMap
+            (\i char ->
+                if char == ' ' then
+                    []
 
-                                else
-                                    clippedSprite color
-                                        deviceClip
-                                        ( x * s + pen + glyph.left, baseline + glyph.top )
-                                        ( glyph.w, glyph.h )
-                                        ( glyph.x, glyph.y )
-                                        ( glyph.w, glyph.h )
-                            )
-                )
-                lines
-                |> List.concat
+                else
+                    clippedSprite color
+                        deviceClip
+                        ( left + i * charW * m, top )
+                        ( charW * m, charH * m )
+                        (charTexturePosition char)
+                        charSize
+            )
+        |> List.concat
+
+
+{-| One line of Noto Sans, from where it starts on the baseline in device pixels.
+Measured at the UI size, drawn with the face for the device size.
+-}
+sansRun : Int -> FontSize -> NotoSans.Variant -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> List (Triangle DevicePixels)
+sansRun s fontSize v deviceClip color ( left, baseline ) string =
+    sansPens s v.kerning (face v (sansSize fontSize)) (face v (sansSize fontSize * s)) string
+        |> List.concatMap
+            (\( pen, glyph ) ->
+                if glyph.w == 0 then
+                    []
+
+                else
+                    clippedSprite color
+                        deviceClip
+                        ( left + pen + glyph.left, baseline + glyph.top )
+                        ( glyph.w, glyph.h )
+                        ( glyph.x, glyph.y )
+                        ( glyph.w, glyph.h )
+            )
 
 
 {-| Where each glyph of one line goes, in device pixels from its left, and the glyph.
@@ -599,60 +695,71 @@ clippedSprite color { left, right, top, bottom } ( x, y ) ( w, h ) ( tx, ty ) ( 
 
 {-| The size of text: its widest line by its lines.
 -}
-textSize : Font -> String -> Coord UiPixels
-textSize font string =
+textSize : FontSize -> Font -> String -> Coord UiPixels
+textSize fontSize font string =
+    customTextSize fontSize [ { text = string, color = Color.black, font = font } ]
+
+
+{-| The size of `customText`'s segments: its widest line by its lines.
+-}
+customTextSize : FontSize -> List Segment -> Coord UiPixels
+customTextSize fontSize segments =
     let
         lines =
-            String.split "\n" string
+            segmentLines segments
     in
     Coord.xy
-        (lines |> List.map (textWidthRaw font) |> List.maximum |> Maybe.withDefault 0)
-        ((List.length lines |> max 1) * lineHeightRaw font)
+        (lines
+            |> List.map (\line -> (Tuple.second (layoutSegments fontSize line) + 63) // 64)
+            |> List.maximum
+            |> Maybe.withDefault 0
+        )
+        (List.length lines * lineHeightRaw fontSize)
 
 
 {-| Text cut short with "…" to fit in `maxWidth`.
 -}
-ellipsis : Font -> Quantity Int UiPixels -> String -> String
-ellipsis font maxWidth string =
-    if textWidthRaw font string <= Quantity.unwrap maxWidth then
+ellipsis : FontSize -> Font -> Quantity Int UiPixels -> String -> String
+ellipsis fontSize font maxWidth string =
+    if textWidthRaw fontSize font string <= Quantity.unwrap maxWidth then
         string
 
     else
-        ellipsisHelper font (Quantity.unwrap maxWidth) (String.dropRight 1 string)
+        ellipsisHelper fontSize font (Quantity.unwrap maxWidth) (String.dropRight 1 string)
 
 
-ellipsisHelper : Font -> Int -> String -> String
-ellipsisHelper font maxWidth string =
+ellipsisHelper : FontSize -> Font -> Int -> String -> String
+ellipsisHelper fontSize font maxWidth string =
     let
         dots =
             case font of
-                Mono _ ->
+                Mono ->
                     "..."
 
-                Sans _ _ ->
+                Sans _ ->
                     "…"
 
         candidate =
             String.trimRight string ++ dots
     in
-    if String.isEmpty string || textWidthRaw font candidate <= maxWidth then
+    if String.isEmpty string || textWidthRaw fontSize font candidate <= maxWidth then
         candidate
 
     else
-        ellipsisHelper font maxWidth (String.dropRight 1 string)
+        ellipsisHelper fontSize font maxWidth (String.dropRight 1 string)
 
 
 {-| Breaks text into lines at most `maxWidth` wide, between words. A word wider than
 that gets a line of its own.
 -}
-wrap : Font -> Quantity Int UiPixels -> String -> String
-wrap font maxWidth string =
+wrap : FontSize -> Font -> Quantity Int UiPixels -> String -> String
+wrap fontSize font maxWidth string =
     String.words string
         |> List.foldl
             (\word lines ->
                 case lines of
                     line :: rest ->
-                        if textWidthRaw font (line ++ " " ++ word) <= Quantity.unwrap maxWidth then
+                        if textWidthRaw fontSize font (line ++ " " ++ word) <= Quantity.unwrap maxWidth then
                             (line ++ " " ++ word) :: rest
 
                         else

@@ -17,6 +17,7 @@ module Ui exposing
     , colorText
     , column
     , customButton
+    , customText
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , el
@@ -119,9 +120,8 @@ type Element id
     = TextInput (TextInputData id)
     | TextInputMultiline (TextInputMultilineData id)
     | Text
-        { color : Color
-        , font : Sprite.Font
-        , text : String
+        { fontSize : Sprite.FontSize
+        , segments : List Sprite.Segment
         , cachedSize : Coord UiPixels
         }
     | Button (ButtonData id) (Element id)
@@ -414,26 +414,36 @@ paddingXY x y =
 -- TEXT
 
 
-textHelper : Color -> Sprite.Font -> String -> Element id
-textHelper color font text2 =
-    Text
-        { color = color
-        , font = font
-        , text = text2
-        , cachedSize = Sprite.textSize font text2
-        }
-
-
 {-| Black text. '\\n' starts a new line.
 -}
-text : Sprite.Font -> String -> Element id
-text font =
-    textHelper Color.black font
+text : Sprite.FontSize -> Sprite.Font -> String -> Element id
+text fontSize font =
+    colorText Color.black fontSize font
 
 
-colorText : Color -> Sprite.Font -> String -> Element id
-colorText color font =
-    textHelper color font
+colorText : Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+colorText color fontSize font text2 =
+    customText fontSize [ { text = text2, color = color, font = font } ]
+
+
+{-| Runs of text one after another, each in its own colour and font. They all share one
+font size, so every line is the same height whichever fonts it mixes. '\\n' in any of
+them starts a new line.
+
+    Ui.customText Sprite.Small
+        [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
+        , { text = "make check", color = Color.black, font = Sprite.Mono }
+        , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
+        ]
+
+-}
+customText : Sprite.FontSize -> List Sprite.Segment -> Element id
+customText fontSize segments =
+    Text
+        { fontSize = fontSize
+        , segments = segments
+        , cachedSize = Sprite.customTextSize fontSize segments
+        }
 
 
 
@@ -1055,7 +1065,7 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                      else
                         []
                     )
-                        ++ Sprite.text scale data.color data.font viewport3 data.text position
+                        ++ Sprite.customText scale data.fontSize viewport3 data.segments position
 
                 Button data child ->
                     borderAndFillView

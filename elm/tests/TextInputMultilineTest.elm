@@ -3,15 +3,15 @@ module TextInputMultilineTest exposing (suite)
 import Expect
 import Keyboard
 import Sprite
+import Test exposing (Test, describe, test)
 import TextInput
 import TextInputMultiline
-import Test exposing (Test, describe, test)
 import Units
 
 
 style : TextInputMultiline.Style
 style =
-    { font = Sprite.Mono Sprite.Small, width = Units.uiPixels 400, lines = 10 }
+    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.uiPixels 400, lines = 10 }
 
 
 {-| Types `text` (one key per character, '\\n' as Enter), then presses `keys`.

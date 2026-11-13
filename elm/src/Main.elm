@@ -1413,16 +1413,23 @@ em n =
     Units.uiPixels (16 * n)
 
 
-bodyFont : Sprite.Font
-bodyFont =
-    Sprite.Sans Sprite.Regular Sprite.Small
+{-| The UI's font: Noto Sans Regular.
+-}
+sans : Sprite.Font
+sans =
+    Sprite.Sans Sprite.Regular
+
+
+bodySize : Sprite.FontSize
+bodySize =
+    Sprite.Small
 
 
 {-| For titles and the temperature: the next size up.
 -}
-headingFont : Sprite.Font
-headingFont =
-    Sprite.Sans Sprite.Regular Sprite.Big
+headingSize : Sprite.FontSize
+headingSize =
+    Sprite.Big
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
@@ -1495,26 +1502,27 @@ overlay model =
     let
         -- The debug overlay keeps town-collab's pixel font.
         mono =
-            Sprite.Mono Sprite.Small
+            Sprite.Mono
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.text mono (String.padRight 10 ' ' label), Ui.text mono value ]
+                [ Ui.text Sprite.Small mono (String.padRight 10 ' ' label), Ui.text Sprite.Small mono value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
                     Ui.row { spacing = 4, padding = Ui.noPadding }
-                        [ Ui.text mono (String.padRight 10 ' ' "Renderer")
-                        , badge mono gpu
-                        , Ui.text mono
+                        [ Ui.text Sprite.Small mono (String.padRight 10 ' ' "Renderer")
+                        , badge Sprite.Small gpu
+                        , Ui.text Sprite.Small
+                            mono
                             ((if gpu then
                                 "GPU, "
 
                               else
                                 "CPU, "
                              )
-                                ++ Sprite.ellipsis mono (Units.uiPixels (40 * 10)) name
+                                ++ Sprite.ellipsis Sprite.Small mono (Units.uiPixels (40 * 10)) name
                             )
                         ]
 
@@ -1594,7 +1602,7 @@ overlay model =
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
                 (Ui.column { spacing = 3, padding = Ui.noPadding }
-                    ([ Ui.text mono "Elm OS debug"
+                    ([ Ui.text Sprite.Small mono "Elm OS debug"
                      , line "Build" (BootInfo.buildText model.bootInfo)
                      , line "Screen"
                         (String.fromInt (Coord.xRaw model.screenSize)
@@ -1622,11 +1630,11 @@ overlay model =
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
 -}
-badge : Sprite.Font -> Bool -> Ui.Element id
-badge font gpu =
+badge : Sprite.FontSize -> Bool -> Ui.Element id
+badge fontSize gpu =
     let
         side =
-            Sprite.lineHeight font
+            Sprite.lineHeight fontSize
 
         size =
             ( side, side )
@@ -1761,16 +1769,16 @@ networkPanel : Model -> Ui.Element UiId
 networkPanel model =
     let
         font =
-            bodyFont
+            sans
 
         width =
             panelWidth
 
         t =
-            Ui.text font
+            Ui.text bodySize font
 
         fit string =
-            Sprite.ellipsis font width string
+            Sprite.ellipsis bodySize font width string
 
         small =
             Ui.paddingXY 6 3
@@ -1831,10 +1839,10 @@ networkPanel model =
                             t (fit ("Getting an address on " ++ status.ssid))
 
                         Wifi.Connected ->
-                            Ui.colorText connectedColor font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
+                            Ui.colorText connectedColor bodySize font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
 
                         Wifi.Failed ->
-                            Ui.colorText Color.errorColor font (Sprite.wrap font width status.error)
+                            Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width status.error)
 
         networkRows =
             case model.wifiDevice of
@@ -1865,7 +1873,7 @@ networkPanel model =
                         []
 
                     else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText Color.errorColor font "That kind of network isn't supported yet" ]
+                        [ Ui.colorText Color.errorColor bodySize font "That kind of network isn't supported yet" ]
 
                     else
                         (if needsPassword selected then
@@ -1889,7 +1897,7 @@ networkPanel model =
                             []
                         )
                             ++ [ Ui.button { id = ConnectButton, padding = small }
-                                    (t (Sprite.ellipsis font (width |> Quantity.minus (Units.uiPixels 12)) ("Connect to " ++ selected.ssid)))
+                                    (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (Units.uiPixels 12)) ("Connect to " ++ selected.ssid)))
                                ]
 
                 Nothing ->
@@ -1933,13 +1941,13 @@ wiredRows : Model -> List (Ui.Element UiId)
 wiredRows model =
     let
         font =
-            bodyFont
+            sans
 
         width =
             panelWidth
 
         t =
-            Ui.text font
+            Ui.text bodySize font
 
         link l =
             [ t ("Wired (" ++ l.name ++ ")")
@@ -1951,10 +1959,10 @@ wiredRows model =
                     t "Getting an address…"
 
                 Wired.Connected ->
-                    Ui.colorText connectedColor font (Sprite.ellipsis font width ("Connected, " ++ l.ip))
+                    Ui.colorText connectedColor bodySize font (Sprite.ellipsis bodySize font width ("Connected, " ++ l.ip))
 
                 Wired.Failed ->
-                    Ui.colorText Color.errorColor font (Sprite.wrap font width "Cable plugged in, but no address from the network (DHCP)")
+                    Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
             ]
 
         divider =
@@ -1991,7 +1999,7 @@ networkRow : Model -> Wifi.Network -> Ui.Element UiId
 networkRow model network =
     let
         font =
-            bodyFont
+            sans
 
         connectedHere =
             model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
@@ -2034,9 +2042,9 @@ networkRow model network =
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
             (Ui.row { spacing = 6, padding = Ui.noPadding }
-                [ bars, Ui.text font (Sprite.ellipsis font nameWidth network.ssid) ]
+                [ bars, Ui.text bodySize font (Sprite.ellipsis bodySize font nameWidth network.ssid) ]
             )
-            (Ui.text font label)
+            (Ui.text bodySize font label)
         )
 
 
@@ -2081,7 +2089,7 @@ signalBars dbm =
 -}
 passwordStyle : Model -> TextInput.Style
 passwordStyle model =
-    { font = bodyFont, width = em 14, masked = not model.showPassword }
+    { font = sans, fontSize = bodySize, width = em 14, masked = not model.showPassword }
 
 
 passwordInput : Model -> Ui.Element UiId
@@ -2104,13 +2112,13 @@ weatherRows : Model -> List (Ui.Element UiId)
 weatherRows model =
     let
         font =
-            bodyFont
+            sans
 
         width =
             panelWidth
 
         t =
-            Ui.text font
+            Ui.text bodySize font
 
         small =
             Ui.paddingXY 6 3
@@ -2141,23 +2149,23 @@ weatherRows model =
             [ divider, t "Weather: finding where we are…" ]
 
         LoadingForecast place ->
-            [ divider, t (Sprite.ellipsis font width ("Weather in " ++ place.name ++ "…")) ]
+            [ divider, t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
             [ divider
-            , Ui.colorText Color.errorColor font (Sprite.wrap font width (Effect.httpErrorToString error))
+            , Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
         GotWeather place forecast ->
             [ divider
             , Ui.leftAndRight width
-                (t (Sprite.ellipsis font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
+                (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
             , Ui.row { spacing = 8, padding = Ui.noPadding }
                 [ weatherIcon 3 forecast.code
                 , Ui.column { spacing = 3, padding = Ui.noPadding }
-                    [ Ui.text headingFont (fixed 1 forecast.temperature ++ "°C")
+                    [ Ui.text headingSize sans (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -2188,7 +2196,7 @@ weatherRows model =
                     )
                     forecast.days
                 )
-            , Ui.colorText Color.outlineColor font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            , Ui.colorText Color.outlineColor bodySize font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
             ]
 
 
@@ -2283,7 +2291,7 @@ toolbar : Model -> Ui.Element UiId
 toolbar model =
     let
         t =
-            Ui.text bodyFont
+            Ui.text bodySize sans
 
         small =
             Ui.paddingXY 6 3
@@ -2350,7 +2358,7 @@ calculatorWindow model =
 -}
 toolbarHeight : Int
 toolbarHeight =
-    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodyFont)
+    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodySize)
 
 
 {-| In the bottom right corner: while the host switches to a newer build, or when the
@@ -2366,7 +2374,7 @@ notice model text =
                 , inFront = []
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
-                (Ui.text bodyFont text)
+                (Ui.text bodySize sans text)
             )
         )
 
@@ -2375,17 +2383,17 @@ aboutPage : Model -> Ui.Element UiId
 aboutPage model =
     let
         font =
-            bodyFont
+            sans
 
         t =
-            Ui.text font
+            Ui.text bodySize font
 
         valueWidth =
             em 26
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (em 5) (t label), t (Sprite.ellipsis font valueWidth value) ]
+                [ Ui.minWidth (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
 
         system =
             model.system
@@ -2425,7 +2433,7 @@ aboutPage model =
             , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
             }
             (Ui.column { spacing = 4, padding = Ui.noPadding }
-                [ Ui.text headingFont "Elm OS"
+                [ Ui.text headingSize sans "Elm OS"
                 , t "A Linux kernel that boots straight into one Elm program."
                 , t ""
                 , line "Version" (field .commit)
@@ -2474,7 +2482,8 @@ aboutPage model =
                     )
                 , t ""
                 , t
-                    (Sprite.wrap font
+                    (Sprite.wrap bodySize
+                        font
                         (em 31)
                         ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
                             ++ "The UI framework and the debug overlay's pixel font are from town-collab. "
@@ -2501,9 +2510,10 @@ editorStyle model =
         ( screenWidth, screenHeight ) =
             Coord.toTuple (uiSize model)
     in
-    { font = bodyFont
+    { font = sans
+    , fontSize = bodySize
     , width = Quantity.min (em 40) (Units.uiPixels (screenWidth - 40))
-    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodyFont))
+    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodySize))
     }
 
 
@@ -2514,7 +2524,7 @@ editorWindow : Model -> Ui.Element UiId
 editorWindow model =
     let
         t =
-            Ui.text bodyFont
+            Ui.text bodySize sans
 
         style =
             editorStyle model
@@ -2559,7 +2569,7 @@ editorWindow model =
             }
             (Ui.column { spacing = 6, padding = Ui.noPadding }
                 [ Ui.leftAndRight style.width
-                    (Ui.text headingFont "Text editor")
+                    (Ui.text headingSize sans "Text editor")
                     (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
                 , Ui.textInputMultiline
                     { id = EditorInput
@@ -2568,7 +2578,13 @@ editorWindow model =
                     }
                 , Ui.leftAndRight style.width
                     (t status)
-                    (Ui.colorText Color.outlineColor bodyFont "Ctrl+Z undo, Ctrl+Y redo")
+                    (Ui.customText bodySize
+                        [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
+                        , { text = " undo, ", color = Color.outlineColor, font = sans }
+                        , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
+                        , { text = " redo", color = Color.outlineColor, font = sans }
+                        ]
+                    )
                 ]
             )
         )

@@ -46,10 +46,10 @@ type alias Model =
     }
 
 
-{-| How the box looks: its font, its width, and how many lines tall it is.
+{-| How the box looks: its font and size, its width, and how many lines tall it is.
 -}
 type alias Style =
-    { font : Sprite.Font, width : Quantity Int UiPixels, lines : Int }
+    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int }
 
 
 init : Model
@@ -115,7 +115,7 @@ lineAt ls line =
 -}
 carets : Style -> String -> List Int
 carets style line =
-    Sprite.caretPositions style.font line |> List.map Quantity.unwrap
+    Sprite.caretPositions style.fontSize style.font line |> List.map Quantity.unwrap
 
 
 caretX : List Int -> Int -> Int
@@ -481,7 +481,7 @@ padding =
 
 lineHeight : Style -> Int
 lineHeight style =
-    Sprite.lineHeight style.font |> Quantity.unwrap
+    Sprite.lineHeight style.fontSize |> Quantity.unwrap
 
 
 caretWidth : Style -> Int
@@ -663,6 +663,7 @@ view scale viewport style offset hasFocus scroll state =
                 Sprite.text
                     scale
                     Color.black
+                    style.fontSize
                     style.font
                     { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }
                     l.text

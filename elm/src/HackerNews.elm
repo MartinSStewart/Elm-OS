@@ -433,13 +433,13 @@ view idMap _ model =
                         loadedView idMap model.comments data
 
                     Nothing ->
-                        Ui.text (Sans Regular Small) "Loading..."
+                        Ui.text Small (Sans Regular) "Loading..."
 
             Loaded data ->
                 loadedView idMap model.comments data
 
             LoadFailed httpError ->
-                Ui.text (Sans Regular Small) (Effect.httpErrorToString httpError)
+                Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
         )
 
 
@@ -447,7 +447,7 @@ loadedView : (UiId -> id) -> Dict String CommentsState -> List ( PostId, String 
 loadedView idMap comments data =
     Ui.column
         { spacing = 8, padding = Ui.noPadding }
-        [ Ui.text (Sans Bold Small) "Hacker News"
+        [ Ui.text Small (Sans Bold) "Hacker News"
         , List.indexedMap
             (\index ( PostId postIdText, value ) ->
                 let
@@ -460,13 +460,14 @@ loadedView idMap comments data =
                     ((Ui.row
                         { spacing = 8, padding = Ui.noPadding }
                         [ Ui.right
-                            { width = Ui.size (Ui.text (Sans Regular Small) "00.") |> Coord.x }
+                            { width = Ui.size (Ui.text Small (Sans Regular) "00.") |> Coord.x }
                             (Ui.colorText
                                 Color.lightFont
-                                (Sans Regular Small)
+                                Small
+                                (Sans Regular)
                                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
                             )
-                        , Ui.text (Sans Regular Small) value
+                        , Ui.text Small (Sans Regular) value
                         ]
                         |> Ui.customButton
                             { id = idMap (NewsPostButton id)
@@ -491,7 +492,7 @@ commentsView postId comments =
             []
 
         Just (CommentsLoading _) ->
-            [ Ui.text (Sans Regular Small) "Loading comments..." ]
+            [ Ui.text Small (Sans Regular) "Loading comments..." ]
 
         Just (CommentsLoaded loaded) ->
             List.map
@@ -501,10 +502,10 @@ commentsView postId comments =
                         [ Ui.el
                             { padding = Ui.paddingXY (16 * (depth + 1)) 0, inFront = [], borderAndFill = Ui.NoBorderOrFill }
                             Ui.none
-                        , Ui.colorText Color.lightFont (Sans Regular Small) (String.left 100 content)
+                        , Ui.colorText Color.lightFont Small (Sans Regular) (String.left 100 content)
                         ]
                 )
                 (flattenComments 0 loaded)
 
         Just (CommentsLoadFailed error) ->
-            [ Ui.text (Sans Regular Small) (Effect.httpErrorToString error) ]
+            [ Ui.text Small (Sans Regular) (Effect.httpErrorToString error) ]
