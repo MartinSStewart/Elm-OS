@@ -2328,8 +2328,8 @@ toolbar model =
 
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
-                    , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "News")
-                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } model.newsOpen (t "Hacker news")
+                    , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "Wikipedia")
+                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } model.hackerNews.isOpen (t "Hacker news")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
