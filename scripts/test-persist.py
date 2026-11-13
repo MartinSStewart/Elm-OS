@@ -3,14 +3,15 @@ host/init/src/persist.rs), in QEMU, on a copy of build/data-empty.img.
 
   1. Boot, open the text editor and type "hello", open the calculator and work out
      6 * 7. Once the screen shows it, wait for the host to say it has fsynced the log,
-     then kill QEMU: a power cut. Check every entry on the disk has the right length and CRC-32 (so Elm's
-     CRC-32, compiled by eco, matches zlib's).
+     then kill QEMU: a power cut. Check every entry on the disk has the right length and CRC-32, and
+     that the host's message log (host/common/src/msglog.rs) carries on from the snapshot's number.
   2. Add half an entry to the end of the log, as a write cut short by the power would
-     leave it. Boot: the screen must show the editor and calculator as they were, and
-     the snapshot Elm writes at start must have the text in it and the log no torn
-     entry.
+     leave it. Boot: the screen must show the editor and calculator as they were (Elm
+     reads the snapshot (its CRC-32, compiled by eco, must match zlib's) and the host
+     sends the logged messages again), and the snapshot Elm writes at start must have
+     the text in it and the log no torn entry.
   3. Type " world" and restart with the toolbar's Restart button: Elm takes a snapshot
-     before the restart, so the log is empty afterwards.
+     before the restart, so the log has only the messages after it.
   4. Power cuts at random moments while typing, a few times over: every boot must
      come back, with the editor's text one of the texts it had, never something else,
      and the log on the disk must have everything the host said it had fsynced.
@@ -229,6 +230,34 @@ def entries(data, name, torn_ok=False):
     return out
 
 
+def log_entries(data, torn_ok=False):
+    """The message log's entries as (number, message bytes) (host/common/src/msglog.rs:
+    `ELMOSLG1`, the number of the last message dropped (u64), then each entry's length
+    (u32), CRC-32 of what follows it (u32), number (u64) and message, little-endian).
+    Each must have the right CRC-32, and the numbers must go up by one. Only the last
+    may be cut short, and only if torn_ok."""
+    if data[:8] != b"ELMOSLG1" or len(data) < 16:
+        fail(f"the log isn't a message log: {data[:40]!r}")
+    (base,) = struct.unpack_from("<Q", data, 8)
+    at, out = 16, []
+    while at < len(data):
+        if len(data) < at + 16:
+            break
+        length, crc, seq = struct.unpack_from("<IIQ", data, at)
+        end = at + 16 + length
+        if end > len(data):
+            break
+        if zlib.crc32(data[at + 8:end]) != crc:
+            fail(f"log: entry {len(out)} (number {seq}) has the wrong CRC-32")
+        if seq != base + 1 + len(out):
+            fail(f"log: entry {len(out)} is number {seq}, after {base + len(out)}")
+        out.append((seq, data[at + 16:end]))
+        at = end
+    if at < len(data) and not torn_ok:
+        fail(f"the log ends with part of an entry: {data[at:at + 40]!r}")
+    return base, out
+
+
 def snapshot_text():
     data = disk_file("snapshot")
     if data is None:
@@ -238,8 +267,8 @@ def snapshot_text():
 
 
 def editor_text(snap):
-    """The text editor's text in a snapshot ([format, version, modelHash, msgHash, next,
-    model], see Persist.elm). Model is a record encoded as an array, in Main.Model's field
+    """The text editor's text in a snapshot ([format, version, modelHash, seq, model,
+    pending], see Persist.elm). Model is a record encoded as an array, in Main.Model's field
     order (MODEL_FIELDS). The editor's state is with the other UI elements' in `uiState`
     (Ui.Model: [focus, uiState]), a Dict encoded as [[key, value], ...] whose key for it is
     Main.idToString EditorInput. The value is a Ui.ElementState, a custom type encoded as
@@ -249,7 +278,7 @@ def editor_text(snap):
     if "uiState" not in MODEL_FIELDS:
         fail("Main.Model has no `uiState` field any more: update editor_text in this test")
     try:
-        states = dict(snap[5][MODEL_FIELDS.index("uiState")][1])
+        states = dict(snap[4][MODEL_FIELDS.index("uiState")][1])
         if EDITOR_ID not in states:
             return ""
         tag, state = states[EDITOR_ID]
@@ -259,7 +288,7 @@ def editor_text(snap):
         text = state[0][0][2]
     except (IndexError, TypeError, ValueError) as e:
         fail(f"the snapshot's Model isn't shaped as editor_text in this test expects ({e!r}): "
-             f"{json.dumps(snap[5])[:300]}")
+             f"{json.dumps(snap[4])[:300]}")
     if not isinstance(text, str):
         fail(f"the editor's text in the snapshot isn't a string: {text!r}")
     return text
@@ -322,16 +351,18 @@ power_cut()
 print("power cut after typing")
 
 log = disk_file("log")
-logged = entries(log, "log")
+base, logged = log_entries(log)
 first_snap = snapshot_text()
-print(f"disk: snapshot {len(json.dumps(first_snap))} bytes (Model version {first_snap[1]}), log {len(logged)} entries, "
+if not logged:
+    fail("no messages in the log after typing")
+print(f"disk: snapshot {len(json.dumps(first_snap))} bytes (Model version {first_snap[1]}), log {len(logged)} messages, "
       f"numbered {logged[0][0]}..{logged[-1][0]}")
-if [e[0] for e in logged] != list(range(first_snap[4], first_snap[4] + len(logged))):
-    fail("the log's entries aren't numbered on from the snapshot's")
+if base != first_snap[3]:
+    fail(f"the log carries on from message {base}, but the snapshot has up to {first_snap[3]}")
 
 # ---- 2. a torn write at the end of the log, then boot
 
-replace_file("log", log + b"57 1234abcd [" + str(logged[-1][0] + 1).encode() + b",[0,[1,[")
+replace_file("log", log + struct.pack("<IIQ", 57, 0x1234ABCD, logged[-1][0] + 1) + b"\x05\x01")
 boot()
 move(w - 5, h // 2)
 time.sleep(2)
@@ -347,7 +378,7 @@ power_cut()
 snap = snapshot_text()
 if editor_text(snap) != "hello":
     fail(f"the snapshot taken at start has {editor_text(snap)!r} in the editor, not 'hello'")
-entries(disk_file("log"), "log")  # no torn entry any more
+log_entries(disk_file("log"))  # no torn entry any more
 print("the snapshot written at start has 'hello'; the torn entry is gone")
 
 # ---- 3. a clean restart
@@ -378,9 +409,12 @@ except subprocess.TimeoutExpired:
 if "[persist] wrote /data/snapshot" not in serial():
     fail("no snapshot before the restart")
 snap = snapshot_text()
-if editor_text(snap) != "hello world" or disk_file("log") != b"":
-    fail(f"after Restart: editor {editor_text(snap)!r}, log {disk_file('log')!r}")
-print("Restart takes a snapshot first: 'hello world', empty log")
+# The host goes on logging what it sends (frames, say) until it restarts: those are
+# after the snapshot's number.
+base, after_restart = log_entries(disk_file("log"))
+if editor_text(snap) != "hello world" or base != snap[3]:
+    fail(f"after Restart: editor {editor_text(snap)!r}, the log carries on from {base}, the snapshot has up to {snap[3]}")
+print(f"Restart takes a snapshot first: 'hello world', and the log has only the {len(after_restart)} messages after it")
 
 # ---- 4. power cuts at random moments
 
@@ -402,7 +436,7 @@ for round in range(int(os.environ.get("ROUNDS", 3))):
     on_disk = disk_file("log") or b""
     if len(on_disk) < synced:
         fail(f"the host said it had fsynced {synced} bytes of the log, but the disk has {len(on_disk)}")
-    entries(on_disk[:synced], "log")  # and what it fsynced is whole
+    log_entries(on_disk[:synced])  # and what it fsynced is whole
     boot()
     wait_for("[persist] wrote /data/snapshot")  # the one taken at start, once the log is replayed
     power_cut()

@@ -1,6 +1,7 @@
 module Generate exposing (Options, SourceFile, freeze, generate, placeholder)
 
-{-| Writes encoders and decoders for the types the Model and the Msg are made of,
+{-| Writes encoders and decoders for the types the Model is made of (the Msg isn't saved:
+the host logs its own messages, see elm/src/Persist.elm),
 in the style of Lamdera's Wire: each module that defines such a type `T` gets
 `w3_encode_T` and `w3_decode_T` added to the end of it, and exposed, so the
 functions can see the type's variants even when the module keeps them to itself.
@@ -194,15 +195,12 @@ placeholder options files =
                            , "    Persist.program " ++ options.config ++ " codecs"
                            , ""
                            , ""
-                           , "codecs : Persist.Codecs " ++ options.model ++ " " ++ options.msg
+                           , "codecs : Persist.Codecs " ++ options.model
                            , "codecs ="
                            , "    { encodeModel = \\_ -> Json.Encode.null"
                            , "    , modelDecoder = " ++ failing
-                           , "    , encodeMsg = \\_ -> Json.Encode.null"
-                           , "    , msgDecoder = " ++ failing
                            , "    , version = 0"
                            , "    , modelShape = \"\""
-                           , "    , msgShape = \"\""
                            , "    , versionShape = \\_ -> Nothing"
                            , "    , migrate = \\_ _ -> Nothing"
                            , "    }"
@@ -296,7 +294,7 @@ generateWith options modules modelKey msgKey configKey =
                     )
 
         ( reached, reachErrors ) =
-            reach defs used ([ ( modelKey, keyName modelKey ), ( msgKey, keyName msgKey ) ] ++ frozenRoots) Set.empty []
+            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots) Set.empty []
 
         clashes =
             [ "Wire", options.entry ]
@@ -354,7 +352,6 @@ generateWith options modules modelKey msgKey configKey =
 
                     shapes =
                         { model = modelShape
-                        , msg = rootShape defs used identity msgKey
                         , versions =
                             if List.isEmpty warnings then
                                 frozenShapes
@@ -1451,7 +1448,6 @@ defShape used rename def =
 
 type alias Shapes =
     { model : String
-    , msg : String
     , versions : List ( Int, String )
 
     -- A draft build: the last of `versions` is the current types, not frozen.
@@ -1542,15 +1538,12 @@ entryModule options configKey modelKey msgKey shapes =
                , "    Persist.program " ++ keyName configKey ++ " codecs"
                , ""
                , ""
-               , "codecs : Persist.Codecs " ++ modelType ++ " " ++ msgType
+               , "codecs : Persist.Codecs " ++ modelType
                , "codecs ="
                , "    { encodeModel = " ++ Tuple.first modelKey ++ ".w3_encode_" ++ Tuple.second modelKey
                , "    , modelDecoder = " ++ Tuple.first modelKey ++ ".w3_decode_" ++ Tuple.second modelKey
-               , "    , encodeMsg = " ++ Tuple.first msgKey ++ ".w3_encode_" ++ Tuple.second msgKey
-               , "    , msgDecoder = " ++ Tuple.first msgKey ++ ".w3_decode_" ++ Tuple.second msgKey
                , "    , version = " ++ String.fromInt latest
                , "    , modelShape = " ++ stringLiteral shapes.model
-               , "    , msgShape = " ++ stringLiteral shapes.msg
                , "    , versionShape = versionShape"
                , "    , migrate = migrate"
                , "    }"

@@ -86,6 +86,14 @@ type Effect
       -- with a newer build, host/init/src/elm.rs): the snapshot is written. Persist
       -- writes one before it.
     | SwitchReady
+      -- The Model on the data disk (Persist.elm, host/init/src/persist.rs). The host
+      -- logs every message it sends; ReadSnapshot is answered with the snapshot file's
+      -- text, WriteSnapshot replaces it (the host adds its length and checksum) and
+      -- drops the logged messages up to that number, and ReplayLog has the host send
+      -- the logged messages after that number again, then ReplayDone.
+    | ReadSnapshot
+    | WriteSnapshot { text : String, seq : Int }
+    | ReplayLog { after : Int }
 
 
 type PowerAction
@@ -259,3 +267,12 @@ encode effect =
 
         SwitchReady ->
             Postcard.variant 15 []
+
+        ReadSnapshot ->
+            Postcard.variant 16 []
+
+        WriteSnapshot { text, seq } ->
+            Postcard.variant 17 [ Postcard.string text, Postcard.unsigned seq ]
+
+        ReplayLog { after } ->
+            Postcard.variant 18 [ Postcard.unsigned after ]

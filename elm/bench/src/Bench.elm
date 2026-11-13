@@ -20,7 +20,6 @@ import Task exposing (Task)
 import Time
 import Ui
 import Units
-import Wire
 
 
 runs : Int
@@ -109,9 +108,7 @@ steps =
                             open =
                                 { loaded | isOpen = True }
                         in
-                        timed "Msg log entry (base64 of the body)" (\() -> E.encode 0 (Wire.encodeBytes itemBody) |> String.length)
-                            |> Task.andThen (\_ -> timed "  of which E.encode of the string" (\() -> E.encode 0 (E.string Fixture.item) |> String.length))
-                            |> Task.andThen (\_ -> timed "snapshot of HackerNews.Model" (\() -> E.encode 0 (HackerNews.w3_encode_Model open) |> String.length))
+                        timed "snapshot of HackerNews.Model" (\() -> E.encode 0 (HackerNews.w3_encode_Model open) |> String.length)
                             |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize)" (\() -> Sprite.textSize Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
                             |> Task.andThen (\_ -> frame open)
                     )

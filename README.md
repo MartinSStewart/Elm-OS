@@ -145,7 +145,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | --- | --- |
 | `elm/src/` | The Elm program (`Main.elm`), UI framework, sprite encoding, wifi panel and weather |
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
-| `elm/src/Persist.elm` | Saving the Model: Msg log, snapshots, replay at start |
+| `elm/src/Persist.elm` | Saving the Model: snapshots, replaying the host's message log at start |
 | `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
 | `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
 | `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU rendering, HTTP |
@@ -215,35 +215,39 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 
 ### Saving the Model
 
-`elm/src/Persist.elm` wraps the program so its Model survives restarts and power cuts. Every Msg
-is appended to a log on the data disk, and now and then (at start, when the log reaches
-256 KB, and before powering off or restarting) the whole Model is written as a snapshot, which
-empties the log. At start the snapshot is loaded and the log replayed through `update`, then
-`Main.resume` drops what belonged to the last boot (screen, network, stats) and keeps what the
-user did. This works because `update` is deterministic: time, input and every answer from the
-host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying is quick.
+`elm/src/Persist.elm` wraps the program so its Model survives restarts and power cuts. The host
+appends every message it sends Elm to a log on the data disk before sending it, numbered (the
+bytes it sends, so Elm encodes nothing per message), and now and then (at start, when the
+messages since the last one add up to 256 KB, and before powering off or restarting) Elm writes
+the whole Model as a snapshot with the number of the last message it has, and the host drops
+the logged messages up to there. At start Elm loads the snapshot and asks the host for the
+logged messages after it, and replays them through `update`. This works because `update` is
+deterministic: time (`HostMessage.Tick`, `Frame`), input and every answer from the host arrive as
+messages from the host, which is why Persist gives the program no subscriptions of its own.
+Drawing is left out of `update` (`Main.draw`), so replaying is quick.
 
 - **Where:** the GPT partition named "Elm OS data" (ext4): the second partition on the USB stick,
   and `build/data-qemu.img` in QEMU. `host/init/src/persist.rs` waits up to 5 s for it at start
   (a USB stick appears a second or two after boot; `ELMOS_DATA_WAIT` on the kernel command line
   changes that), mounts it at `/data` and tells Elm. Without one, nothing is saved.
-- **Files:** `/data/snapshot` and `/data/log`. Each entry is a line: its length in bytes, its
-  CRC-32, and JSON (see below), so a write cut short by a power cut is recognised and
-  ignored, along with anything after it. Log entries are numbered, so entries the snapshot already
-  has are skipped if the power goes between writing the snapshot and emptying the log.
-- **Writes:** the host only appends to and replaces files in `/data`, in the order Elm asks.
-  A snapshot goes to a new file, which is fsynced and renamed over the old one. Appends are
-  fsynced within a second (a USB stick is slow to fsync and wears), so a power cut loses at most
-  the last second.
+- **Files:** `/data/snapshot` is one line: its length in bytes, its CRC-32, and JSON (see below).
+  `/data/log` is binary (`host/common/src/msglog.rs`): each entry has its length, CRC-32 and
+  number. Either way a write cut short by a power cut is recognised and ignored, along with
+  anything after it. Messages the snapshot already has are skipped by their numbers.
+- **Writes:** one host thread does them, in order. A snapshot goes to a new file, which is
+  fsynced and renamed over the old one, and only then is the log trimmed (rewritten the same
+  way). Log appends are fsynced within a second (a USB stick is slow to fsync and wears), so a
+  power cut loses at most the last second.
 - **HTTP requests in flight:** a request doesn't outlive the host, so the snapshot keeps the ids
-  of requests not yet answered (worked out from the logged Msgs, so no extra write before each
+  of requests not yet answered (worked out from the logged messages, so no extra write before each
   request), and after a restart or power cut each gets `Effect.Interrupted` as its answer. As
   with a timeout, whether the server got it is unknown. A second request with an id that is
   still waiting isn't sent.
 - **Changing types:** see "Versions and migrations" below. The snapshot says which version of
-  the Model's types wrote it, and an older one is migrated. Msgs are never migrated: a log
-  written by a build with a different Msg type is skipped. A snapshot that can't be read is
-  kept as `/data/snapshot-unreadable` and the Model starts afresh.
+  the Model's types wrote it, and an older one is migrated. The log holds the host's messages, not
+  Msgs, so it replays into a newer build too, and the Msg type can change freely (it needn't be
+  serializable). A snapshot that can't be read is kept as `/data/snapshot-unreadable` and the
+  Model starts afresh.
 
 ### Versions and migrations
 

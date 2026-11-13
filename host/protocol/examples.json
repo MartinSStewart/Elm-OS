@@ -19,6 +19,9 @@
     {"writeFile": {"path": "/data/snapshot", "text": ""}},
     {"log": {"text": "couldn't read a message from the host"}},
     "switchReady",
+    "readSnapshot",
+    {"writeSnapshot": {"text": "[\"elmos-persist-5\"]", "seq": 300}},
+    {"replayLog": {"after": 12}},
     {"render": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}
   ],
   "fromHost": [
@@ -45,6 +48,10 @@
     {"dataDisk": {"path": null, "httpInFlight": []}},
     {"switching": {"to": "3f2a9c1"}},
     {"reflashNeeded": {"build": "eca6a3aa4c51"}},
+    "tick",
+    {"snapshot": {"text": "5 12345678 [1]\n"}},
+    {"snapshot": {"text": null}},
+    {"replayDone": {"upto": 300}},
     {"httpResponse": {"id": "weather", "status": 200, "body": [123, 125, 0, 255]}},
     {"httpError": {"id": "weather", "error": "timeout", "message": "the server took too long"}},
     {"httpError": {"id": "weather", "error": "badUrl", "message": "no host"}},

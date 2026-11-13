@@ -1,4 +1,4 @@
-module HostMessage exposing (HttpFailure(..), ToElm(..), decode)
+module HostMessage exposing (HttpFailure(..), ToElm(..), decode, decodeNumbered)
 
 {-| What the host sends on `fromHost` (Effect.elm): Elm's copy of host/protocol's
 `ToElm`, one variant for each of its variants, in the same order, and `decode`, which
@@ -70,6 +70,13 @@ type ToElm
     | Switching String
       -- The newest deployed build, which needs the USB stick flashed again (Main.elm).
     | ReflashNeeded String
+      -- Once a second.
+    | Tick
+      -- The snapshot file's text (Persist.elm).
+    | Snapshot (Maybe String)
+      -- After the logged messages Persist asked for again: the number of the last one
+      -- an earlier program got.
+    | ReplayDone Int
 
 
 type HttpFailure
@@ -83,6 +90,14 @@ type HttpFailure
 decode : Bytes -> Maybe ToElm
 decode =
     BD.decode decoder
+
+
+{-| What comes on `fromHost`: the message's number in the host's message log (if the
+host logged it), then the message (protocol::from\_host\_payload).
+-}
+decodeNumbered : Bytes -> Maybe ( Maybe Int, ToElm )
+decodeNumbered =
+    BD.decode (BD.map2 Tuple.pair (P.decodeMaybe P.decodeUnsigned) decoder)
 
 
 decoder : BD.Decoder ToElm
@@ -179,6 +194,15 @@ decoder =
 
                     23 ->
                         BD.map ReflashNeeded P.decodeString
+
+                    24 ->
+                        BD.succeed Tick
+
+                    25 ->
+                        BD.map Snapshot (P.decodeMaybe P.decodeString)
+
+                    26 ->
+                        BD.map ReplayDone P.decodeUnsigned
 
                     _ ->
                         BD.fail

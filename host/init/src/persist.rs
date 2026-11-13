@@ -8,24 +8,34 @@
 //!
 //!   {"t":"dataDisk","path":"/data"}     or "path":null without one
 //!
-//! Elm then reads its files with readFiles (files.rs) and writes them with
+//! Once it is mounted, every message elm.rs sends the program (protocol::is_logged)
+//! is first appended to /data/log (common::msglog has the format), numbered. Elm keeps
+//! its Model with
+//!
+//!   readSnapshot             the snapshot file's text, as ToElm::Snapshot
+//!   writeSnapshot(T, N)      replaces the snapshot with T (framed: length, CRC-32),
+//!                            then drops the log's messages up to number N
+//!   replayLog(N)             the logged messages after N that earlier programs got
+//!
+//! and other files with readFiles (files.rs), appendFile and writeFile:
 //!
 //!   {"t":"appendFile","path":P,"text":T}   adds T to the end of P (creating it)
 //!   {"t":"writeFile","path":P,"text":T}    replaces P with T, atomically
 //!
-//! P must be a file directly in /data. One thread does the writes, in the order Elm
-//! asked for them. writeFile writes P.new, fsyncs it, renames it over P and fsyncs
-//! the directory, so after a power cut P has either its old text or the new.
-//! appendFile only writes; the file is fsynced a second after the first write since
-//! the last fsync (a USB stick is slow to fsync and wears out), and at `shutdown`,
-//! before the computer powers off or restarts. So a power cut loses at most the
-//! last second of appends, and Elm can tell where they stop (each entry has its
-//! length and a checksum).
+//! P must be a file directly in /data. One thread does the writes, in the order they
+//! were asked for. writeFile (and writeSnapshot) writes P.new, fsyncs it, renames it
+//! over P and fsyncs the directory, so after a power cut P has either its old text or
+//! the new. Appends (and the log) are only written; the file is fsynced a second after
+//! the first write since the last fsync (a USB stick is slow to fsync and wears out),
+//! and at `shutdown`, before the computer powers off or restarts. So a power cut loses
+//! at most the last second of messages, and the log can tell where they stop (each
+//! entry has its length and a checksum).
 //!
 //! If a write fails (the disk is full, or the stick was pulled out), nothing more is
 //! written until the next boot, so what is on the disk stays a consistent earlier
 //! state rather than, say, a log emptied after its snapshot failed.
 
+use common::msglog::{self, MsgLog};
 use protocol::ToElm;
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -33,6 +43,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -45,6 +56,8 @@ const SYNC_DELAY: Duration = Duration::from_secs(1);
 enum Op {
     Append { path: PathBuf, text: String },
     Write { path: PathBuf, text: String },
+    Log { seq: u64, message: Vec<u8> },
+    WriteSnapshot { text: String, seq: u64 },
     Flush(Sender<()>),
     Run(Box<dyn FnOnce(&mut Writer) + Send>),
 }
@@ -64,11 +77,23 @@ pub fn start() {
                 *queue().lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                 rx
             });
+            let mut writer = Writer::default();
+            if mounted {
+                match MsgLog::open(&Disk::path("log")) {
+                    Ok((log, note)) => {
+                        log!("persist", "{note}");
+                        NEXT_SEQ.store(log.next(), Ordering::SeqCst);
+                        LOGGING.store(true, Ordering::SeqCst);
+                        writer.log = Some(log);
+                    }
+                    Err(err) => log!("persist", "can't open the message log: {err}; not logging messages"),
+                }
+            }
             set_mounted(mounted);
             // elm.rs fills in the HTTP requests in flight for each program it sends this to.
             elm::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()), http_in_flight: Vec::new() });
             if let Some(rx) = rx {
-                Writer::default().run(rx);
+                writer.run(rx);
             }
         })
         .expect("start the persist thread");
@@ -133,6 +158,17 @@ impl Disk<'_> {
         }
         !self.0.failed
     }
+    /// Drops every logged message (the numbers carry on).
+    pub fn empty_log(&mut self) -> bool {
+        if let Some(log) = &mut self.0.log {
+            let last = log.last();
+            if let Err(err) = log.trim(last) {
+                self.0.fail(format!("emptying the message log: {err}"));
+            }
+        }
+        !self.0.failed
+    }
+
     pub fn remove(&mut self, name: &str) {
         let path = Self::path(name);
         if let Some(f) = self.0.open.remove(&path) {
@@ -143,6 +179,74 @@ impl Disk<'_> {
                 let _ = File::open(dir).and_then(|d| d.sync_all());
             }
         }
+    }
+}
+
+/// Whether messages are being logged, and the number the next one gets.
+static LOGGING: AtomicBool = AtomicBool::new(false);
+static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Logs a message for the Elm program (its bytes, ToElm::to_bytes) before it is sent,
+/// and gives its number; None without a log. elm.rs calls this with its state locked,
+/// so the numbers go in the order the messages go out.
+pub fn log_message(message: &[u8]) -> Option<u64> {
+    if !LOGGING.load(Ordering::SeqCst) {
+        return None;
+    }
+    let seq = NEXT_SEQ.fetch_add(1, Ordering::SeqCst);
+    send(Op::Log { seq, message: message.to_vec() }).then_some(seq)
+}
+
+/// The number of the last message logged (0 for none).
+pub fn last_logged() -> u64 {
+    if LOGGING.load(Ordering::SeqCst) {
+        NEXT_SEQ.load(Ordering::SeqCst) - 1
+    } else {
+        0
+    }
+}
+
+/// Effect::WriteSnapshot.
+pub fn write_snapshot(text: String, seq: u64) {
+    send(Op::WriteSnapshot { text, seq });
+}
+
+/// Effect::ReadSnapshot, for program number `program`: after the writes before it.
+pub fn read_snapshot(program: u64) {
+    let sent = send(Op::Run(Box::new(move |_| {
+        let text = std::fs::read_to_string(Disk::path("snapshot")).ok();
+        elm::answer(program, &ToElm::Snapshot { text });
+    })));
+    if !sent {
+        elm::answer(program, &ToElm::Snapshot { text: None });
+    }
+}
+
+/// Effect::ReplayLog, for program number `program`: the logged messages numbered
+/// after `after` and up to `upto` (the last one an earlier program got), then
+/// ReplayDone.
+pub fn replay_log(program: u64, after: u64, upto: u64) {
+    let sent = send(Op::Run(Box::new(move |w: &mut Writer| {
+        let entries = match &w.log {
+            Some(log) => log.entries(after, upto).unwrap_or_else(|err| {
+                log!("persist", "reading the message log: {err}");
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+        if crate::sys::debug() {
+            log!("persist", "replaying {} logged messages after number {after}", entries.len());
+        }
+        for (seq, bytes) in entries {
+            match ToElm::from_bytes(&bytes) {
+                Some(msg) => elm::replayed(program, seq, msg),
+                None => log!("persist", "logged message {seq} doesn't read; skipping it"),
+            }
+        }
+        elm::answer(program, &ToElm::ReplayDone { upto });
+    })));
+    if !sent {
+        elm::answer(program, &ToElm::ReplayDone { upto });
     }
 }
 
@@ -248,6 +352,7 @@ fn mount(dev: &str) -> bool {
 #[derive(Default)]
 struct Writer {
     open: HashMap<PathBuf, File>,
+    log: Option<MsgLog>,
     sync_due: Option<Instant>,
     failed: bool,
 }
@@ -267,9 +372,23 @@ impl Writer {
                 },
             };
             match op {
-                Some(Op::Append { .. } | Op::Write { .. }) if self.failed => {}
+                Some(Op::Append { .. } | Op::Write { .. } | Op::Log { .. } | Op::WriteSnapshot { .. }) if self.failed => {}
                 Some(Op::Append { path, text }) => self.append(path, &text),
                 Some(Op::Write { path, text }) => self.write(&path, &text),
+                Some(Op::Log { seq, message }) => self.log(seq, &message),
+                Some(Op::WriteSnapshot { text, seq }) => {
+                    self.write(&Disk::path("snapshot"), &msglog::frame_snapshot(&text));
+                    if !self.failed {
+                        if let Some(log) = &mut self.log {
+                            if let Err(err) = log.trim(seq) {
+                                self.fail(format!("dropping logged messages up to {seq}: {err}"));
+                            } else if crate::sys::debug() {
+                                // scripts/test-persist.py reads this.
+                                log!("persist", "wrote /data/log ({} bytes)", log.len());
+                            }
+                        }
+                    }
+                }
                 Some(Op::Flush(done)) => {
                     self.sync();
                     let _ = done.send(());
@@ -305,6 +424,17 @@ impl Writer {
         }
     }
 
+    fn log(&mut self, seq: u64, message: &[u8]) {
+        let Some(log) = &mut self.log else { return };
+        if let Err(err) = log.append(seq, message) {
+            self.fail(format!("logging message {seq}: {err}"));
+            return;
+        }
+        if self.sync_due.is_none() {
+            self.sync_due = Some(Instant::now() + SYNC_DELAY);
+        }
+    }
+
     fn write(&mut self, path: &Path, text: &str) {
         // A file we were appending to is about to be replaced; finish with it first.
         if let Some(f) = self.open.remove(path) {
@@ -331,6 +461,7 @@ impl Writer {
     fn fail(&mut self, why: String) {
         log!("persist", "{why}; not writing to the data disk again until the next boot");
         self.failed = true;
+        LOGGING.store(false, Ordering::SeqCst);
     }
 
     fn sync(&mut self) {
@@ -342,6 +473,18 @@ impl Writer {
                 // scripts/test-persist.py reads this: everything up to here survives a power cut.
                 let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
                 log!("persist", "synced {} ({bytes} bytes)", path.display());
+            }
+        }
+        if let Some(log) = &mut self.log {
+            if log.unsynced() {
+                if let Err(err) = log.sync() {
+                    log!("persist", "fsync /data/log: {err}; not writing to the data disk again until the next boot");
+                    self.failed = true;
+                    LOGGING.store(false, Ordering::SeqCst);
+                } else if crate::sys::debug() {
+                    // scripts/test-persist.py reads this: everything up to here survives a power cut.
+                    log!("persist", "synced /data/log ({} bytes)", log.len());
+                }
             }
         }
         self.sync_due = None;

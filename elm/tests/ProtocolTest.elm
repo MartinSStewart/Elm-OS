@@ -53,6 +53,9 @@ effects =
     , Effect.WriteFile { path = "/data/snapshot", text = "" }
     , Effect.Log "couldn't read a message from the host"
     , Effect.SwitchReady
+    , Effect.ReadSnapshot
+    , Effect.WriteSnapshot { text = "[\"elmos-persist-5\"]", seq = 300 }
+    , Effect.ReplayLog { after = 12 }
     , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
     ]
 
@@ -72,12 +75,16 @@ readsHostMessage hexText =
                     Expect.fail "HostMessage.decode can't read it"
 
                 Just _ ->
-                    case Persist.fromHost Main.persistConfig bytes of
-                        Persist.AppMsg msg ->
+                    -- As it comes on fromHost: not numbered (protocol::from_host_payload).
+                    case Maybe.map (Persist.fromHost Main.persistConfig) (fromHex ("00" ++ hexText)) of
+                        Just (Persist.AppMsg _ _ msg) ->
                             logs msg |> Expect.equal []
 
-                        _ ->
+                        Just _ ->
                             Expect.pass
+
+                        Nothing ->
+                            Expect.fail "not hex"
 
 
 logs : Main.Msg -> List String
@@ -187,6 +194,13 @@ suite =
             )
         , describe "every message the host sends is read"
             (List.map (\( json, bytes ) -> test json (\_ -> readsHostMessage bytes)) ProtocolExamples.fromHost)
+        , test "a message from the host carries its number in the host's log"
+            (\_ ->
+                -- Some(300), then Tick.
+                fromHex "01ac0218"
+                    |> Maybe.map (Persist.fromHost Main.persistConfig)
+                    |> Expect.equal (Just (Persist.AppMsg (Just 300) 4 (Main.persistConfig.fromHost (Ok HostMessage.Tick))))
+            )
         , test "a message from the host that can't be read is logged, and nothing else happens"
             (\_ ->
                 [ "63", "", "02" ]
@@ -194,7 +208,7 @@ suite =
                     |> List.map
                         (\bytes ->
                             case Persist.fromHost Main.persistConfig bytes of
-                                Persist.AppMsg msg ->
+                                Persist.AppMsg _ _ msg ->
                                     logs msg
 
                                 _ ->

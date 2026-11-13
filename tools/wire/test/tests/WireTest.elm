@@ -30,7 +30,6 @@ suite : Test
 suite =
     describe "tools/wire"
         [ test "the Model reads back" (\_ -> roundTrip ElmOs.codecs.encodeModel ElmOs.codecs.modelDecoder App.sample)
-        , test "a Msg reads back" (\_ -> roundTrip ElmOs.codecs.encodeMsg ElmOs.codecs.msgDecoder App.sampleMsg)
         , test "the format" (\_ -> E.encode 0 (ElmOs.codecs.encodeModel App.sample) |> String.left 60 |> Expect.equal "[-3,\"NaN\",\"é\\\"\\\\😀\",true,\"x\",[],[1,\"one\"],[false,\"+Inf\",\"é\"]")
         , test "Bytes are base64 (RFC 4648's examples)"
             (\_ ->

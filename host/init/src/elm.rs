@@ -18,6 +18,11 @@
 //!   - The data disk message lists the HTTP requests the host is still working on, or
 //!     has an answer for that it hasn't delivered: their answers are coming, so
 //!     Persist.elm doesn't report them as cut off.
+//!   - Each message (protocol::is_logged) is appended to the message log on the data
+//!     disk (persist.rs) as it goes out, and carries its number there. A new program
+//!     asks for the logged messages earlier programs got after its snapshot
+//!     (Effect::ReplayLog): those numbered up to `replay_upto`, the last one logged
+//!     before it started.
 //!
 //! Which build runs is up to programs.rs: the one in the initramfs, or one on the data
 //! disk. `switch_to` replaces the running program with another build without
@@ -105,19 +110,37 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Bytes { .. }
         | ToElm::Sha256 { .. }
         | ToElm::Switching { .. }
-        | ToElm::ReflashNeeded { .. } => return None,
+        | ToElm::ReflashNeeded { .. }
+        | ToElm::Tick
+        | ToElm::Snapshot { .. }
+        | ToElm::ReplayDone { .. } => return None,
     })
 }
 
 /// Only worth sending to the program running now.
 fn only_now(msg: &ToElm) -> bool {
-    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. })
+    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::Tick)
 }
 
 fn http_answer(msg: &ToElm) -> Option<&str> {
     match msg {
         ToElm::HttpResponse { id, .. } | ToElm::HttpError { id, .. } => Some(id),
         _ => None,
+    }
+}
+
+/// A message waiting to go to the program: its number in the log once it has one (it
+/// is logged the first time it goes out, or is one being replayed), and whether it
+/// still needs logging.
+struct Queued {
+    msg: ToElm,
+    seq: Option<u64>,
+    fresh: bool,
+}
+
+impl Queued {
+    fn new(msg: ToElm) -> Queued {
+        Queued { msg, seq: None, fresh: true }
     }
 }
 
@@ -129,7 +152,9 @@ struct State {
     program: u64,
     pid: Option<u32>,
     latest: [Option<ToElm>; LATEST_KINDS],
-    queue: VecDeque<ToElm>,
+    queue: VecDeque<Queued>,
+    /// The last message logged before the program running now started.
+    replay_upto: u64,
     /// Requests started and not yet answered to a program, by id.
     http_in_flight: Vec<String>,
     dropped: usize,
@@ -193,9 +218,27 @@ pub fn send(msg: &ToElm) {
         }
         return;
     }
-    s.queue.push_back(msg.clone());
+    s.queue.push_back(Queued::new(msg.clone()));
     drop(s);
     link().ready.notify_all();
+}
+
+/// A logged message that program number `program` asked to have again
+/// (Effect::ReplayLog, persist.rs), with its number: not logged again.
+pub fn replayed(program: u64, seq: u64, msg: ToElm) {
+    let mut s = state();
+    if s.program != program || s.to_elm.is_none() {
+        return;
+    }
+    s.queue.push_back(Queued { msg, seq: Some(seq), fresh: false });
+    drop(s);
+    link().ready.notify_all();
+}
+
+/// Effect::ReplayLog from program number `program`.
+pub fn replay_log(program: u64, after: u64) {
+    let upto = state().replay_upto;
+    crate::persist::replay_log(program, after, upto);
 }
 
 /// Sends an answer to a request that Elm program number `program` made (the number
@@ -242,7 +285,7 @@ fn writer() {
         let next = loop {
             if s.to_elm.is_some() {
                 let found = if s.holding {
-                    s.queue.iter().position(|m| matches!(m, ToElm::Frame { .. }))
+                    s.queue.iter().position(|m| matches!(m.msg, ToElm::Frame { .. }))
                 } else if s.queue.is_empty() {
                     None
                 } else {
@@ -256,9 +299,14 @@ fn writer() {
         };
         let stream = s.to_elm.clone().unwrap();
         let program = s.program;
-        let msg = s.queue.remove(next).unwrap();
-        let bytes = encode(&s, &msg);
+        let Queued { msg, mut seq, fresh } = s.queue.remove(next).unwrap();
+        let message = encode(&s, &msg);
+        if fresh && protocol::is_logged(&msg) {
+            // With the state locked, so a program starting now sees it in replay_upto.
+            seq = crate::persist::log_message(&message);
+        }
         drop(s);
+        let bytes = protocol::from_host_payload(seq, &message);
 
         if crate::sys::debug() && !matches!(msg, ToElm::Frame { .. }) {
             log!("host", "-> Elm {:.300}", format!("{msg:?}"));
@@ -284,7 +332,8 @@ fn writer() {
                     s.to_elm = None;
                 }
                 if !only_now(&msg) && latest_slot(&msg).is_none() {
-                    s.queue.push_front(msg);
+                    // Not logged again: Persist.elm skips a number it has had.
+                    s.queue.push_front(Queued { msg, seq, fresh: false });
                 }
             }
         }
@@ -745,10 +794,12 @@ fn connect(stream: &UnixStream, pid: u32) -> u64 {
     s.holding = false;
     s.unanswered_since = None;
     s.hung = None;
-    s.queue.retain(|m| !only_now(m));
+    // Messages an earlier program got (logged) come again in the replay instead.
+    s.queue.retain(|m| !only_now(&m.msg) && (m.fresh || m.seq.is_none()));
+    s.replay_upto = crate::persist::last_logged();
     let latest: Vec<ToElm> = s.latest.iter().flatten().cloned().collect();
     for msg in latest.into_iter().rev() {
-        s.queue.push_front(msg);
+        s.queue.push_front(Queued::new(msg));
     }
     let program = s.program;
     drop(s);

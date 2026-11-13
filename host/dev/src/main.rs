@@ -178,6 +178,7 @@ struct Runner {
     shown: Vec<u8>,
     stats: stats::Stats,
     stats_at: Instant,
+    tick_at: Instant,
     /// The newest of the messages each new program gets first (host/init/src/elm.rs).
     boot: Option<ToElm>,
     wifi_status: ToElm,
@@ -405,6 +406,19 @@ impl Runner {
                     self.finish_switch();
                 }
             }
+            Effect::ReadSnapshot => {
+                let text = std::fs::read_to_string(self.data.join("snapshot")).ok();
+                elm::send(&ToElm::Snapshot { text });
+            }
+            Effect::WriteSnapshot { text, seq } => {
+                let path = self.data.join("snapshot");
+                if let Err(e) = common::msglog::write_atomically(&path, common::msglog::frame_snapshot(&text).as_bytes()) {
+                    log!("dev", "writing {}: {e}", path.display());
+                } else {
+                    elm::trim_log(seq);
+                }
+            }
+            Effect::ReplayLog { after } => elm::replay_log(after),
         }
     }
 
@@ -537,7 +551,14 @@ impl Runner {
                 self.stats.send(None);
             }
         }
-        let mut next = self.watched_at + WATCH_EVERY;
+        // The Elm program's clock, as /init sends it (host/init/src/host.rs).
+        if self.tick_at.elapsed() >= Duration::from_secs(1) {
+            self.tick_at = Instant::now();
+            if self.running.is_some() {
+                elm::send(&ToElm::Tick);
+            }
+        }
+        let mut next = (self.watched_at + WATCH_EVERY).min(self.tick_at + Duration::from_secs(1));
         if self.running.is_some() {
             next = next.min(self.asked_at + if self.awaiting_frame { FRAME_TIMEOUT } else { FRAME_INTERVAL });
         }
@@ -707,6 +728,7 @@ fn main() {
         data.display(),
         if watch.is_some() { "; rebuilding when the Elm code changes" } else { "" }
     );
+    elm::open_log(&data.join("log"));
     let mut runner = Runner {
         pixels: Vec::new(),
         o,
@@ -727,6 +749,7 @@ fn main() {
         shown: Vec::new(),
         stats: stats::Stats::new(),
         stats_at: Instant::now(),
+        tick_at: Instant::now(),
         boot: None,
         wifi_status: fake::status(WifiState::Idle, "", "", ""),
         wifi_scan: None,

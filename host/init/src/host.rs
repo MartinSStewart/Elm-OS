@@ -262,6 +262,9 @@ impl Host {
                     elm::note_output(&format!("[elm] {text}"));
                 }
                 Effect::SwitchReady => elm::switch_ready(self.program),
+                Effect::ReadSnapshot => persist::read_snapshot(self.program),
+                Effect::WriteSnapshot { text, seq } => persist::write_snapshot(text, seq),
+                Effect::ReplayLog { after } => elm::replay_log(self.program, after),
             }
         }
         if cursor_dirty {
@@ -384,6 +387,7 @@ pub fn run() -> ! {
     host.stats = Stats::new();
     host.stats.send(host.gpu_pid());
     let mut last_stats = now();
+    let mut last_tick = now();
     // The first frame is asked for once the Elm program has started (FromElm::Connected).
     elm::start();
     let mut last_scan = now();
@@ -398,9 +402,9 @@ pub fn run() -> ! {
         fds.extend(input_fds.iter().map(|&fd| sys::pollfd(fd)));
 
         // Sleep until the next thing that is due: an input device scan (about once a
-        // second), stats, a tap's release, the CPU renderer's next frame, or the frame
+        // second), stats, a tick, a tap's release, the CPU renderer's next frame, or the frame
         // timeout.
-        let mut due = (last_scan + 1.0).min(last_stats + 0.5);
+        let mut due = (last_scan + 1.0).min(last_stats + 0.5).min(last_tick + 1.0);
         if let Some(t) = host.inputs.tap_release_at {
             due = due.min(t);
         }
@@ -428,6 +432,12 @@ pub fn run() -> ! {
         if t - last_stats >= 0.5 {
             host.stats.send(host.gpu_pid());
             last_stats = t;
+        }
+        // The Elm program's clock (BootInfo's checks): from here rather than a
+        // Time.every in Elm, so it is in the message log like everything else.
+        if t - last_tick >= 1.0 {
+            elm::send(&ToElm::Tick);
+            last_tick = t;
         }
         if fds[0].revents != 0 {
             if error_screen::panicked() {

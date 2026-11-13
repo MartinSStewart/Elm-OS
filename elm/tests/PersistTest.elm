@@ -2,6 +2,7 @@ module PersistTest exposing (suite)
 
 import ElmOs
 import Json.Decode as D
+import Json.Encode as E
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import Expect
@@ -43,70 +44,151 @@ hostMsg =
     Main.persistConfig.fromHost
 
 
-{-| A disk: file contents by path.
+{-| The host's side of the data disk: the snapshot file, the message log (each message
+with its number), the number of the last message logged, and other files by path.
 -}
-type alias Disk =
-    Dict String String
+type alias Host =
+    { snapshot : Maybe String
+    , log : List ( Int, HostIn )
+    , last : Int
+    , files : Dict String String
+    }
 
 
-applyEffects : List Effect -> Disk -> Disk
-applyEffects effects disk =
-    List.foldl
-        (\effect d ->
-            case effect of
-                Effect.AppendFile { path, text } ->
-                    Dict.insert path (Maybe.withDefault "" (Dict.get path d) ++ text) d
-
-                Effect.WriteFile { path, text } ->
-                    Dict.insert path text d
-
-                _ ->
-                    d
-        )
-        disk
-        effects
+emptyHost : Host
+emptyHost =
+    { snapshot = Nothing, log = [], last = 0, files = Dict.empty }
 
 
-{-| Boots with this disk, then runs these host messages. The Model and the disk after.
+type alias State =
+    Persist.Model Main.Model Main.Msg
+
+
+{-| Logs a message, as the host does before sending it.
 -}
-boot : Disk -> List HostIn -> ( Maybe Main.Model, Disk )
-boot =
-    bootWith []
-
-
-{-| `boot`, when the host started the program again (it crashed, say) while it was
-still answering these HTTP requests of the last run.
--}
-bootWith : List String -> Disk -> List HostIn -> ( Maybe Main.Model, Disk )
-bootWith httpInFlight disk messages =
+logMessage : HostIn -> Host -> ( Persist.Msg Main.Msg, Host )
+logMessage message host =
     let
-        step msg ( model, d ) =
+        seq =
+            host.last + 1
+    in
+    ( Persist.AppMsg (Just seq) 10 (hostMsg message), { host | log = host.log ++ [ ( seq, message ) ], last = seq } )
+
+
+{-| Applies one message, then what the host does for its effects: answers come after
+everything already waiting.
+-}
+run : Int -> List (Persist.Msg Main.Msg) -> ( State, Host ) -> ( State, Host )
+run upto queue ( state, host ) =
+    case queue of
+        [] ->
+            ( state, host )
+
+        msg :: rest ->
             let
                 ( next, effects ) =
-                    Persist.update Main.persistConfig ElmOs.codecs msg model
-            in
-            ( next, applyEffects effects d )
+                    Persist.update Main.persistConfig ElmOs.codecs msg state
 
-        ( start, _ ) =
-            Persist.init
+                ( answers, nextHost ) =
+                    List.foldl (hostEffect upto) ( [], host ) effects
+            in
+            run upto (rest ++ answers) ( next, nextHost )
+
+
+hostEffect : Int -> Effect -> ( List (Persist.Msg Main.Msg), Host ) -> ( List (Persist.Msg Main.Msg), Host )
+hostEffect upto effect ( answers, host ) =
+    case effect of
+        Effect.ReadSnapshot ->
+            ( answers ++ [ Persist.GotSnapshot host.snapshot ], host )
+
+        Effect.ReplayLog { after } ->
+            ( answers
+                ++ List.filterMap
+                    (\( seq, message ) ->
+                        if seq > after && seq <= upto then
+                            Just (Persist.AppMsg (Just seq) 10 (hostMsg message))
+
+                        else
+                            Nothing
+                    )
+                    host.log
+                ++ [ Persist.ReplayDone upto ]
+            , host
+            )
+
+        Effect.WriteSnapshot { text, seq } ->
+            ( answers, { host | snapshot = Just (Persist.frame text), log = List.filter (\( n, _ ) -> n > seq) host.log } )
+
+        Effect.WriteFile { path, text } ->
+            ( answers, { host | files = Dict.insert path text host.files } )
+
+        _ ->
+            ( answers, host )
+
+
+{-| Starts the program on this disk. `early` messages come while it is restoring the
+Model (logged as they go out, so the logged messages it asks for come after them),
+and `later` ones once it's running. The Model and the disk after.
+-}
+bootWith : List String -> List HostIn -> List HostIn -> Host -> ( Maybe Main.Model, Host )
+bootWith httpInFlight early later host =
+    let
+        -- The last message an earlier program got.
+        upto =
+            host.last
+
+        ( earlyMsgs, logged ) =
+            List.foldl (\message ( msgs, h ) -> logMessage message h |> Tuple.mapFirst (\m -> msgs ++ [ m ])) ( [], host ) early
+
+        started =
+            run upto (Persist.DataDisk (Just "/data") httpInFlight :: earlyMsgs) ( Tuple.first Persist.init, logged )
     in
-    ( start, disk )
-        |> step (Persist.DataDisk (Just "/data") httpInFlight)
-        |> step (Persist.DataFiles (Dict.get "/data/snapshot" disk) (Dict.get "/data/log" disk))
-        |> (\state -> List.foldl (\message -> step (Persist.AppMsg (hostMsg message))) state messages)
+    List.foldl (\message ( state, h ) -> logMessage message h |> (\( m, h2 ) -> run upto [ m ] ( state, h2 ))) started later
         |> Tuple.mapFirst Persist.appModel
+
+
+boot : Host -> List HostIn -> ( Maybe Main.Model, Host )
+boot host later =
+    bootWith [] [] later host
+
+
+{-| The Model the program comes back with, and the disk after.
+-}
+restart : Host -> ( Maybe Main.Model, Host )
+restart host =
+    boot host []
 
 
 {-| The Model replaying the messages gives, without any disk.
 -}
 direct : List HostIn -> Main.Model
 direct messages =
-    List.foldl (\message model -> Tuple.first (Main.persistConfig.update (hostMsg message) model)) Main.persistConfig.init messages
+    directMsgs (List.map hostMsg messages)
 
 
-restored : Disk -> Main.Model
-restored disk =
-    (Persist.restore Main.persistConfig ElmOs.codecs { snapshot = Dict.get "/data/snapshot" disk, log = Dict.get "/data/log" disk }).model
+directMsgs : List Main.Msg -> Main.Model
+directMsgs msgs =
+    List.foldl (\msg model -> Tuple.first (Main.persistConfig.update msg model)) Main.persistConfig.init msgs
+
+
+{-| The Model after these messages and a restart: the session asks for "geo", which a
+restart cuts off.
+-}
+afterRestart : List HostIn -> Main.Model
+afterRestart messages =
+    directMsgs (List.map hostMsg messages ++ [ Main.persistConfig.httpInterrupted "geo" ])
+
+
+{-| A restart after the first 15 messages of the session, then the rest.
+-}
+restartedAt15 : Main.Model
+restartedAt15 =
+    directMsgs (List.map hostMsg (List.take 15 session) ++ [ Main.persistConfig.httpInterrupted "geo" ] ++ List.map hostMsg (List.drop 15 session))
+
+
+pending : Host -> List String
+pending host =
+    (Persist.restore Main.persistConfig ElmOs.codecs host.snapshot).pending
 
 
 suite : Test
@@ -149,47 +231,42 @@ suite =
         , test "restoring gives the Model as it was"
             (\_ ->
                 let
-                    ( live, disk ) =
-                        boot Dict.empty session
+                    ( live, host ) =
+                        boot emptyHost session
                 in
                 Expect.all
-                    [ \_ -> Just (restored disk) |> Expect.equal live
-                    , \_ -> live |> Expect.equal (Just (direct session))
-                    , \_ -> Dict.get "/data/log" disk |> Maybe.map (\log -> List.length (Persist.unframe log)) |> Expect.equal (Just (List.length session))
+                    [ \_ -> live |> Expect.equal (Just (direct session))
+                    , \_ -> List.length host.log |> Expect.equal (List.length session)
+                    , \_ -> Tuple.first (restart host) |> Expect.equal (Just (afterRestart session))
+
+                    -- The snapshot written at the restart has them all.
+                    , \_ -> (Tuple.second (restart host)).log |> Expect.equal []
                     ]
                     ()
             )
-        , test "a power cut in the middle of the log keeps the Msgs before it"
+        , test "a power cut in the middle of the log keeps the messages before it"
             (\_ ->
                 let
-                    ( _, disk ) =
-                        boot Dict.empty session
-
-                    log =
-                        Dict.get "/data/log" disk |> Maybe.withDefault ""
-
-                    cutAt =
-                        String.length log * 2 // 3
+                    ( _, host ) =
+                        boot emptyHost session
 
                     cut =
-                        Dict.insert "/data/log" (String.left cutAt log) disk
-
-                    kept =
-                        List.length (Persist.unframe (String.left cutAt log))
+                        { host | log = List.take 9 host.log, last = 9 }
                 in
-                restored cut |> Expect.equal (direct (List.take kept session))
+                Tuple.first (restart cut) |> Expect.equal (Just (afterRestart (List.take 9 session)))
             )
-        , test "after a restart, the log continues from the restored Model"
+        , test "after a restart, new messages follow the restored Model"
             (\_ ->
                 let
-                    ( _, disk ) =
-                        boot Dict.empty (List.take 15 session)
+                    ( _, host ) =
+                        boot emptyHost (List.take 15 session)
 
-                    ( second, disk2 ) =
-                        boot disk (List.drop 15 session)
+                    ( second, host2 ) =
+                        boot host (List.drop 15 session)
                 in
                 Expect.all
-                    [ \_ -> Just (restored disk2) |> Expect.equal second
+                    [ \_ -> second |> Expect.equal (Just restartedAt15)
+                    , \_ -> Tuple.first (restart host2) |> Expect.equal second
 
                     -- Nothing is reset on a restart: the last boot's wifi is there until
                     -- the host says otherwise.
@@ -197,62 +274,125 @@ suite =
                     ]
                     ()
             )
-        , test "a snapshot whose log wasn't emptied skips the entries it has"
+        , test "messages that come while the Model is restored are applied after the logged ones"
             (\_ ->
                 let
-                    ( _, disk ) =
-                        boot Dict.empty session
+                    ( _, host ) =
+                        boot emptyHost (List.take 15 session)
+                in
+                bootWith [] (List.drop 15 session) [] host
+                    |> Tuple.first
+                    |> Expect.equal (Just restartedAt15)
+            )
+        , test "a message the host sends again is applied once"
+            (\_ ->
+                let
+                    ( _, host ) =
+                        boot emptyHost (List.take 15 session)
 
-                    oldLog =
-                        Dict.get "/data/log" disk |> Maybe.withDefault ""
+                    again =
+                        List.filterMap
+                            (\( seq, message ) ->
+                                if seq > 10 then
+                                    Just (Persist.AppMsg (Just seq) 10 (hostMsg message))
+
+                                else
+                                    Nothing
+                            )
+                            host.log
+                in
+                -- The log replayed, then its last five messages again.
+                run host.last (Persist.DataDisk (Just "/data") [] :: again) ( Tuple.first Persist.init, { host | snapshot = Nothing } )
+                    |> Tuple.first
+                    |> Persist.appModel
+                    |> Expect.equal (Just (afterRestart (List.take 15 session)))
+            )
+        , test "a snapshot whose log wasn't trimmed skips the messages it has"
+            (\_ ->
+                let
+                    ( _, host ) =
+                        boot emptyHost session
 
                     ( _, rebooted ) =
-                        boot disk []
+                        restart host
                 in
                 -- The second boot's snapshot has the whole session; put the old log back.
-                Dict.insert "/data/log" oldLog rebooted
-                    |> restored
-                    |> Expect.equal (restored rebooted)
+                Tuple.first (restart { rebooted | log = host.log })
+                    |> Expect.equal (Just (afterRestart session))
             )
-        , test "a snapshot from other types is ignored"
+        , test "a log started again from 1 after the snapshot (it was lost) doesn't lose new messages"
             (\_ ->
                 let
-                    ( _, disk ) =
-                        boot Dict.empty session
+                    ( _, host ) =
+                        boot emptyHost (List.take 15 session)
+
+                    -- The snapshot says 15; the log starts again from 1.
+                    ( _, rebooted ) =
+                        restart host
+                in
+                boot { rebooted | log = [], last = 0 } (List.drop 15 session)
+                    |> Tuple.first
+                    |> Expect.equal (Just restartedAt15)
+            )
+        , test "a snapshot from other types is ignored, kept, and its log isn't replayed"
+            (\_ ->
+                let
+                    ( _, host ) =
+                        boot emptyHost session
 
                     other =
-                        Dict.insert "/data/snapshot" (Persist.frame "[\"00000000\",0,[]]") disk
+                        Persist.frame "[\"00000000\",0,[]]"
+
+                    ( model, after ) =
+                        restart { host | snapshot = Just other }
                 in
-                restored other |> Expect.equal Main.persistConfig.init
+                ( model, Dict.get "/data/snapshot-unreadable" after.files )
+                    |> Expect.equal ( Just Main.persistConfig.init, Just other )
+            )
+        , test "a snapshot in the format before reads (its log is gone)"
+            (\_ ->
+                let
+                    ( _, host ) =
+                        restart (Tuple.second (boot emptyHost session))
+
+                    old =
+                        host.snapshot
+                            |> Maybe.map Persist.unframe
+                            |> Maybe.andThen List.head
+                            |> Maybe.andThen (\payload -> D.decodeString (D.list D.value) payload |> Result.toMaybe)
+                            |> Maybe.map
+                                (\fields ->
+                                    case fields of
+                                        [ _, version, modelHash, _, model, waiting ] ->
+                                            Persist.frame (E.encode 0 (E.list identity [ E.string "elmos-persist-4", version, modelHash, E.string "msgs", E.int 7, model, waiting ]))
+
+                                        _ ->
+                                            ""
+                                )
+                in
+                Tuple.first (restart { emptyHost | snapshot = old })
+                    |> Expect.equal (Just (afterRestart session))
             )
         , test "a request still waiting at a power cut is answered as interrupted at the next boot"
             (\_ ->
                 let
-                    ( _, disk ) =
-                        boot Dict.empty session
-
-                    pending d =
-                        (Persist.restore Main.persistConfig ElmOs.codecs { snapshot = Dict.get "/data/snapshot" d, log = Dict.get "/data/log" d }).pending
-
-                    ( _, rebooted ) =
-                        boot disk []
+                    ( _, host ) =
+                        boot emptyHost session
                 in
-                ( pending disk, pending rebooted ) |> Expect.equal ( [ "geo" ], [] )
+                -- "geo" was waiting (see the next test).
+                pending (Tuple.second (restart host)) |> Expect.equal []
             )
         , test "a request the host is still answering when it starts the program again is left waiting"
             (\_ ->
                 let
-                    ( _, disk ) =
-                        boot Dict.empty session
-
-                    pending d =
-                        (Persist.restore Main.persistConfig ElmOs.codecs { snapshot = Dict.get "/data/snapshot" d, log = Dict.get "/data/log" d }).pending
+                    ( _, host ) =
+                        boot emptyHost session
 
                     ( _, restarted ) =
-                        bootWith [ "geo" ] disk []
+                        bootWith [ "geo" ] [] [] host
 
                     ( _, answered ) =
-                        bootWith [ "geo" ] disk [ Ok (HostMessage.HttpError "geo" HostMessage.Network "no route") ]
+                        bootWith [ "geo" ] [ Ok (HostMessage.HttpError "geo" HostMessage.Network "no route") ] [] host
                 in
                 ( pending restarted, pending answered ) |> Expect.equal ( [ "geo" ], [] )
             )

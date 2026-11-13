@@ -2,5 +2,6 @@
 //! kernel's display (KMS) interface.
 pub mod atlas;
 pub mod drm;
+pub mod msglog;
 mod font;
 pub mod raster;

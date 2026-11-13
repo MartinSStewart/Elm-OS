@@ -105,7 +105,8 @@ pub fn keep_snapshot() -> bool {
 }
 
 /// The new build failed: puts back the snapshot from before it started (which it may
-/// have migrated and rewritten), and empties the log, which may hold its Msgs.
+/// have migrated and rewritten), and empties the message log, which may hold messages
+/// only the new build got.
 pub fn roll_back() -> bool {
     persist::on_disk(|d| {
         let ok = match d.read("snapshot-before-switch") {
@@ -114,7 +115,7 @@ pub fn roll_back() -> bool {
                 d.remove("snapshot");
                 true
             }
-        } && d.write("log", "");
+        } && d.empty_log();
         d.remove("snapshot-before-switch");
         ok
     })

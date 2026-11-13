@@ -202,6 +202,15 @@ toInput message =
         HostMessage.ReflashNeeded build ->
             Ok (ReflashNeeded build)
 
+        HostMessage.Tick ->
+            Err "Tick is a Msg of its own (fromHost)"
+
+        HostMessage.Snapshot _ ->
+            Err "the snapshot is for Persist.elm"
+
+        HostMessage.ReplayDone _ ->
+            Err "ReplayDone is for Persist.elm"
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -1727,14 +1736,26 @@ persistConfig : Persist.Config Model Msg
 persistConfig =
     { init = init
     , update = update
-    , fromHost = \message -> GotInput (Result.andThen toInput message)
-
-    -- An idle eco program exits; a timer keeps the event loop alive. It also paces
-    -- BootInfo's battery checks and USB stick search.
-    , subscriptions = \_ -> Time.every 1000 (\_ -> Tick)
+    , fromHost = fromHost
     , httpAnswered = httpAnswered
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     }
+
+
+{-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
+checks and USB stick search.
+-}
+fromHost : Result String HostMessage.ToElm -> Msg
+fromHost message =
+    case message of
+        Ok HostMessage.Tick ->
+            Tick
+
+        Ok other ->
+            GotInput (toInput other)
+
+        Err problem ->
+            GotInput (Err problem)
 
 
 httpAnswered : Msg -> Maybe String

@@ -1,4 +1,4 @@
-module App exposing (Kind(..), Model, Msg, config, init, sample, sampleMsg)
+module App exposing (Kind(..), Model, Msg, config, init, sample)
 
 {-| A program whose Model and Msg have every kind of type tools/wire handles.
 -}
@@ -103,17 +103,11 @@ sample =
     }
 
 
-sampleMsg : Msg
-sampleMsg =
-    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green, Got (List.range 0 255 |> List.map Bytes.Encode.unsignedInt8 |> Bytes.Encode.sequence |> Bytes.Encode.encode) ]
-
-
 config : Persist.Config Model Msg
 config =
     { init = init
     , update = \_ model -> ( model, [] )
     , fromHost = \_ -> NoOp
-    , subscriptions = \_ -> Sub.none
     , httpAnswered = \_ -> Nothing
     , httpInterrupted = \_ -> NoOp
     }

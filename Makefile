@@ -234,7 +234,7 @@ $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/k
 # ---- the /init binary: the host (Rust, host/init) + Elm program, one static executable
 
 # The Elm program is compiled from build/wire, a copy of elm/ with encoders and
-# decoders for the Model and Msg added by tools/wire (for Persist.elm), and the
+# decoders for the Model added by tools/wire (for Persist.elm), and the
 # program's entry module, ElmOs.elm. Errors still name src/<Module>.elm and the
 # original line numbers.
 $(BUILD)/elm.o: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
