@@ -2,14 +2,14 @@ port module Effect exposing
     ( Effect(..)
     , HttpError(..)
     , HttpRequest
-    , HttpRequestId(..)
     , PowerAction(..)
+    , badBody
+    , bodyToString
     , encode
     , fromHost
-    , get
     , httpErrorToString
     , message
-    , stringToHttpRequestId
+    , noBody
     , toCmd
     )
 
@@ -33,6 +33,7 @@ decoder give the same bytes as the host's, so the two sides can't drift apart.
 -}
 
 import Bytes exposing (Bytes)
+import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color exposing (Color)
 import Duration exposing (Duration)
@@ -97,9 +98,32 @@ type alias HttpRequest =
     , method : String
     , url : String
     , headers : List ( String, String )
-    , body : String
+    , body : Bytes
     , timeoutMs : Maybe Duration
     }
+
+
+{-| A request with no body (a GET, say).
+-}
+noBody : Bytes
+noBody =
+    BE.encode (BE.sequence [])
+
+
+{-| A body read as UTF-8 text. Bodies are bytes, as they came from the server, so they
+can be images or anything else; text is the usual case.
+-}
+bodyToString : Bytes -> Maybe String
+bodyToString body =
+    BD.decode (BD.string (Bytes.width body)) body
+
+
+{-| A response that isn't what was asked for (its status isn't 2xx, or its body can't
+be read): BadBody, with the body as text, or empty if it isn't text.
+-}
+badBody : { status : Int, body : Bytes } -> HttpError
+badBody response =
+    BadBody { status = response.status, body = bodyToString response.body |> Maybe.withDefault "" }
 
 
 {-| What went wrong with a request, when no response came back. Any status code,
@@ -112,6 +136,8 @@ type HttpError
       -- A restart or a power cut came before the answer (Persist.elm). Whether the
       -- server got the request is unknown, as with a Timeout.
     | Interrupted
+      -- The body as text (badBody), for showing. A String, not Bytes, since this is
+      -- kept in the Model.
     | BadBody { status : Int, body : String }
     | FailedToDecodeBody String
 
@@ -203,7 +229,7 @@ encode effect =
                 , Postcard.string request.method
                 , Postcard.string request.url
                 , Postcard.list (\( name, value ) -> BE.sequence [ Postcard.string name, Postcard.string value ]) request.headers
-                , Postcard.string request.body
+                , Postcard.bytes request.body
                 , Postcard.maybe (\a -> Duration.inMilliseconds a |> Postcard.float64) request.timeoutMs
                 ]
 

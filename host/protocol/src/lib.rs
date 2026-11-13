@@ -111,8 +111,9 @@ pub struct HttpRequest {
     pub url: String,
     #[serde(default)]
     pub headers: Vec<(String, String)>,
-    #[serde(default)]
-    pub body: String,
+    /// Bytes, so any kind of body can be sent (an empty one for none).
+    #[serde(default, with = "serde_bytes")]
+    pub body: Vec<u8>,
     pub timeout_ms: Option<f64>,
 }
 
@@ -166,8 +167,13 @@ pub enum ToElm {
         path: Option<String>,
         http_in_flight: Vec<String>,
     },
-    /// Any status, 404 included.
-    HttpResponse { id: String, status: u16, body: String },
+    /// Any status, 404 included. The body as it came, so not necessarily text.
+    HttpResponse {
+        id: String,
+        status: u16,
+        #[serde(with = "serde_bytes")]
+        body: Vec<u8>,
+    },
     HttpError { id: String, error: HttpFailure, message: String },
     /// Sorted; null if the directory can't be listed.
     Dir { path: String, entries: Option<Vec<String>> },

@@ -12,6 +12,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 -}
 
 import BootInfo
+import Bytes exposing (Bytes)
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
@@ -45,7 +46,7 @@ type Input
     = Screen Int Int
       -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
     | Frame Float
-    | HttpResponse String (Result Effect.HttpError { status : Int, body : String })
+    | HttpResponse String (Result Effect.HttpError { status : Int, body : Bytes })
     | Mouse Int Int
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
@@ -504,11 +505,16 @@ step event model =
                             case result of
                                 Ok response ->
                                     if response.status >= 200 && response.status < 300 then
-                                        D.decodeString decoder response.body
-                                            |> Result.mapError (\error -> FailedToDecodeBody (D.errorToString error))
+                                        case Effect.bodyToString response.body of
+                                            Just text ->
+                                                D.decodeString decoder text
+                                                    |> Result.mapError (\error -> FailedToDecodeBody (D.errorToString error))
+
+                                            Nothing ->
+                                                Err (Effect.badBody response)
 
                                     else
-                                        Err (BadBody response)
+                                        Err (Effect.badBody response)
 
                                 Err error ->
                                     Err error
@@ -978,7 +984,7 @@ click model id uiState =
 
 httpGet : HttpRequestId -> String -> Effect
 httpGet id url =
-    Effect.Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = "", timeoutMs = Just (Duration.seconds 30) }
+    Effect.Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = Effect.noBody, timeoutMs = Just (Duration.seconds 30) }
 
 
 type HttpRequestId

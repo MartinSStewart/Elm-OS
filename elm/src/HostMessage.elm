@@ -54,8 +54,8 @@ type ToElm
       -- Where the data disk is mounted, if there is one, and the HTTP requests an
       -- earlier program made that the host is still working on (Persist.elm).
     | DataDisk (Maybe String) (List String)
-      -- id, status (404 included), body
-    | HttpResponse String Int String
+      -- id, status (404 included), body (Effect.bodyToString reads text)
+    | HttpResponse String Int Bytes
       -- id, what went wrong, the host's message
     | HttpError String HttpFailure String
       -- Sorted; Nothing if the directory can't be listed.
@@ -155,7 +155,7 @@ decoder =
                         BD.map2 DataDisk (P.decodeMaybe P.decodeString) (P.decodeList P.decodeString)
 
                     16 ->
-                        BD.map3 HttpResponse P.decodeString P.decodeUnsigned P.decodeString
+                        BD.map3 HttpResponse P.decodeString P.decodeUnsigned P.decodeBytes
 
                     17 ->
                         BD.map3 HttpError P.decodeString httpFailure P.decodeString

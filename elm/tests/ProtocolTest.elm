@@ -10,6 +10,7 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color
+import Duration
 import Effect exposing (Effect)
 import Expect
 import HostMessage
@@ -38,10 +39,10 @@ effects =
         , method = "GET"
         , url = "https://example.com/a?b=1"
         , headers = [ ( "Accept", "application/json" ) ]
-        , body = ""
-        , timeoutMs = Just 30000
+        , body = Effect.noBody
+        , timeoutMs = Just (Duration.seconds 30)
         }
-    , Effect.Http { id = "post", method = "POST", url = "https://example.com/", headers = [], body = "{}", timeoutMs = Nothing }
+    , Effect.Http { id = "post", method = "POST", url = "https://example.com/", headers = [], body = BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 123, 125, 0, 255 ])), timeoutMs = Nothing }
     , Effect.ListDir "/sys/block"
     , Effect.ReadFiles { id = "persist", paths = [ "/data/snapshot", "/data/log" ] }
     , Effect.ReadBytes { path = "/dev/sda", offset = 512, length = 512 }

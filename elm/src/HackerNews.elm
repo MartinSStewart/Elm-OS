@@ -14,6 +14,7 @@ module HackerNews exposing
     )
 
 import Array exposing (Array)
+import Bytes exposing (Bytes)
 import Color
 import Coord
 import Dict exposing (Dict)
@@ -57,14 +58,14 @@ type Effect
     = HttpRequest HttpRequestId String
 
 
-gotHttpRequest : HttpRequestId -> Result Effect.HttpError { status : Int, body : String } -> Model -> Model
+gotHttpRequest : HttpRequestId -> Result Effect.HttpError { status : Int, body : Bytes } -> Model -> Model
 gotHttpRequest requestId result model =
     case requestId of
         TopPostsRequest ->
             case result of
                 Ok data ->
                     if data.status >= 200 && data.status < 300 then
-                        case H.run H.noCharRefs data.body of
+                        case H.run H.noCharRefs (Effect.bodyToString data.body |> Maybe.withDefault "") of
                             Ok html ->
                                 { model | data = Loaded (getTitles html) }
 
@@ -72,7 +73,7 @@ gotHttpRequest requestId result model =
                                 { model | data = LoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }) }
 
                     else
-                        { model | data = LoadFailed (Effect.BadBody data) }
+                        { model | data = LoadFailed (Effect.badBody data) }
 
                 Err error ->
                     { model | data = LoadFailed error }
@@ -81,7 +82,7 @@ gotHttpRequest requestId result model =
             case result of
                 Ok data ->
                     if data.status >= 200 && data.status < 300 then
-                        case H.run H.noCharRefs data.body of
+                        case H.run H.noCharRefs (Effect.bodyToString data.body |> Maybe.withDefault "") of
                             Ok html ->
                                 { model | comments = Dict.insert postId (CommentsLoaded (getComments html)) model.comments }
 
@@ -95,7 +96,7 @@ gotHttpRequest requestId result model =
                                 }
 
                     else
-                        { model | comments = Dict.insert postId (CommentsLoadFailed (Effect.BadBody data)) model.comments }
+                        { model | comments = Dict.insert postId (CommentsLoadFailed (Effect.badBody data)) model.comments }
 
                 Err error ->
                     { model | comments = Dict.insert postId (CommentsLoadFailed error) model.comments }

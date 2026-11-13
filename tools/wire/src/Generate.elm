@@ -19,7 +19,7 @@ The JSON is compact and positional:
     an array of `[key, value]` arrays
   - Int, String and Bool are themselves, a Char is a string, a Float is a number or
     "NaN", "+Inf" or "-Inf", a Quantity is its number, a Time.Posix is its
-    milliseconds, and a Json.Encode.Value is itself
+    milliseconds, Bytes is a base64 string, and a Json.Encode.Value is itself
 
 So the data doesn't say which field is which, and `shape` describes every type the
 codecs cover: data saved with a different shape mustn't be decoded with these.
@@ -115,6 +115,7 @@ builtins =
         , ( ( "Basics", "Order" ), Builtin "Wire.encodeOrder" "Wire.decodeOrder" [] )
         , ( ( "String", "String" ), Builtin "Wire.encodeString" "Wire.decodeString" [] )
         , ( ( "Char", "Char" ), Builtin "Wire.encodeChar" "Wire.decodeChar" [] )
+        , ( ( "Bytes", "Bytes" ), Builtin "Wire.encodeBytes" "Wire.decodeBytes" [] )
         , ( ( "List", "List" ), Builtin "Wire.encodeList" "Wire.decodeList" [ 0 ] )
         , ( ( "Array", "Array" ), Builtin "Wire.encodeArray" "Wire.decodeArray" [ 0 ] )
         , ( ( "Set", "Set" ), Builtin "Wire.encodeSet" "Wire.decodeSet" [ 0 ] )

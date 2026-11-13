@@ -4,6 +4,8 @@ module App exposing (Kind(..), Model, Msg, config, init, sample, sampleMsg)
 -}
 
 import Array exposing (Array)
+import Bytes exposing (Bytes)
+import Bytes.Encode
 import Dict exposing (Dict)
 import Json.Encode
 import Persist
@@ -62,6 +64,7 @@ type Msg
     | Many Int String (List Msg)
     | Inline { x : Int, y : ( Int, Int ) }
     | Paint Colour
+    | Got Bytes
 
 
 init : Model
@@ -102,7 +105,7 @@ sample =
 
 sampleMsg : Msg
 sampleMsg =
-    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green ]
+    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green, Got (List.range 0 255 |> List.map Bytes.Encode.unsignedInt8 |> Bytes.Encode.sequence |> Bytes.Encode.encode) ]
 
 
 config : Persist.Config Model Msg

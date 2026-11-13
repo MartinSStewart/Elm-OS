@@ -268,7 +268,7 @@ request id dates =
             -- Wikimedia asks every program to say who it is and how to reach its authors,
             -- and may refuse ones that don't.
             [ ( "User-Agent", "ElmOS/0.1 (https://github.com/MartinSStewart/Elm-OS)" ) ]
-        , body = ""
+        , body = Effect.noBody
         , timeoutMs = Just (Duration.seconds 30)
         }
 
