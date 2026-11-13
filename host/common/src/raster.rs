@@ -17,6 +17,12 @@ fn sample(atlas: &[u8], u: f32, v: f32) -> u32 {
 /// samples the atlas at its interpolated u, v (nearest pixel), and blends the colour
 /// in by the sample.
 pub fn fill_triangle(back: &mut [u32], stride: usize, w: u32, h: u32, atlas: &[u8], t: &Tri) {
+    fill_triangle_rows(back, stride, w, 0, h, atlas, t)
+}
+
+/// The part of the triangle in rows `y0..y1`, into `back`, which holds just those rows
+/// (row y0 first): so that threads can each draw a band of the screen (host/dev).
+pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: u32, atlas: &[u8], t: &Tri) {
     let p0 = t.p[0];
     let (mut p1, mut p2) = (t.p[1], t.p[2]);
     let mut area = edge(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]);
@@ -29,8 +35,8 @@ pub fn fill_triangle(back: &mut [u32], stride: usize, w: u32, h: u32, atlas: &[u
     }
     let minx = (p0[0].min(p1[0]).min(p2[0]).floor() as i32).max(0);
     let maxx = (p0[0].max(p1[0]).max(p2[0]).ceil() as i32).min(w as i32);
-    let miny = (p0[1].min(p1[1]).min(p2[1]).floor() as i32).max(0);
-    let maxy = (p0[1].max(p1[1]).max(p2[1]).ceil() as i32).min(h as i32);
+    let miny = (p0[1].min(p1[1]).min(p2[1]).floor() as i32).max(y0 as i32);
+    let maxy = (p0[1].max(p1[1]).max(p2[1]).ceil() as i32).min(y1 as i32);
     let (r, g, b, a) = (t.rgba >> 24, (t.rgba >> 16) & 255, (t.rgba >> 8) & 255, t.rgba & 255);
     if a == 0 {
         return;
@@ -51,7 +57,7 @@ pub fn fill_triangle(back: &mut [u32], stride: usize, w: u32, h: u32, atlas: &[u
     // Each edge function grows by a fixed step per pixel along x.
     let (dw0, dw1, dw2) = (-(p2[1] - p1[1]), -(p0[1] - p2[1]), -(p1[1] - p0[1]));
     for y in miny..maxy {
-        let start = y as usize * stride;
+        let start = (y as u32 - y0) as usize * stride;
         let row = &mut back[start + minx as usize..start + maxx as usize];
         let py = y as f32 + 0.5;
         let px = minx as f32 + 0.5;

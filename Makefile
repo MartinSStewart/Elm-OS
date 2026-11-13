@@ -636,8 +636,10 @@ DEV_SIZE ?= 1280x800
 DEV_DATA ?= $(BUILD)/dev-data
 DEV_SRC  := $(HOST_SRC) $(shell find host/dev -name '*.rs' -o -name '*.js' -o -name Cargo.toml)
 
+# --optimize halves the time Elm takes a frame in JavaScript, but refuses Debug.log
+# and the rest of Debug, so it is left out while elm/src uses them.
 $(BUILD)/elm.js: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
-	cd $(BUILD)/wire && $(ECO) make src/ElmOs.elm --output=$(abspath $@)
+	cd $(BUILD)/wire && $(ECO) make src/ElmOs.elm $$(grep -rqE '\bDebug\.' $(abspath elm/src) || echo --optimize) --output=$(abspath $@)
 
 # For this computer, not Elm OS: no musl target, and the window library is dynamic.
 $(BUILD)/elmos-dev: $(DEV_SRC)

@@ -71,6 +71,8 @@ Model is kept in `build/dev-data`; remove that directory to start afresh.
 The JavaScript build behaves like the native one except for numbers: Ints are 53-bit
 floats there, and `//` and Bitwise work on 32 bits. eco's native crashes and speed
 don't show either, so try a change in `make dev-native` or `make run` before relying on it.
+It compiles with `--optimize`, which roughly halves the time Elm takes per frame there,
+except while `elm/src` uses `Debug`, which `--optimize` refuses.
 
 ## Staying up to date
 

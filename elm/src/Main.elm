@@ -618,7 +618,7 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case Ui.hover (uiMouse model) (screenUi model) of
+            case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (Ui.hover (uiMouse model) (screenUi model)) of
                 ( id, { ui } ) :: _ ->
                     ( { model | uiState = Ui.onWheel (idToString id) clicks ui model.uiState }, [] )
 

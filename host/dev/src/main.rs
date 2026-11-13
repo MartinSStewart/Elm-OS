@@ -184,6 +184,8 @@ struct Runner {
     wifi_scan: Option<ToElm>,
     timers: fake::Timers,
     mouse: (i32, i32),
+    /// Whether the mouse has moved since it was last sent.
+    mouse_moved: bool,
     /// Touchpad scrolling not yet a whole wheel click.
     wheel: f64,
     watch: Option<Watch>,
@@ -445,6 +447,13 @@ impl Runner {
         }
     }
 
+    fn send_mouse(&mut self) {
+        if self.mouse_moved {
+            self.mouse_moved = false;
+            elm::send(&ToElm::Mouse { x: self.mouse.0, y: self.mouse.1 });
+        }
+    }
+
     fn ask_for_frame(&mut self) {
         if self.running.is_none() {
             return;
@@ -476,10 +485,23 @@ impl Runner {
     fn draw(&mut self) {
         let Some(tris) = self.scene.take() else { return };
         let start = Instant::now();
-        self.pixels.fill(0);
-        for t in &tris {
-            raster::fill_triangle(&mut self.pixels, self.o.w as usize, self.o.w, self.o.h, &self.atlas, t);
-        }
+        // In bands, a thread each: one thread is too slow for a big window.
+        let (w, h) = (self.o.w, self.o.h);
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) as u32;
+        let rows = h.div_ceil(threads).max(1);
+        let atlas = &self.atlas;
+        std::thread::scope(|scope| {
+            for (i, band) in self.pixels.chunks_mut((rows * w) as usize).enumerate() {
+                let tris = &tris;
+                scope.spawn(move || {
+                    band.fill(0);
+                    let y0 = i as u32 * rows;
+                    for t in tris {
+                        raster::fill_triangle_rows(band, w as usize, w, y0, (y0 + rows).min(h), atlas, t);
+                    }
+                });
+            }
+        });
         self.present();
         self.stats.draw.push(start.elapsed().as_secs_f64());
         if self.boot.is_none() {
@@ -505,6 +527,7 @@ impl Runner {
             self.start();
         }
         self.check_watch();
+        self.send_mouse();
         // Ask for the next frame before drawing this one, so Elm works on it meanwhile.
         self.ask_for_frame();
         self.draw();
@@ -541,10 +564,12 @@ impl Runner {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // Sent once per turn of the loop (send_mouse), not for each of the
+                // many events a move makes: each is a Msg for Elm, logged to disk.
                 let pos = (position.x.round() as i32, position.y.round() as i32);
                 if pos != self.mouse {
                     self.mouse = pos;
-                    elm::send(&ToElm::Mouse { x: pos.0, y: pos.1 });
+                    self.mouse_moved = true;
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -554,6 +579,8 @@ impl Runner {
                     MouseButton::Middle => 2,
                     _ => return,
                 };
+                // Where it is first, as /init does.
+                self.send_mouse();
                 elm::send(&ToElm::Button { b, down: state == ElementState::Pressed });
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -564,6 +591,7 @@ impl Runner {
                 };
                 let clicks = self.wheel.trunc();
                 if clicks != 0.0 {
+                    self.send_mouse();
                     self.wheel -= clicks;
                     elm::send(&ToElm::Wheel { dy: clicks as i32 });
                 }
@@ -704,6 +732,7 @@ fn main() {
         wifi_scan: None,
         timers: Vec::new(),
         mouse: (0, 0),
+        mouse_moved: false,
         wheel: 0.0,
         watch,
         watched_at: Instant::now(),

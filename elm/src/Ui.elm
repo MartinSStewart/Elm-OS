@@ -35,6 +35,7 @@ module Ui exposing
     , onAnimationFrame
     , onMouseDown
     , onWheel
+    , scrolls
     , paddingXY
     , quads
     , right
@@ -372,6 +373,44 @@ onWheel id clicks element model =
                         )
             in
             { model | uiState = Dict.insert id (ViewportState state3) model.uiState }
+
+
+{-| Whether the wheel does something over this element. The wheel goes to the
+innermost hovered element that scrolls, so wheeling over a button inside a viewport
+scrolls the viewport.
+-}
+scrolls : Element id -> Bool
+scrolls element =
+    case element of
+        Viewport _ _ ->
+            True
+
+        TextInputMultiline _ ->
+            True
+
+        TextInput _ ->
+            False
+
+        Text _ ->
+            False
+
+        Button _ _ ->
+            False
+
+        Row _ _ ->
+            False
+
+        Column _ _ ->
+            False
+
+        Single _ _ ->
+            False
+
+        Quads _ ->
+            False
+
+        Empty ->
+            False
 
 
 initViewportModel : ViewportModel
