@@ -494,7 +494,11 @@ than `maxWidth` (see Sprite.wrapLines). '\\n' still starts a new line too.
 -}
 customTextWrapped : Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
 customTextWrapped fontSize maxWidth segments =
-    customText fontSize (Sprite.wrapSegments fontSize maxWidth segments)
+    let
+        ( wrapped, cachedSize ) =
+            Sprite.wrapWithSize fontSize maxWidth segments
+    in
+    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
 
 
 

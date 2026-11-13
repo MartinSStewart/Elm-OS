@@ -20,6 +20,7 @@ module Sprite exposing
     , wrap
     , wrapLines
     , wrapSegments
+    , wrapWithSize
     )
 
 {-| Turning things into textured triangles for the render port, after town-collab's Sprite.
@@ -40,6 +41,7 @@ than blown up pixels.
 
 -}
 
+import Array exposing (Array)
 import Bounds exposing (Bounds)
 import Bytes exposing (Endianness(..))
 import Bytes.Encode as BE
@@ -822,6 +824,13 @@ wrap fontSize font maxWidth string =
 -}
 wrapSegments : FontSize -> Quantity Int UiPixels -> List Segment -> List Segment
 wrapSegments fontSize maxWidth segments =
+    joinLines (wrapLines fontSize maxWidth segments)
+
+
+{-| Lines of segments joined into one list, with a '\\n' between each two.
+-}
+joinLines : List (List Segment) -> List Segment
+joinLines lines =
     let
         newline : Segment -> Segment
         newline segment =
@@ -829,9 +838,9 @@ wrapSegments fontSize maxWidth segments =
 
         style : Segment
         style =
-            List.head segments |> Maybe.withDefault { text = "", color = Color.black, font = Sans Regular }
+            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.black, font = Sans Regular }
     in
-    case wrapLines fontSize maxWidth segments of
+    case lines of
         first :: rest ->
             List.foldl
                 (\line acc -> List.reverse line ++ (newline (List.head acc |> Maybe.withDefault style) :: acc))
@@ -853,8 +862,38 @@ Each word is measured once, so this takes time in proportion to the length of th
 -}
 wrapLines : FontSize -> Quantity Int UiPixels -> List Segment -> List (List Segment)
 wrapLines fontSize maxWidth segments =
-    segmentLines segments
-        |> List.concatMap (wrapLine fontSize (Quantity.unwrap maxWidth * 64))
+    wrapLinesHelper fontSize maxWidth segments |> Tuple.first
+
+
+{-| `wrapSegments`, and the size of the text it gives (as `customTextSize` would
+measure it), from the same measurements: wrapping already measures every word, so
+measuring the lines again would double the work.
+-}
+wrapWithSize : FontSize -> Quantity Int UiPixels -> List Segment -> ( List Segment, Coord UiPixels )
+wrapWithSize fontSize maxWidth segments =
+    let
+        ( lines, widest ) =
+            wrapLinesHelper fontSize maxWidth segments
+    in
+    ( joinLines lines, Coord.xy ((widest + 63) // 64) (List.length lines * lineHeightRaw fontSize) )
+
+
+{-| The wrapped lines, and how wide the widest is (1/64 UI pixels).
+-}
+wrapLinesHelper : FontSize -> Quantity Int UiPixels -> List Segment -> ( List (List Segment), Int )
+wrapLinesHelper fontSize maxWidth segments =
+    List.foldl
+        (\line ( lines, widest ) ->
+            let
+                state : WrapState
+                state =
+                    List.foldl (placeWord fontSize (Quantity.unwrap maxWidth * 64)) { lines = [], current = [], x = 0, widest = 0 } (toWords line)
+            in
+            ( List.reverse state.current :: state.lines ++ lines, max widest (max state.widest state.x) )
+        )
+        ( [], 0 )
+        (segmentLines segments)
+        |> Tuple.mapFirst List.reverse
 
 
 {-| A word and the space before it (Nothing for the first word of a line). A word can
@@ -905,25 +944,15 @@ toWords line =
 
 
 {-| Where the greedy line breaking has got to: the lines done (last first), the
-segments of the current line (last first), and how wide the current line is so far
-(1/64 UI pixels).
+segments of the current line (last first), how wide the current line is so far, and
+the widest line done (1/64 UI pixels).
 -}
 type alias WrapState =
-    { lines : List (List Segment), current : List Segment, x : Int }
-
-
-wrapLine : FontSize -> Int -> List Segment -> List (List Segment)
-wrapLine fontSize max64 line =
-    let
-        state : WrapState
-        state =
-            List.foldl (placeWord fontSize max64) { lines = [], current = [], x = 0 } (toWords line)
-    in
-    List.reverse (List.reverse state.current :: state.lines)
+    { lines : List (List Segment), current : List Segment, x : Int, widest : Int }
 
 
 placeWord : FontSize -> Int -> Word -> WrapState -> WrapState
-placeWord fontSize max64 word state =
+placeWord fontSize limit64 word state =
     let
         wordWidth : Int
         wordWidth =
@@ -947,31 +976,31 @@ placeWord fontSize max64 word state =
                 Nothing ->
                     state.current
     in
-    if state.x + spaceWidth + wordWidth <= max64 then
+    if state.x + spaceWidth + wordWidth <= limit64 then
         { state | current = List.foldl pushSegment withSpace word.pieces, x = state.x + spaceWidth + wordWidth }
 
     else if state.x == 0 then
         -- Nothing on the line yet, and the word is too wide for it on its own.
-        breakWord fontSize max64 word.pieces state
+        breakWord fontSize limit64 word.pieces state
 
     else
         let
             newLine : WrapState
             newLine =
-                { lines = List.reverse state.current :: state.lines, current = [], x = 0 }
+                { lines = List.reverse state.current :: state.lines, current = [], x = 0, widest = max state.widest state.x }
         in
-        if wordWidth <= max64 then
+        if wordWidth <= limit64 then
             { newLine | current = List.foldl pushSegment [] word.pieces, x = wordWidth }
 
         else
-            breakWord fontSize max64 word.pieces newLine
+            breakWord fontSize limit64 word.pieces newLine
 
 
 {-| A word too wide for a line, put on the current line (which is empty) one character
 at a time, starting a new line whenever the next character won't fit.
 -}
 breakWord : FontSize -> Int -> List Segment -> WrapState -> WrapState
-breakWord fontSize max64 pieces state =
+breakWord fontSize limit64 pieces state =
     List.foldl
         (\piece state2 ->
             let
@@ -990,8 +1019,8 @@ breakWord fontSize max64 pieces state =
                             segment =
                                 { piece | text = String.fromChar char }
                         in
-                        if state3.x + charWidth > max64 && state3.x > 0 then
-                            { lines = List.reverse state3.current :: state3.lines, current = [ segment ], x = charWidth }
+                        if state3.x + charWidth > limit64 && state3.x > 0 then
+                            { lines = List.reverse state3.current :: state3.lines, current = [ segment ], x = charWidth, widest = max state3.widest state3.x }
 
                         else
                             { state3 | current = pushSegment segment state3.current, x = state3.x + charWidth }
@@ -1020,7 +1049,8 @@ pushSegment segment line =
 
 
 {-| How far text moves the pen (1/64 UI pixels): `layoutLine`'s end, without making a
-list of where each character goes.
+list of where each character goes. Word wrap measures every word with this, so it looks
+glyphs up in `Metrics` rather than NotoSans's Dicts.
 -}
 width64 : FontSize -> Font -> String -> Int
 width64 fontSize font string =
@@ -1030,32 +1060,154 @@ width64 fontSize font string =
 
         Sans style ->
             let
-                v : NotoSans.Variant
-                v =
-                    variant style
-
-                f : NotoSans.Face
-                f =
-                    face v (sansSize fontSize)
-
-                missing : NotoSans.Glyph
-                missing =
-                    missingGlyph f
+                m : Metrics
+                m =
+                    metrics style fontSize
             in
             String.foldl
                 (\char ( pen, previous ) ->
                     let
-                        at : Int
-                        at =
-                            case Dict.get ( previous, char ) v.kerning of
-                                Just k ->
-                                    pen + (k * f.size * 64 + 500) // 1000
+                        code : Int
+                        code =
+                            Char.toCode char
+
+                        kern : Int
+                        kern =
+                            case Array.get previous m.kerning of
+                                Just after ->
+                                    if Dict.isEmpty after then
+                                        0
+
+                                    else
+                                        Dict.get code after |> Maybe.withDefault 0
 
                                 Nothing ->
-                                    pen
+                                    0
                     in
-                    ( at + (Dict.get char f.glyphs |> Maybe.withDefault missing).advance, char )
+                    ( pen + kern + (Array.get code m.advances |> Maybe.withDefault m.missingAdvance), code )
                 )
-                ( 0, ' ' )
+                ( 0, Char.toCode ' ' )
                 string
                 |> Tuple.first
+
+
+{-| A Noto Sans face's advances and kerning (1/64 UI pixels), in Arrays indexed by
+character code: an Array.get is a good deal quicker than a Dict.get with a Char, let
+alone a pair of them. `kerning` has, for each character, how much closer or further
+the characters after it go.
+-}
+type alias Metrics =
+    { advances : Array Int, missingAdvance : Int, kerning : Array (Dict Int Int) }
+
+
+makeMetrics : Style -> FontSize -> Metrics
+makeMetrics style fontSize =
+    let
+        v : NotoSans.Variant
+        v =
+            variant style
+
+        f : NotoSans.Face
+        f =
+            face v (sansSize fontSize)
+
+        missing : Int
+        missing =
+            (missingGlyph f).advance
+
+        glyphs : List ( Int, Int )
+        glyphs =
+            Dict.toList f.glyphs |> List.map (\( char, glyph ) -> ( Char.toCode char, glyph.advance ))
+
+        kerning : Dict Int (Dict Int Int)
+        kerning =
+            Dict.foldl
+                (\( first, second ) k acc ->
+                    Dict.update
+                        (Char.toCode first)
+                        (\after -> Just (Dict.insert (Char.toCode second) ((k * f.size * 64 + 500) // 1000) (Maybe.withDefault Dict.empty after)))
+                        acc
+                )
+                Dict.empty
+                v.kerning
+    in
+    { advances =
+        List.foldl
+            (\( code, advance ) array -> Array.set code advance array)
+            (Array.repeat (List.foldl (\( code, _ ) high -> max code high) 0 glyphs + 1) missing)
+            glyphs
+    , missingAdvance = missing
+    , kerning =
+        Dict.foldl
+            (\code after array -> Array.set code after array)
+            (Array.repeat (Dict.foldl (\code _ high -> max code high) 0 kerning + 1) Dict.empty)
+            kerning
+    }
+
+
+metrics : Style -> FontSize -> Metrics
+metrics style fontSize =
+    case ( style, fontSize ) of
+        ( Regular, Small ) ->
+            regularSmall
+
+        ( Regular, Big ) ->
+            regularBig
+
+        ( Bold, Small ) ->
+            boldSmall
+
+        ( Bold, Big ) ->
+            boldBig
+
+        ( Italic, Small ) ->
+            italicSmall
+
+        ( Italic, Big ) ->
+            italicBig
+
+        ( BoldItalic, Small ) ->
+            boldItalicSmall
+
+        ( BoldItalic, Big ) ->
+            boldItalicBig
+
+
+regularSmall : Metrics
+regularSmall =
+    makeMetrics Regular Small
+
+
+regularBig : Metrics
+regularBig =
+    makeMetrics Regular Big
+
+
+boldSmall : Metrics
+boldSmall =
+    makeMetrics Bold Small
+
+
+boldBig : Metrics
+boldBig =
+    makeMetrics Bold Big
+
+
+italicSmall : Metrics
+italicSmall =
+    makeMetrics Italic Small
+
+
+italicBig : Metrics
+italicBig =
+    makeMetrics Italic Big
+
+
+boldItalicSmall : Metrics
+boldItalicSmall =
+    makeMetrics BoldItalic Small
+
+
+boldItalicBig : Metrics
+boldItalicBig =
+    makeMetrics BoldItalic Big
