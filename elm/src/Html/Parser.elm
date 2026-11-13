@@ -6,11 +6,10 @@ module Html.Parser exposing
 
 {-| An HTML parser that is forgiving, like a browser, and quick on big pages.
 
-It finds the tags with `String.indexes "<"` and cuts the page up with `String.slice`
-rather than going through it a character at a time (as a parser built from elm/parser
-does), which on a 4.7 MB Hacker News page is the difference between seconds and tens
-of milliseconds. Only the insides of tags (`<a href="...">`) are read a character at a
-time, to get their attributes.
+It splits the page at every `<` (String.split) and reads the pieces with String
+functions, rather than going through it a character at a time (as a parser built from
+elm/parser does): on a 4.7 MB Hacker News page, seconds became under 200 ms natively.
+Attributes are read only when asked for.
 
 What it does with HTML that isn't well formed:
 
@@ -151,8 +150,8 @@ textContentHelper node acc =
 --
 -- The page is split at every "<" (String.split, one pass), so each piece is a tag and
 -- the text after it: `a href="x">link text`. Everything after that works on those small
--- pieces. Slicing the whole page instead is slow natively: eco's String.slice takes
--- longer the further into a string it starts.
+-- pieces, never slicing the whole page: natively, each String.slice of a string that
+-- eco keeps as a rope (one made by String.repeat, say) costs as much as the whole string.
 
 
 {-| The tags open now (innermost first, each with its children so far, last first) and
