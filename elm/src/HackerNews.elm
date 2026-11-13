@@ -17,12 +17,14 @@ module HackerNews exposing
 
 import Bytes exposing (Bytes)
 import Color
-import Coord
+import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect
-import Html.Parser as H
+import Hex
+import Quantity exposing (Quantity)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
+import Units exposing (UiPixels)
 
 
 type PostId
@@ -32,6 +34,7 @@ type PostId
 type UiId
     = NewsPostButton PostId
     | OpenButton
+    | CommentsViewport
 
 
 idToString : UiId -> String
@@ -42,6 +45,9 @@ idToString id =
 
         OpenButton ->
             "OpenButton"
+
+        CommentsViewport ->
+            "CommentsViewport"
 
 
 type Effect
@@ -55,12 +61,12 @@ gotHttpRequest requestId result model =
             case result of
                 Ok data ->
                     if data.status >= 200 && data.status < 300 then
-                        case H.run H.noCharRefs (Effect.bodyToString data.body |> Maybe.withDefault "") of
-                            Ok html ->
-                                { model | data = Loaded (getTitles html) }
+                        case parseTitles (Effect.bodyToString data.body |> Maybe.withDefault "") of
+                            [] ->
+                                { model | data = LoadFailed (Effect.BadBody { status = data.status, body = "No posts in the page" }) }
 
-                            Err _ ->
-                                { model | data = LoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }) }
+                            titles ->
+                                { model | data = Loaded titles }
 
                     else
                         { model | data = LoadFailed (Effect.badBody data) }
@@ -72,18 +78,13 @@ gotHttpRequest requestId result model =
             case result of
                 Ok data ->
                     if data.status >= 200 && data.status < 300 then
-                        case H.run H.noCharRefs (Effect.bodyToString data.body |> Maybe.withDefault "") of
-                            Ok html ->
-                                { model | comments = Dict.insert postId (CommentsLoaded (getComments html)) model.comments }
-
-                            Err _ ->
-                                { model
-                                    | comments =
-                                        Dict.insert
-                                            postId
-                                            (CommentsLoadFailed (Effect.BadBody { status = 200, body = "Failed to parse html" }))
-                                            model.comments
-                                }
+                        { model
+                            | comments =
+                                Dict.insert
+                                    postId
+                                    (CommentsLoaded (Effect.bodyToString data.body |> Maybe.withDefault "" |> parseComments))
+                                    model.comments
+                        }
 
                     else
                         { model | comments = Dict.insert postId (CommentsLoadFailed (Effect.badBody data)) model.comments }
@@ -144,6 +145,9 @@ onClick uiId model =
                 ( False, _ ) ->
                     ( { model | isOpen = isOpen }, [] )
 
+        CommentsViewport ->
+            ( model, [] )
+
         NewsPostButton (PostId postId) ->
             case Dict.get postId model.comments of
                 Just (CommentsLoading _) ->
@@ -192,173 +196,205 @@ init =
     { data = NotLoading, comments = Dict.empty, isOpen = False }
 
 
-getTitles : List H.Node -> List ( PostId, String )
-getTitles nodes =
-    List.concatMap
-        (\node ->
-            case node of
-                H.Comment _ ->
-                    []
-
-                H.Text _ ->
-                    []
-
-                H.Tag "tr" attrs [ _, _, H.Tag _ _ ((H.Tag _ _ ((H.Tag _ [ ( "href", _ ) ] [ H.Text text ]) :: _)) :: _) ] ->
-                    case getAttr "id" attrs of
-                        Just id ->
-                            [ ( PostId id, text ) ]
-
-                        Nothing ->
-                            []
-
-                H.Tag _ _ nodes2 ->
-                    getTitles nodes2
-        )
-        nodes
+-- PARSING
+--
+-- Hacker News pages are read by finding the few markers we need with String.indexes and
+-- cutting the text between them with String.slice, rather than parsing the whole page
+-- into a tree: on a 4.7 MB page with 3,236 comments this takes a fraction of the time.
+-- Every search below is in one row of the page (a post or a comment), except the one
+-- that finds where the rows start, so nothing is searched or copied twice.
 
 
-getAttr : String -> List ( String, String ) -> Maybe String
-getAttr target attrs =
-    List.filterMap
-        (\( name, value ) ->
-            if name == target then
-                Just value
-
-            else
-                Nothing
-        )
-        attrs
-        |> List.head
-
-
-getComments : List H.Node -> List Comment
-getComments nodes =
-    getCommentRows nodes |> buildTree
-
-
-getCommentRows : List H.Node -> List ( Int, String )
-getCommentRows nodes =
-    List.concatMap
-        (\node ->
-            case node of
-                H.Comment _ ->
-                    []
-
-                H.Text _ ->
-                    []
-
-                H.Tag "table" attrs children ->
-                    if List.member ( "class", "comment-tree" ) attrs then
-                        List.filterMap getCommentRow (findTags "tr" children)
-
-                    else
-                        getCommentRows children
-
-                H.Tag _ _ children ->
-                    getCommentRows children
-        )
-        nodes
-
-
-{-| Find the outermost tags with this name (doesn't look inside a match).
+{-| The posts on the front page: each is a `<tr class="athing submission" id="...">`
+with the title in the link after `class="titleline"`.
 -}
-findTags : String -> List H.Node -> List H.Node
-findTags name nodes =
-    List.concatMap
-        (\node ->
-            case node of
-                H.Tag tag _ children ->
-                    if tag == name then
-                        [ node ]
-
-                    else
-                        findTags name children
-
-                H.Text _ ->
-                    []
-
-                H.Comment _ ->
-                    []
-        )
-        nodes
+parseTitles : String -> List ( PostId, String )
+parseTitles html =
+    pieces "<tr class=\"athing" html
+        |> List.filterMap
+            (\row ->
+                Maybe.map2 (\id title -> ( PostId id, title ))
+                    (after "id=\"" row |> Maybe.map (before "\""))
+                    (after "class=\"titleline\"><a " row
+                        |> Maybe.andThen (after ">")
+                        |> Maybe.map (\link -> htmlToText (before "</a>" link))
+                    )
+            )
 
 
-{-| A comment row has an indentation cell (`td.ind` with an `indent` attribute) and a `commtext` div.
+{-| The comments on a post's page, as (indentation, text) in page order. Each is a
+`<tr class="athing comtr">` with an `indent` attribute and the text in a
+`<div class="comment">`, up to its reply link. A flagged or deleted comment has no text
+but "[flagged]" or "[deleted]"; it is kept, so the comments under it stay under it.
 -}
-getCommentRow : H.Node -> Maybe ( Int, String )
-getCommentRow node =
-    case node of
-        H.Tag _ _ children ->
-            case ( findIndent children, findCommentText children ) of
-                ( Just indent, Just content ) ->
-                    Just ( indent, content )
+parseComments : String -> List Comment
+parseComments html =
+    pieces "<tr class=\"athing comtr" html
+        |> List.filterMap
+            (\row ->
+                Maybe.map2 Tuple.pair
+                    (after "indent=\"" row |> Maybe.map (before "\"") |> Maybe.andThen String.toInt)
+                    (after "<div class=\"comment" row
+                        |> Maybe.andThen (after ">")
+                        |> Maybe.map (\comment -> htmlToText (before "<div class=\"reply\"" comment))
+                    )
+            )
+        |> buildTree
 
-                _ ->
-                    Nothing
 
-        _ ->
+{-| The page cut into pieces, each starting at an occurrence of `marker` and going up to
+the next one (the last one to the end of the page). Text before the first is dropped.
+-}
+pieces : String -> String -> List String
+pieces marker html =
+    piecesHelper html (String.indexes marker html) []
+
+
+piecesHelper : String -> List Int -> List String -> List String
+piecesHelper html starts acc =
+    case starts of
+        start :: rest ->
+            let
+                end : Int
+                end =
+                    case rest of
+                        next :: _ ->
+                            next
+
+                        [] ->
+                            String.length html
+            in
+            piecesHelper html rest (String.slice start end html :: acc)
+
+        [] ->
+            List.reverse acc
+
+
+{-| What follows the first `marker` in `text`, if it's there.
+-}
+after : String -> String -> Maybe String
+after marker text =
+    case String.indexes marker text of
+        index :: _ ->
+            Just (String.dropLeft (index + String.length marker) text)
+
+        [] ->
             Nothing
 
 
-findIndent : List H.Node -> Maybe Int
-findIndent nodes =
-    List.filterMap
-        (\node ->
-            case node of
-                H.Tag _ attrs children ->
-                    case getAttr "indent" attrs |> Maybe.andThen String.toInt of
-                        Just indent ->
-                            Just indent
+{-| What comes before the first `marker` in `text` (all of it if there's none).
+-}
+before : String -> String -> String
+before marker text =
+    case String.indexes marker text of
+        index :: _ ->
+            String.left index text
 
-                        Nothing ->
-                            findIndent children
-
-                _ ->
-                    Nothing
-        )
-        nodes
-        |> List.head
+        [] ->
+            text
 
 
-findCommentText : List H.Node -> Maybe String
-findCommentText nodes =
-    List.filterMap
-        (\node ->
-            case node of
-                H.Tag _ attrs children ->
-                    if getAttr "class" attrs |> Maybe.withDefault "" |> String.contains "commtext" then
-                        Just (nodesToText children)
+{-| The text in some HTML: tags are dropped (a `<p>` becomes a space) and character
+references like `&amp;` and `&#x2F;` are decoded.
+-}
+htmlToText : String -> String
+htmlToText html =
+    case String.split "<" html of
+        first :: tags ->
+            first
+                :: List.map tagToText tags
+                |> String.concat
+                |> decodeCharRefs
+                |> String.trim
 
-                    else
-                        findCommentText children
-
-                _ ->
-                    Nothing
-        )
-        nodes
-        |> List.head
+        [] ->
+            ""
 
 
-nodesToText : List H.Node -> String
-nodesToText nodes =
-    List.map
-        (\node ->
-            case node of
-                H.Text text ->
-                    text
+{-| One piece of HTML after a `<`: a tag, then the text up to the next tag.
+-}
+tagToText : String -> String
+tagToText piece =
+    case String.indexes ">" piece of
+        index :: _ ->
+            let
+                name : String
+                name =
+                    String.left index piece
 
-                H.Comment _ ->
-                    ""
+                rest : String
+                rest =
+                    String.dropLeft (index + 1) piece
+            in
+            if name == "p" || String.startsWith "p " name then
+                " " ++ rest
 
-                H.Tag "p" _ children ->
-                    " " ++ nodesToText children
+            else
+                rest
 
-                H.Tag _ _ children ->
-                    nodesToText children
-        )
-        nodes
-        |> String.concat
-        |> String.trim
+        [] ->
+            -- A "<" that doesn't start a tag.
+            "<" ++ piece
+
+
+decodeCharRefs : String -> String
+decodeCharRefs text =
+    case String.split "&" text of
+        first :: refs ->
+            first :: List.map decodeCharRef refs |> String.concat
+
+        [] ->
+            text
+
+
+{-| One piece of text after a `&`: a character reference and `;`, then more text. A `&`
+that doesn't start one (or one we don't know) is kept as it is.
+-}
+decodeCharRef : String -> String
+decodeCharRef piece =
+    case String.indexes ";" (String.left 10 piece) of
+        index :: _ ->
+            case charRef (String.left index piece) of
+                Just char ->
+                    String.cons char (String.dropLeft (index + 1) piece)
+
+                Nothing ->
+                    "&" ++ piece
+
+        [] ->
+            "&" ++ piece
+
+
+charRef : String -> Maybe Char
+charRef name =
+    case name of
+        "amp" ->
+            Just '&'
+
+        "lt" ->
+            Just '<'
+
+        "gt" ->
+            Just '>'
+
+        "quot" ->
+            Just '"'
+
+        "apos" ->
+            Just '\''
+
+        "nbsp" ->
+            Just ' '
+
+        _ ->
+            if String.startsWith "#x" name || String.startsWith "#X" name then
+                String.dropLeft 2 name |> String.toLower |> Hex.fromString |> Result.toMaybe |> Maybe.map Char.fromCode
+
+            else if String.startsWith "#" name then
+                String.dropLeft 1 name |> String.toInt |> Maybe.map Char.fromCode
+
+            else
+                Nothing
 
 
 {-| Turn a flat list of (indentation, text) into a tree, a comment's children being the deeper ones that follow it.
@@ -396,25 +432,75 @@ spanWhile predicate list =
                 ( [], list )
 
 
-flattenComments : Int -> List Comment -> List ( Int, String )
-flattenComments depth comments =
-    List.concatMap
-        (\(Comment comment) ->
-            ( depth, comment.content )
-                :: (if comment.isExpanded then
-                        flattenComments (depth + 1) comment.children
+flattenComments : Int -> List Comment -> List Line -> List Line
+flattenComments depth comments acc =
+    List.foldl
+        (\(Comment comment) acc2 ->
+            if comment.isExpanded then
+                flattenComments (depth + 1) comment.children (CommentLine depth comment.content :: acc2)
 
-                    else
-                        []
-                   )
+            else
+                CommentLine depth comment.content :: acc2
         )
+        acc
         comments
 
 
-view : (UiId -> id) -> Ui.Model id -> Model -> Element id
-view idMap _ model =
+
+-- VIEW
+--
+-- A big thread has thousands of comments, and laying out all their text every frame
+-- took longer than a frame. So everything under the title is a list of one-line rows of
+-- known heights in a viewport, and only the rows that are in view get laid out.
+
+
+{-| One row under the title.
+-}
+type Line
+    = PostLine Int PostId String
+    | CommentLine Int String
+    | StatusLine String
+
+
+lineHeight : Line -> Int
+lineHeight line =
+    case line of
+        PostLine _ _ _ ->
+            textHeight + 2 * postPadding
+
+        CommentLine _ _ ->
+            textHeight
+
+        StatusLine _ ->
+            textHeight
+
+
+textHeight : Int
+textHeight =
+    Sprite.lineHeight Small |> Quantity.unwrap
+
+
+postPadding : Int
+postPadding =
+    2
+
+
+windowPadding : Int
+windowPadding =
+    4
+
+
+titleSpacing : Int
+titleSpacing =
+    8
+
+
+{-| The window, in the top right corner of a screen this big (UI pixels).
+-}
+view : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> Model -> Element id
+view idMap uiState screenSize model =
     Ui.el
-        { padding = Ui.paddingXY 4 4
+        { padding = Ui.paddingXY windowPadding windowPadding
         , inFront = []
         , borderAndFill =
             Ui.BorderAndFill
@@ -430,82 +516,175 @@ view idMap _ model =
             Loading maybe ->
                 case maybe of
                     Just data ->
-                        loadedView idMap model.comments data
+                        loadedView idMap uiState screenSize model.comments data
 
                     Nothing ->
                         Ui.text Small (Sans Regular) "Loading..."
 
             Loaded data ->
-                loadedView idMap model.comments data
+                loadedView idMap uiState screenSize model.comments data
 
             LoadFailed httpError ->
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
         )
 
 
-loadedView : (UiId -> id) -> Dict String CommentsState -> List ( PostId, String ) -> Element id
-loadedView idMap comments data =
+loadedView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> Dict String CommentsState -> List ( PostId, String ) -> Element id
+loadedView idMap uiState screenSize comments data =
+    let
+        width : Int
+        width =
+            min 900 (Coord.xRaw screenSize - 2 * windowPadding - 16)
+
+        viewportHeight : Int
+        viewportHeight =
+            Coord.yRaw screenSize - 2 * windowPadding - textHeight - titleSpacing
+
+        viewportModel : Ui.ViewportModel
+        viewportModel =
+            case Dict.get (idToString CommentsViewport) uiState.uiState of
+                Just (Ui.ViewportState viewport) ->
+                    viewport
+
+                _ ->
+                    Ui.initViewportModel
+
+        -- The scroll offset is 0 or less: how far the rows have moved up.
+        top : Int
+        top =
+            -(Quantity.unwrap viewportModel.offset |> floor)
+
+        lines : List Line
+        lines =
+            List.indexedMap
+                (\index ( postId, title ) -> PostLine index postId title :: commentLines postId comments)
+                data
+                |> List.concat
+    in
     Ui.column
-        { spacing = 8, padding = Ui.noPadding }
+        { spacing = titleSpacing, padding = Ui.noPadding }
         [ Ui.text Small (Sans Bold) "Hacker News"
-        , List.indexedMap
-            (\index ( PostId postIdText, value ) ->
-                let
-                    id : PostId
-                    id =
-                        PostId postIdText
-                in
-                Ui.column
-                    { spacing = 0, padding = Ui.noPadding }
-                    ((Ui.row
-                        { spacing = 8, padding = Ui.noPadding }
-                        [ Ui.right
-                            { width = Ui.size (Ui.text Small (Sans Regular) "00.") |> Coord.x }
-                            (Ui.colorText
-                                Color.lightFont
-                                Small
-                                (Sans Regular)
-                                (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
-                            )
-                        , Ui.text Small (Sans Regular) value
-                        ]
-                        |> Ui.customButton
-                            { id = idMap (NewsPostButton id)
-                            , padding = Ui.paddingXY 0 2
-                            , inFront = []
-                            , borderAndFill = Ui.NoBorderOrFill
-                            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.white }
-                            }
-                     )
-                        :: commentsView postIdText comments
-                    )
-            )
-            data
-            |> Ui.column { spacing = 0, padding = Ui.noPadding }
+        , visibleLines idMap width top (top + viewportHeight) lines
+            |> Ui.viewport
+                { id = idMap CommentsViewport
+                , viewportHeight = Units.uiPixels viewportHeight
+                , model = viewportModel
+                }
         ]
 
 
-commentsView : String -> Dict String CommentsState -> List (Element id)
-commentsView postId comments =
+commentLines : PostId -> Dict String CommentsState -> List Line
+commentLines (PostId postId) comments =
     case Dict.get postId comments of
         Nothing ->
             []
 
         Just (CommentsLoading _) ->
-            [ Ui.text Small (Sans Regular) "Loading comments..." ]
+            [ StatusLine "Loading comments..." ]
 
         Just (CommentsLoaded loaded) ->
-            List.map
-                (\( depth, content ) ->
-                    Ui.row
-                        { spacing = 0, padding = Ui.noPadding }
-                        [ Ui.el
-                            { padding = Ui.paddingXY (16 * (depth + 1)) 0, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-                            Ui.none
-                        , Ui.colorText Color.lightFont Small (Sans Regular) (String.left 100 content)
-                        ]
-                )
-                (flattenComments 0 loaded)
+            flattenComments 0 loaded [] |> List.reverse
 
         Just (CommentsLoadFailed error) ->
-            [ Ui.text Small (Sans Regular) (Effect.httpErrorToString error) ]
+            [ StatusLine (Effect.httpErrorToString error) ]
+
+
+{-| All the rows in a column, but with only those between `top` and `bottom` (UI pixels
+from the top of the first) laid out. Empty space of the same height stands in for the
+rest, so the column is as tall as the whole list and the viewport scrolls through it.
+-}
+visibleLines : (UiId -> id) -> Int -> Int -> Int -> List Line -> Element id
+visibleLines idMap width top bottom lines =
+    let
+        ( above, shown, below ) =
+            List.foldl
+                (\line ( y, aboveHeight, ( shownLines, belowHeight ) ) ->
+                    let
+                        height : Int
+                        height =
+                            lineHeight line
+                    in
+                    if y + height <= top then
+                        ( y + height, aboveHeight + height, ( shownLines, belowHeight ) )
+
+                    else if y >= bottom then
+                        ( y + height, aboveHeight, ( shownLines, belowHeight + height ) )
+
+                    else
+                        ( y + height, aboveHeight, ( lineView idMap width line :: shownLines, belowHeight ) )
+                )
+                ( 0, 0, ( [], 0 ) )
+                lines
+                |> (\( _, aboveHeight, ( shownLines, belowHeight ) ) -> ( aboveHeight, List.reverse shownLines, belowHeight ))
+    in
+    Ui.column
+        { spacing = 0, padding = Ui.noPadding }
+        (space width above :: shown ++ [ space width below ])
+
+
+space : Int -> Int -> Element id
+space width height =
+    Ui.topLeft { size = Coord.xy width height } Ui.none
+
+
+lineView : (UiId -> id) -> Int -> Line -> Element id
+lineView idMap width line =
+    Ui.topLeft
+        { size = Coord.xy width (lineHeight line) }
+        (case line of
+            PostLine index postId title ->
+                let
+                    numberWidth : Quantity Int UiPixels
+                    numberWidth =
+                        Sprite.textSize Small (Sans Regular) "00." |> Coord.x
+
+                    spacing : Int
+                    spacing =
+                        8
+                in
+                Ui.row
+                    { spacing = spacing, padding = Ui.noPadding }
+                    [ Ui.right
+                        { width = numberWidth }
+                        (Ui.colorText
+                            Color.lightFont
+                            Small
+                            (Sans Regular)
+                            (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
+                        )
+                    , Ui.text Small (Sans Regular) (oneLine (width - Quantity.unwrap numberWidth - spacing) title)
+                    ]
+                    |> Ui.customButton
+                        { id = idMap (NewsPostButton postId)
+                        , padding = Ui.paddingXY 0 postPadding
+                        , inFront = []
+                        , borderAndFill = Ui.NoBorderOrFill
+                        , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.white }
+                        }
+
+            CommentLine depth content ->
+                let
+                    indent : Int
+                    indent =
+                        16 * (depth + 1)
+                in
+                Ui.row
+                    { spacing = 0, padding = Ui.noPadding }
+                    [ space indent 0
+                    , Ui.colorText Color.lightFont Small (Sans Regular) (oneLine (width - indent) content)
+                    ]
+
+            StatusLine text ->
+                Ui.text Small (Sans Regular) text
+        )
+
+
+{-| As much of the text as fits on one line this wide, with "…" if it doesn't all fit.
+-}
+oneLine : Int -> String -> String
+oneLine width text =
+    -- No glyph is narrower than 3 UI pixels, so the rest can't fit: dropping it first
+    -- keeps a long comment from being measured in full.
+    String.left (width // 3) text
+        |> String.replace "\n" " "
+        |> Sprite.ellipsis Small (Sans Regular) (Units.uiPixels width)

@@ -94,7 +94,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
 
 .PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
-        dev dev-native dev-check
+        dev dev-native dev-check bench
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -652,6 +652,19 @@ dev: $(BUILD)/elm.js $(BUILD)/elmos-dev
 
 dev-native: $(BUILD)/elm $(BUILD)/elmos-dev
 	$(DEV_RUN) --rebuild '$(MAKE) -s --no-print-directory $(BUILD)/elm' $(BUILD)/elm
+
+# Times the Hacker News app's slow steps (parsing a big comment page, logging and
+# snapshotting it, laying it out) natively on a saved page: elm/bench. BENCH_ITEM picks
+# the item page (elm/bench/fixtures/hn-item-<id>.html.gz).
+BENCH_ITEM ?= elm/bench/fixtures/hn-item-50467087.html.gz
+
+bench: $(BUILD)/wire/.done
+	@mkdir -p $(BUILD)/bench/gen
+	python3 -I elm/bench/make-fixture.py $(BUILD)/bench/gen/Fixture.elm elm/bench/fixtures/hn-top.html.gz $(BENCH_ITEM)
+	python3 -I -c 'import json,sys; d=json.load(open("elm/elm.json")); d["source-directories"]=[sys.argv[1],sys.argv[2],"gen"]; json.dump(d,open(sys.argv[3],"w"),indent=4)' \
+	  $(abspath $(BUILD)/wire/src) $(abspath elm/bench/src) $(BUILD)/bench/elm.json
+	cd $(BUILD)/bench && $(ECO) make $(abspath elm/bench/src/Bench.elm) --optimize --output=bench
+	$(BUILD)/bench/bench
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 

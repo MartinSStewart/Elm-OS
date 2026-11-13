@@ -38,6 +38,7 @@ make test-persist # power cuts and a restart: the Model must come back
 make test-errors  # the error screen: a crash loop, a hang, panics in /init
 make test-wire    # the encoder/decoder generator (tools/wire) on every kind of type
 make check        # every test that doesn't boot: elm-review, Elm unit tests, test-wire, protocol
+make bench        # times the Hacker News app on a saved 3,236-comment page, natively (elm/bench)
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 

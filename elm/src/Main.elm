@@ -1472,7 +1472,7 @@ screenUi model =
                 ++ (if model.hackerNews.isOpen then
                         [ Ui.topRight
                             { size = uiSize model }
-                            (HackerNews.view HackerNewsUiId model.uiState model.hackerNews)
+                            (HackerNews.view HackerNewsUiId model.uiState (uiSize model) model.hackerNews)
                         ]
 
                     else

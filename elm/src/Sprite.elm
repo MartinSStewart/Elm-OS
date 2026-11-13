@@ -721,26 +721,69 @@ customTextSize fontSize segments =
 -}
 ellipsis : FontSize -> Font -> Quantity Int UiPixels -> String -> String
 ellipsis fontSize font maxWidth string =
-    if textWidthRaw fontSize font string <= Quantity.unwrap maxWidth then
+    let
+        ( placed, end ) =
+            layoutLine fontSize font string
+
+        max64 : Int
+        max64 =
+            Quantity.unwrap maxWidth * 64
+    in
+    if end <= max64 then
         string
 
     else
-        ellipsisHelper fontSize font (Quantity.unwrap maxWidth) (String.dropRight 1 string)
+        let
+            -- Where the dots would end after each character's start, from one layout of
+            -- the whole line, so a long string isn't measured again for every character
+            -- dropped. ellipsisHelper then checks the guess (kerning can move it by one).
+            dotsWidth : Int
+            dotsWidth =
+                Tuple.second (layoutLine fontSize font (ellipsisDots font))
+        in
+        placed
+            |> List.take (countFitting (max64 - dotsWidth) placed)
+            |> List.map Tuple.second
+            |> String.fromList
+            |> ellipsisHelper fontSize font (Quantity.unwrap maxWidth)
+
+
+{-| How many characters, from the first, start no further right than `limit`.
+-}
+countFitting : Int -> List ( Int, Char ) -> Int
+countFitting limit placed =
+    countFittingHelper limit placed 0
+
+
+countFittingHelper : Int -> List ( Int, Char ) -> Int -> Int
+countFittingHelper limit placed count =
+    case placed of
+        ( at, _ ) :: rest ->
+            if at <= limit then
+                countFittingHelper limit rest (count + 1)
+
+            else
+                count
+
+        [] ->
+            count
+
+
+ellipsisDots : Font -> String
+ellipsisDots font =
+    case font of
+        Mono ->
+            "..."
+
+        Sans _ ->
+            "…"
 
 
 ellipsisHelper : FontSize -> Font -> Int -> String -> String
 ellipsisHelper fontSize font maxWidth string =
     let
-        dots =
-            case font of
-                Mono ->
-                    "..."
-
-                Sans _ ->
-                    "…"
-
         candidate =
-            String.trimRight string ++ dots
+            String.trimRight string ++ ellipsisDots font
     in
     if String.isEmpty string || textWidthRaw fontSize font candidate <= maxWidth then
         candidate

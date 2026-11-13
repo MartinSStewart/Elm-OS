@@ -56,6 +56,7 @@ tools/wire/src/Generate.elm.
 -}
 
 import Array exposing (Array)
+import Bitwise
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
@@ -125,9 +126,37 @@ toBase64 bytes =
         u8 =
             BD.unsignedInt8
 
+        u32 : BD.Decoder Int
+        u32 =
+            BD.unsignedInt32 Bytes.BE
+
+        -- Twelve bytes (sixteen characters) a step while there are that many: a big HTTP
+        -- body is megabytes, and fewer, bigger steps make it several times quicker.
         step : ( Int, List String ) -> BD.Decoder (BD.Step ( Int, List String ) (List String))
         step ( left, done ) =
-            if left >= 3 then
+            if left >= 12 then
+                BD.map3
+                    (\a b c ->
+                        BD.Loop
+                            ( left - 12
+                            , String.fromList
+                                (base64Chars (Bitwise.shiftRightZfBy 8 a)
+                                    (base64Chars
+                                        (Bitwise.or (Bitwise.shiftLeftBy 16 (Bitwise.and 0xFF a)) (Bitwise.shiftRightZfBy 16 b))
+                                        (base64Chars
+                                            (Bitwise.or (Bitwise.shiftLeftBy 8 (Bitwise.and 0xFFFF b)) (Bitwise.shiftRightZfBy 24 c))
+                                            (base64Chars (Bitwise.and 0x00FFFFFF c) [])
+                                        )
+                                    )
+                                )
+                                :: done
+                            )
+                    )
+                    u32
+                    u32
+                    u32
+
+            else if left >= 3 then
                 BD.map3 (\a b c -> BD.Loop ( left - 3, base64Chunk a b c 4 :: done )) u8 u8 u8
 
             else if left == 2 then
@@ -143,6 +172,17 @@ toBase64 bytes =
         |> Maybe.withDefault []
         |> List.reverse
         |> String.concat
+
+
+{-| The four characters of 24 bits, in front of `rest`.
+-}
+base64Chars : Int -> List Char -> List Char
+base64Chars n rest =
+    base64Char (Bitwise.shiftRightZfBy 18 n)
+        :: base64Char (Bitwise.and 63 (Bitwise.shiftRightZfBy 12 n))
+        :: base64Char (Bitwise.and 63 (Bitwise.shiftRightZfBy 6 n))
+        :: base64Char (Bitwise.and 63 n)
+        :: rest
 
 
 {-| The first `count` characters of the base64 of these three bytes.
