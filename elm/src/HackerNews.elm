@@ -682,6 +682,7 @@ view idMap uiState screenSize model =
                     idMap
                     uiState
                     screenSize
+                    (PostId id)
                     title
                     (Dict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
@@ -741,8 +742,8 @@ postView idMap width index ( postId, title ) =
             }
 
 
-commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> String -> CommentsState -> Element id
-commentsView idMap uiState screenSize title comments =
+commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> PostId -> String -> CommentsState -> Element id
+commentsView idMap uiState screenSize postId title comments =
     let
         width : Int
         width =
@@ -780,7 +781,7 @@ commentsView idMap uiState screenSize title comments =
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
             |> Ui.minWidth (Units.uiPixels width)
-            |> scrolling idMap uiState (CommentsViewport page.postId) screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling idMap uiState (CommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
