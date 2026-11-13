@@ -1525,15 +1525,15 @@ overlay model =
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.text (uiScale model) Sprite.Small mono (String.padRight 10 ' ' label), Ui.text (uiScale model) Sprite.Small mono value ]
+                [ Ui.text model.uiState Sprite.Small mono (String.padRight 10 ' ' label), Ui.text model.uiState Sprite.Small mono value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
                     Ui.row { spacing = 4, padding = Ui.noPadding }
-                        [ Ui.text (uiScale model) Sprite.Small mono (String.padRight 10 ' ' "Renderer")
+                        [ Ui.text model.uiState Sprite.Small mono (String.padRight 10 ' ' "Renderer")
                         , badge Sprite.Small gpu
-                        , Ui.text (uiScale model) Sprite.Small
+                        , Ui.text model.uiState Sprite.Small
                             mono
                             ((if gpu then
                                 "GPU, "
@@ -1621,7 +1621,7 @@ overlay model =
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
                 (Ui.column { spacing = 3, padding = Ui.noPadding }
-                    ([ Ui.text (uiScale model) Sprite.Small mono "Elm OS debug"
+                    ([ Ui.text model.uiState Sprite.Small mono "Elm OS debug"
                      , line "Build" (BootInfo.buildText model.bootInfo)
                      , line "Screen"
                         (String.fromInt (Coord.xRaw model.screenSize)
@@ -1806,7 +1806,7 @@ networkPanel model =
             panelWidth
 
         t =
-            Ui.text (uiScale model) bodySize font
+            Ui.text model.uiState bodySize font
 
         fit string =
             Sprite.ellipsis (uiScale model) bodySize font width string
@@ -1870,10 +1870,10 @@ networkPanel model =
                             t (fit ("Getting an address on " ++ status.ssid))
 
                         Wifi.Connected ->
-                            Ui.colorText (uiScale model) connectedColor bodySize font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
+                            Ui.colorText model.uiState connectedColor bodySize font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
 
                         Wifi.Failed ->
-                            Ui.colorText (uiScale model) Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width status.error)
+                            Ui.colorText model.uiState Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width status.error)
 
         networkRows =
             case model.wifiDevice of
@@ -1904,7 +1904,7 @@ networkPanel model =
                         []
 
                     else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText (uiScale model) Color.errorColor bodySize font "That kind of network isn't supported yet" ]
+                        [ Ui.colorText model.uiState Color.errorColor bodySize font "That kind of network isn't supported yet" ]
 
                     else
                         (if needsPassword selected then
@@ -1978,7 +1978,7 @@ wiredRows model =
             panelWidth
 
         t =
-            Ui.text (uiScale model) bodySize font
+            Ui.text model.uiState bodySize font
 
         link l =
             [ t ("Wired (" ++ l.name ++ ")")
@@ -1990,10 +1990,10 @@ wiredRows model =
                     t "Getting an address…"
 
                 Wired.Connected ->
-                    Ui.colorText (uiScale model) connectedColor bodySize font (Sprite.ellipsis (uiScale model) bodySize font width ("Connected, " ++ l.ip))
+                    Ui.colorText model.uiState connectedColor bodySize font (Sprite.ellipsis (uiScale model) bodySize font width ("Connected, " ++ l.ip))
 
                 Wired.Failed ->
-                    Ui.colorText (uiScale model) Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width "Cable plugged in, but no address from the network (DHCP)")
+                    Ui.colorText model.uiState Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width "Cable plugged in, but no address from the network (DHCP)")
             ]
 
         divider =
@@ -2073,9 +2073,9 @@ networkRow model network =
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
             (Ui.row { spacing = 6, padding = Ui.noPadding }
-                [ bars, Ui.text (uiScale model) bodySize font (Sprite.ellipsis (uiScale model) bodySize font nameWidth network.ssid) ]
+                [ bars, Ui.text model.uiState bodySize font (Sprite.ellipsis (uiScale model) bodySize font nameWidth network.ssid) ]
             )
-            (Ui.text (uiScale model) bodySize font label)
+            (Ui.text model.uiState bodySize font label)
         )
 
 
@@ -2149,7 +2149,7 @@ weatherRows model =
             panelWidth
 
         t =
-            Ui.text (uiScale model) bodySize font
+            Ui.text model.uiState bodySize font
 
         small =
             Ui.paddingXY 6 3
@@ -2184,7 +2184,7 @@ weatherRows model =
 
         WeatherFailed error ->
             [ divider
-            , Ui.colorText (uiScale model) Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width (Effect.httpErrorToString error))
+            , Ui.colorText model.uiState Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
@@ -2196,7 +2196,7 @@ weatherRows model =
             , Ui.row { spacing = 8, padding = Ui.noPadding }
                 [ weatherIcon 3 forecast.code
                 , Ui.column { spacing = 3, padding = Ui.noPadding }
-                    [ Ui.text (uiScale model) headingSize sans (fixed 1 forecast.temperature ++ "°C")
+                    [ Ui.text model.uiState headingSize sans (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -2212,7 +2212,7 @@ weatherRows model =
                     (\i day ->
                         Ui.row { spacing = 6, padding = Ui.noPadding }
                             [ weatherIcon 1 day.code
-                            , Ui.minWidth (em 6)
+                            , Ui.left (em 6)
                                 (t
                                     (if i == 0 then
                                         "Today"
@@ -2221,13 +2221,13 @@ weatherRows model =
                                         Weather.weekday day.date
                                     )
                                 )
-                            , Ui.minWidth (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
                             , t (Weather.describe day.code)
                             ]
                     )
                     forecast.days
                 )
-            , Ui.colorText (uiScale model) Color.outlineColor bodySize font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            , Ui.colorText model.uiState Color.outlineColor bodySize font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
             ]
 
 
@@ -2322,7 +2322,7 @@ toolbar : Model -> Ui.Element UiId
 toolbar model =
     let
         t =
-            Ui.text (uiScale model) bodySize sans
+            Ui.text model.uiState bodySize sans
 
         small =
             Ui.paddingXY 6 3
@@ -2381,7 +2381,7 @@ calculatorWindow model =
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
             }
-            (Calculator.view (uiScale model) (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
+            (Calculator.view model.uiState (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
         )
 
 
@@ -2405,7 +2405,7 @@ notice model text =
                 , inFront = []
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
-                (Ui.text (uiScale model) bodySize sans text)
+                (Ui.text model.uiState bodySize sans text)
             )
         )
 
@@ -2417,14 +2417,14 @@ aboutPage model =
             sans
 
         t =
-            Ui.text (uiScale model) bodySize font
+            Ui.text model.uiState bodySize font
 
         valueWidth =
             em 26
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (em 5) (t label), t (Sprite.ellipsis (uiScale model) bodySize font valueWidth value) ]
+                [ Ui.left (em 5) (t label), t (Sprite.ellipsis (uiScale model) bodySize font valueWidth value) ]
 
         system =
             model.system
@@ -2464,7 +2464,7 @@ aboutPage model =
             , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
             }
             (Ui.column { spacing = 4, padding = Ui.noPadding }
-                [ Ui.text (uiScale model) headingSize sans "Elm OS"
+                [ Ui.text model.uiState headingSize sans "Elm OS"
                 , t "A Linux kernel that boots straight into one Elm program."
                 , t ""
                 , line "Version" (field .commit)
@@ -2556,7 +2556,7 @@ editorWindow : Model -> Ui.Element UiId
 editorWindow model =
     let
         t =
-            Ui.text (uiScale model) bodySize sans
+            Ui.text model.uiState bodySize sans
 
         style =
             editorStyle model
@@ -2601,7 +2601,7 @@ editorWindow model =
             }
             (Ui.column { spacing = 6, padding = Ui.noPadding }
                 [ Ui.leftAndRight style.width
-                    (Ui.text (uiScale model) headingSize sans "Text editor")
+                    (Ui.text model.uiState headingSize sans "Text editor")
                     (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
                 , Ui.textInputMultiline
                     { id = EditorInput
@@ -2610,7 +2610,7 @@ editorWindow model =
                     }
                 , Ui.leftAndRight style.width
                     (t status)
-                    (Ui.customText (uiScale model) bodySize
+                    (Ui.customText model.uiState bodySize
                         [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
                         , { text = " undo, ", color = Color.outlineColor, font = sans }
                         , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }

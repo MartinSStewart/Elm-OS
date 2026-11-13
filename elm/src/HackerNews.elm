@@ -33,7 +33,7 @@ import Html.Parser
 import Quantity exposing (Quantity)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
-import Units exposing (UiPixels, UiScale)
+import Units exposing (UiPixels)
 
 
 type PostId
@@ -461,7 +461,7 @@ parseComments html =
                         |> Maybe.map (\comment -> commentText (nodeChildren comment) |> String.trim)
                     )
             )
-        |> buildTree 0
+        |> buildTree 0 0
         |> Tuple.first
 
 
@@ -545,8 +545,8 @@ commentText nodes =
 children being the deeper ones that follow it, numbering them in order from `index`.
 Also gives the index after the last.
 -}
-buildTree : Int -> List { indent : Int, author : String, content : String } -> ( List Comment, Int )
-buildTree index rows =
+buildTree : Int -> Int -> List { indent : Int, author : String, content : String } -> ( List Comment, Int )
+buildTree indentation index rows =
     case rows of
         [] ->
             ( [], index )
@@ -557,10 +557,10 @@ buildTree index rows =
                     spanWhile (\next -> next.indent > row.indent) rest
 
                 ( children, afterChildren ) =
-                    buildTree (index + 1) childRows
+                    buildTree (indentation + 1) (index + 1) childRows
 
                 ( siblings, afterSiblings ) =
-                    buildTree afterChildren siblingRows
+                    buildTree indentation afterChildren siblingRows
             in
             ( Comment
                 { index = index
@@ -568,7 +568,7 @@ buildTree index rows =
                 , content = row.content
                 , children = children
                 , descendants = afterChildren - index - 1
-                , isExpanded = List.length children <= maxExpandedChildren
+                , isExpanded = indentation == 0 || List.length children <= maxExpandedChildren
                 }
                 :: siblings
             , afterSiblings
@@ -633,9 +633,9 @@ replyIndent =
 
 {-| Room for the button that shows or hides a comment's replies, left of its text.
 -}
-toggleWidth : UiScale -> Int
-toggleWidth scale =
-    Sprite.textSize scale Small (Sans Regular) "[+0000]" |> Coord.xRaw
+toggleWidth : Ui.Model a -> Int
+toggleWidth uiState =
+    Sprite.textSize uiState.scale Small (Sans Regular) "[+0000]" |> Coord.xRaw
 
 
 toggleSpacing : Int
@@ -669,13 +669,13 @@ view idMap uiState screenSize model =
                                 postsView idMap uiState screenSize data
 
                             Nothing ->
-                                Ui.text uiState.scale Small (Sans Regular) "Loading..."
+                                Ui.text uiState Small (Sans Regular) "Loading..."
 
                     Loaded data ->
                         postsView idMap uiState screenSize data
 
                     LoadFailed httpError ->
-                        Ui.text uiState.scale Small (Sans Regular) (Effect.httpErrorToString httpError)
+                        Ui.text uiState Small (Sans Regular) (Effect.httpErrorToString httpError)
 
             CommentsPage (PostId id) title ->
                 commentsView
@@ -697,24 +697,24 @@ postsView idMap uiState screenSize data =
 
         title : Element id
         title =
-            Ui.text uiState.scale Small (Sans Bold) "Hacker News"
+            Ui.text uiState Small (Sans Bold) "Hacker News"
     in
     Ui.column
         { spacing = titleSpacing, padding = Ui.noPadding }
         [ title
         , Ui.column
             { spacing = 0, padding = Ui.noPadding }
-            (List.indexedMap (postView idMap uiState.scale width) data)
+            (List.indexedMap (postView idMap uiState width) data)
             |> scrolling idMap uiState PostsViewport screenSize (Coord.yRaw (Ui.size title))
         ]
 
 
-postView : (UiId -> id) -> UiScale -> Int -> Int -> ( PostId, String ) -> Element id
-postView idMap scale width index ( postId, title ) =
+postView : (UiId -> id) -> Ui.Model a -> Int -> Int -> ( PostId, String ) -> Element id
+postView idMap uiState width index ( postId, title ) =
     let
         numberWidth : Quantity Int UiPixels
         numberWidth =
-            Sprite.textSize scale Small (Sans Regular) "00." |> Coord.x
+            Sprite.textSize uiState.scale Small (Sans Regular) "00." |> Coord.x
 
         spacing : Int
         spacing =
@@ -725,15 +725,15 @@ postView idMap scale width index ( postId, title ) =
         [ Ui.right
             { width = numberWidth }
             (Ui.colorText
-                scale
+                uiState
                 Color.lightFont
                 Small
                 (Sans Regular)
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
             )
-        , Ui.text scale Small (Sans Regular) (Sprite.ellipsis scale Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - spacing)) title)
+        , Ui.text uiState Small (Sans Regular) (Sprite.ellipsis uiState.scale Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - spacing)) title)
         ]
-        |> Ui.minWidth (Units.uiPixels width)
+        |> Ui.left (Units.uiPixels width)
         |> Ui.customButton
             { id = idMap (NewsPostButton postId)
             , padding = Ui.paddingXY 0 postPadding
@@ -752,7 +752,7 @@ commentsView idMap uiState screenSize postId title comments =
 
         backButton : Element id
         backButton =
-            Ui.button { id = idMap BackButton, padding = Ui.paddingXY 6 0 } (Ui.text uiState.scale Small (Sans Regular) "< Posts")
+            Ui.button { id = idMap BackButton, padding = Ui.paddingXY 6 0 } (Ui.text uiState Small (Sans Regular) "< Posts")
 
         headerSpacing : Int
         headerSpacing =
@@ -764,88 +764,94 @@ commentsView idMap uiState screenSize postId title comments =
             { spacing = headerSpacing, padding = Ui.noPadding }
             [ backButton
             , Ui.text
-                uiState.scale
+                uiState
                 Small
                 (Sans Bold)
                 (Sprite.ellipsis uiState.scale Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title)
             ]
         , (case comments of
             CommentsLoading ->
-                Ui.text uiState.scale Small (Sans Regular) "Loading comments..."
+                Ui.text uiState Small (Sans Regular) "Loading comments..."
 
             CommentsLoaded [] ->
-                Ui.text uiState.scale Small (Sans Regular) "No comments yet."
+                Ui.text uiState Small (Sans Regular) "No comments yet."
 
             CommentsLoaded loaded ->
-                commentsColumn idMap uiState.scale width loaded
+                commentsColumn idMap uiState width loaded
 
             CommentsLoadFailed error ->
-                Ui.text uiState.scale Small (Sans Regular) (Effect.httpErrorToString error)
+                Ui.text uiState Small (Sans Regular) (Effect.httpErrorToString error)
           )
-            |> Ui.minWidth (Units.uiPixels width)
+            |> Ui.left (Units.uiPixels width)
             |> scrolling idMap uiState (CommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
-commentsColumn : (UiId -> id) -> UiScale -> Int -> List Comment -> Element id
-commentsColumn idMap scale width comments =
+commentsColumn : (UiId -> id) -> Ui.Model a -> Int -> List Comment -> Element id
+commentsColumn idMap uiState width comments =
     Ui.column
         { spacing = commentSpacing, padding = Ui.noPadding }
-        (List.map (commentView idMap scale width) comments)
+        (List.map (commentView idMap uiState width) comments)
 
 
 {-| A comment, and under it its replies if they are shown. `width` is how wide it can be.
 -}
-commentView : (UiId -> id) -> UiScale -> Int -> Comment -> Element id
-commentView idMap scale width (Comment comment) =
+commentView : (UiId -> id) -> Ui.Model a -> Int -> Comment -> Element id
+commentView idMap uiState width (Comment comment) =
     let
         textWidth : Int
         textWidth =
-            width - toggleWidth scale - toggleSpacing
+            width - toggleWidth uiState - toggleSpacing
 
         repliesButton : Element id
         repliesButton =
-            if List.isEmpty comment.children then
-                Ui.none
-
-            else if comment.isExpanded then
-                toggleButton idMap scale comment.index "[–]"
+            if comment.isExpanded then
+                toggleButton idMap uiState comment.index "[-]"
 
             else
-                toggleButton idMap scale comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
+                toggleButton idMap uiState comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
 
         text : Element id
         text =
             Ui.row
                 { spacing = toggleSpacing, padding = Ui.noPadding }
-                [ Ui.minWidth (Units.uiPixels (toggleWidth scale)) repliesButton
+                [ Ui.right { width = Units.uiPixels (toggleWidth uiState) } repliesButton
                 , Ui.customTextWrapped
-                    scale
+                    uiState
                     Small
                     (Units.uiPixels textWidth)
                     [ { text = comment.author ++ "  ", color = Color.black, font = Sans Bold }
-                    , { text = comment.content, color = Color.lightFont, font = Sans Regular }
+                    , { text = comment.content, color = Color.black, font = Sans Regular }
                     ]
                 ]
     in
-    if comment.isExpanded && not (List.isEmpty comment.children) then
+    if comment.isExpanded then
         Ui.column
             { spacing = commentSpacing, padding = Ui.noPadding }
             [ text
             , Ui.row
                 { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (Units.uiPixels replyIndent) Ui.none
-                , commentsColumn idMap scale (width - replyIndent) comment.children
+                [ Ui.left (Units.uiPixels replyIndent) Ui.none
+                , commentsColumn idMap uiState (width - replyIndent) comment.children
                 ]
             ]
 
     else
-        text
+        Ui.row
+            { spacing = toggleSpacing, padding = Ui.noPadding }
+            [ Ui.right { width = Units.uiPixels (toggleWidth uiState) } repliesButton
+            , Ui.customTextWrapped
+                uiState
+                Small
+                (Units.uiPixels textWidth)
+                [ { text = comment.author ++ "  ", color = Color.black, font = Sans Bold }
+                ]
+            ]
 
 
-toggleButton : (UiId -> id) -> UiScale -> Int -> String -> Element id
-toggleButton idMap scale index label =
-    Ui.colorText scale Color.lightFont Small (Sans Regular) label
+toggleButton : (UiId -> id) -> Ui.Model a -> Int -> String -> Element id
+toggleButton idMap uiState index label =
+    Ui.colorText uiState Color.lightFont Small Mono label
         |> Ui.customButton
             { id = idMap (CommentToggle index)
             , padding = Ui.noPadding

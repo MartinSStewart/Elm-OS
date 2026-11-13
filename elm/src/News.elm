@@ -42,7 +42,6 @@ import Quantity
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
-import Units exposing (UiScale)
 
 
 type alias Day =
@@ -99,7 +98,7 @@ view idMap uiState news =
         }
         (Ui.column
             { spacing = 4, padding = Ui.noPadding }
-            [ Ui.text uiState.scale Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
+            [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
             , case news of
                 NewsNotRequested ->
                     Ui.none
@@ -110,13 +109,13 @@ view idMap uiState news =
                             daysView idMap uiState days
 
                         Nothing ->
-                            Ui.text uiState.scale Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
+                            Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
 
                 LoadedNews days ->
                     daysView idMap uiState days
 
                 NewsFailed string ->
-                    Ui.text uiState.scale Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
+                    Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
             ]
         )
 
@@ -132,10 +131,10 @@ daysView idMap uiState days =
                         (\topic ->
                             Ui.column
                                 { spacing = 8, padding = Ui.noPadding }
-                                [ Ui.text uiState.scale Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
+                                [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
                                 , Ui.column
                                     { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
-                                    (List.map (itemView uiState.scale 140) topic.items)
+                                    (List.map (itemView uiState 140) topic.items)
                                 ]
                         )
                         topics
@@ -148,8 +147,8 @@ daysView idMap uiState days =
                     ++ String.fromInt (Date.day date)
                     ++ ", "
                     ++ String.fromInt (Date.year date)
-                    |> Ui.text uiState.scale Sprite.Small (Sprite.Sans Sprite.Regular)
-                    |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
+                    |> Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular)
+                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
                     |> Ui.el
                         { padding = Ui.paddingXY 12 4
                         , inFront = []
@@ -190,8 +189,8 @@ itemSpacing =
     6
 
 
-itemView : UiScale -> Int -> Item -> Element id
-itemView scale width (Item item) =
+itemView : Ui.Model id -> Int -> Item -> Element id
+itemView uiState width (Item item) =
     let
         inlineText : String
         inlineText =
@@ -201,7 +200,7 @@ itemView scale width (Item item) =
         { spacing = itemSpacing, padding = Ui.noPadding }
         [ Ui.row
             { spacing = 6, padding = Ui.noPadding }
-            [ Ui.text scale Sprite.Small (Sprite.Sans Sprite.Regular) "•"
+            [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular) "•"
             , String.foldl
                 (\char { lastSpace, lastBreak, index, lines } ->
                     if index - lastBreak > width then
@@ -231,11 +230,11 @@ itemView scale width (Item item) =
                 |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
                 |> List.reverse
                 |> String.join "\n"
-                |> Ui.text scale Sprite.Small (Sprite.Sans Sprite.Regular)
+                |> Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular)
             ]
         , Ui.column
             { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }
-            (List.map (itemView scale (width - 2)) item.children)
+            (List.map (itemView uiState (width - 2)) item.children)
         ]
 
 

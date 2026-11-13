@@ -28,9 +28,9 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , left
     , leftAndRight
     , map
-    , minWidth
     , noPadding
     , none
     , onAnimationFrame
@@ -153,7 +153,7 @@ type ElementState
 
 
 {-| `scale` is the screen's UI scale. Text is laid out differently at each scale (see
-Sprite), so views that make text take it from here.
+Sprite), so `text` and the other text elements take the Model to measure at it.
 -}
 type alias Model id =
     { focus : Maybe id
@@ -463,44 +463,44 @@ paddingXY x y =
 
 {-| Black text. '\\n' starts a new line.
 -}
-text : UiScale -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-text scale fontSize font =
-    colorText scale Color.black fontSize font
+text : Model a -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+text model fontSize font =
+    colorText model Color.black fontSize font
 
 
-colorText : UiScale -> Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-colorText scale color fontSize font text2 =
-    customText scale fontSize [ { text = text2, color = color, font = font } ]
+colorText : Model a -> Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+colorText model color fontSize font text2 =
+    customText model fontSize [ { text = text2, color = color, font = font } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
 font size, so every line is the same height whichever fonts it mixes. '\\n' in any of
-them starts a new line. It's measured at the UI scale it will be drawn at.
+them starts a new line. It's measured at the Model's UI scale, which it will be drawn at.
 
-    Ui.customText ui.scale Sprite.Small
+    Ui.customText uiState Sprite.Small
         [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
         , { text = "make check", color = Color.black, font = Sprite.Mono }
         , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
         ]
 
 -}
-customText : UiScale -> Sprite.FontSize -> List Sprite.Segment -> Element id
-customText scale fontSize segments =
+customText : Model a -> Sprite.FontSize -> List Sprite.Segment -> Element id
+customText model fontSize segments =
     Text
         { fontSize = fontSize
         , segments = segments
-        , cachedSize = Sprite.customTextSize scale fontSize segments
+        , cachedSize = Sprite.customTextSize model.scale fontSize segments
         }
 
 
 {-| `customText` with word wrap: lines are broken between words so that none is wider
 than `maxWidth` (see Sprite.wrapLines). '\\n' still starts a new line too.
 -}
-customTextWrapped : UiScale -> Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
-customTextWrapped scale fontSize maxWidth segments =
+customTextWrapped : Model a -> Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
+customTextWrapped model fontSize maxWidth segments =
     let
         ( wrapped, cachedSize ) =
-            Sprite.wrapWithSize scale fontSize maxWidth segments
+            Sprite.wrapWithSize model.scale fontSize maxWidth segments
     in
     Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
 
@@ -733,7 +733,7 @@ align fx fy areaSize child =
         ( childX, childY ) =
             Coord.toTuple (size child)
 
-        left =
+        left2 =
             (sizeX - childX) * fx // 2
 
         top =
@@ -741,8 +741,8 @@ align fx fy areaSize child =
     in
     Single
         { padding =
-            { topLeft = Coord.xy left top
-            , bottomRight = Coord.xy (sizeX - childX - left) (sizeY - childY - top)
+            { topLeft = Coord.xy left2 top
+            , bottomRight = Coord.xy (sizeX - childX - left2) (sizeY - childY - top)
             }
         , inFront = []
         , borderAndFill = NoBorderOrFill
@@ -754,16 +754,16 @@ align fx fy areaSize child =
 
 {-| A child at the left of a space at least `width` wide, for lining things up in columns.
 -}
-minWidth : Quantity Int UiPixels -> Element id -> Element id
-minWidth width child =
+left : Quantity Int UiPixels -> Element id -> Element id
+left width child =
     align 0 0 ( Quantity.max width (Coord.x (size child)), Coord.y (size child) ) child
 
 
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
-leftAndRight width left right2 =
-    row { spacing = 0, padding = noPadding } [ minWidth (width |> Quantity.minus (Coord.x (size right2))) left, right2 ]
+leftAndRight width leftChild rightChild =
+    row { spacing = 0, padding = noPadding } [ left (width |> Quantity.minus (Coord.x (size rightChild))) leftChild, rightChild ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
@@ -773,7 +773,7 @@ center data =
 
 right : { width : Quantity Int UiPixels } -> Element id -> Element id
 right data element =
-    align 2 1 ( data.width, Coord.y (size element) ) element
+    align 2 0 ( data.width, Coord.y (size element) ) element
 
 
 topLeft : { size : Coord UiPixels } -> Element id -> Element id
