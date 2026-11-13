@@ -17,7 +17,6 @@ Both go over HTTPS: Main asks the host for them with Effect.get, and the host fe
 them with rustls (host/init/src/http.rs).
 -}
 
-import Effect
 import Json.Decode as D
 
 

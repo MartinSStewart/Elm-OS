@@ -46,7 +46,7 @@ type Input
     = Screen Int Int
       -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
     | Frame Float
-    | HttpResponse String (Result Effect.HttpError { status : Int, body : Bytes })
+    | HttpResponse String (Result HttpError { status : Int, body : Bytes })
     | Mouse Int Int
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
@@ -271,7 +271,7 @@ type WeatherState
     | FindingPlace
     | LoadingForecast Weather.Place
     | GotWeather Weather.Place Weather.Forecast
-    | WeatherFailed Effect.HttpError
+    | WeatherFailed HttpError
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -500,7 +500,7 @@ step event model =
             case stringToHttpRequestId id of
                 Just id2 ->
                     let
-                        decoded : D.Decoder value -> Result Effect.HttpError value
+                        decoded : D.Decoder value -> Result HttpError value
                         decoded decoder =
                             case result of
                                 Ok response ->
@@ -1258,7 +1258,7 @@ dragSelect focus position model =
         NewsUiId _ ->
             model
 
-        HackerNewsUiId uiId ->
+        HackerNewsUiId _ ->
             model
 
 

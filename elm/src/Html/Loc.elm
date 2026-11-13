@@ -365,7 +365,7 @@ classEq target_ =
                                 False
 
                             ( "class", v ) :: rest ->
-                                if List.any (\cls -> cls == target) (splitClasses (String.toLower v)) then
+                                if List.member target (splitClasses (String.toLower v)) then
                                     True
 
                                 else
@@ -667,62 +667,6 @@ lastChild selector =
 
 
 -- UPDATING
-
-
-insertRight : Node -> Loc -> Maybe Loc
-insertRight newNode (Loc t p) =
-    case p of
-        Top ->
-            Nothing
-
-        PNode tag attrs left up right ->
-            Just (Loc t (PNode tag attrs left up (newNode :: right)))
-
-
-insertLeft : Node -> Loc -> Maybe Loc
-insertLeft newNode (Loc t p) =
-    case p of
-        Top ->
-            Nothing
-
-        PNode tag attrs left up right ->
-            Just (Loc t (PNode tag attrs (newNode :: left) up right))
-
-
-insertDown : Node -> Loc -> Maybe Loc
-insertDown newNode (Loc t p) =
-    case t of
-        Text _ ->
-            Nothing
-
-        Comment _ ->
-            Nothing
-
-        Tag tag attrs kids ->
-            Just (Loc newNode (PNode tag attrs [] p kids))
-
-
-{-| Delete the node at given location.
-
-The new selected node will be the right sibling, if possible,
-else the left sibling, else the parent node.
-
--}
-delete : Loc -> Maybe Loc
-delete (Loc _ p) =
-    case p of
-        Top ->
-            Nothing
-
-        PNode tag attrs left up (r :: right) ->
-            Just (Loc r (PNode tag attrs left up right))
-
-        PNode tag attrs (l :: left) up [] ->
-            Just (Loc l (PNode tag attrs left up []))
-
-        PNode tag attrs [] up [] ->
-            -- Parent has no more children
-            Just (Loc (Tag tag attrs []) up)
 
 
 {-| Is there another solution?

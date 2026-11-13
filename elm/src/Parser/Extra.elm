@@ -24,8 +24,7 @@
 
 
 module Parser.Extra exposing
-    ( caseInsensitiveToken
-    , chompOneOrMore
+    ( chompOneOrMore
     , chompUntilLookAhead
     , ifProgress
     , justOneChar
@@ -34,7 +33,7 @@ module Parser.Extra exposing
     , zeroOrMore
     )
 
-import Parser exposing (..)
+import Parser exposing ((|.), (|=), Parser, Step(..), andThen, backtrackable, chompIf, chompWhile, commit, getChompedString, getOffset, loop, map, oneOf, problem, succeed)
 
 
 justOneChar : Parser String
@@ -63,8 +62,8 @@ the parser again at offset+1.
 -}
 chompUntilLookAhead : (Char -> Bool) -> Parser a -> Parser ()
 chompUntilLookAhead predicate parser =
-    (loop "" <|
-        \acc ->
+    loop ""
+        (\acc ->
             oneOf
                 [ succeed (\s -> Loop (acc ++ s))
                     |= (chompOneOrMore predicate |> getChompedString)
@@ -74,7 +73,7 @@ chompUntilLookAhead predicate parser =
                     |= justOneChar
                 , succeed (Done acc)
                 ]
-    )
+        )
         |> andThen
             (\acc ->
                 if String.isEmpty acc then
@@ -85,39 +84,22 @@ chompUntilLookAhead predicate parser =
             )
 
 
-{-| Like Parser.token except case-insensitive.
--}
-caseInsensitiveToken : String -> Parser ()
-caseInsensitiveToken token =
-    loop (String.toLower token) <|
-        \chars ->
-            case String.uncons chars of
-                Just ( char, rest ) ->
-                    oneOf
-                        [ succeed (Loop rest)
-                            |. chompIf (\c -> Char.toLower c == char)
-                        , problem ("expected case-insensitive char '" ++ String.fromChar char ++ "'")
-                        ]
-
-                Nothing ->
-                    succeed (Done ())
-
-
 zeroOrMore : Parser a -> Parser (List a)
 zeroOrMore parser =
-    loop [] <|
-        \acc ->
+    loop []
+        (\acc ->
             oneOf
                 [ succeed (\val -> Loop (val :: acc))
                     |= parser
                 , succeed (Done (List.reverse acc))
                 ]
+        )
 
 
 oneOrMore : String -> Parser a -> Parser (List a)
 oneOrMore name parser =
-    loop [] <|
-        \acc ->
+    loop []
+        (\acc ->
             oneOf
                 [ succeed (\val -> Loop (val :: acc))
                     |= parser
@@ -127,6 +109,7 @@ oneOrMore name parser =
                   else
                     succeed (Done (List.reverse acc))
                 ]
+        )
 
 
 {-| Create a parser that backtracks on success.

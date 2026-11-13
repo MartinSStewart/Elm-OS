@@ -24,10 +24,9 @@
 
 
 module Html.Parser exposing
-    ( Node(..), Document, Config
-    , allCharRefs, noCharRefs, customCharRefs
-    , run, runElement, runDocument
-    , nodeToString, nodesToString, nodeToPrettyString, nodesToPrettyString, documentToString, documentToPrettyString
+    ( Node(..), Config
+    , noCharRefs
+    , run
     )
 
 {-| Leniently parse html5 documents and fragments and then render them
@@ -36,30 +35,27 @@ into strings or Elm's virtual dom nodes.
 
 # Definition
 
-@docs Node, Document, Config
+@docs Node, Config
 
 
 # Config
 
-@docs allCharRefs, noCharRefs, customCharRefs
+@docs noCharRefs
 
 
 # Parse
 
-@docs run, runElement, runDocument
+@docs run
 
 
 # Render
-
-@docs nodeToString, nodesToString, nodeToPrettyString, nodesToPrettyString, documentToString, documentToPrettyString
 
 -}
 
 import Dict exposing (Dict)
 import Hex
-import Html.CharRefs
-import Parser exposing (..)
-import Parser.Extra exposing (..)
+import Parser exposing ((|.), (|=), DeadEnd, Nestable(..), Parser, Step(..), andThen, backtrackable, chompIf, chompUntilEndOr, chompWhile, getChompedString, lineComment, loop, map, multiComment, oneOf, problem, succeed, symbol, token)
+import Parser.Extra exposing (chompOneOrMore, chompUntilLookAhead, ifProgress, justOneChar, lookAhead, oneOrMore, zeroOrMore)
 
 
 {-| An html node is tree of text, comments, and element nodes.
@@ -81,20 +77,6 @@ type Config
         }
 
 
-{-| A config with char reference decoding turned on.
-
-This will add ~40kb to your bundle, but it is necessary to decode
-entities like `"&Delta;"` into "Δ".
-
-    run allCharRefs "abc&Delta;def"
-        == Ok [ text "abcΔdef" ]
-
--}
-allCharRefs : Config
-allCharRefs =
-    Config { charRefs = Html.CharRefs.all }
-
-
 {-| A config with char reference decoding turned off.
 
 If you know that the html you are parsing never has named character references,
@@ -107,43 +89,6 @@ or if it's sufficient to just consume them as undecoded text, then turning this 
 noCharRefs : Config
 noCharRefs =
     Config { charRefs = Dict.empty }
-
-
-{-| Provide your own character reference lookup dictionary.
-
-Note that named character references are case sensitive. When providing your own,
-you will want to consult the exhaustive `Html.CharRefs.all` dictionary to
-see which keys appear multiple times, like "quot" and "QUOT".
-
-Here is an example of providing a small subset of commonly-seen character references.
-
-    config : Html.Parser.Config
-    config =
-        [ ( "quot", "\"" )
-        , ( "QUOT", "\"" )
-        , ( "apos", "'" )
-        , ( "gt", ">" )
-        , ( "GT", ">" )
-        , ( "Gt", ">" )
-        , ( "lt", "<" )
-        , ( "LT", "<" )
-        , ( "Lt", "<" )
-        , ( "amp", "&" )
-        , ( "AMP", "&" )
-        , ( "nbsp", "\u{00A0}" )
-        ]
-        |> Dict.fromList
-        |> customCharRefs
-
-    run config "<span>&male; &amp; &female;</span>"
-        == Ok (Tag "span" [] [Text "&male; & &female;"])
-
-Notice that character references missing from the lookup table are simply parsed as text.
-
--}
-customCharRefs : Dict String String -> Config
-customCharRefs dict =
-    Config { charRefs = dict }
 
 
 {-| Parse an html fragment into a list of html nodes.
@@ -162,124 +107,31 @@ run cfg input =
     Parser.run (parseAll cfg) input
 
 
-{-| Like `run` except it only parses one top-level element and it always returns a single node.
--}
-runElement : Config -> String -> Result (List DeadEnd) Node
-runElement cfg input =
-    Parser.run
-        (succeed identity
-            |. ws
-            |= element cfg
-        )
-        input
-
-
-{-| An html document has a `<!doctype>` and then a root html node.
--}
-type alias Document =
-    { legacyCompat : Bool
-    , root : Node
-    }
-
-
-doctypeLegacy : Parser Bool
-doctypeLegacy =
-    -- https://html.spec.whatwg.org/multipage/syntax.html#doctype-legacy-string
-    (succeed identity
-        |. chompOneOrMore isSpace
-        |. caseInsensitiveToken "SYSTEM"
-        |. chompOneOrMore isSpace
-        |= (oneOf
-                [ token "\""
-                , token "'"
-                ]
-                |> getChompedString
-           )
-    )
-        |> andThen
-            (\quote ->
-                succeed ()
-                    |. token "about:legacy-compat"
-                    |. token quote
-            )
-        |> andThen (\_ -> succeed True)
-
-
-doctype : Parser Bool
-doctype =
-    -- https://html.spec.whatwg.org/multipage/syntax.html#the-doctype
-    succeed identity
-        |. token "<!"
-        |. caseInsensitiveToken "DOCTYPE"
-        |. chompOneOrMore isSpace
-        |. caseInsensitiveToken "html"
-        |= oneOf
-            [ backtrackable doctypeLegacy
-            , succeed False
-            ]
-        |. chompWhile isSpace
-        |. token ">"
-
-
-{-| Parses `<!doctype html>` and any html nodes after.
-
-Always returns a single root node. Wraps nodes in a root `<html>` node if one is not present.
-
-**Caveat**: If there are multiple top-level nodes and one of them is `<html>`, then this
-function will wrap them all in another `<html>` node.
-
--}
-runDocument : Config -> String -> Result (List DeadEnd) Document
-runDocument cfg input =
-    Parser.run (document cfg) input
-
-
-document : Config -> Parser Document
-document cfg =
-    succeed Document
-        |= doctype
-        |. ws
-        |= (zeroOrMore (node cfg)
-                |> map
-                    (\nodes ->
-                        case nodes of
-                            [] ->
-                                Tag "html" [] []
-
-                            ((Tag "html" _ _) as root) :: [] ->
-                                root
-
-                            other :: [] ->
-                                Tag "html" [] [ other ]
-
-                            _ ->
-                                Tag "html" [] nodes
-                    )
-           )
-
-
 parseAll : Config -> Parser (List Node)
 parseAll cfg =
-    Parser.loop [] <|
-        \acc ->
+    loop []
+        (\acc ->
             oneOf
                 [ node cfg
                     |> map (\n -> Loop (n :: acc))
                 , succeed ()
                     |> map (\_ -> Done (List.reverse acc))
                 ]
+        )
 
 
 {-| Chomps zero or more space characters or html comments.
 -}
 ws : Parser ()
 ws =
-    loop 0 <|
-        ifProgress <|
-            oneOf
+    loop 0
+        (ifProgress
+            (oneOf
                 [ multiComment "<!--" "-->" NotNestable
                 , chompWhile isSpace
                 ]
+            )
+        )
 
 
 isSpace : Char -> Bool
@@ -312,7 +164,7 @@ attributeValueQuoted cfg quote =
         isQuotedValueChar c =
             c /= quote && c /= '&'
     in
-    Parser.succeed identity
+    succeed identity
         |. chompIf ((==) quote)
         |= (oneOf
                 [ chompOneOrMore isQuotedValueChar
@@ -531,19 +383,19 @@ element cfg =
                         else if List.member tag escapableRawTextTags then
                             -- Raw text elemements consume text until they find their own closing tag
                             succeed (Tag tag attrs)
-                                |= (loop [] <|
-                                        \acc ->
-                                            oneOf
-                                                [ succeed (Done (List.reverse acc))
-                                                    |. backtrackable (closeTag tag)
-                                                , succeed (\n -> Loop (n :: acc))
-                                                    |= (chompUntilLookAhead (\c -> c /= '<') (closeTag tag)
-                                                            |> getChompedString
-                                                            |> map Text
-                                                       )
-                                                , succeed (Done (List.reverse acc))
-                                                ]
-                                   )
+                                |= loop []
+                                    (\acc ->
+                                        oneOf
+                                            [ succeed (Done (List.reverse acc))
+                                                |. backtrackable (closeTag tag)
+                                            , succeed (\n -> Loop (n :: acc))
+                                                |= (chompUntilLookAhead (\c -> c /= '<') (closeTag tag)
+                                                        |> getChompedString
+                                                        |> map Text
+                                                   )
+                                            , succeed (Done (List.reverse acc))
+                                            ]
+                                    )
 
                         else if isAutoclosingTag tag then
                             -- Autoclosing tag is automatically closed by an opening tag of the same name
@@ -569,16 +421,16 @@ element cfg =
                         else
                             -- Normal elements parse all nodes as children until their closing tag
                             succeed (Tag tag attrs)
-                                |= (loop [] <|
-                                        \acc ->
-                                            oneOf
-                                                [ succeed (Done (List.reverse acc))
-                                                    |. backtrackable (closeTag tag)
-                                                , succeed (\n -> Loop (n :: acc))
-                                                    |= backtrackable (node cfg)
-                                                , succeed () |> map (\_ -> Done (List.reverse acc))
-                                                ]
-                                   )
+                                |= loop []
+                                    (\acc ->
+                                        oneOf
+                                            [ succeed (Done (List.reverse acc))
+                                                |. backtrackable (closeTag tag)
+                                            , succeed (\n -> Loop (n :: acc))
+                                                |= backtrackable (node cfg)
+                                            , succeed () |> map (\_ -> Done (List.reverse acc))
+                                            ]
+                                    )
             )
 
 
@@ -717,7 +569,7 @@ For example: "<script>alert('</script>')</script>"
 -}
 consumeJavascriptUntilClosingTag : Parser (List Node)
 consumeJavascriptUntilClosingTag =
-    Parser.loop [] <|
+    loop [] <|
         \acc ->
             let
                 accumulate newNode =
@@ -732,28 +584,28 @@ consumeJavascriptUntilClosingTag =
                         ( nonTextNode :: tail, _ ) ->
                             Loop (newNode :: nonTextNode :: tail)
             in
-            Parser.oneOf
+            oneOf
                 [ -- HTML comments are, albeit considered a bad practice recently,
                   -- allowed inside <script> to hide scripts from really ancient web browser
                   comment
                     |> map accumulate
                 , lineComment "//"
-                    |> Parser.getChompedString
-                    |> Parser.map (Text >> accumulate)
-                , Parser.multiComment "/*" "*/" Parser.NotNestable
-                    |> Parser.getChompedString
-                    |> Parser.map (Text >> accumulate)
+                    |> getChompedString
+                    |> map (Text >> accumulate)
+                , multiComment "/*" "*/" Parser.NotNestable
+                    |> getChompedString
+                    |> map (Text >> accumulate)
                 , javaScriptStringLike '"'
-                    |> Parser.map (Text >> accumulate)
+                    |> map (Text >> accumulate)
                 , javaScriptStringLike '\''
-                    |> Parser.map (Text >> accumulate)
+                    |> map (Text >> accumulate)
                 , javaScriptStringLike '`'
-                    |> Parser.map (Text >> accumulate)
+                    |> map (Text >> accumulate)
                 , closeTag "script"
-                    |> Parser.map (\() -> Done (List.reverse acc))
-                , Parser.chompIf (always True)
-                    |> Parser.getChompedString
-                    |> Parser.map (Text >> accumulate)
+                    |> map (\() -> Done (List.reverse acc))
+                , chompIf (always True)
+                    |> getChompedString
+                    |> map (Text >> accumulate)
                 ]
 
 
@@ -763,207 +615,26 @@ javaScriptStringLike terminatorChar =
         terminatorStr =
             String.fromChar terminatorChar
     in
-    Parser.succeed identity
-        |. Parser.token terminatorStr
-        |= Parser.loop "" (stringHelp terminatorChar terminatorStr)
+    succeed identity
+        |. token terminatorStr
+        |= loop "" (stringHelp terminatorChar terminatorStr)
         -- Restoring original shape
-        |> Parser.map (\chunk -> terminatorStr ++ chunk ++ terminatorStr)
+        |> map (\chunk -> terminatorStr ++ chunk ++ terminatorStr)
 
 
-stringHelp : Char -> String -> String -> Parser (Parser.Step String String)
+stringHelp : Char -> String -> String -> Parser (Step String String)
 stringHelp terminatorChar terminatorStr acc =
-    Parser.oneOf
-        [ Parser.succeed (\char -> Parser.Loop (acc ++ "\\" ++ char))
-            |. Parser.token "\\"
+    oneOf
+        [ succeed (\char -> Parser.Loop (acc ++ "\\" ++ char))
+            |. token "\\"
             |= justOneChar
-        , Parser.token terminatorStr
-            |> Parser.map (\_ -> Parser.Done acc)
+        , token terminatorStr
+            |> map (\_ -> Done acc)
         , chompOneOrMore (\char -> char /= '\\' && char /= terminatorChar)
-            |> Parser.getChompedString
-            |> Parser.map (\chunk -> Parser.Loop (acc ++ chunk))
+            |> getChompedString
+            |> map (\chunk -> Loop (acc ++ chunk))
         ]
 
 
 
 -- RENDER
-
-
-openTagToString : String -> List ( String, String ) -> String
-openTagToString tag attrs =
-    "<"
-        ++ tag
-        ++ (if List.isEmpty attrs then
-                ""
-
-            else
-                List.map
-                    (\( k, v ) ->
-                        if String.isEmpty v then
-                            k
-
-                        else
-                            k ++ "=\"" ++ v ++ "\""
-                    )
-                    attrs
-                    |> String.join " "
-                    |> (\s -> " " ++ s)
-           )
-        ++ ">"
-
-
-{-| Convert an html node into a non-pretty string.
-
-    nodeToString (Tag "a" [] [ Text "hi" ])
-        == "<a>hi</a>"
-
--}
-nodeToString : Node -> String
-nodeToString node_ =
-    case node_ of
-        Text s ->
-            s
-
-        Comment s ->
-            "<!--" ++ s ++ "-->"
-
-        Tag tag attrs kids ->
-            if isVoidTag tag && List.isEmpty kids then
-                openTagToString tag attrs
-
-            else
-                openTagToString tag attrs
-                    ++ (List.map nodeToString kids
-                            |> String.concat
-                       )
-                    ++ "</"
-                    ++ tag
-                    ++ ">"
-
-
-{-| Convert multiple html nodes into a non-pretty string.
-
-    nodesToString
-        [ Tag "a" [] [ Text "hi" ]
-        , Tag "div" [] [ Tag "span" [] [] ]
-        ]
-        == "<a>hi</a><div><span></span></div>"
-
--}
-nodesToString : List Node -> String
-nodesToString nodes =
-    List.map nodeToString nodes
-        |> String.concat
-
-
-{-| Generate a pretty string for a single html node.
--}
-nodeToPrettyString : Node -> String
-nodeToPrettyString node_ =
-    prettyNode_ 0 node_
-
-
-prettyNode_ : Int -> Node -> String
-prettyNode_ indent node_ =
-    let
-        pad =
-            String.padLeft (indent * 4) ' ' ""
-    in
-    case node_ of
-        Text s ->
-            if String.isEmpty (String.trim s) then
-                ""
-
-            else
-                let
-                    ss =
-                        s
-                            |> String.trim
-                            |> String.split "\n"
-                            |> List.filter (String.trim >> String.isEmpty >> not)
-                            |> String.join ("\n" ++ String.padLeft (indent * 4) ' ' "")
-                in
-                "\n" ++ pad ++ ss
-
-        Comment s ->
-            if String.isEmpty s then
-                ""
-
-            else
-                "\n" ++ pad ++ "<!--" ++ s ++ "-->"
-
-        Tag tag attrs kids ->
-            String.trim <|
-                String.concat
-                    (List.concat
-                        [ [ "\n" ++ pad ++ openTagToString tag attrs ]
-                        , List.map (prettyNode_ (indent + 1)) kids
-                        , [ if List.isEmpty kids then
-                                ""
-
-                            else
-                                "\n"
-                          , (if List.isEmpty kids then
-                                ""
-
-                             else
-                                pad
-                            )
-                                ++ (if isVoidTag tag && List.isEmpty kids then
-                                        ""
-
-                                    else
-                                        "</"
-                                            ++ tag
-                                            ++ ">"
-                                   )
-                          ]
-                        ]
-                    )
-
-
-{-| Turn a node tree into a pretty-printed, indented html string.
-
-    ("<a><b><c>hello</c></b></a>"
-        |> Html.Parser.run Html.Parser.allCharRefs
-        |> Result.map nodesToPrettyString
-    )
-        == Ok """<a>
-        <b>
-            <c>
-                hello
-            </c>
-        </b>
-    </a>"""
-
--}
-nodesToPrettyString : List Node -> String
-nodesToPrettyString nodes =
-    List.foldl
-        (\node_ acc ->
-            acc ++ nodeToPrettyString node_
-        )
-        ""
-        nodes
-
-
-doctypeToString : Bool -> String
-doctypeToString legacyCompat =
-    if legacyCompat then
-        "<!DOCTYPE html SYSTEM \"about:legacy-compat\">"
-
-    else
-        "<!DOCTYPE html>"
-
-
-{-| Convert a document into a string starting with `<!doctype html>` followed by the root html node.
--}
-documentToString : Document -> String
-documentToString doc =
-    doctypeToString doc.legacyCompat ++ "\n" ++ nodeToString doc.root
-
-
-{-| Convert a document into a pretty, indented string.
--}
-documentToPrettyString : Document -> String
-documentToPrettyString doc =
-    doctypeToString doc.legacyCompat ++ "\n" ++ nodeToPrettyString doc.root
