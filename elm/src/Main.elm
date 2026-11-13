@@ -2205,7 +2205,7 @@ weatherRows model =
                     (\i day ->
                         Ui.row { spacing = 6, padding = Ui.noPadding }
                             [ weatherIcon 1 day.code
-                            , Ui.minWidth (em 6)
+                            , Ui.left (em 6)
                                 (t
                                     (if i == 0 then
                                         "Today"
@@ -2214,7 +2214,7 @@ weatherRows model =
                                         Weather.weekday day.date
                                     )
                                 )
-                            , Ui.minWidth (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
                             , t (Weather.describe day.code)
                             ]
                     )
@@ -2417,7 +2417,7 @@ aboutPage model =
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
+                [ Ui.left (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
 
         system =
             model.system

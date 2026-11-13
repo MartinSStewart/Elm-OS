@@ -148,7 +148,7 @@ daysView idMap uiState days =
                     ++ ", "
                     ++ String.fromInt (Date.year date)
                     |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
-                    |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
+                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
                     |> Ui.el
                         { padding = Ui.paddingXY 12 4
                         , inFront = []

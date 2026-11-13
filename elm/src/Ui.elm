@@ -28,9 +28,9 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , left
     , leftAndRight
     , map
-    , minWidth
     , noPadding
     , none
     , onAnimationFrame
@@ -729,7 +729,7 @@ align fx fy areaSize child =
         ( childX, childY ) =
             Coord.toTuple (size child)
 
-        left =
+        left2 =
             (sizeX - childX) * fx // 2
 
         top =
@@ -737,8 +737,8 @@ align fx fy areaSize child =
     in
     Single
         { padding =
-            { topLeft = Coord.xy left top
-            , bottomRight = Coord.xy (sizeX - childX - left) (sizeY - childY - top)
+            { topLeft = Coord.xy left2 top
+            , bottomRight = Coord.xy (sizeX - childX - left2) (sizeY - childY - top)
             }
         , inFront = []
         , borderAndFill = NoBorderOrFill
@@ -750,16 +750,16 @@ align fx fy areaSize child =
 
 {-| A child at the left of a space at least `width` wide, for lining things up in columns.
 -}
-minWidth : Quantity Int UiPixels -> Element id -> Element id
-minWidth width child =
+left : Quantity Int UiPixels -> Element id -> Element id
+left width child =
     align 0 0 ( Quantity.max width (Coord.x (size child)), Coord.y (size child) ) child
 
 
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
-leftAndRight width left right2 =
-    row { spacing = 0, padding = noPadding } [ minWidth (width |> Quantity.minus (Coord.x (size right2))) left, right2 ]
+leftAndRight width left2 right2 =
+    row { spacing = 0, padding = noPadding } [ left (width |> Quantity.minus (Coord.x (size right2))) left2, right2 ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
@@ -769,7 +769,7 @@ center data =
 
 right : { width : Quantity Int UiPixels } -> Element id -> Element id
 right data element =
-    align 2 1 ( data.width, Coord.y (size element) ) element
+    align 2 0 ( data.width, Coord.y (size element) ) element
 
 
 topLeft : { size : Coord UiPixels } -> Element id -> Element id

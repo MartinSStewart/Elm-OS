@@ -461,7 +461,7 @@ parseComments html =
                         |> Maybe.map (\comment -> commentText (nodeChildren comment) |> String.trim)
                     )
             )
-        |> buildTree 0
+        |> buildTree 0 0
         |> Tuple.first
 
 
@@ -545,8 +545,8 @@ commentText nodes =
 children being the deeper ones that follow it, numbering them in order from `index`.
 Also gives the index after the last.
 -}
-buildTree : Int -> List { indent : Int, author : String, content : String } -> ( List Comment, Int )
-buildTree index rows =
+buildTree : Int -> Int -> List { indent : Int, author : String, content : String } -> ( List Comment, Int )
+buildTree indentation index rows =
     case rows of
         [] ->
             ( [], index )
@@ -557,10 +557,10 @@ buildTree index rows =
                     spanWhile (\next -> next.indent > row.indent) rest
 
                 ( children, afterChildren ) =
-                    buildTree (index + 1) childRows
+                    buildTree (indentation + 1) (index + 1) childRows
 
                 ( siblings, afterSiblings ) =
-                    buildTree afterChildren siblingRows
+                    buildTree indentation afterChildren siblingRows
             in
             ( Comment
                 { index = index
@@ -568,7 +568,7 @@ buildTree index rows =
                 , content = row.content
                 , children = children
                 , descendants = afterChildren - index - 1
-                , isExpanded = List.length children <= maxExpandedChildren
+                , isExpanded = indentation == 0 || List.length children <= maxExpandedChildren
                 }
                 :: siblings
             , afterSiblings
@@ -732,7 +732,7 @@ postView idMap width index ( postId, title ) =
             )
         , Ui.text Small (Sans Regular) (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - spacing)) title)
         ]
-        |> Ui.minWidth (Units.uiPixels width)
+        |> Ui.left (Units.uiPixels width)
         |> Ui.customButton
             { id = idMap (NewsPostButton postId)
             , padding = Ui.paddingXY 0 postPadding
@@ -780,7 +780,7 @@ commentsView idMap uiState screenSize postId title comments =
             CommentsLoadFailed error ->
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
-            |> Ui.minWidth (Units.uiPixels width)
+            |> Ui.left (Units.uiPixels width)
             |> scrolling idMap uiState (CommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
@@ -803,11 +803,8 @@ commentView idMap width (Comment comment) =
 
         repliesButton : Element id
         repliesButton =
-            if List.isEmpty comment.children then
-                Ui.none
-
-            else if comment.isExpanded then
-                toggleButton idMap comment.index "[–]"
+            if comment.isExpanded then
+                toggleButton idMap comment.index "[-]"
 
             else
                 toggleButton idMap comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
@@ -816,33 +813,41 @@ commentView idMap width (Comment comment) =
         text =
             Ui.row
                 { spacing = toggleSpacing, padding = Ui.noPadding }
-                [ Ui.minWidth (Units.uiPixels toggleWidth) repliesButton
+                [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
                 , Ui.customTextWrapped
                     Small
                     (Units.uiPixels textWidth)
                     [ { text = comment.author ++ "  ", color = Color.black, font = Sans Bold }
-                    , { text = comment.content, color = Color.lightFont, font = Sans Regular }
+                    , { text = comment.content, color = Color.black, font = Sans Regular }
                     ]
                 ]
     in
-    if comment.isExpanded && not (List.isEmpty comment.children) then
+    if comment.isExpanded then
         Ui.column
             { spacing = commentSpacing, padding = Ui.noPadding }
             [ text
             , Ui.row
                 { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (Units.uiPixels replyIndent) Ui.none
+                [ Ui.left (Units.uiPixels replyIndent) Ui.none
                 , commentsColumn idMap (width - replyIndent) comment.children
                 ]
             ]
 
     else
-        text
+        Ui.row
+            { spacing = toggleSpacing, padding = Ui.noPadding }
+            [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
+            , Ui.customTextWrapped
+                Small
+                (Units.uiPixels textWidth)
+                [ { text = comment.author ++ "  ", color = Color.black, font = Sans Bold }
+                ]
+            ]
 
 
 toggleButton : (UiId -> id) -> Int -> String -> Element id
 toggleButton idMap index label =
-    Ui.colorText Color.lightFont Small (Sans Regular) label
+    Ui.colorText Color.lightFont Small Mono label
         |> Ui.customButton
             { id = idMap (CommentToggle index)
             , padding = Ui.noPadding
