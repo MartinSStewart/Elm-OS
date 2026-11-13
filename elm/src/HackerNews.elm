@@ -27,7 +27,7 @@ and replies are hidden at first under a comment with more than 8 of them.
 import Bytes exposing (Bytes)
 import Color
 import Coord exposing (Coord)
-import Dict
+import Dict exposing (Dict)
 import Effect
 import Html.Parser
 import Quantity exposing (Quantity)
@@ -80,6 +80,11 @@ type Effect
 type alias Model =
     { data : HackerNewsState
     , page : Page
+
+    -- The comments of the last few posts opened, by post id. `opened` says when (it
+    -- counts up from `openCount`), so the longest unopened can go when there are too many.
+    , comments : Dict String { opened : Int, state : CommentsState }
+    , openCount : Int
     , isOpen : Bool
     }
 
@@ -91,12 +96,11 @@ type HackerNewsState
     | LoadFailed Effect.HttpError
 
 
-{-| The list of posts, or one post's comments. Only the open post's comments are kept:
-going back to the list drops them, so the Model doesn't grow with every post read.
+{-| The list of posts, or one post's comments (in `comments`), with its title.
 -}
 type Page
     = PostsPage
-    | CommentsPage { postId : PostId, title : String, comments : CommentsState }
+    | CommentsPage PostId String
 
 
 type CommentsState
@@ -126,7 +130,15 @@ type HttpRequestId
 
 init : Model
 init =
-    { data = NotLoading, page = PostsPage, isOpen = False }
+    { data = NotLoading, page = PostsPage, comments = Dict.empty, openCount = 0, isOpen = False }
+
+
+{-| How many posts' comments are kept. Opening another drops those of the post opened
+longest ago.
+-}
+maxKeptComments : Int
+maxKeptComments =
+    10
 
 
 {-| A comment's replies are hidden at first if it has more than this many.
@@ -160,35 +172,25 @@ gotHttpRequest requestId result model =
                 Err error ->
                     { model | data = LoadFailed error }
 
-        GetPostRequest postId ->
-            case model.page of
-                CommentsPage page ->
-                    if page.postId == postId then
-                        let
-                            comments : CommentsState
-                            comments =
-                                case result of
-                                    Ok data ->
-                                        if data.status >= 200 && data.status < 300 then
-                                            Effect.bodyToString data.body
-                                                |> Maybe.withDefault ""
-                                                |> parseComments
-                                                |> CommentsLoaded
+        GetPostRequest (PostId postId) ->
+            let
+                comments : CommentsState
+                comments =
+                    case result of
+                        Ok data ->
+                            if data.status >= 200 && data.status < 300 then
+                                Effect.bodyToString data.body
+                                    |> Maybe.withDefault ""
+                                    |> parseComments
+                                    |> CommentsLoaded
 
-                                        else
-                                            CommentsLoadFailed (Effect.badBody data)
+                            else
+                                CommentsLoadFailed (Effect.badBody data)
 
-                                    Err error ->
-                                        CommentsLoadFailed error
-                        in
-                        { model | page = CommentsPage { page | comments = comments } }
-
-                    else
-                        -- The person went on to another post before this one came.
-                        model
-
-                PostsPage ->
-                    model
+                        Err error ->
+                            CommentsLoadFailed error
+            in
+            { model | comments = Dict.update postId (Maybe.map (\entry -> { entry | state = comments })) model.comments }
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -250,17 +252,57 @@ onClick uiId model =
             ( model, [] )
 
         NewsPostButton ((PostId id) as postId) ->
-            ( { model
-                | page =
-                    CommentsPage
-                        { postId = postId
-                        , title = postTitle postId model.data
-                        , comments = CommentsLoading
-                        }
-              }
-            , [ ResetViewport CommentsViewport
-              , HttpRequest (GetPostRequest postId) ("https://news.ycombinator.com/item?id=" ++ id)
-              ]
+            let
+                cached : Maybe CommentsState
+                cached =
+                    Dict.get id model.comments |> Maybe.map .state
+
+                opened : Model
+                opened =
+                    { model
+                        | page = CommentsPage postId (postTitle postId model.data)
+                        , comments =
+                            Dict.insert
+                                id
+                                { opened = model.openCount
+                                , state =
+                                    case cached of
+                                        Just (CommentsLoaded comments) ->
+                                            CommentsLoaded comments
+
+                                        Just CommentsLoading ->
+                                            CommentsLoading
+
+                                        Just (CommentsLoadFailed _) ->
+                                            CommentsLoading
+
+                                        Nothing ->
+                                            CommentsLoading
+                                }
+                                model.comments
+                                |> dropOldest
+                        , openCount = model.openCount + 1
+                    }
+
+                load : List Effect
+                load =
+                    [ HttpRequest (GetPostRequest postId) ("https://news.ycombinator.com/item?id=" ++ id) ]
+            in
+            ( opened
+            , ResetViewport CommentsViewport
+                :: (case cached of
+                        Just (CommentsLoaded _) ->
+                            []
+
+                        Just CommentsLoading ->
+                            []
+
+                        Just (CommentsLoadFailed _) ->
+                            load
+
+                        Nothing ->
+                            load
+                   )
             )
 
         BackButton ->
@@ -268,21 +310,58 @@ onClick uiId model =
 
         CommentToggle index ->
             case model.page of
-                CommentsPage page ->
-                    case page.comments of
-                        CommentsLoaded comments ->
-                            ( { model | page = CommentsPage { page | comments = CommentsLoaded (List.map (toggle index) comments) } }
-                            , []
-                            )
+                CommentsPage (PostId id) _ ->
+                    ( { model
+                        | comments =
+                            Dict.update
+                                id
+                                (Maybe.map
+                                    (\entry ->
+                                        case entry.state of
+                                            CommentsLoaded comments ->
+                                                { entry | state = CommentsLoaded (List.map (toggle index) comments) }
 
-                        CommentsLoading ->
-                            ( model, [] )
+                                            CommentsLoading ->
+                                                entry
 
-                        CommentsLoadFailed _ ->
-                            ( model, [] )
+                                            CommentsLoadFailed _ ->
+                                                entry
+                                    )
+                                )
+                                model.comments
+                      }
+                    , []
+                    )
 
                 PostsPage ->
                     ( model, [] )
+
+
+{-| Drops the comments opened longest ago while more than `maxKeptComments` are kept.
+-}
+dropOldest : Dict String { opened : Int, state : CommentsState } -> Dict String { opened : Int, state : CommentsState }
+dropOldest comments =
+    if Dict.size comments > maxKeptComments then
+        Dict.foldl
+            (\id entry oldest ->
+                case oldest of
+                    Just ( _, oldestOpened ) ->
+                        if entry.opened < oldestOpened then
+                            Just ( id, entry.opened )
+
+                        else
+                            oldest
+
+                    Nothing ->
+                        Just ( id, entry.opened )
+            )
+            Nothing
+            comments
+            |> Maybe.map (\( id, _ ) -> dropOldest (Dict.remove id comments))
+            |> Maybe.withDefault comments
+
+    else
+        comments
 
 
 postTitle : PostId -> HackerNewsState -> String
@@ -602,8 +681,13 @@ view idMap uiState screenSize model =
                     LoadFailed httpError ->
                         Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
 
-            CommentsPage page ->
-                commentsView idMap uiState screenSize page
+            CommentsPage (PostId id) title ->
+                commentsView
+                    idMap
+                    uiState
+                    screenSize
+                    title
+                    (Dict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
 
 
@@ -661,8 +745,8 @@ postView idMap width index ( postId, title ) =
             }
 
 
-commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> { postId : PostId, title : String, comments : CommentsState } -> Element id
-commentsView idMap uiState screenSize page =
+commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> String -> CommentsState -> Element id
+commentsView idMap uiState screenSize title comments =
     let
         width : Int
         width =
@@ -684,17 +768,17 @@ commentsView idMap uiState screenSize page =
             , Ui.text
                 Small
                 (Sans Bold)
-                (Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) page.title)
+                (Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title)
             ]
-        , (case page.comments of
+        , (case comments of
             CommentsLoading ->
                 Ui.text Small (Sans Regular) "Loading comments..."
 
             CommentsLoaded [] ->
                 Ui.text Small (Sans Regular) "No comments yet."
 
-            CommentsLoaded comments ->
-                commentsColumn idMap width comments
+            CommentsLoaded loaded ->
+                commentsColumn idMap width loaded
 
             CommentsLoadFailed error ->
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
