@@ -988,11 +988,6 @@ click model id uiState =
                     case effect of
                         HackerNews.HttpRequest requestId url ->
                             ( model2, httpGet (HackerNewsRequest requestId) url :: effects2 )
-
-                        HackerNews.ResetViewport viewportId ->
-                            ( { model2 | uiState = Ui.updateElement (idToString (HackerNewsUiId viewportId)) (\_ -> Nothing) model2.uiState }
-                            , effects2
-                            )
                 )
                 ( { model | hackerNews = hackerNews }, [] )
                 effects

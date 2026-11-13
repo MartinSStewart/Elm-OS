@@ -44,7 +44,7 @@ type UiId
     = NewsPostButton PostId
     | OpenButton
     | PostsViewport
-    | CommentsViewport
+    | CommentsViewport PostId
     | BackButton
     | CommentToggle Int
 
@@ -61,8 +61,8 @@ idToString id =
         PostsViewport ->
             "PostsViewport"
 
-        CommentsViewport ->
-            "CommentsViewport"
+        CommentsViewport (PostId postId) ->
+            "CommentsViewport_" ++ postId
 
         BackButton ->
             "BackButton"
@@ -73,8 +73,6 @@ idToString id =
 
 type Effect
     = HttpRequest HttpRequestId String
-      -- Scroll a viewport back to the top.
-    | ResetViewport UiId
 
 
 type alias Model =
@@ -248,7 +246,7 @@ onClick uiId model =
         PostsViewport ->
             ( model, [] )
 
-        CommentsViewport ->
+        CommentsViewport _ ->
             ( model, [] )
 
         NewsPostButton ((PostId id) as postId) ->
@@ -289,20 +287,18 @@ onClick uiId model =
                     [ HttpRequest (GetPostRequest postId) ("https://news.ycombinator.com/item?id=" ++ id) ]
             in
             ( opened
-            , ResetViewport CommentsViewport
-                :: (case cached of
-                        Just (CommentsLoaded _) ->
-                            []
+            , case cached of
+                Just (CommentsLoaded _) ->
+                    []
 
-                        Just CommentsLoading ->
-                            []
+                Just CommentsLoading ->
+                    []
 
-                        Just (CommentsLoadFailed _) ->
-                            load
+                Just (CommentsLoadFailed _) ->
+                    load
 
-                        Nothing ->
-                            load
-                   )
+                Nothing ->
+                    load
             )
 
         BackButton ->
@@ -784,7 +780,7 @@ commentsView idMap uiState screenSize title comments =
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
             |> Ui.minWidth (Units.uiPixels width)
-            |> scrolling idMap uiState CommentsViewport screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling idMap uiState (CommentsViewport page.postId) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
