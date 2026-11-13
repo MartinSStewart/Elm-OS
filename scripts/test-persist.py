@@ -239,10 +239,47 @@ def snapshot_text():
 
 def editor_text(snap):
     """The text editor's text in a snapshot ([format, version, modelHash, msgHash, next,
-    model], see Persist.elm): Model is a record encoded as an array, in Main.Model's field
-    order (MODEL_FIELDS); then `editor` (TextInputMultiline.Model: [input, scroll],
-    TextInput.Model: [current, undo, redo], State: [cursor, size, text])."""
-    return snap[5][MODEL_FIELDS.index("editor")][0][0][2]
+    model], see Persist.elm). Model is a record encoded as an array, in Main.Model's field
+    order (MODEL_FIELDS). The editor's state is with the other UI elements' in `uiState`
+    (Ui.Model: [focus, uiState]), a Dict encoded as [[key, value], ...] whose key for it is
+    Main.idToString EditorInput. The value is a Ui.ElementState, a custom type encoded as
+    [variant's number, argument]: variant 1 is TextInputMultilineState, holding a
+    TextInputMultiline.Model: [input, scroll], TextInput.Model: [current, undo, redo],
+    State: [cursor, size, text]. "" if the editor has no state yet (nothing typed)."""
+    if "uiState" not in MODEL_FIELDS:
+        fail("Main.Model has no `uiState` field any more: update editor_text in this test")
+    try:
+        states = dict(snap[5][MODEL_FIELDS.index("uiState")][1])
+        if EDITOR_ID not in states:
+            return ""
+        tag, state = states[EDITOR_ID]
+        if tag != EDITOR_STATE_TAG:
+            fail(f"the editor's state in the snapshot is variant {tag} of Ui.ElementState, "
+                 f"not TextInputMultilineState ({EDITOR_STATE_TAG})")
+        text = state[0][0][2]
+    except (IndexError, TypeError, ValueError) as e:
+        fail(f"the snapshot's Model isn't shaped as editor_text in this test expects ({e!r}): "
+             f"{json.dumps(snap[5])[:300]}")
+    if not isinstance(text, str):
+        fail(f"the editor's text in the snapshot isn't a string: {text!r}")
+    return text
+
+
+def variant_number(path, type_name, variant):
+    """Where `variant` comes in the custom type `type_name` (tools/wire numbers a type's
+    variants in the order they are written)."""
+    source = re.sub(r"--[^\n]*", "", open(path).read())
+    m = re.search(rf"^type {type_name}\b[^=]*=(.*?)(?=^\S)", source, re.S | re.M)
+    if not m:
+        fail(f"no `type {type_name}` in {path}")
+    names = [v.split()[0] for v in m.group(1).split("|")]
+    if variant not in names:
+        fail(f"{type_name} in {path} has no variant {variant}: update editor_text in this test")
+    return names.index(variant)
+
+
+EDITOR_ID = "EditorInput"  # Main.idToString EditorInput
+EDITOR_STATE_TAG = variant_number(f"{ROOT}/elm/src/Ui.elm", "ElementState", "TextInputMultilineState")
 
 
 def model_fields():
