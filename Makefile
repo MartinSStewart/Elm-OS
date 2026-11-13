@@ -90,7 +90,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-update release measure-frames
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -154,7 +154,10 @@ KMAKE     = SOURCE_DATE_EPOCH=$(KERNEL_EPOCH) $(MAKE) -C $(KERNEL_SRC) KBUILD_BU
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
 # ELMOS_UPDATES=1: follow the deployed branch (host/init/src/update.rs); QEMU runs don't.
-USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_UPDATES=1
+# panic=10: if /init dies anyway (its panic hook, host/init/src/error_screen.rs, normally
+# shows the message or restarts), the kernel restarts the computer after 10 s rather
+# than freezing.
+USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 panic=10 mac80211_hwsim.radios=0 ELMOS_UPDATES=1
 
 kernel-src: $(KERNEL_SRC)/Makefile
 
@@ -594,6 +597,10 @@ test-persist: all $(BUILD)/data-empty.img | check-run-deps
 # from one that fails (see the script).
 test-switch: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-switch.py
+
+# The error screen: a crash loop, a hang, and panics in /init (see the script).
+test-errors: all $(BUILD)/data-empty.img | check-run-deps
+	python3 scripts/test-errors.py
 
 # Following the deployed branch, against a stand-in for GitHub (see the script).
 test-update: all $(BUILD)/data-empty.img | check-run-deps

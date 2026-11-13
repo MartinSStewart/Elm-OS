@@ -84,6 +84,11 @@ pub fn wait_mounted() -> bool {
     known.unwrap()
 }
 
+/// Whether the data disk is mounted, without waiting (false while not yet known).
+pub fn is_mounted() -> bool {
+    mounted_state().0.try_lock().map(|m| *m == Some(true)).unwrap_or(false)
+}
+
 fn mounted_state() -> &'static (Mutex<Option<bool>>, std::sync::Condvar) {
     static MOUNTED: OnceLock<(Mutex<Option<bool>>, std::sync::Condvar)> = OnceLock::new();
     MOUNTED.get_or_init(|| (Mutex::new(None), std::sync::Condvar::new()))

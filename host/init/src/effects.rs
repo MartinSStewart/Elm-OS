@@ -74,6 +74,17 @@ pub fn from_elm(kind: u8, payload: Vec<u8>) -> bool {
     }
 }
 
+/// Wakes the host thread without sending it anything (error_screen.rs).
+pub fn wake() {
+    inbox().waker.wake();
+}
+
+/// For the host thread after a panic: clears the wake-up without touching the queue,
+/// whose lock the thread that panicked may hold.
+pub fn clear_wake() {
+    inbox().waker.clear();
+}
+
 /// A new Elm program has started (elm.rs).
 pub fn connected(program: u64) {
     push(Sent::Connected(program));

@@ -37,7 +37,9 @@ pub fn valid_name(name: &str) -> bool {
 pub fn path(build: &Build) -> PathBuf {
     match build {
         Some(name) => persist::Disk::path(&format!("programs/{name}/elm")),
-        None => PathBuf::from(BUILT_IN),
+        // ELMOS_ELM (kernel command line) runs another program as the built-in build:
+        // for scripts/test-errors.py, or to try a program by hand.
+        None => PathBuf::from(std::env::var("ELMOS_ELM").unwrap_or_else(|_| BUILT_IN.to_owned())),
     }
 }
 

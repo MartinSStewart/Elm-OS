@@ -35,6 +35,7 @@ make run-cpu      # QEMU window, drawn on the CPU
 make test         # headless boot test, saves build/screenshot.png
 make test-gpu     # the same test on the GPU
 make test-persist # power cuts and a restart: the Model must come back
+make test-errors  # the error screen: a crash loop, a hang, panics in /init
 make test-wire    # the encoder/decoder generator (tools/wire) on every kind of type
 make check        # every test that doesn't boot: elm-review, Elm unit tests, test-wire, protocol
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
@@ -148,6 +149,19 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   answers to the old program's file reads are dropped. The data disk message lists the HTTP
   requests the host is still answering, so `Persist.elm` doesn't report them as interrupted.
   This is the base for switching to a newer build of the Elm program without restarting.
+- When something goes wrong that the Elm program can't show, the host draws an error screen
+  itself (`host/init/src/error_screen.rs`, in the pixel font):
+  - The Elm program ends five times in a row within 30 s of starting (a crash loop), or hangs
+    (a frame unanswered for 30 s, `ELMOS_HANG_SECS`; the host stops it): the host stops
+    starting it and shows how each run ended (exit status or signal, or hung) and the last
+    lines it wrote on stderr or `Effect.Log`. Enter starts it again. The program's stderr goes
+    through the host, line by line, to the console as before.
+  - `/init` panics on a thread other than the host thread: the message stays on screen, and
+    Enter restarts the computer. If the host thread itself panicked (or is stuck), the message
+    is saved in `/data/host-panic.txt` and the computer restarts; the next boot shows it before
+    starting Elm, until Enter. The USB stick's kernel has `panic=10` in case `/init` dies anyway.
+  - For testing: `ELMOS_ELM=<path>` runs another program in place of the built-in build, and
+    `ELMOS_TEST_PANIC=thread|main` makes `/init` panic ten seconds after it starts.
 - Elm uses no effect packages besides `Time`: everything Elm sends goes out as bytes on
   one port, `Effect.toHost`: the `Effect`s (cursor colour, wifi scan/connect/disconnect,
   power, HTTP, files) as JSON, and each frame's scene as triangles, each message
@@ -324,6 +338,7 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   last snapshot are lost when the Msg type or the Model's version changes, since only the Model
   is migrated (a restart or power-off takes a snapshot first, so only a power cut loses any).
   The encoders and decoders make the Elm program about 0.8 MB bigger.
-- A hung (rather than crashed) Elm program isn't detected or restarted yet.
+- A crash loop caused by the saved Model needs the data disk wiped by hand (or a fix); the error
+  screen doesn't offer to start without it yet.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and
   virgl drivers would shrink it a lot.

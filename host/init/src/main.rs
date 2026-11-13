@@ -33,6 +33,7 @@ macro_rules! log {
 mod display;
 mod effects;
 mod elm;
+mod error_screen;
 mod files;
 mod gpu;
 mod host;
@@ -53,14 +54,34 @@ pub fn init_started_at() -> f64 {
     f64::from_bits(INIT_AT.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// ELMOS_TEST_PANIC=thread or =main (kernel command line) makes /init panic on
+/// purpose ten seconds after it starts, on a thread of its own or on the host thread,
+/// to check what a panic does (scripts/test-errors.py).
+fn test_panic() {
+    match std::env::var("ELMOS_TEST_PANIC").as_deref() {
+        Ok("thread") => {
+            let _ = std::thread::Builder::new().name("test panic".into()).spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                panic!("ELMOS_TEST_PANIC=thread asked for this panic");
+            });
+        }
+        Ok("main") => host::panic_at(init_started_at() + 10.0),
+        _ => {}
+    }
+}
+
 fn main() {
     INIT_AT.store(sys::now().to_bits(), std::sync::atomic::Ordering::Relaxed);
+    // A panic shows its message on screen, or restarts the computer, rather than
+    // freezing it (error_screen.rs).
+    std::panic::set_hook(Box::new(error_screen::panic_hook));
     if sys::is_pid1() {
         sys::mount_kernel_filesystems();
     }
     // A dead GPU renderer or Elm program must not take /init with it.
     // SAFETY: ignoring a signal.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+    test_panic();
     persist::start();
     net::start();
     // Starts the Elm program once the display is up (elm::start), and never returns.
