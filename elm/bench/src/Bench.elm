@@ -13,6 +13,7 @@ import Coord
 import Effect
 import Fixture
 import HackerNews
+import Html.Parser
 import Json.Encode as E
 import Sprite
 import Task exposing (Task)
@@ -94,6 +95,8 @@ steps =
 
         Just itemRequest ->
             timed "bodyToString" (\() -> Effect.bodyToString itemBody |> Maybe.map String.length)
+                |> Task.andThen (\_ -> timed "Html.Parser.parse" (\() -> Html.Parser.parse Fixture.item))
+                |> Task.andThen (\nodes -> timed "  find every tr (Html.Parser.findAll)" (\() -> Html.Parser.findAll (\_ -> True) nodes |> List.length))
                 |> Task.andThen
                     (\_ ->
                         timed "parse comments (gotHttpRequest)"

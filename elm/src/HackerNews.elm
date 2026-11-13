@@ -20,7 +20,7 @@ import Color
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect
-import Hex
+import Html.Parser
 import Quantity exposing (Quantity)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
@@ -197,204 +197,127 @@ init =
 
 
 -- PARSING
---
--- Hacker News pages are read by finding the few markers we need with String.indexes and
--- cutting the text between them with String.slice, rather than parsing the whole page
--- into a tree: on a 4.7 MB page with 3,236 comments this takes a fraction of the time.
--- Every search below is in one row of the page (a post or a comment), except the one
--- that finds where the rows start, so nothing is searched or copied twice.
 
 
 {-| The posts on the front page: each is a `<tr class="athing submission" id="...">`
-with the title in the link after `class="titleline"`.
+with the title in the link in its `<span class="titleline">`.
 -}
 parseTitles : String -> List ( PostId, String )
 parseTitles html =
-    pieces "<tr class=\"athing" html
+    Html.Parser.parse html
+        |> Html.Parser.findAll (isElement "tr" "athing")
         |> List.filterMap
             (\row ->
                 Maybe.map2 (\id title -> ( PostId id, title ))
-                    (after "id=\"" row |> Maybe.map (before "\""))
-                    (after "class=\"titleline\"><a " row
-                        |> Maybe.andThen (after ">")
-                        |> Maybe.map (\link -> htmlToText (before "</a>" link))
+                    (attribute "id" row)
+                    (Html.Parser.findAll (isElement "span" "titleline") [ row ]
+                        |> List.concatMap nodeChildren
+                        |> Html.Parser.findAll (isElement "a" "")
+                        |> List.head
+                        |> Maybe.map (\link -> Html.Parser.textContent [ link ] |> String.trim)
                     )
             )
 
 
-{-| The comments on a post's page, as (indentation, text) in page order. Each is a
-`<tr class="athing comtr">` with an `indent` attribute and the text in a
-`<div class="comment">`, up to its reply link. A flagged or deleted comment has no text
+{-| The comments on a post's page, in a tree. Each is a `<tr class="athing comtr">` with
+an `indent` attribute on its `<td class="ind">`, and its text in a
+`<div class="comment">`, before the reply link. A flagged or deleted comment has no text
 but "[flagged]" or "[deleted]"; it is kept, so the comments under it stay under it.
 -}
 parseComments : String -> List Comment
 parseComments html =
-    pieces "<tr class=\"athing comtr" html
+    Html.Parser.parse html
+        |> Html.Parser.findAll (isElement "tr" "comtr")
         |> List.filterMap
             (\row ->
                 Maybe.map2 Tuple.pair
-                    (after "indent=\"" row |> Maybe.map (before "\"") |> Maybe.andThen String.toInt)
-                    (after "<div class=\"comment" row
-                        |> Maybe.andThen (after ">")
-                        |> Maybe.map (\comment -> htmlToText (before "<div class=\"reply\"" comment))
+                    (Html.Parser.findAll (isElement "td" "ind") [ row ]
+                        |> List.head
+                        |> Maybe.andThen (attribute "indent")
+                        |> Maybe.andThen String.toInt
+                    )
+                    (Html.Parser.findAll (isElement "div" "comment") [ row ]
+                        |> List.head
+                        |> Maybe.map (\comment -> commentText (nodeChildren comment) |> String.trim)
                     )
             )
         |> buildTree
 
 
-{-| The page cut into pieces, each starting at an occurrence of `marker` and going up to
-the next one (the last one to the end of the page). Text before the first is dropped.
+{-| Whether a node is a tag with this name and class (any class, for "").
 -}
-pieces : String -> String -> List String
-pieces marker html =
-    piecesHelper html (String.indexes marker html) []
+isElement : String -> String -> Html.Parser.Node -> Bool
+isElement name class node =
+    case node of
+        Html.Parser.Element tag attributes _ ->
+            tag
+                == name
+                && (String.isEmpty class
+                        || (Html.Parser.getAttribute "class" attributes
+                                |> Maybe.withDefault ""
+                                |> String.words
+                                |> List.member class
+                           )
+                   )
+
+        Html.Parser.Text _ ->
+            False
+
+        Html.Parser.Comment _ ->
+            False
 
 
-piecesHelper : String -> List Int -> List String -> List String
-piecesHelper html starts acc =
-    case starts of
-        start :: rest ->
-            let
-                end : Int
-                end =
-                    case rest of
-                        next :: _ ->
-                            next
+attribute : String -> Html.Parser.Node -> Maybe String
+attribute name node =
+    case node of
+        Html.Parser.Element _ attributes _ ->
+            Html.Parser.getAttribute name attributes
 
-                        [] ->
-                            String.length html
-            in
-            piecesHelper html rest (String.slice start end html :: acc)
+        Html.Parser.Text _ ->
+            Nothing
 
-        [] ->
-            List.reverse acc
-
-
-{-| What follows the first `marker` in `text`, if it's there.
--}
-after : String -> String -> Maybe String
-after marker text =
-    case String.indexes marker text of
-        index :: _ ->
-            Just (String.dropLeft (index + String.length marker) text)
-
-        [] ->
+        Html.Parser.Comment _ ->
             Nothing
 
 
-{-| What comes before the first `marker` in `text` (all of it if there's none).
+nodeChildren : Html.Parser.Node -> List Html.Parser.Node
+nodeChildren node =
+    case node of
+        Html.Parser.Element _ _ nodes ->
+            nodes
+
+        Html.Parser.Text _ ->
+            []
+
+        Html.Parser.Comment _ ->
+            []
+
+
+{-| A comment's text: a paragraph starts with a space, and the reply link is left out.
 -}
-before : String -> String -> String
-before marker text =
-    case String.indexes marker text of
-        index :: _ ->
-            String.left index text
+commentText : List Html.Parser.Node -> String
+commentText nodes =
+    List.map
+        (\node ->
+            case node of
+                Html.Parser.Text text ->
+                    text
 
-        [] ->
-            text
+                Html.Parser.Comment _ ->
+                    ""
 
+                Html.Parser.Element "p" _ nodes2 ->
+                    " " ++ commentText nodes2
 
-{-| The text in some HTML: tags are dropped (a `<p>` becomes a space) and character
-references like `&amp;` and `&#x2F;` are decoded.
--}
-htmlToText : String -> String
-htmlToText html =
-    case String.split "<" html of
-        first :: tags ->
-            first
-                :: List.map tagToText tags
-                |> String.concat
-                |> decodeCharRefs
-                |> String.trim
+                Html.Parser.Element _ attributes nodes2 ->
+                    if Html.Parser.getAttribute "class" attributes == Just "reply" then
+                        ""
 
-        [] ->
-            ""
-
-
-{-| One piece of HTML after a `<`: a tag, then the text up to the next tag.
--}
-tagToText : String -> String
-tagToText piece =
-    case String.indexes ">" piece of
-        index :: _ ->
-            let
-                name : String
-                name =
-                    String.left index piece
-
-                rest : String
-                rest =
-                    String.dropLeft (index + 1) piece
-            in
-            if name == "p" || String.startsWith "p " name then
-                " " ++ rest
-
-            else
-                rest
-
-        [] ->
-            -- A "<" that doesn't start a tag.
-            "<" ++ piece
-
-
-decodeCharRefs : String -> String
-decodeCharRefs text =
-    case String.split "&" text of
-        first :: refs ->
-            first :: List.map decodeCharRef refs |> String.concat
-
-        [] ->
-            text
-
-
-{-| One piece of text after a `&`: a character reference and `;`, then more text. A `&`
-that doesn't start one (or one we don't know) is kept as it is.
--}
-decodeCharRef : String -> String
-decodeCharRef piece =
-    case String.indexes ";" (String.left 10 piece) of
-        index :: _ ->
-            case charRef (String.left index piece) of
-                Just char ->
-                    String.cons char (String.dropLeft (index + 1) piece)
-
-                Nothing ->
-                    "&" ++ piece
-
-        [] ->
-            "&" ++ piece
-
-
-charRef : String -> Maybe Char
-charRef name =
-    case name of
-        "amp" ->
-            Just '&'
-
-        "lt" ->
-            Just '<'
-
-        "gt" ->
-            Just '>'
-
-        "quot" ->
-            Just '"'
-
-        "apos" ->
-            Just '\''
-
-        "nbsp" ->
-            Just ' '
-
-        _ ->
-            if String.startsWith "#x" name || String.startsWith "#X" name then
-                String.dropLeft 2 name |> String.toLower |> Hex.fromString |> Result.toMaybe |> Maybe.map Char.fromCode
-
-            else if String.startsWith "#" name then
-                String.dropLeft 1 name |> String.toInt |> Maybe.map Char.fromCode
-
-            else
-                Nothing
+                    else
+                        commentText nodes2
+        )
+        nodes
+        |> String.concat
 
 
 {-| Turn a flat list of (indentation, text) into a tree, a comment's children being the deeper ones that follow it.
