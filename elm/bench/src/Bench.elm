@@ -111,30 +111,37 @@ steps =
                                 { loaded | isOpen = True }
                         in
                         timed "snapshot of HackerNews.Model" (\() -> E.encode 0 (HackerNews.w3_encode_Model open) |> String.length)
-                            |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize)" (\() -> Sprite.textSize Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
-                            |> Task.andThen (\_ -> frame open)
+                            |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize, 1x)" (\() -> Sprite.textSize (Units.scaleFor (Units.devicePixels 1280)) Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
+                            |> Task.andThen (\_ -> frame (Coord.xy 1280 800) open)
+                            |> Task.andThen (\_ -> frame (Coord.xy 2560 1600) open)
                     )
 
 
-frame : HackerNews.Model -> Task Never ()
-frame model =
+{-| One frame of the comments page on a screen this big (device pixels), at its UI scale:
+1280 x 800 is 1x, 2560 x 1600 is 2x (the same 1280 x 800 UI pixels).
+-}
+frame : Coord.Coord Units.DevicePixels -> HackerNews.Model -> Task Never ()
+frame screen model =
     let
-        screen =
-            Coord.xy 1280 800
+        scale =
+            Units.scaleFor (Coord.x screen)
 
         element () =
-            HackerNews.view identity Ui.init (Coord.xy 1280 800) model
+            HackerNews.view identity (Ui.init scale) (Coord.toUi scale screen) model
+
+        named label =
+            String.fromInt (Units.scaleInt scale) ++ "x " ++ label
     in
-    timed "view (build the Element)" (\() -> element ())
-        |> Task.andThen (\ui -> timed "Ui.hover" (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed "Ui.view (triangles)" (\() -> Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen ui))
+    timed (named "view (build the Element)") (\() -> element ())
+        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
                     _ =
                         Debug.log "triangles" (List.length triangles)
                 in
-                timed "encode Render" (\() -> Effect.message [ Effect.Render (\() -> triangles) ] |> Bytes.width)
+                timed (named "encode Render") (\() -> Effect.message [ Effect.Render (\() -> triangles) ] |> Bytes.width)
             )
         |> Task.andThen
             (\bytes ->
@@ -142,7 +149,7 @@ frame model =
                     _ =
                         Debug.log "render bytes" bytes
                 in
-                timed "whole frame" (\() -> Effect.message [ Effect.Render (\() -> Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen (element ())) ] |> Bytes.width)
+                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> Ui.view scale False Nothing Nothing screen (element ())) ] |> Bytes.width)
             )
         |> Task.map (\_ -> ())
 

@@ -35,9 +35,11 @@ pixels) and multiplies the sample by its colour:
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
-UI pixels and `toDevice` scales them; text is measured in UI pixels but drawn straight
-in device pixels, so on a 2x screen it uses the font drawn at twice the size rather
-than blown up pixels.
+UI pixels and `toDevice` scales them; text is drawn straight in device pixels, so on a
+2x screen it uses the font drawn at twice the size rather than blown up pixels. Text
+is also laid out with that font's own (hinted) advances and kerning, so measuring,
+wrapping and caret positions all take the UI scale: text can be a little wider or
+narrower at 2x than twice its width at 1x, and wrap in different places.
 
 -}
 
@@ -409,17 +411,19 @@ lineHeightRaw fontSize =
     ascent + descent
 
 
-{-| Where each character of one line of text starts, in 1/64 UI pixels from the left,
-and where the line ends. Text is laid out with the font at its UI size, so it measures
-the same at every UI scale.
+{-| Where each character of one line of text starts, in 1/64 device pixels from the
+left, and where the line ends, at a UI scale (device pixels per UI pixel). Noto Sans is
+laid out with the face drawn for the device size, with its own hinted advances and
+kerning, so text at 2x is not exactly twice as wide as at 1x: each scale has its own
+layout, and wraps and measures by it.
 -}
-layoutLine : FontSize -> Font -> String -> ( List ( Int, Char ), Int )
-layoutLine fontSize font string =
+layoutLine : Int -> FontSize -> Font -> String -> ( List ( Int, Char ), Int )
+layoutLine s fontSize font string =
     case font of
         Mono ->
             let
                 advance =
-                    Tuple.first charSize * monoScale fontSize * 64
+                    Tuple.first charSize * monoScale fontSize * s * 64
             in
             ( String.toList string |> List.indexedMap (\i c -> ( i * advance, c ))
             , String.length string * advance
@@ -431,7 +435,7 @@ layoutLine fontSize font string =
                     variant style
 
                 ( placed, end ) =
-                    layoutSans v.kerning (face v (sansSize fontSize)) string
+                    layoutSans v.kerning (face v (sansSize fontSize * s)) string
             in
             ( List.map (\( at, char, _ ) -> ( at, char )) placed, end )
 
@@ -465,14 +469,14 @@ layoutSans kerning f string =
     ( List.reverse placed, end )
 
 
-{-| Where each segment of one line starts, in 1/64 UI pixels from the left, and where
-the line ends. Each segment is laid out on its own (no kerning across segments).
+{-| Where each segment of one line starts, in 1/64 device pixels from the left, and
+where the line ends. Each segment is laid out on its own (no kerning across segments).
 -}
-layoutSegments : FontSize -> List Segment -> ( List ( Int, Segment ), Int )
-layoutSegments fontSize segments =
+layoutSegments : Int -> FontSize -> List Segment -> ( List ( Int, Segment ), Int )
+layoutSegments s fontSize segments =
     List.foldl
         (\segment ( acc, pen ) ->
-            ( ( pen, segment ) :: acc, pen + Tuple.second (layoutLine fontSize segment.font segment.text) )
+            ( ( pen, segment ) :: acc, pen + Tuple.second (layoutLine s fontSize segment.font segment.text) )
         )
         ( [], 0 )
         segments
@@ -503,21 +507,38 @@ segmentLines segments =
     List.reverse (List.reverse current :: done)
 
 
-textWidthRaw : FontSize -> Font -> String -> Int
-textWidthRaw fontSize font string =
-    (Tuple.second (layoutLine fontSize font string) + 63) // 64
+{-| A width in 1/64 device pixels, in whole UI pixels (rounding up).
+-}
+toUiCeiling : Int -> Int -> Int
+toUiCeiling s width =
+    (width + 64 * s - 1) // (64 * s)
+
+
+{-| A position in 1/64 device pixels, in the nearest whole UI pixel.
+-}
+toUiRound : Int -> Int -> Int
+toUiRound s at =
+    (at + 32 * s) // (64 * s)
+
+
+textWidthRaw : Int -> FontSize -> Font -> String -> Int
+textWidthRaw s fontSize font string =
+    toUiCeiling s (Tuple.second (layoutLine s fontSize font string))
 
 
 {-| Where the cursor goes before each character of one line of text, and after the last,
 from its left: one more number than there are characters.
 -}
-caretPositions : FontSize -> Font -> String -> List (Quantity Int UiPixels)
-caretPositions fontSize font string =
+caretPositions : UiScale -> FontSize -> Font -> String -> List (Quantity Int UiPixels)
+caretPositions uiScale fontSize font string =
     let
+        s =
+            Units.scaleInt uiScale
+
         ( placed, end ) =
-            layoutLine fontSize font string
+            layoutLine s fontSize font string
     in
-    List.map (\( at, _ ) -> Quantity ((at + 32) // 64)) placed ++ [ Quantity ((end + 32) // 64) ]
+    List.map (\( at, _ ) -> Quantity (toUiRound s at)) placed ++ [ Quantity (toUiRound s end) ]
 
 
 {-| Text in one colour and font at a position (its top left). '\\n' starts a new line.
@@ -558,13 +579,13 @@ customText uiScale fontSize clip segments position =
                 top =
                     y + lineIndex * height
             in
-            layoutSegments fontSize line
+            layoutSegments s fontSize line
                 |> Tuple.first
                 |> List.concatMap
                     (\( start, segment ) ->
                         let
                             left =
-                                x * s + (start * s + 32) // 64
+                                x * s + (start + 32) // 64
                         in
                         case segment.font of
                             Mono ->
@@ -606,14 +627,19 @@ monoRun s fontSize deviceClip color ( left, top ) string =
         |> List.concat
 
 
-{-| One line of Noto Sans, from where it starts on the baseline in device pixels.
-Measured at the UI size, drawn with the face for the device size.
+{-| One line of Noto Sans, from where it starts on the baseline in device pixels, laid
+out and drawn with the face for the device size (as `layoutLine` measures it).
 -}
 sansRun : Int -> FontSize -> NotoSans.Variant -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> List (Triangle DevicePixels)
 sansRun s fontSize v deviceClip color ( left, baseline ) string =
-    sansPens s v.kerning (face v (sansSize fontSize)) (face v (sansSize fontSize * s)) string
+    layoutSans v.kerning (face v (sansSize fontSize * s)) string
+        |> Tuple.first
         |> List.concatMap
-            (\( pen, glyph ) ->
+            (\( at, _, glyph ) ->
+                let
+                    pen =
+                        (at + 32) // 64
+                in
                 if glyph.w == 0 then
                     []
 
@@ -625,42 +651,6 @@ sansRun s fontSize v deviceClip color ( left, baseline ) string =
                         ( glyph.x, glyph.y )
                         ( glyph.w, glyph.h )
             )
-
-
-{-| Where each glyph of one line goes, in device pixels from its left, and the glyph.
-
-At 1x that's the UI size's own (hinted) layout. At a bigger scale the face for the
-device size is laid out with its own hinted advances, which its glyphs were hinted to
-fit, then stretched or squeezed to the UI layout's width times the scale, so the text
-takes the room it was measured to take. (Doubling the UI size's advances instead
-doubles their rounding, which leaves uneven gaps; the font's unrounded advances make
-glyphs touch at 1x.)
-
--}
-sansPens : Int -> Dict ( Char, Char ) Int -> NotoSans.Face -> NotoSans.Face -> String -> List ( Int, NotoSans.Glyph )
-sansPens s kerning layoutFace drawFace line =
-    if s == 1 then
-        layoutSans kerning layoutFace line |> Tuple.first |> List.map (\( at, _, glyph ) -> ( (at + 32) // 64, glyph ))
-
-    else
-        let
-            target =
-                Tuple.second (layoutSans kerning layoutFace line) * s
-
-            ( placed, end ) =
-                layoutSans kerning drawFace line
-        in
-        List.map
-            (\( at, _, glyph ) ->
-                ( if end <= 0 then
-                    (at + 32) // 64
-
-                  else
-                    (at * target + end * 32) // (end * 64)
-                , glyph
-                )
-            )
-            placed
 
 
 clippedSprite :
@@ -699,22 +689,25 @@ clippedSprite color { left, right, top, bottom } ( x, y ) ( w, h ) ( tx, ty ) ( 
 
 {-| The size of text: its widest line by its lines.
 -}
-textSize : FontSize -> Font -> String -> Coord UiPixels
-textSize fontSize font string =
-    customTextSize fontSize [ { text = string, color = Color.black, font = font } ]
+textSize : UiScale -> FontSize -> Font -> String -> Coord UiPixels
+textSize uiScale fontSize font string =
+    customTextSize uiScale fontSize [ { text = string, color = Color.black, font = font } ]
 
 
 {-| The size of `customText`'s segments: its widest line by its lines.
 -}
-customTextSize : FontSize -> List Segment -> Coord UiPixels
-customTextSize fontSize segments =
+customTextSize : UiScale -> FontSize -> List Segment -> Coord UiPixels
+customTextSize uiScale fontSize segments =
     let
+        s =
+            Units.scaleInt uiScale
+
         lines =
             segmentLines segments
     in
     Coord.xy
         (lines
-            |> List.map (\line -> (Tuple.second (layoutSegments fontSize line) + 63) // 64)
+            |> List.map (\line -> toUiCeiling s (Tuple.second (layoutSegments s fontSize line)))
             |> List.maximum
             |> Maybe.withDefault 0
         )
@@ -723,15 +716,18 @@ customTextSize fontSize segments =
 
 {-| Text cut short with "…" to fit in `maxWidth`.
 -}
-ellipsis : FontSize -> Font -> Quantity Int UiPixels -> String -> String
-ellipsis fontSize font maxWidth string =
+ellipsis : UiScale -> FontSize -> Font -> Quantity Int UiPixels -> String -> String
+ellipsis uiScale fontSize font maxWidth string =
     let
+        s =
+            Units.scaleInt uiScale
+
         ( placed, end ) =
-            layoutLine fontSize font string
+            layoutLine s fontSize font string
 
         max64 : Int
         max64 =
-            Quantity.unwrap maxWidth * 64
+            Quantity.unwrap maxWidth * 64 * s
     in
     if end <= max64 then
         string
@@ -743,13 +739,13 @@ ellipsis fontSize font maxWidth string =
             -- dropped. ellipsisHelper then checks the guess (kerning can move it by one).
             dotsWidth : Int
             dotsWidth =
-                Tuple.second (layoutLine fontSize font (ellipsisDots font))
+                Tuple.second (layoutLine s fontSize font (ellipsisDots font))
         in
         placed
             |> List.take (countFitting (max64 - dotsWidth) placed)
             |> List.map Tuple.second
             |> String.fromList
-            |> ellipsisHelper fontSize font (Quantity.unwrap maxWidth)
+            |> ellipsisHelper s fontSize font (Quantity.unwrap maxWidth)
 
 
 {-| How many characters, from the first, start no further right than `limit`.
@@ -783,30 +779,30 @@ ellipsisDots font =
             "…"
 
 
-ellipsisHelper : FontSize -> Font -> Int -> String -> String
-ellipsisHelper fontSize font maxWidth string =
+ellipsisHelper : Int -> FontSize -> Font -> Int -> String -> String
+ellipsisHelper s fontSize font maxWidth string =
     let
         candidate =
             String.trimRight string ++ ellipsisDots font
     in
-    if String.isEmpty string || textWidthRaw fontSize font candidate <= maxWidth then
+    if String.isEmpty string || textWidthRaw s fontSize font candidate <= maxWidth then
         candidate
 
     else
-        ellipsisHelper fontSize font maxWidth (String.dropRight 1 string)
+        ellipsisHelper s fontSize font maxWidth (String.dropRight 1 string)
 
 
 {-| Breaks text into lines at most `maxWidth` wide, between words. A word wider than
 that gets a line of its own.
 -}
-wrap : FontSize -> Font -> Quantity Int UiPixels -> String -> String
-wrap fontSize font maxWidth string =
+wrap : UiScale -> FontSize -> Font -> Quantity Int UiPixels -> String -> String
+wrap uiScale fontSize font maxWidth string =
     String.words string
         |> List.foldl
             (\word lines ->
                 case lines of
                     line :: rest ->
-                        if textWidthRaw fontSize font (line ++ " " ++ word) <= Quantity.unwrap maxWidth then
+                        if textWidthRaw (Units.scaleInt uiScale) fontSize font (line ++ " " ++ word) <= Quantity.unwrap maxWidth then
                             (line ++ " " ++ word) :: rest
 
                         else
@@ -822,9 +818,9 @@ wrap fontSize font maxWidth string =
 
 {-| Like `wrapLines`, with the lines joined by '\\n' again, ready for `customText`.
 -}
-wrapSegments : FontSize -> Quantity Int UiPixels -> List Segment -> List Segment
-wrapSegments fontSize maxWidth segments =
-    joinLines (wrapLines fontSize maxWidth segments)
+wrapSegments : UiScale -> FontSize -> Quantity Int UiPixels -> List Segment -> List Segment
+wrapSegments uiScale fontSize maxWidth segments =
+    joinLines (wrapLines uiScale fontSize maxWidth segments)
 
 
 {-| Lines of segments joined into one list, with a '\\n' between each two.
@@ -860,34 +856,37 @@ the same colour and font are joined into one.
 Each word is measured once, so this takes time in proportion to the length of the text.
 
 -}
-wrapLines : FontSize -> Quantity Int UiPixels -> List Segment -> List (List Segment)
-wrapLines fontSize maxWidth segments =
-    wrapLinesHelper fontSize maxWidth segments |> Tuple.first
+wrapLines : UiScale -> FontSize -> Quantity Int UiPixels -> List Segment -> List (List Segment)
+wrapLines uiScale fontSize maxWidth segments =
+    wrapLinesHelper (Units.scaleInt uiScale) fontSize maxWidth segments |> Tuple.first
 
 
 {-| `wrapSegments`, and the size of the text it gives (as `customTextSize` would
 measure it), from the same measurements: wrapping already measures every word, so
 measuring the lines again would double the work.
 -}
-wrapWithSize : FontSize -> Quantity Int UiPixels -> List Segment -> ( List Segment, Coord UiPixels )
-wrapWithSize fontSize maxWidth segments =
+wrapWithSize : UiScale -> FontSize -> Quantity Int UiPixels -> List Segment -> ( List Segment, Coord UiPixels )
+wrapWithSize uiScale fontSize maxWidth segments =
     let
+        s =
+            Units.scaleInt uiScale
+
         ( lines, widest ) =
-            wrapLinesHelper fontSize maxWidth segments
+            wrapLinesHelper s fontSize maxWidth segments
     in
-    ( joinLines lines, Coord.xy ((widest + 63) // 64) (List.length lines * lineHeightRaw fontSize) )
+    ( joinLines lines, Coord.xy (toUiCeiling s widest) (List.length lines * lineHeightRaw fontSize) )
 
 
-{-| The wrapped lines, and how wide the widest is (1/64 UI pixels).
+{-| The wrapped lines, and how wide the widest is (1/64 device pixels).
 -}
-wrapLinesHelper : FontSize -> Quantity Int UiPixels -> List Segment -> ( List (List Segment), Int )
-wrapLinesHelper fontSize maxWidth segments =
+wrapLinesHelper : Int -> FontSize -> Quantity Int UiPixels -> List Segment -> ( List (List Segment), Int )
+wrapLinesHelper s fontSize maxWidth segments =
     List.foldl
         (\line ( lines, widest ) ->
             let
                 state : WrapState
                 state =
-                    List.foldl (placeWord fontSize (Quantity.unwrap maxWidth * 64)) { lines = [], current = [], x = 0, widest = 0 } (toWords line)
+                    List.foldl (placeWord s fontSize (Quantity.unwrap maxWidth * 64 * s)) { lines = [], current = [], x = 0, widest = 0 } (toWords line)
             in
             ( List.reverse state.current :: state.lines ++ lines, max widest (max state.widest state.x) )
         )
@@ -945,24 +944,24 @@ toWords line =
 
 {-| Where the greedy line breaking has got to: the lines done (last first), the
 segments of the current line (last first), how wide the current line is so far, and
-the widest line done (1/64 UI pixels).
+the widest line done (1/64 device pixels).
 -}
 type alias WrapState =
     { lines : List (List Segment), current : List Segment, x : Int, widest : Int }
 
 
-placeWord : FontSize -> Int -> Word -> WrapState -> WrapState
-placeWord fontSize limit64 word state =
+placeWord : Int -> FontSize -> Int -> Word -> WrapState -> WrapState
+placeWord s fontSize limit64 word state =
     let
         wordWidth : Int
         wordWidth =
-            List.foldl (\piece sum -> sum + width64 fontSize piece.font piece.text) 0 word.pieces
+            List.foldl (\piece sum -> sum + width64 s fontSize piece.font piece.text) 0 word.pieces
 
         spaceWidth : Int
         spaceWidth =
             case word.space of
                 Just space ->
-                    width64 fontSize space.font " "
+                    width64 s fontSize space.font " "
 
                 Nothing ->
                     0
@@ -981,7 +980,7 @@ placeWord fontSize limit64 word state =
 
     else if state.x == 0 then
         -- Nothing on the line yet, and the word is too wide for it on its own.
-        breakWord fontSize limit64 word.pieces state
+        breakWord s fontSize limit64 word.pieces state
 
     else
         let
@@ -993,19 +992,19 @@ placeWord fontSize limit64 word state =
             { newLine | current = List.foldl pushSegment [] word.pieces, x = wordWidth }
 
         else
-            breakWord fontSize limit64 word.pieces newLine
+            breakWord s fontSize limit64 word.pieces newLine
 
 
 {-| A word too wide for a line, put on the current line (which is empty) one character
 at a time, starting a new line whenever the next character won't fit.
 -}
-breakWord : FontSize -> Int -> List Segment -> WrapState -> WrapState
-breakWord fontSize limit64 pieces state =
+breakWord : Int -> FontSize -> Int -> List Segment -> WrapState -> WrapState
+breakWord s fontSize limit64 pieces state =
     List.foldl
         (\piece state2 ->
             let
                 ( placed, end ) =
-                    layoutLine fontSize piece.font piece.text
+                    layoutLine s fontSize piece.font piece.text
 
                 ends : List Int
                 ends =
@@ -1048,21 +1047,21 @@ pushSegment segment line =
             [ segment ]
 
 
-{-| How far text moves the pen (1/64 UI pixels): `layoutLine`'s end, without making a
-list of where each character goes. Word wrap measures every word with this, so it looks
-glyphs up in `Metrics` rather than NotoSans's Dicts.
+{-| How far text moves the pen (1/64 device pixels): `layoutLine`'s end, without making
+a list of where each character goes. Word wrap measures every word with this, so it
+looks glyphs up in `Metrics` rather than NotoSans's Dicts.
 -}
-width64 : FontSize -> Font -> String -> Int
-width64 fontSize font string =
+width64 : Int -> FontSize -> Font -> String -> Int
+width64 s fontSize font string =
     case font of
         Mono ->
-            String.length string * Tuple.first charSize * monoScale fontSize * 64
+            String.length string * Tuple.first charSize * monoScale fontSize * s * 64
 
         Sans style ->
             let
                 m : Metrics
                 m =
-                    metrics style fontSize
+                    metrics s style fontSize
             in
             String.foldl
                 (\char ( pen, previous ) ->
@@ -1091,7 +1090,7 @@ width64 fontSize font string =
                 |> Tuple.first
 
 
-{-| A Noto Sans face's advances and kerning (1/64 UI pixels), in Arrays indexed by
+{-| A Noto Sans face's advances and kerning (1/64 device pixels), in Arrays indexed by
 character code: an Array.get is a good deal quicker than a Dict.get with a Char, let
 alone a pair of them. `kerning` has, for each character, how much closer or further
 the characters after it go.
@@ -1100,8 +1099,8 @@ type alias Metrics =
     { advances : Array Int, missingAdvance : Int, kerning : Array (Dict Int Int) }
 
 
-makeMetrics : Style -> FontSize -> Metrics
-makeMetrics style fontSize =
+makeMetrics : Int -> Style -> FontSize -> Metrics
+makeMetrics s style fontSize =
     let
         v : NotoSans.Variant
         v =
@@ -1109,7 +1108,7 @@ makeMetrics style fontSize =
 
         f : NotoSans.Face
         f =
-            face v (sansSize fontSize)
+            face v (sansSize fontSize * s)
 
         missing : Int
         missing =
@@ -1145,69 +1144,169 @@ makeMetrics style fontSize =
     }
 
 
-metrics : Style -> FontSize -> Metrics
-metrics style fontSize =
-    case ( style, fontSize ) of
-        ( Regular, Small ) ->
-            regularSmall
+{-| The metrics for a style and size at a UI scale. Those for 1x and 2x, the scales
+`Units.scaleFor` gives, are made once; any other scale makes them again every time.
+-}
+metrics : Int -> Style -> FontSize -> Metrics
+metrics s style fontSize =
+    case s of
+        1 ->
+            metrics1x style fontSize
 
-        ( Regular, Big ) ->
-            regularBig
+        2 ->
+            metrics2x style fontSize
 
-        ( Bold, Small ) ->
-            boldSmall
-
-        ( Bold, Big ) ->
-            boldBig
-
-        ( Italic, Small ) ->
-            italicSmall
-
-        ( Italic, Big ) ->
-            italicBig
-
-        ( BoldItalic, Small ) ->
-            boldItalicSmall
-
-        ( BoldItalic, Big ) ->
-            boldItalicBig
+        _ ->
+            makeMetrics s style fontSize
 
 
-regularSmall : Metrics
-regularSmall =
-    makeMetrics Regular Small
+metrics1x : Style -> FontSize -> Metrics
+metrics1x style fontSize =
+    case style of
+        Regular ->
+            case fontSize of
+                Small ->
+                    regularSmall1x
+
+                Big ->
+                    regularBig1x
+
+        Bold ->
+            case fontSize of
+                Small ->
+                    boldSmall1x
+
+                Big ->
+                    boldBig1x
+
+        Italic ->
+            case fontSize of
+                Small ->
+                    italicSmall1x
+
+                Big ->
+                    italicBig1x
+
+        BoldItalic ->
+            case fontSize of
+                Small ->
+                    boldItalicSmall1x
+
+                Big ->
+                    boldItalicBig1x
 
 
-regularBig : Metrics
-regularBig =
-    makeMetrics Regular Big
+metrics2x : Style -> FontSize -> Metrics
+metrics2x style fontSize =
+    case style of
+        Regular ->
+            case fontSize of
+                Small ->
+                    regularSmall2x
+
+                Big ->
+                    regularBig2x
+
+        Bold ->
+            case fontSize of
+                Small ->
+                    boldSmall2x
+
+                Big ->
+                    boldBig2x
+
+        Italic ->
+            case fontSize of
+                Small ->
+                    italicSmall2x
+
+                Big ->
+                    italicBig2x
+
+        BoldItalic ->
+            case fontSize of
+                Small ->
+                    boldItalicSmall2x
+
+                Big ->
+                    boldItalicBig2x
 
 
-boldSmall : Metrics
-boldSmall =
-    makeMetrics Bold Small
+regularSmall1x : Metrics
+regularSmall1x =
+    makeMetrics 1 Regular Small
 
 
-boldBig : Metrics
-boldBig =
-    makeMetrics Bold Big
+regularBig1x : Metrics
+regularBig1x =
+    makeMetrics 1 Regular Big
 
 
-italicSmall : Metrics
-italicSmall =
-    makeMetrics Italic Small
+boldSmall1x : Metrics
+boldSmall1x =
+    makeMetrics 1 Bold Small
 
 
-italicBig : Metrics
-italicBig =
-    makeMetrics Italic Big
+boldBig1x : Metrics
+boldBig1x =
+    makeMetrics 1 Bold Big
 
 
-boldItalicSmall : Metrics
-boldItalicSmall =
-    makeMetrics BoldItalic Small
+italicSmall1x : Metrics
+italicSmall1x =
+    makeMetrics 1 Italic Small
 
 
-boldItalicBig : Metrics
-boldItalicBig =
-    makeMetrics BoldItalic Big
+italicBig1x : Metrics
+italicBig1x =
+    makeMetrics 1 Italic Big
+
+
+boldItalicSmall1x : Metrics
+boldItalicSmall1x =
+    makeMetrics 1 BoldItalic Small
+
+
+boldItalicBig1x : Metrics
+boldItalicBig1x =
+    makeMetrics 1 BoldItalic Big
+
+
+regularSmall2x : Metrics
+regularSmall2x =
+    makeMetrics 2 Regular Small
+
+
+regularBig2x : Metrics
+regularBig2x =
+    makeMetrics 2 Regular Big
+
+
+boldSmall2x : Metrics
+boldSmall2x =
+    makeMetrics 2 Bold Small
+
+
+boldBig2x : Metrics
+boldBig2x =
+    makeMetrics 2 Bold Big
+
+
+italicSmall2x : Metrics
+italicSmall2x =
+    makeMetrics 2 Italic Small
+
+
+italicBig2x : Metrics
+italicBig2x =
+    makeMetrics 2 Italic Big
+
+
+boldItalicSmall2x : Metrics
+boldItalicSmall2x =
+    makeMetrics 2 BoldItalic Small
+
+
+boldItalicBig2x : Metrics
+boldItalicBig2x =
+    makeMetrics 2 BoldItalic Big

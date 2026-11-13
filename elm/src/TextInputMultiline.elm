@@ -46,10 +46,11 @@ type alias Model =
     }
 
 
-{-| How the box looks: its font and size, its width, and how many lines tall it is.
+{-| How the box looks: its font and size, its width, how many lines tall it is, and the
+UI scale its text is laid out at (Ui.Model.scale).
 -}
 type alias Style =
-    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int }
+    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int, scale : UiScale }
 
 
 init : Model
@@ -115,7 +116,7 @@ lineAt ls line =
 -}
 carets : Style -> String -> List Int
 carets style line =
-    Sprite.caretPositions style.fontSize style.font line |> List.map Quantity.unwrap
+    Sprite.caretPositions style.scale style.fontSize style.font line |> List.map Quantity.unwrap
 
 
 caretX : List Int -> Int -> Int

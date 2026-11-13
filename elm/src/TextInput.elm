@@ -383,10 +383,10 @@ deleteSelection state =
 
 
 {-| How a text input looks: its font and size, its width, and whether it shows a dot for each
-character instead of the text (for passwords).
+character instead of the text (for passwords), and the UI scale it is laid out at (Ui.Model.scale).
 -}
 type alias Style =
-    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, masked : Bool }
+    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, masked : Bool, scale : UiScale }
 
 
 shownText : Style -> String -> String
@@ -410,7 +410,7 @@ the start of the text.
 -}
 carets : Style -> State -> List Int
 carets style state =
-    Sprite.caretPositions style.fontSize style.font (shownText style state.text) |> List.map Quantity.unwrap
+    Sprite.caretPositions style.scale style.fontSize style.font (shownText style state.text) |> List.map Quantity.unwrap
 
 
 caretX : List Int -> Int -> Int
