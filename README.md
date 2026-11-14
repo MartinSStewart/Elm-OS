@@ -308,6 +308,10 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   `Maybe`, `Result`, elm-units' `Quantity`, `Time.Posix` and `Json.Encode.Value`. It stops the
   build, saying which field, for a function, an extensible record or another package's type.
   Type variables that are only labels (a `Quantity`'s units) don't need to be saveable.
+- A `Transient a` (`elm/src/Transient.elm`) is saved as `[]` and comes back empty, whatever
+  `a` is: tools/wire never looks inside it. It is for what the Model or a Msg holds that
+  can't or needn't be saved (a running game, a file's bytes, a cache), and that the
+  program can do without after a restart.
 - `make test-wire` checks it on a program with all of those (`tools/wire/test`): the generated
   code must compile and read back what it writes. `make elm-tests` also runs on `build/wire`.
 

@@ -78,11 +78,11 @@ v1Files =
 suite : Test
 suite =
     describe "migrations"
-        [ test "the newest version is 2" (\_ -> ElmOs.codecs.version |> Expect.equal 2)
-        , test "version 2's shape is the current one" (\_ -> ElmOs.codecs.versionShape 2 |> Expect.equal (Just ElmOs.codecs.modelShape))
+        [ test "the newest version is 3" (\_ -> ElmOs.codecs.version |> Expect.equal 3)
+        , test "version 3's shape is the current one" (\_ -> ElmOs.codecs.versionShape 3 |> Expect.equal (Just ElmOs.codecs.modelShape))
         , test "a version 1 Model migrates"
             (\_ ->
-                case ElmOs.codecs.migrate 1 (Evergreen.V1.App.w3_encode_Model v1Sample) |> Maybe.map (D.decodeValue ElmOs.codecs.modelDecoder) of
+                case ElmOs.codecs.migrate 1 (Evergreen.V1.App.w3_encode_Model v1Sample) |> Maybe.andThen (ElmOs.codecs.migrate 2) |> Maybe.map (D.decodeValue ElmOs.codecs.modelDecoder) of
                     Just (Ok m) ->
                         ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, App.Beta 3 ), ( [ App.Alpha, App.Beta 1 ], [ ( "a", Just (App.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
 
@@ -100,7 +100,7 @@ suite =
                     , \r -> r.replayed |> Expect.equal 0
                     , \r -> r.next |> Expect.equal 6
                     , \r -> r.unreadable |> Expect.equal Nothing
-                    , \r -> r.notes |> Expect.equal [ "migrated the Model from version 1 to 2", "skipped 2 logged Msgs, which an older build wrote" ]
+                    , \r -> r.notes |> Expect.equal [ "migrated the Model from version 1 to 3", "skipped 2 logged Msgs, which an older build wrote" ]
                     ]
                     restored
             )
@@ -119,9 +119,9 @@ suite =
             (\_ ->
                 let
                     newer =
-                        Persist.frame "[\"elmos-persist-4\",3,\"00000000\",\"00000000\",0,[],[]]"
+                        Persist.frame "[\"elmos-persist-4\",4,\"00000000\",\"00000000\",0,[],[]]"
                 in
                 (Persist.restore App.config ElmOs.codecs { snapshot = Just newer, log = Nothing }).notes
-                    |> Expect.equal [ "the snapshot is of version 3 of the Model, newer than this build's 2; starting afresh, and keeping it as snapshot-unreadable" ]
+                    |> Expect.equal [ "the snapshot is of version 4 of the Model, newer than this build's 3; starting afresh, and keeping it as snapshot-unreadable" ]
             )
         ]

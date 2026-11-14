@@ -1,4 +1,4 @@
-module App exposing (Kind(..), Model, Msg, config, init, sample, sampleMsg)
+module App exposing (Kind(..), Model, Msg(..), config, init, sample, sampleMsg)
 
 {-| A program whose Model and Msg have every kind of type tools/wire handles.
 -}
@@ -12,6 +12,7 @@ import Set exposing (Set)
 import Sub.Everything exposing (..)
 import Sub.Things as Things exposing (Opaque, Tree(..))
 import Time
+import Transient exposing (Transient)
 
 
 type alias Model =
@@ -41,6 +42,9 @@ type alias Model =
     , kind : Kind
     , kinds : List Kind
     , kindDict : Dict String (Maybe Kind)
+
+    -- Never saved: it comes back empty. It can hold anything, a function too.
+    , transient : Transient (Int -> Int)
     }
 
 
@@ -62,6 +66,7 @@ type Msg
     | Many Int String (List Msg)
     | Inline { x : Int, y : ( Int, Int ) }
     | Paint Colour
+    | Keep (Transient String)
 
 
 init : Model
@@ -97,12 +102,13 @@ sample =
     , kind = Beta 2
     , kinds = [ Alpha, Delta ]
     , kindDict = Dict.fromList [ ( "a", Just Alpha ), ( "b", Nothing ) ]
+    , transient = Transient.wrap (\n -> n + 1)
     }
 
 
 sampleMsg : Msg
 sampleMsg =
-    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green ]
+    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green, Keep (Transient.wrap "kept") ]
 
 
 config : Persist.Config Model Msg

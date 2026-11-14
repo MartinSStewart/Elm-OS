@@ -64,6 +64,12 @@ After a restart, `resume` turns the restored Model into one for this boot: the
 screen, the network and anything else that belonged to the last one is forgotten
 (the host tells us again), while what the user did (open windows, text typed) stays.
 
+Some things can't or shouldn't be saved: a running game, a file's bytes, a cache. The
+Model and Msgs keep those in a `Transient` (Transient.elm), which is written as `[]`
+and read back empty. So after a restart, and in a Msg replayed from the log, it is
+empty. Put in a Transient only what the program can do without after a restart: what
+it can make again (by reading the file again, say) or lose.
+
 -}
 
 import Array exposing (Array)

@@ -42,6 +42,7 @@ module Wire exposing
     , encodeTuple2
     , encodeTuple3
     , encodeUnit
+    , encodeTransient
     , encodeValue
     , fail
     , lazy
@@ -198,6 +199,14 @@ encodeDate date =
 encodePosix : Time.Posix -> Value
 encodePosix time =
     E.int (Time.posixToMillis time)
+
+
+{-| A Transient is never saved, whatever is in it (elm/src/Transient.elm). It is
+read back as the empty one, which the generated decoder names itself.
+-}
+encodeTransient : a -> Value
+encodeTransient _ =
+    E.list identity []
 
 
 encodeValue : Value -> Value

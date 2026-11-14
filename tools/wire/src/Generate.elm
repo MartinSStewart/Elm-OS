@@ -20,6 +20,9 @@ The JSON is compact and positional:
   - Int, String and Bool are themselves, a Char is a string, a Float is a number or
     "NaN", "+Inf" or "-Inf", a Quantity is its number, a Time.Posix is its
     milliseconds, and a Json.Encode.Value is itself
+  - a Transient (elm/src/Transient.elm) is `[]`, whatever is in it, and is read
+    back as `Transient.empty`: its type argument is never looked at, so it needs no
+    codec, and a frozen version keeps it as `Transient ()`
 
 So the data doesn't say which field is which, and `shape` describes every type the
 codecs cover: data saved with a different shape mustn't be decoded with these.
@@ -126,7 +129,18 @@ builtins =
         , ( ( "Time", "Posix" ), Builtin "Wire.encodePosix" "Wire.decodePosix" [] )
         , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
         , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
+
+        -- Its decoder is `Transient.empty` in the module that uses it (see decFn).
+        , ( transientKey, Builtin "Wire.encodeTransient" "Wire.fail" [] )
         ]
+
+
+{-| Transient.Transient: a value that is never saved (elm/src/Transient.elm). Each
+program has its own Transient module, so it isn't one of the user's types here.
+-}
+transientKey : Key
+transientKey =
+    ( "Transient", "Transient" )
 
 
 {-| The modules every Elm module imports without saying so, and the types they expose.
@@ -388,6 +402,7 @@ allDefs modules =
                         )
             )
         |> Dict.fromList
+        |> Dict.remove transientKey
 
 
 splitName : String -> Maybe Key
@@ -887,7 +902,7 @@ userRefs : Dict Key Def -> List Ty -> Set Key
 userRefs defs types =
     let
         go ty acc =
-            case ty of
+            case forgetTransient ty of
                 TTuple items ->
                     List.foldl go acc items
 
@@ -908,6 +923,24 @@ userRefs defs types =
                     acc
     in
     List.foldl go Set.empty types
+
+
+{-| A Transient's type argument is never saved, so a frozen version doesn't keep
+it (it might be anything: a package's type, or one with functions in it). It is a
+`Transient ()` there.
+-}
+forgetTransient : Ty -> Ty
+forgetTransient ty =
+    case ty of
+        TNamed key _ ->
+            if key == transientKey then
+                TNamed key [ TUnit ]
+
+            else
+                ty
+
+        _ ->
+            ty
 
 
 {-| Whether `from` leads back to `to`, so a decoder for `to` that uses `from`'s needs
@@ -1335,7 +1368,11 @@ decFn ctx m self depth ty =
                 ( fn, argCodecs ) =
                     case Dict.get key builtins of
                         Just b ->
-                            ( b.decode, dataArgs ctx.used key args )
+                            if key == transientKey then
+                                ( "(Wire.succeed " ++ qualify m (Tuple.first key) "empty" ++ ")", [] )
+
+                            else
+                                ( b.decode, dataArgs ctx.used key args )
 
                         Nothing ->
                             ( qualify m (Tuple.first key) ("w3_decode_" ++ Tuple.second key), dataArgs ctx.used key args )
@@ -1840,8 +1877,8 @@ frozenFile defs version moduleName ds =
         name =
             frozenModuleName version moduleName
 
-        render =
-            renderTy (frozenRef defs version moduleName)
+        render atomic ty =
+            renderTy (frozenRef defs version moduleName) atomic (forgetTransient ty)
 
         decl ( def, hasData ) =
             let
@@ -2478,6 +2515,10 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
 
                     else
                         Just (changedConv ("Dict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
+
+            ( ( "Transient", "Transient" ), _, _ ) ->
+                -- Never saved, so there is nothing to migrate: it stays empty.
+                Just (sameConv value)
 
             ( ( "Set", "Set" ), [ o ], [ n ] ) ->
                 if fixed o && o == n then
