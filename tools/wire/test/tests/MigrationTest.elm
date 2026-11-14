@@ -15,6 +15,8 @@ import Json.Decode as D
 import Json.Encode as E
 import Persist
 import Quantity
+import SeqDict
+import SeqSet
 import Set
 import Test exposing (Test, describe, test)
 import Time
@@ -48,6 +50,9 @@ v1Sample =
     , kind = Evergreen.V1.App.Gamma "abc"
     , kinds = [ Evergreen.V1.App.Alpha, Evergreen.V1.App.Gamma "x" ]
     , kindDict = Dict.fromList [ ( "a", Just (Evergreen.V1.App.Beta 4) ), ( "b", Nothing ) ]
+    , seqSet = SeqSet.fromList [ 2, 1 ]
+    , seqDict = SeqDict.empty
+    , kindSeqDict = SeqDict.fromList [ ( "z", Just (Evergreen.V1.App.Gamma "y") ), ( "a", Nothing ) ]
     }
 
 
@@ -82,7 +87,11 @@ suite =
             (\_ ->
                 case ElmOs.codecs.migrate 1 (Evergreen.V1.App.w3_encode_Model v1Sample) |> Maybe.map (D.decodeValue ElmOs.codecs.modelDecoder) of
                     Just (Ok m) ->
-                        ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, App.Beta 3 ), ( [ App.Alpha, App.Beta 1 ], [ ( "a", Just (App.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
+                        Expect.all
+                            [ \_ -> ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, App.Beta 3 ), ( [ App.Alpha, App.Beta 1 ], [ ( "a", Just (App.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
+                            , \_ -> ( SeqSet.toList m.seqSet, SeqDict.toList m.kindSeqDict ) |> Expect.equal ( [ 2, 1 ], [ ( "z", Just (App.Beta 1) ), ( "a", Nothing ) ] )
+                            ]
+                            ()
 
                     _ ->
                         Expect.fail "didn't migrate"

@@ -10,6 +10,8 @@ import Dict exposing (Dict)
 import Json.Encode
 import Persist
 import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
+import SeqSet exposing (SeqSet)
 import Set exposing (Set)
 import Sub.Everything exposing (..)
 import Sub.Things as Things exposing (Opaque, Tree(..))
@@ -43,6 +45,9 @@ type alias Model =
     , kind : Kind
     , kinds : List Kind
     , kindDict : Dict String (Maybe Kind)
+    , seqSet : SeqSet Int
+    , seqDict : SeqDict ( Int, String ) (List Float)
+    , kindSeqDict : SeqDict String (Maybe Kind)
     }
 
 
@@ -100,6 +105,11 @@ sample =
     , kind = Beta 2
     , kinds = [ Alpha, Delta ]
     , kindDict = Dict.fromList [ ( "a", Just Alpha ), ( "b", Nothing ) ]
+
+    -- Not in sorted order, so that reading them back checks their insertion order is kept.
+    , seqSet = SeqSet.fromList [ 3, 1, 2 ]
+    , seqDict = SeqDict.fromList [ ( ( 2, "b" ), [ 1.5 ] ), ( ( 1, "a" ), [] ) ]
+    , kindSeqDict = SeqDict.fromList [ ( "b", Just Delta ), ( "a", Nothing ) ]
     }
 
 

@@ -11,6 +11,8 @@ import Dict
 import Evergreen.V1.Sub.Things
 import Json.Encode
 import Quantity
+import SeqDict
+import SeqSet
 import Set
 import Time
 
@@ -48,6 +50,9 @@ type alias Model =
     , kind : Kind
     , kinds : List Kind
     , kindDict : Dict.Dict String (Maybe Kind)
+    , seqSet : SeqSet.SeqSet Int
+    , seqDict : SeqDict.SeqDict ( Int, String ) (List Float)
+    , kindSeqDict : SeqDict.SeqDict String (Maybe Kind)
     }
 
 

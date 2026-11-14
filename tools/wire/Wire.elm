@@ -17,6 +17,8 @@ module Wire exposing
     , decodeQuantity
     , decodeDate
     , decodeResult
+    , decodeSeqDict
+    , decodeSeqSet
     , decodeSet
     , decodeString
     , decodeTuple2
@@ -39,6 +41,8 @@ module Wire exposing
     , encodeDate
     , encodeRecord
     , encodeResult
+    , encodeSeqDict
+    , encodeSeqSet
     , encodeSet
     , encodeString
     , encodeTuple2
@@ -64,6 +68,8 @@ import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
+import SeqSet exposing (SeqSet)
 import Date exposing (Date)
 import Set exposing (Set)
 import Time
@@ -261,6 +267,19 @@ encodeArray =
 encodeSet : (comparable -> Value) -> Set comparable -> Value
 encodeSet enc set =
     E.list enc (Set.toList set)
+
+
+{-| A SeqSet and a SeqDict are written as lists in insertion order, which reading
+them back keeps.
+-}
+encodeSeqSet : (a -> Value) -> SeqSet a -> Value
+encodeSeqSet enc set =
+    E.list enc (SeqSet.toList set)
+
+
+encodeSeqDict : (k -> Value) -> (v -> Value) -> SeqDict k v -> Value
+encodeSeqDict encKey encValue dict =
+    E.list (\( k, v ) -> E.list identity [ encKey k, encValue v ]) (SeqDict.toList dict)
 
 
 encodeDict : (comparable -> Value) -> (v -> Value) -> Dict comparable v -> Value
@@ -502,6 +521,16 @@ decodeArray =
 decodeSet : Decoder comparable -> Decoder (Set comparable)
 decodeSet dec =
     D.map Set.fromList (D.list dec)
+
+
+decodeSeqSet : Decoder a -> Decoder (SeqSet a)
+decodeSeqSet dec =
+    D.map SeqSet.fromList (D.list dec)
+
+
+decodeSeqDict : Decoder k -> Decoder v -> Decoder (SeqDict k v)
+decodeSeqDict decKey decValue =
+    D.map SeqDict.fromList (D.list (D.map2 Tuple.pair (D.index 0 decKey) (D.index 1 decValue)))
 
 
 decodeDict : Decoder comparable -> Decoder v -> Decoder (Dict comparable v)

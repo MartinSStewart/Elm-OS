@@ -6,6 +6,8 @@ import ElmOs
 import Expect
 import Json.Decode as D
 import Json.Encode as E
+import SeqDict
+import SeqSet
 import Test exposing (Test, describe, test)
 import Wire
 
@@ -30,6 +32,16 @@ suite : Test
 suite =
     describe "tools/wire"
         [ test "the Model reads back" (\_ -> roundTrip ElmOs.codecs.encodeModel ElmOs.codecs.modelDecoder App.sample)
+        , test "SeqSet and SeqDict read back in insertion order"
+            (\_ ->
+                case D.decodeString ElmOs.codecs.modelDecoder (E.encode 0 (ElmOs.codecs.encodeModel App.sample)) of
+                    Ok m ->
+                        ( SeqSet.toList m.seqSet, SeqDict.keys m.seqDict, SeqDict.keys m.kindSeqDict )
+                            |> Expect.equal ( [ 3, 1, 2 ], [ ( 2, "b" ), ( 1, "a" ) ], [ "b", "a" ] )
+
+                    Err e ->
+                        Expect.fail (D.errorToString e)
+            )
         , test "the format" (\_ -> E.encode 0 (ElmOs.codecs.encodeModel App.sample) |> String.left 60 |> Expect.equal "[-3,\"NaN\",\"é\\\"\\\\😀\",true,\"x\",[],[1,\"one\"],[false,\"+Inf\",\"é\"]")
         , test "Bytes are base64 (RFC 4648's examples)"
             (\_ ->

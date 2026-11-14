@@ -121,6 +121,8 @@ builtins =
         , ( ( "Array", "Array" ), Builtin "Wire.encodeArray" "Wire.decodeArray" [ 0 ] )
         , ( ( "Set", "Set" ), Builtin "Wire.encodeSet" "Wire.decodeSet" [ 0 ] )
         , ( ( "Dict", "Dict" ), Builtin "Wire.encodeDict" "Wire.decodeDict" [ 0, 1 ] )
+        , ( ( "SeqSet", "SeqSet" ), Builtin "Wire.encodeSeqSet" "Wire.decodeSeqSet" [ 0 ] )
+        , ( ( "SeqDict", "SeqDict" ), Builtin "Wire.encodeSeqDict" "Wire.decodeSeqDict" [ 0, 1 ] )
         , ( ( "Maybe", "Maybe" ), Builtin "Wire.encodeMaybe" "Wire.decodeMaybe" [ 0 ] )
         , ( ( "Result", "Result" ), Builtin "Wire.encodeResult" "Wire.decodeResult" [ 0, 1 ] )
         , ( ( "Quantity", "Quantity" ), Builtin "Wire.encodeQuantity" "Wire.decodeQuantity" [ 0 ] )
@@ -2474,6 +2476,28 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
                         Just (changedConv ("Dict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
 
             ( ( "Set", "Set" ), [ o ], [ n ] ) ->
+                if fixed o && o == n then
+                    Just (sameConv value)
+
+                else
+                    Nothing
+
+            ( ( "SeqDict", "SeqDict" ), [ oldK, oldV ], [ newK, newV ] ) ->
+                if not (fixed oldK) || oldK /= newK then
+                    Nothing
+
+                else
+                    let
+                        ( f, isSame, needs ) =
+                            convFn env depth oldV newV
+                    in
+                    if isSame then
+                        Just (sameConv value)
+
+                    else
+                        Just (changedConv ("SeqDict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
+
+            ( ( "SeqSet", "SeqSet" ), [ o ], [ n ] ) ->
                 if fixed o && o == n then
                     Just (sameConv value)
 
