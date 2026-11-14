@@ -31,9 +31,12 @@ APT_PACKAGES="llvm-21-dev libmlir-21-dev mlir-21-tools clang-21 lld-21 libunwind
 
 if [ "${1:-}" = --install-deps ]; then
     . /etc/os-release
+    # Ubuntu derivatives such as Linux Mint name their own release in VERSION_CODENAME and the
+    # Ubuntu one it is built on in UBUNTU_CODENAME; apt.llvm.org only knows Debian and Ubuntu names.
+    codename=${UBUNTU_CODENAME:-$VERSION_CODENAME}
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/llvm.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] https://apt.llvm.org/$VERSION_CODENAME/ llvm-toolchain-$VERSION_CODENAME-21 main" \
+    echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" \
         > /etc/apt/sources.list.d/llvm-21.list
     apt-get update
     # shellcheck disable=SC2086
