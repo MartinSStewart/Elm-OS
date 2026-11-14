@@ -26,11 +26,24 @@
 # firmware (OVMF), the image as a USB disk, USB keyboard and mouse, only the
 # firmware's framebuffer for a display, and like a desktop, wired Ethernet (an Intel
 # e1000e card on QEMU's user-mode network) and no wifi. The image is opened read-only.
+#
+# Sound: an Intel HD Audio card (intel-hda, with a plain output codec) that plays on
+# this computer through the first of PipeWire, PulseAudio, SDL, Core Audio or ALSA
+# that this QEMU was built with, or nowhere if none. QEMU_AUDIO=<driver> picks
+# another (`qemu-system-x86_64 -audiodev help` lists them; none for silence).
 set -e
 cd "$(dirname "$0")/.."
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
 ACCEL="-cpu max"
 [ -w /dev/kvm ] && ACCEL="-enable-kvm -cpu host"
+AUDIO="${QEMU_AUDIO:-}"
+if [ -z "$AUDIO" ]; then
+  HAVE=$(qemu-system-x86_64 -audiodev help 2>/dev/null || true)
+  for d in pipewire pa sdl coreaudio alsa; do
+    echo "$HAVE" | grep -qx "$d" && AUDIO=$d && break
+  done
+fi
+SOUND="-audiodev ${AUDIO:-none},id=snd0 -device intel-hda -device hda-output,audiodev=snd0"
 
 if [ "$1" = --usb ]; then
   shift
@@ -42,7 +55,7 @@ if [ "$1" = --usb ]; then
   exec qemu-system-x86_64 $ACCEL -machine q35 -m 2G -smp 2 -bios "$OVMF" \
     -drive if=none,id=stick,format=raw,file=build/elmos-usb.img,snapshot=on \
     -device qemu-xhci -device usb-storage,drive=stick,bootindex=0 \
-    -device usb-kbd -device usb-tablet -vga std -nic user,model=e1000e \
+    -device usb-kbd -device usb-tablet -vga std -nic user,model=e1000e $SOUND \
     -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot "$@"
 fi
 RES="${QEMU_RES:-1920x1080}"
@@ -60,5 +73,5 @@ exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
   -nic user,model=virtio-net-pci \
   -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" \
   -append "console=ttyS0 quiet retain_initrd" \
-  -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
+  -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci $SOUND \
   -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"

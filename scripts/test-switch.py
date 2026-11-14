@@ -71,6 +71,7 @@ def boot():
          "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1",
          "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
          "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
+         "-audiodev", f"wav,id=snd0,path={os.path.join(tmp, f'sound{boots}.wav')}", "-device", "intel-hda", "-device", "hda-output,audiodev=snd0",
          "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
     # Not "[persist] mounted ...": with ELMOS_DEBUG wpa_supplicant's lines share the
     # serial port and can land in the middle of it.

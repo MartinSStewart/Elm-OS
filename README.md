@@ -49,7 +49,8 @@ renamed it), rather than leaving a driver out without saying so.
 
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
 wifi network to join: **Elm OS test network**, password `password`. `make run` keeps what Elm
-OS saves in `build/data-qemu.img`; delete it to start afresh.
+OS saves in `build/data-qemu.img`; delete it to start afresh. Its sound card (Intel HD Audio)
+plays through PipeWire, PulseAudio or SDL, whichever QEMU has; `QEMU_AUDIO=none` silences it.
 
 ## Staying up to date
 
@@ -111,7 +112,8 @@ Hardware support: Intel graphics (i915) and NVIDIA graphics (nouveau, with NVIDI
 GTX 900 to RTX 20 series cards), with the firmware framebuffer as a fallback; USB and PS/2
 keyboards and mice; I2C and PS/2 touchpads; Intel wifi (AX201 firmware included, others via
 `WIFI_FIRMWARE` in the `Makefile`); wired Ethernet on Intel (e1000e, igc) and Realtek (r8169)
-chips. The CPU must be Haswell or newer. One image serves every machine: drivers for hardware
+chips; sound on Intel HD Audio chips (nearly every PC's) with Realtek, HDMI/DisplayPort and other
+codecs, through the plain HDA driver even on laptops built for Sound Open Firmware. The CPU must be Haswell or newer. One image serves every machine: drivers for hardware
 that isn't there just don't start. Tested on an Intel Tiger Lake laptop; `make test-usb` also
 boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can be baked in with `USB_CMDLINE`, for example
 `make usb USB_CMDLINE="console=tty0 loglevel=7 ELMOS_RENDERER=cpu"`.

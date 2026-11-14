@@ -110,6 +110,7 @@ qemu = subprocess.Popen(
      f" ELMOS_UPDATES=1 ELMOS_UPDATE_API={url} ELMOS_UPDATE_DOWNLOAD={url}"
      " ELMOS_UPDATE_FIRST=2 ELMOS_UPDATE_EVERY=3",
      "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
+     "-audiodev", f"wav,id=snd0,path={os.path.join(tmp, 'sound.wav')}", "-device", "intel-hda", "-device", "hda-output,audiodev=snd0",
      "-no-reboot", "-serial", f"file:{serial_path}",
      "-qmp", f"unix:{qmp_path},server=on,wait=off"])
 

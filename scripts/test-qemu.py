@@ -30,6 +30,12 @@ else:
 
 usb = "--usb" in sys.argv[1:]
 
+# Sound: an Intel HD Audio card whose output QEMU writes to a wav file, at the rate
+# and format /init plays (host/init/src/audio.rs), so what Elm played can be checked.
+wav_path = os.path.join(tmp, "sound.wav")
+sound = ["-audiodev", f"wav,id=snd0,path={wav_path},out.frequency=48000,out.channels=2,out.format=s16",
+         "-device", "intel-hda", "-device", "hda-output,audiodev=snd0"]
+
 # Stands in for geojs.io and open-meteo.com: the guest reaches it at 10.0.2.2 through
 # QEMU's user-mode network, over the simulated wifi.
 GEO = {"latitude": "59.33", "longitude": "18.07", "city": "Stockholm", "country": "Sweden"}
@@ -78,7 +84,7 @@ else:
             + f" ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci", "-device", "virtio-mouse-pci"]
 qemu = subprocess.Popen(
-    ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
+    ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, *sound, "-no-reboot",
      "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
 
 

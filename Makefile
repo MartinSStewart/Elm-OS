@@ -154,7 +154,14 @@ KMAKE     = SOURCE_DATE_EPOCH=$(KERNEL_EPOCH) $(MAKE) -C $(KERNEL_SRC) KBUILD_BU
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
 # ELMOS_UPDATES=1: follow the deployed branch (host/init/src/update.rs); QEMU runs don't.
-USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_UPDATES=1
+# snd_intel_dspcfg.dsp_driver=1: Intel laptops since about 2019 (Tiger Lake among them)
+# put a DSP in front of their HD Audio chip, for Sound Open Firmware (SOF) to drive
+# digital microphones and speaker amplifiers. Elm OS has no SOF (it needs firmware and
+# a large driver stack), so this tells the kernel to give the chip to the plain HDA
+# driver, which plays through the codec's speakers and headphones like any other PC's.
+# The kernel already falls back to that with no SOF built in; this makes the choice
+# explicit, so it holds even if a DSP driver is ever added.
+USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0 snd_intel_dspcfg.dsp_driver=1 ELMOS_UPDATES=1
 
 kernel-src: $(KERNEL_SRC)/Makefile
 

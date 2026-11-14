@@ -35,6 +35,7 @@ qemu = subprocess.Popen(
      "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "none",
      "-append", "console=ttyS0 loglevel=4 ELMOS_STATS=1" + ("" if gpu else " ELMOS_CURSOR=software"),
      "-vga", "none", *devices, "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
+     "-audiodev", f"wav,id=snd0,path={os.path.join(tmp, 'sound.wav')}", "-device", "intel-hda", "-device", "hda-output,audiodev=snd0",
      "-no-reboot", "-serial", f"file:{serial_path}"])
 
 
