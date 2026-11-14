@@ -76,9 +76,9 @@ for now: underlined text and sprites from town-collab's texture.
 import Bounds exposing (Bounds)
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Dict exposing (Dict)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
+import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -154,13 +154,13 @@ type ElementState
 
 type alias Model id =
     { focus : Maybe id
-    , uiState : Dict String ElementState
+    , uiState : SeqDict id ElementState
     }
 
 
 init : Model id
 init =
-    { focus = Nothing, uiState = Dict.empty }
+    { focus = Nothing, uiState = SeqDict.empty }
 
 
 type alias ViewportModel =
@@ -178,7 +178,7 @@ onAnimationFrame : Duration -> Model id -> Model id
 onAnimationFrame timeElapsed model =
     { model
         | uiState =
-            Dict.map
+            SeqDict.map
                 (\_ value ->
                     case value of
                         TextInputState _ ->
@@ -226,14 +226,14 @@ onAnimationFrame timeElapsed model =
     }
 
 
-insertElement : String -> ElementState -> Model id -> Model id
+insertElement : id -> ElementState -> Model id -> Model id
 insertElement id state model =
-    { model | uiState = Dict.insert id state model.uiState }
+    { model | uiState = SeqDict.insert id state model.uiState }
 
 
-updateElement : String -> (Maybe ElementState -> Maybe ElementState) -> Model id -> Model id
+updateElement : id -> (Maybe ElementState -> Maybe ElementState) -> Model id -> Model id
 updateElement id state model =
-    { model | uiState = Dict.update id state model.uiState }
+    { model | uiState = SeqDict.update id state model.uiState }
 
 
 onMouseDown :
@@ -241,11 +241,10 @@ onMouseDown :
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
-    -> String
     -> Element id
     -> Model id
     -> ( Model id, Maybe a )
-onMouseDown onClick relativePositionToUi cursor id idString element model =
+onMouseDown onClick relativePositionToUi cursor id element model =
     case element of
         TextInput textInput2 ->
             let
@@ -254,7 +253,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case Dict.get idString model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (TextInputState state2) ->
                                 state2
 
@@ -263,7 +262,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         )
             in
             ( { model
-                | uiState = Dict.insert idString (TextInputState state3) model.uiState
+                | uiState = SeqDict.insert id (TextInputState state3) model.uiState
                 , focus = Just id
               }
             , Nothing
@@ -276,7 +275,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case Dict.get idString model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
 
@@ -285,7 +284,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         )
             in
             ( { model
-                | uiState = Dict.insert idString (TextInputMultilineState state3) model.uiState
+                | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState
                 , focus = Just id
               }
             , Nothing
@@ -316,7 +315,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
             ( { model | focus = Nothing }, Nothing )
 
 
-onWheel : String -> Int -> Element id -> Model id -> Model id
+onWheel : id -> Int -> Element id -> Model id -> Model id
 onWheel id clicks element model =
     case element of
         TextInput _ ->
@@ -328,7 +327,7 @@ onWheel id clicks element model =
                     TextInputMultiline.wheel
                         textInput2.style
                         clicks
-                        (case Dict.get id model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
 
@@ -336,7 +335,7 @@ onWheel id clicks element model =
                                 TextInputMultiline.init
                         )
             in
-            { model | uiState = Dict.insert id (TextInputMultilineState state3) model.uiState }
+            { model | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState }
 
         -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
         Text _ ->
@@ -368,7 +367,7 @@ onWheel id clicks element model =
                         clicks
                         (size element2)
                         data
-                        (case Dict.get id model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (ViewportState state2) ->
                                 state2
 
@@ -376,7 +375,7 @@ onWheel id clicks element model =
                                 initViewportModel
                         )
             in
-            { model | uiState = Dict.insert id (ViewportState state3) model.uiState }
+            { model | uiState = SeqDict.insert id (ViewportState state3) model.uiState }
 
 
 {-| Whether the wheel does something over this element. The wheel goes to the

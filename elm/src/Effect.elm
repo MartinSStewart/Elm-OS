@@ -40,6 +40,8 @@ import Duration exposing (Duration)
 import Postcard
 import Sprite exposing (Triangle)
 import Units exposing (DevicePixels, UiScale)
+import Wifi exposing (Ssid)
+import Wpa2Password exposing (Wpa2Password)
 
 
 port toHost : Bytes -> Cmd msg
@@ -56,7 +58,7 @@ type Effect
       -- so moving the mouse the same distance crosses the same amount of UI at 1x and 2x.
     | SetCursor { color : Color, scale : UiScale }
     | WifiScan
-    | WifiConnect { ssid : String, password : String }
+    | WifiConnect { ssid : Ssid, password : Maybe Wpa2Password }
     | WifiDisconnect
     | Power PowerAction
       -- Answered on `fromHost` with an httpResponse or httpError carrying the same id.
@@ -216,7 +218,18 @@ encode effect =
             Postcard.variant 2 []
 
         WifiConnect { ssid, password } ->
-            Postcard.variant 3 [ Postcard.string ssid, Postcard.string password ]
+            Postcard.variant
+                3
+                [ Postcard.string (Wifi.ssidToString ssid)
+                , Postcard.string
+                    (case password of
+                        Just password2 ->
+                            Wpa2Password.toString password2
+
+                        Nothing ->
+                            ""
+                    )
+                ]
 
         WifiDisconnect ->
             Postcard.variant 4 []

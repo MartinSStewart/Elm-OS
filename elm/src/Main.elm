@@ -27,6 +27,7 @@ import Keyboard exposing (Key(..))
 import News exposing (NewsState(..))
 import Persist
 import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -34,8 +35,9 @@ import Time
 import Ui exposing (ElementState(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
-import Wifi
+import Wifi exposing (Ssid)
 import Wired
+import Wpa2Password exposing (Wpa2Password)
 
 
 
@@ -248,7 +250,7 @@ type alias Model =
     , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
     , selected : Maybe Wifi.Network
     , -- save passwords here for networks that have been connected to before
-      savedWifiPasswords : Dict String String
+      savedWifiPasswords : SeqDict Ssid Wpa2Password
     , showPassword : Bool
     , weather : WeatherState
     , geoUrl : String
@@ -293,7 +295,7 @@ type Msg
 
 type UiId
     = RefreshButton
-    | NetworkButton String
+    | NetworkButton Ssid
     | PasswordInput
     | ShowPasswordButton
     | ConnectButton
@@ -334,10 +336,10 @@ init =
     , wifiDevice = Wifi.Unknown
     , networks = []
     , scanning = True
-    , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
+    , wifiStatus = { state = Wifi.Idle, ssid = Wifi.stringToSsid "", ip = "", error = "" }
     , wired = []
     , selected = Nothing
-    , savedWifiPasswords = Dict.empty
+    , savedWifiPasswords = SeqDict.empty
     , showPassword = False
     , weather = NoWeather
     , geoUrl = Weather.defaultGeoUrl
@@ -366,7 +368,7 @@ idToString uiId =
             "RefreshButton"
 
         NetworkButton string ->
-            "NetworkButton_" ++ string
+            "NetworkButton_" ++ Wifi.ssidToString string
 
         PasswordInput ->
             "PasswordInput"
@@ -611,7 +613,7 @@ step event model =
                 ( id, { relativePositionToUi, ui } ) :: _ ->
                     let
                         ( uiState, maybeModelAndEffects ) =
-                            Ui.onMouseDown (click model) relativePositionToUi cursor id (idToString id) ui model.uiState
+                            Ui.onMouseDown (click model) relativePositionToUi cursor id ui model.uiState
                     in
                     case maybeModelAndEffects of
                         Just ( model2, effects ) ->
@@ -632,7 +634,7 @@ step event model =
         Wheel clicks ->
             case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (Ui.hover (uiMouse model) (screenUi model)) of
                 ( id, { ui } ) :: _ ->
-                    ( { model | uiState = Ui.onWheel (idToString id) clicks ui model.uiState }, [] )
+                    ( { model | uiState = Ui.onWheel id clicks ui model.uiState }, [] )
 
                 _ ->
                     ( model, [] )
@@ -720,24 +722,26 @@ step event model =
 {-| Once a network the user picked is joined, its password is kept, so it can be
 joined again without asking (`reconnect`).
 -}
-savePassword : Wifi.Status -> Model -> Dict String String
+savePassword : Wifi.Status -> Model -> SeqDict Ssid Wpa2Password
 savePassword status model =
     case model.selected of
         Just network ->
             if status.state == Wifi.Connected && network.ssid == status.ssid then
-                Dict.insert network.ssid
-                    (if needsPassword network then
-                        case Dict.get (idToString PasswordInput) model.uiState.uiState of
-                            Just (TextInputState password) ->
-                                password.current.text
+                if needsPassword network then
+                    case SeqDict.get PasswordInput model.uiState.uiState of
+                        Just (TextInputState password) ->
+                            case Wpa2Password.fromString password.current.text of
+                                Ok ok ->
+                                    SeqDict.insert network.ssid ok model.savedWifiPasswords
 
-                            _ ->
-                                ""
+                                Err _ ->
+                                    SeqDict.remove network.ssid model.savedWifiPasswords
 
-                     else
-                        ""
-                    )
-                    model.savedWifiPasswords
+                        _ ->
+                            SeqDict.remove network.ssid model.savedWifiPasswords
+
+                else
+                    SeqDict.remove network.ssid model.savedWifiPasswords
 
             else
                 model.savedWifiPasswords
@@ -753,10 +757,10 @@ working would be tried again after every scan, every 30 seconds.
 reconnect : Model -> ( Model, List Effect )
 reconnect model =
     let
-        known : List ( Wifi.Network, String )
+        known : List ( Wifi.Network, Wpa2Password )
         known =
             List.filterMap
-                (\network -> Dict.get network.ssid model.savedWifiPasswords |> Maybe.map (Tuple.pair network))
+                (\network -> SeqDict.get network.ssid model.savedWifiPasswords |> Maybe.map (Tuple.pair network))
                 model.networks
                 |> List.sortBy (\( network, _ ) -> negate network.signal)
     in
@@ -767,7 +771,7 @@ reconnect model =
                     | weather = weatherWithoutWifi model
                     , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
                   }
-                , [ Effect.WifiConnect { ssid = network.ssid, password = password } ]
+                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password } ]
                 )
 
             else
@@ -1064,25 +1068,36 @@ connect : Model -> ( Model, List Effect )
 connect model =
     case model.selected of
         Just network ->
-            let
-                password =
-                    if needsPassword network then
-                        case Dict.get (idToString PasswordInput) model.uiState.uiState of
-                            Just (TextInputState password2) ->
-                                password2.current.text
+            if needsPassword network then
+                case SeqDict.get PasswordInput model.uiState.uiState of
+                    Just (TextInputState password2) ->
+                        case Wpa2Password.fromString password2.current.text of
+                            Ok password ->
+                                ( { model
+                                    | weather = weatherWithoutWifi model
+                                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+                                  }
+                                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password } ]
+                                )
 
-                            _ ->
-                                ""
+                            Err error ->
+                                ( { model
+                                    | wifiStatus =
+                                        { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = error }
+                                  }
+                                , []
+                                )
 
-                    else
-                        ""
-            in
-            ( { model
-                | weather = weatherWithoutWifi model
-                , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
-              }
-            , [ Effect.WifiConnect { ssid = network.ssid, password = password } ]
-            )
+                    _ ->
+                        ( model, [] )
+
+            else
+                ( { model
+                    | weather = weatherWithoutWifi model
+                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+                  }
+                , [ Effect.WifiConnect { ssid = network.ssid, password = Nothing } ]
+                )
 
         Nothing ->
             ( model, [] )
@@ -1106,7 +1121,7 @@ typeKey key model =
             ( { model
                 | uiState =
                     Ui.updateElement
-                        (idToString PasswordInput)
+                        PasswordInput
                         (\maybe ->
                             TextInput.paste
                                 model.clipboard
@@ -1133,7 +1148,7 @@ typeKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case Dict.get (idToString PasswordInput) model.uiState.uiState of
+                        (case SeqDict.get PasswordInput model.uiState.uiState of
                             Just (TextInputState password2) ->
                                 password2
 
@@ -1143,7 +1158,7 @@ typeKey key model =
             in
             ( { model
                 | uiState =
-                    Ui.insertElement (idToString PasswordInput) (TextInputState (limitPassword password)) model.uiState
+                    Ui.insertElement PasswordInput (TextInputState (limitPassword password)) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -1170,7 +1185,7 @@ dragSelect focus position model =
             { model
                 | uiState =
                     Ui.updateElement
-                        (idToString PasswordInput)
+                        PasswordInput
                         (\maybe ->
                             TextInput.mouseDownMove
                                 (passwordStyle model)
@@ -1194,7 +1209,7 @@ dragSelect focus position model =
             { model
                 | uiState =
                     Ui.updateElement
-                        (idToString EditorInput)
+                        EditorInput
                         (\maybe ->
                             TextInputMultiline.mouseDownMove
                                 (editorStyle model)
@@ -1286,7 +1301,7 @@ editorKey key model =
             { model
                 | uiState =
                     Ui.updateElement
-                        (idToString EditorInput)
+                        EditorInput
                         (\maybe ->
                             TextInputMultiline.paste
                                 (editorStyle model)
@@ -1312,7 +1327,7 @@ editorKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case Dict.get (idToString EditorInput) model.uiState.uiState of
+                        (case SeqDict.get EditorInput model.uiState.uiState of
                             Just (TextInputMultilineState editor2) ->
                                 editor2
 
@@ -1321,7 +1336,7 @@ editorKey key model =
                         )
             in
             { model
-                | uiState = Ui.insertElement (idToString EditorInput) (TextInputMultilineState editor) model.uiState
+                | uiState = Ui.insertElement EditorInput (TextInputMultilineState editor) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -1840,9 +1855,15 @@ networkPanel model =
                 Wifi.NoCard ->
                     t title
 
+        status : Wifi.Status
         status =
             model.wifiStatus
 
+        ssid : String
+        ssid =
+            Wifi.ssidToString model.wifiStatus.ssid
+
+        statusLine : Ui.Element id
         statusLine =
             case model.wifiDevice of
                 Wifi.Unknown ->
@@ -1857,13 +1878,13 @@ networkPanel model =
                             t "Not connected. Pick a network:"
 
                         Wifi.Connecting ->
-                            t (fit ("Joining " ++ status.ssid ++ "…"))
+                            t (fit ("Joining " ++ ssid ++ "…"))
 
                         Wifi.Dhcp ->
-                            t (fit ("Getting an address on " ++ status.ssid))
+                            t (fit ("Getting an address on " ++ ssid))
 
                         Wifi.Connected ->
-                            Ui.colorText connectedColor bodySize font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
+                            Ui.colorText connectedColor bodySize font (fit ("Connected to " ++ ssid ++ ", " ++ status.ip))
 
                         Wifi.Failed ->
                             Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width status.error)
@@ -1920,8 +1941,16 @@ networkPanel model =
                          else
                             []
                         )
-                            ++ [ Ui.button { id = ConnectButton, padding = small }
-                                    (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (Units.uiPixels 12)) ("Connect to " ++ selected.ssid)))
+                            ++ [ Ui.button
+                                    { id = ConnectButton, padding = small }
+                                    (t
+                                        (Sprite.ellipsis
+                                            bodySize
+                                            font
+                                            (width |> Quantity.minus (Units.uiPixels 12))
+                                            ("Connect to " ++ Wifi.ssidToString selected.ssid)
+                                        )
+                                    )
                                ]
 
                 Nothing ->
@@ -2065,8 +2094,11 @@ networkRow model network =
     Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY 4 2 }
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
-            (Ui.row { spacing = 6, padding = Ui.noPadding }
-                [ bars, Ui.text bodySize font (Sprite.ellipsis bodySize font nameWidth network.ssid) ]
+            (Ui.row
+                { spacing = 6, padding = Ui.noPadding }
+                [ bars
+                , Ui.text bodySize font (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid))
+                ]
             )
             (Ui.text bodySize font label)
         )
@@ -2123,7 +2155,7 @@ passwordInput model =
         , style = passwordStyle model
         , isValid = True
         , state =
-            case Dict.get (idToString PasswordInput) model.uiState.uiState of
+            case SeqDict.get PasswordInput model.uiState.uiState of
                 Just (TextInputState textInput) ->
                     textInput
 
@@ -2430,7 +2462,11 @@ aboutPage model =
                 Wifi.Card name ->
                     case model.wifiStatus.state of
                         Wifi.Connected ->
-                            name ++ ", connected to " ++ model.wifiStatus.ssid ++ " as " ++ model.wifiStatus.ip
+                            name
+                                ++ ", connected to "
+                                ++ Wifi.ssidToString model.wifiStatus.ssid
+                                ++ " as "
+                                ++ model.wifiStatus.ip
 
                         Wifi.Idle ->
                             name ++ ", not connected"
@@ -2555,7 +2591,7 @@ editorWindow model =
 
         textInput : TextInputMultiline.Model
         textInput =
-            case Dict.get (idToString EditorInput) model.uiState.uiState of
+            case SeqDict.get EditorInput model.uiState.uiState of
                 Just (TextInputMultilineState editor) ->
                     editor
 

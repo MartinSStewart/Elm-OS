@@ -39,6 +39,7 @@ import Duration
 import Effect
 import Json.Decode as D
 import Quantity
+import SeqDict
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
@@ -170,7 +171,7 @@ daysView idMap uiState days =
             { id = idMap NewsViewport
             , viewportHeight = Quantity.unsafe 1000
             , model =
-                case Dict.get (idToString NewsViewport) uiState.uiState of
+                case SeqDict.get (idMap NewsViewport) uiState.uiState of
                     Just (ViewportState viewport) ->
                         viewport
 

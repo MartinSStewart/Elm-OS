@@ -152,7 +152,10 @@ decoder =
                         BD.map WifiScan (P.decodeList network)
 
                     12 ->
-                        BD.map4 (\state ssid ip error -> WifiStatus { state = state, ssid = ssid, ip = ip, error = error })
+                        BD.map4
+                            (\state ssid ip error ->
+                                WifiStatus { state = state, ssid = Wifi.stringToSsid ssid, ip = ip, error = error }
+                            )
                             wifiState
                             P.decodeString
                             P.decodeString
@@ -244,7 +247,7 @@ stats =
 
 network : BD.Decoder Wifi.Network
 network =
-    BD.map3 Wifi.Network P.decodeString P.decodeInt security
+    BD.map3 Wifi.Network (BD.map Wifi.stringToSsid P.decodeString) P.decodeInt security
 
 
 {-| protocol::Security's variants, in order.

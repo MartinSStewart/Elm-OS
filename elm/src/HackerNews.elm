@@ -33,6 +33,7 @@ import Effect
 import Hex
 import Html.Parser
 import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
 import Units exposing (UiPixels)
@@ -83,7 +84,7 @@ type alias Model =
 
     -- The comments of the last few posts opened, by post id. `opened` says when (it
     -- counts up from `openCount`), so the longest unopened can go when there are too many.
-    , comments : Dict String { opened : Int, state : CommentsState }
+    , comments : SeqDict PostId { opened : Int, state : CommentsState }
     , openCount : Int
     , isOpen : Bool
     }
@@ -103,6 +104,11 @@ type alias Post =
     , title : String
     , comments : Int
     }
+
+
+postIdToString : PostId -> String
+postIdToString (PostId postId) =
+    postId
 
 
 {-| The list of posts, or one post's comments (in `comments`), with its title.
@@ -143,7 +149,7 @@ type HttpRequestId
 
 init : Model
 init =
-    { data = NotLoading, page = PostsPage, comments = Dict.empty, openCount = 0, isOpen = False }
+    { data = NotLoading, page = PostsPage, comments = SeqDict.empty, openCount = 0, isOpen = False }
 
 
 {-| How many posts' comments are kept. Opening another drops those of the post opened
@@ -185,7 +191,7 @@ gotHttpRequest requestId result model =
                 Err error ->
                     { model | data = LoadFailed error }
 
-        GetPostRequest (PostId postId) ->
+        GetPostRequest postId ->
             let
                 comments : CommentsState
                 comments =
@@ -203,7 +209,7 @@ gotHttpRequest requestId result model =
                         Err error ->
                             CommentsLoadFailed error
             in
-            { model | comments = Dict.update postId (Maybe.map (\entry -> { entry | state = comments })) model.comments }
+            { model | comments = SeqDict.updateIfExists postId (\entry -> { entry | state = comments }) model.comments }
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -264,19 +270,19 @@ onClick uiId model =
         CommentsViewport _ ->
             ( model, [] )
 
-        NewsPostButton ((PostId id) as postId) ->
+        NewsPostButton postId ->
             let
                 cached : Maybe CommentsState
                 cached =
-                    Dict.get id model.comments |> Maybe.map .state
+                    SeqDict.get postId model.comments |> Maybe.map .state
 
                 opened : Model
                 opened =
                     { model
                         | page = CommentsPage postId (postTitle postId model.data)
                         , comments =
-                            Dict.insert
-                                id
+                            SeqDict.insert
+                                postId
                                 { opened = model.openCount
                                 , state =
                                     case cached of
@@ -299,7 +305,10 @@ onClick uiId model =
 
                 load : List Effect
                 load =
-                    [ HttpRequest (GetPostRequest postId) ("https://news.ycombinator.com/item?id=" ++ id) ]
+                    [ HttpRequest
+                        (GetPostRequest postId)
+                        ("https://news.ycombinator.com/item?id=" ++ postIdToString postId)
+                    ]
             in
             ( opened
             , case cached of
@@ -321,23 +330,21 @@ onClick uiId model =
 
         CommentToggle index ->
             case model.page of
-                CommentsPage (PostId id) _ ->
+                CommentsPage id _ ->
                     ( { model
                         | comments =
-                            Dict.update
+                            SeqDict.updateIfExists
                                 id
-                                (Maybe.map
-                                    (\entry ->
-                                        case entry.state of
-                                            CommentsLoaded comments ->
-                                                { entry | state = CommentsLoaded (List.map (toggle index) comments) }
+                                (\entry ->
+                                    case entry.state of
+                                        CommentsLoaded comments ->
+                                            { entry | state = CommentsLoaded (List.map (toggle index) comments) }
 
-                                            CommentsLoading ->
-                                                entry
+                                        CommentsLoading ->
+                                            entry
 
-                                            CommentsLoadFailed _ ->
-                                                entry
-                                    )
+                                        CommentsLoadFailed _ ->
+                                            entry
                                 )
                                 model.comments
                       }
@@ -350,10 +357,10 @@ onClick uiId model =
 
 {-| Drops the comments opened longest ago while more than `maxKeptComments` are kept.
 -}
-dropOldest : Dict String { opened : Int, state : CommentsState } -> Dict String { opened : Int, state : CommentsState }
+dropOldest : SeqDict PostId { opened : Int, state : CommentsState } -> SeqDict PostId { opened : Int, state : CommentsState }
 dropOldest comments =
-    if Dict.size comments > maxKeptComments then
-        Dict.foldl
+    if SeqDict.size comments > maxKeptComments then
+        SeqDict.foldl
             (\id entry oldest ->
                 case oldest of
                     Just ( _, oldestOpened ) ->
@@ -368,7 +375,7 @@ dropOldest comments =
             )
             Nothing
             comments
-            |> Maybe.map (\( id, _ ) -> dropOldest (Dict.remove id comments))
+            |> Maybe.map (\( id, _ ) -> dropOldest (SeqDict.remove id comments))
             |> Maybe.withDefault comments
 
     else
@@ -722,7 +729,7 @@ replyIndent =
 -}
 toggleWidth : Int
 toggleWidth =
-    Sprite.textSize Small Mono "[+0000]" |> Coord.xRaw
+    Sprite.textSize Small Mono "[+000]" |> Coord.xRaw
 
 
 toggleSpacing : Int
@@ -764,14 +771,14 @@ view idMap uiState screenSize model =
                     LoadFailed httpError ->
                         Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
 
-            CommentsPage (PostId id) title ->
+            CommentsPage id title ->
                 commentsView
                     idMap
                     uiState
                     screenSize
-                    (PostId id)
+                    id
                     title
-                    (Dict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
+                    (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
 
 
@@ -919,7 +926,7 @@ commentView idMap uiState width (Comment comment) =
         text =
             Ui.row
                 { spacing = toggleSpacing, padding = Ui.noPadding }
-                [ Ui.right { width = Units.uiPixels (toggleWidth) } repliesButton
+                [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
                 , Ui.customTextWrapped
                     Small
                     (Units.uiPixels textWidth)
@@ -942,7 +949,7 @@ commentView idMap uiState width (Comment comment) =
     else
         Ui.row
             { spacing = toggleSpacing, padding = Ui.noPadding }
-            [ Ui.right { width = Units.uiPixels (toggleWidth) } repliesButton
+            [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
             , Ui.customTextWrapped
                 Small
                 (Units.uiPixels textWidth)
@@ -1001,7 +1008,7 @@ scrolling idMap uiState viewportId screenSize headerHeight content =
         { id = idMap viewportId
         , viewportHeight = Units.uiPixels (Coord.yRaw screenSize - 2 * windowPadding - headerHeight - titleSpacing)
         , model =
-            case Dict.get (idToString viewportId) uiState.uiState of
+            case SeqDict.get (idMap viewportId) uiState.uiState of
                 Just (Ui.ViewportState viewport) ->
                     viewport
 
