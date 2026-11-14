@@ -20,6 +20,8 @@
     {"log": {"text": "couldn't read a message from the host"}},
     "switchReady",
     {"capturePointer": {"capture": true}},
+    {"readFile": {"path": "/usr/share/doom/freedoom1.wad"}},
+    {"writeBytes": {"path": "/data/doom/doomsav0.dsg", "bytes": [0, 1, 255]}},
     {"render": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}
   ],
   "fromHost": [
@@ -55,6 +57,8 @@
     {"files": {"id": "other", "files": [["/sys/class/power_supply/BAT0/status", "Discharging\n"]]}},
     {"bytes": {"path": "/dev/sda", "offset": 512, "hex": "4546492050415254"}},
     {"sha256": {"path": "/sys/firmware/initrd", "hex": null}},
-    {"mouseMotion": {"dx": -3, "dy": 5}}
+    {"mouseMotion": {"dx": -3, "dy": 5}},
+    {"file": {"path": "/data/doom/doomsav0.dsg", "bytes": [0, 1, 255]}},
+    {"file": {"path": "/nope", "bytes": null}}
   ]
 }

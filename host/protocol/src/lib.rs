@@ -99,6 +99,15 @@ pub enum Effect {
     /// games, 3D views, drawing. Buttons and the wheel come as usual. A new Elm program
     /// starts with it off.
     CapturePointer { capture: bool },
+    /// Answered with `ToElm::File`: the whole file, as bytes.
+    ReadFile { path: String },
+    /// Replaces a file on the data disk with these bytes, atomically, as `WriteFile`
+    /// does with text. No answer.
+    WriteBytes {
+        path: String,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -194,6 +203,12 @@ pub enum ToElm {
     /// moved, in its own counts (evdev's relative motion, neither accelerated nor
     /// scaled), right and down positive.
     MouseMotion { dx: i32, dy: i32 },
+    /// The answer to `Effect::ReadFile`: the file's bytes, null if it can't be read.
+    File {
+        path: String,
+        #[serde(with = "serde_bytes")]
+        bytes: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -320,9 +335,11 @@ mod tests {
             Effect::Log { .. } => "log",
             Effect::SwitchReady => "switchReady",
             Effect::CapturePointer { .. } => "capturePointer",
+            Effect::ReadFile { .. } => "readFile",
+            Effect::WriteBytes { .. } => "writeBytes",
         }
     }
-    const EFFECT_TAGS: usize = 17;
+    const EFFECT_TAGS: usize = 19;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -351,9 +368,10 @@ mod tests {
             ToElm::Switching { .. } => "switching",
             ToElm::ReflashNeeded { .. } => "reflashNeeded",
             ToElm::MouseMotion { .. } => "mouseMotion",
+            ToElm::File { .. } => "file",
         }
     }
-    const TO_ELM_TAGS: usize = 25;
+    const TO_ELM_TAGS: usize = 26;
 
     #[test]
     fn reads_the_render_example() {

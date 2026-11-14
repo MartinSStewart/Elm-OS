@@ -262,9 +262,11 @@ impl Host {
                     files::request(self.program, Request::ReadBytes { path, offset, length })
                 }
                 Effect::Sha256 { path, length } => files::request(self.program, Request::Sha256 { path, length }),
+                Effect::ReadFile { path } => files::request(self.program, Request::ReadFile { path }),
                 Effect::WriteSys { path, text } => files::write_sys(path, text),
                 Effect::AppendFile { path, text } => persist::append_file(path, text),
-                Effect::WriteFile { path, text } => persist::write_file(path, text),
+                Effect::WriteFile { path, text } => persist::write_file(path, text.into_bytes()),
+                Effect::WriteBytes { path, bytes } => persist::write_file(path, bytes),
                 Effect::Log { text } => log!("elm", "{}", text),
                 Effect::SwitchReady => elm::switch_ready(self.program),
                 Effect::CapturePointer { capture } => {

@@ -12,6 +12,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 -}
 
 import BootInfo
+import Bytes exposing (Bytes)
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
@@ -29,6 +30,7 @@ import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
 import Time
+import Transient exposing (Transient)
 import Ui exposing (ElementState(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
@@ -65,6 +67,11 @@ type Input
     | ReflashNeeded String
       -- While the pointer is captured (Effect.CapturePointer): the mouse's motion.
     | MouseMotion Int Int
+      -- A file (Effect.ReadFile): Nothing if it couldn't be read. Its bytes aren't
+      -- saved in the log (Transient.elm), so a Msg replayed after a restart has none.
+    | File String (Maybe (Transient Bytes))
+      -- Where the data disk is, if there is one: a program's own files can go there too.
+    | DataDisk (Maybe String)
 
 
 type alias SystemInfo =
@@ -161,8 +168,8 @@ toInput message =
         HostMessage.NetConfig urls ->
             Ok (NetConfig urls)
 
-        HostMessage.DataDisk _ _ ->
-            Err "the data disk message is Persist's"
+        HostMessage.DataDisk path _ ->
+            Ok (DataDisk path)
 
         HostMessage.HttpResponse id status body ->
             Ok (HttpResponse id (Ok { status = status, body = body }))
@@ -204,6 +211,9 @@ toInput message =
 
         HostMessage.MouseMotion dx dy ->
             Ok (MouseMotion dx dy)
+
+        HostMessage.File path bytes ->
+            Ok (File path (Maybe.map Transient.wrap bytes))
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -684,6 +694,13 @@ step event model =
 
         MouseMotion _ _ ->
             -- Nothing captures the pointer yet.
+            ( model, [] )
+
+        File _ _ ->
+            -- Nothing reads files yet.
+            ( model, [] )
+
+        DataDisk _ ->
             ( model, [] )
 
         NetConfig urls ->

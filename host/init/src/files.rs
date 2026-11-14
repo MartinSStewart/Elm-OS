@@ -9,6 +9,8 @@
 //!   -> {"t":"files","id":ID,"files":[[P,TEXT],...]}   TEXT is null if P can't be read
 //!   {"t":"readBytes","path":P,"offset":O,"length":N}
 //!   -> {"t":"bytes","path":P,"offset":O,"hex":HEX}   null unless all N bytes were read
+//!   {"t":"readFile","path":P}
+//!   -> {"t":"file","path":P,"bytes":BYTES}   the whole file; null if P can't be read
 //!   {"t":"writeSys","path":P,"text":T}   (write_sys) no answer
 //!   {"t":"sha256","path":P,"length":N|null}
 //!   -> {"t":"sha256","path":P,"hex":HEX}   of the first N bytes (all of P if null);
@@ -25,6 +27,7 @@ pub enum Request {
     ListDir { path: String },
     ReadFiles { id: String, paths: Vec<String> },
     ReadBytes { path: String, offset: u64, length: usize },
+    ReadFile { path: String },
     Sha256 { path: String, length: Option<u64> },
 }
 
@@ -87,6 +90,13 @@ fn answer(req: Request) -> ToElm {
                 Some(hex(&buf))
             };
             ToElm::Bytes { hex: read(), path, offset }
+        }
+        Request::ReadFile { path } => {
+            let bytes = std::fs::read(&path).ok();
+            if bytes.is_none() {
+                log!("files", "{path}: can't read it");
+            }
+            ToElm::File { path, bytes }
         }
         Request::Sha256 { path, length } => {
             let sha = File::open(&path).ok().and_then(|f| sha256(f, length));

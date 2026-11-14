@@ -69,7 +69,8 @@ type Effect
       -- the file again to see whether it took.
     | WriteSys { path : String, text : String }
       -- Saving files on the data disk (Persist.elm, host/init/src/persist.rs). Only
-      -- under the directory the host said it mounted it at. No answer.
+      -- under the directory the host said it mounted it at (in it, or in directories
+      -- under it, which are made as needed). No answer.
       -- AppendFile adds the text to the end of the file (creating it); the host
       -- makes it durable within a second, and before powering off or restarting.
       -- WriteFile replaces the file at once, atomically: after a power cut it has
@@ -87,6 +88,10 @@ type Effect
       -- mouse's motion (HostMessage.MouseMotion) instead of where it is (Mouse). Buttons
       -- and the wheel come as usual. For games, 3D views, drawing.
     | CapturePointer Bool
+      -- Answered on `fromHost` with the whole file's bytes (HostMessage.File).
+    | ReadFile { path : String }
+      -- WriteFile with bytes: replaces the file on the data disk at once, atomically.
+    | WriteBytes { path : String, bytes : Bytes }
 
 
 type PowerAction
@@ -250,3 +255,9 @@ encode effect =
 
         CapturePointer capture ->
             Postcard.variant 16 [ Postcard.bool capture ]
+
+        ReadFile { path } ->
+            Postcard.variant 17 [ Postcard.string path ]
+
+        WriteBytes { path, bytes } ->
+            Postcard.variant 18 [ Postcard.string path, Postcard.bytes bytes ]

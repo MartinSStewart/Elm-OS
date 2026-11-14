@@ -30,7 +30,9 @@ writes files; what goes in them is decided here.
 
   - The disk: the host mounts the partition named "Elm OS data" (on the USB stick,
     or a virtual disk in QEMU) and says where with `{"t":"dataDisk","path":P}`
-    (P is null without one, and then nothing is saved), with `"httpInFlight"`.
+    (P is null without one, and then nothing is saved), with `"httpInFlight"`. The
+    program gets that message too, after the Msgs that came before it, to keep files
+    of its own there.
   - `log` holds one entry per Msg, and `snapshot` one entry, the Model. Each entry
     is a line: its length in bytes, its CRC-32, and the JSON (written by the code tools/wire generates), so
     `42 89abcdef [17,[1,...]]`. A power cut while writing leaves the last entry
@@ -251,16 +253,21 @@ update config codecs msg model =
                     ( ReadingDisk disk (appMsg :: early), [] )
 
         DataDisk maybeDir httpInFlight ->
+            let
+                -- The program is told too, to keep its own files on the disk.
+                forProgram =
+                    config.fromHost (Ok (HostMessage.DataDisk maybeDir httpInFlight))
+            in
             case model of
                 WaitingForDisk early ->
                     case maybeDir of
                         Just dir ->
-                            ( ReadingDisk { dir = dir, httpInFlight = httpInFlight } early
+                            ( ReadingDisk { dir = dir, httpInFlight = httpInFlight } (forProgram :: early)
                             , [ Effect.ReadFiles { id = readId, paths = [ dir ++ "/snapshot", dir ++ "/log" ] } ]
                             )
 
                         Nothing ->
-                            runEarly config codecs early config.init NotSaving []
+                            runEarly config codecs (forProgram :: early) config.init NotSaving []
 
                 ReadingDisk _ _ ->
                     ( model, [] )

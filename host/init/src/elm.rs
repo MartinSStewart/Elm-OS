@@ -86,7 +86,8 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Sha256 { .. }
         | ToElm::Switching { .. }
         | ToElm::ReflashNeeded { .. }
-        | ToElm::MouseMotion { .. } => return None,
+        | ToElm::MouseMotion { .. }
+        | ToElm::File { .. } => return None,
     })
 }
 

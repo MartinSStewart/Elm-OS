@@ -73,6 +73,9 @@ type ToElm
       -- While the pointer is captured (Effect.CapturePointer): how far the mouse moved,
       -- in its own counts (not accelerated or scaled), right and down positive.
     | MouseMotion Int Int
+      -- The answer to Effect.ReadFile: the path, and the file's bytes, Nothing if it
+      -- can't be read.
+    | File String (Maybe Bytes)
 
 
 type HttpFailure
@@ -185,6 +188,9 @@ decoder =
 
                     24 ->
                         BD.map2 MouseMotion P.decodeInt P.decodeInt
+
+                    25 ->
+                        BD.map2 File P.decodeString (P.decodeMaybe P.decodeBytes)
 
                     _ ->
                         BD.fail

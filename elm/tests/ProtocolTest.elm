@@ -53,6 +53,8 @@ effects =
     , Effect.Log "couldn't read a message from the host"
     , Effect.SwitchReady
     , Effect.CapturePointer True
+    , Effect.ReadFile { path = "/usr/share/doom/freedoom1.wad" }
+    , Effect.WriteBytes { path = "/data/doom/doomsav0.dsg", bytes = BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 0, 1, 255 ])) }
     , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
     ]
 

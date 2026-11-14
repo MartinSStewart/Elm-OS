@@ -8,14 +8,17 @@
 //!
 //!   {"t":"dataDisk","path":"/data"}     or "path":null without one
 //!
-//! Elm then reads its files with readFiles (files.rs) and writes them with
+//! Elm then reads its files with readFiles and readFile (files.rs) and writes them with
 //!
 //!   {"t":"appendFile","path":P,"text":T}   adds T to the end of P (creating it)
 //!   {"t":"writeFile","path":P,"text":T}    replaces P with T, atomically
+//!   {"t":"writeBytes","path":P,"bytes":B}  the same with bytes
 //!
-//! P must be a file directly in /data. One thread does the writes, in the order Elm
-//! asked for them. writeFile writes P.new, fsyncs it, renames it over P and fsyncs
-//! the directory, so after a power cut P has either its old text or the new.
+//! P must be a file in /data, or in a directory under it (made if it isn't there),
+//! but not under /data/programs, which holds the host's builds of the Elm program
+//! (programs.rs). One thread does the writes, in the order Elm asked for them.
+//! writeFile writes P.new, fsyncs it, renames it over P and fsyncs the directory, so
+//! after a power cut P has either its old text or the new.
 //! appendFile only writes; the file is fsynced a second after the first write since
 //! the last fsync (a USB stick is slow to fsync and wears out), and at `shutdown`,
 //! before the computer powers off or restarts. So a power cut loses at most the
@@ -44,7 +47,7 @@ const SYNC_DELAY: Duration = Duration::from_secs(1);
 
 enum Op {
     Append { path: PathBuf, text: String },
-    Write { path: PathBuf, text: String },
+    Write { path: PathBuf, bytes: Vec<u8> },
     Flush(Sender<()>),
     Run(Box<dyn FnOnce(&mut Writer) + Send>),
 }
@@ -124,7 +127,7 @@ impl Disk<'_> {
     /// nothing more is written until the next boot.
     pub fn write(&mut self, name: &str, text: &str) -> bool {
         if !self.0.failed {
-            self.0.write(&Self::path(name), text);
+            self.0.write(&Self::path(name), text.as_bytes());
         }
         !self.0.failed
     }
@@ -147,9 +150,10 @@ pub fn append_file(path: String, text: String) {
     }
 }
 
-pub fn write_file(path: String, text: String) {
+/// Replaces the file (writeFile, writeBytes).
+pub fn write_file(path: String, bytes: Vec<u8>) {
     if let Some(path) = checked(&path) {
-        send(Op::Write { path, text });
+        send(Op::Write { path, bytes });
     }
 }
 
@@ -175,15 +179,39 @@ fn send(op: Op) -> bool {
     }
 }
 
-/// Only files directly in /data, so Elm can't write anywhere else.
+/// Only files in /data and the directories under it, so Elm can't write anywhere
+/// else: every part of the path a plain name (no "..", nothing hidden), and not in
+/// programs/, the host's own (programs.rs).
 fn checked(path: &str) -> Option<PathBuf> {
     let p = Path::new(path);
-    let ok = p.parent() == Some(Path::new(MOUNT_POINT))
-        && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| !n.starts_with('.') && !n.ends_with(".new"));
+    let names: Option<Vec<&str>> = p.strip_prefix(MOUNT_POINT).ok().and_then(|rest| {
+        rest.components()
+            .map(|c| match c {
+                std::path::Component::Normal(n) => n.to_str().filter(|n| !n.starts_with('.')),
+                _ => None,
+            })
+            .collect()
+    });
+    let ok = names.is_some_and(|names| {
+        names.first().is_some_and(|&first| first != "programs")
+            && names.last().is_some_and(|last| !last.ends_with(".new"))
+    });
     if !ok {
-        log!("persist", "not writing {path}: only files in {MOUNT_POINT} can be written");
+        log!("persist", "not writing {path}: only files under {MOUNT_POINT} can be written");
     }
     ok.then(|| p.to_path_buf())
+}
+
+/// Makes the directories `path` is in, if they aren't there, each fsynced into its
+/// parent so that it is still there after a power cut.
+fn make_dirs(path: &Path) -> std::io::Result<()> {
+    let Some(dir) = path.parent() else { return Ok(()) };
+    if dir.is_dir() {
+        return Ok(());
+    }
+    make_dirs(dir)?;
+    std::fs::create_dir(dir)?;
+    File::open(dir.parent().unwrap_or(Path::new(MOUNT_POINT)))?.sync_all()
 }
 
 /// The block device of the partition named "Elm OS data", e.g. /dev/sda2.
@@ -264,7 +292,7 @@ impl Writer {
             match op {
                 Some(Op::Append { .. } | Op::Write { .. }) if self.failed => {}
                 Some(Op::Append { path, text }) => self.append(path, &text),
-                Some(Op::Write { path, text }) => self.write(&path, &text),
+                Some(Op::Write { path, bytes }) => self.write(&path, &bytes),
                 Some(Op::Flush(done)) => {
                     self.sync();
                     let _ = done.send(());
@@ -282,6 +310,10 @@ impl Writer {
         let file = match self.open.entry(path.clone()) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
+                if let Err(err) = make_dirs(&path) {
+                    self.fail(format!("making the directory for {}: {err}", path.display()));
+                    return;
+                }
                 match OpenOptions::new().append(true).create(true).open(&path) {
                     Ok(f) => e.insert(f),
                     Err(err) => {
@@ -300,15 +332,16 @@ impl Writer {
         }
     }
 
-    fn write(&mut self, path: &Path, text: &str) {
+    fn write(&mut self, path: &Path, bytes: &[u8]) {
         // A file we were appending to is about to be replaced; finish with it first.
         if let Some(f) = self.open.remove(path) {
             let _ = f.sync_data();
         }
         let tmp = PathBuf::from(format!("{}.new", path.display()));
         let result = (|| -> std::io::Result<()> {
+            make_dirs(path)?;
             let mut f = File::create(&tmp)?;
-            f.write_all(text.as_bytes())?;
+            f.write_all(bytes)?;
             f.sync_all()?;
             std::fs::rename(&tmp, path)?;
             File::open(path.parent().unwrap_or(Path::new(MOUNT_POINT)))?.sync_all()
@@ -316,7 +349,7 @@ impl Writer {
         match result {
             Ok(()) => {
                 if crate::sys::debug() {
-                    log!("persist", "wrote {} ({} bytes)", path.display(), text.len());
+                    log!("persist", "wrote {} ({} bytes)", path.display(), bytes.len());
                 }
             }
             Err(err) => self.fail(format!("writing {}: {err}", path.display())),
