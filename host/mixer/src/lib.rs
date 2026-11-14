@@ -19,7 +19,10 @@
 //! song carries on from where it was.
 //!
 //! Levels: a sound at gain 1 comes out at its own level (a U8 sample is its distance
-//! from 128, times 256), the music at its own; they are added and clipped to 16 bits.
+//! from 128, times 256), the music at its own; they are added, times the master gain
+//! (`Effect::SoundOutput`'s: Elm's volume, 1 to start with), and clipped to 16 bits.
+//! A change of the master gain while something plays slides to the new one over the
+//! next `mix`, about 10 ms in audio.rs, rather than jumping, which would click.
 
 use protocol::{Effect, SampleFormat, Sound};
 use synth::Synth;
@@ -36,6 +39,9 @@ pub struct Mixer {
     volume: u8,
     /// Frames the synthesizer still runs for once its song isn't playing.
     music_tail: u32,
+    /// The master gain, and the one the last `mix` ended at.
+    gain: f32,
+    mixed_gain: f32,
     sum: Vec<f32>,
     music: Vec<i16>,
 }
@@ -117,6 +123,8 @@ impl Mixer {
             synth: None,
             volume: 127,
             music_tail: 0,
+            gain: 1.0,
+            mixed_gain: 1.0,
             sum: Vec::new(),
             music: Vec::new(),
         }
@@ -179,9 +187,32 @@ impl Mixer {
                     s.set_volume(volume);
                 }
             }
+            Effect::SoundOutput { gain: g, .. } => {
+                self.gain = gain(g).max(0.0);
+                // Nothing to slide while nothing plays: the next sound starts at it.
+                if !self.playing() {
+                    self.mixed_gain = self.gain;
+                }
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    /// The frames a second it makes.
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// The master gain (`Effect::SoundOutput`'s).
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    /// Stops every sound and the music, and makes `rate` frames a second from now on
+    /// (for a sound card of another rate). The master gain and the music's volume stay.
+    pub fn reset(&mut self, rate: u32) {
+        *self = Mixer { gain: self.gain, mixed_gain: self.gain, volume: self.volume, ..Mixer::new(rate) };
     }
 
     fn stop(&mut self, voice: u32) {
@@ -221,9 +252,14 @@ impl Mixer {
                 };
             }
         }
-        for (o, s) in out.iter_mut().zip(&self.sum) {
-            *o = s.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        // The master gain, sliding from where the last call left it.
+        let (from, to) = (self.mixed_gain, self.gain);
+        for (i, (o, s)) in out.chunks_exact_mut(2).zip(self.sum.chunks_exact(2)).enumerate() {
+            let g = if from == to { to } else { from + (to - from) * (i + 1) as f32 / frames as f32 };
+            o[0] = (s[0] * g).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+            o[1] = (s[1] * g).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         }
+        self.mixed_gain = to;
     }
 }
 

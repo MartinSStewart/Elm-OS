@@ -1,8 +1,10 @@
 """Boot Elm OS headless in QEMU, drive it through QMP, and check the screen.
 
-Passes when the cursor follows the mouse, the toolbar's windows open, and
-(except with --usb) when Elm OS joins the simulated wifi network and fetches the
-weather, from a stand-in server here rather than the internet. With --usb the machine
+Passes when the cursor follows the mouse, the toolbar's windows open, the about page's
+test sound plays, and (except with --usb) when the sound panel lists both of the
+machine's sound cards, switches between them, turns the volume down and mutes it, and
+Elm OS joins the simulated wifi network and fetches the weather, from a stand-in server
+here rather than the internet. With --usb the machine
 is a desktop without wifi: a wired Intel e1000e card, which must get an address.
 
     python3 scripts/test-qemu.py          plain virtio GPU: checks the CPU fallback
@@ -13,7 +15,7 @@ is a desktop without wifi: a wired Intel e1000e card, which must get an address.
 --gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
 QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
 """
-import array, hashlib, http.server, json, math, os, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
+import array, hashlib, http.server, json, math, os, re, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 import toolbar
 
@@ -30,11 +32,14 @@ else:
 
 usb = "--usb" in sys.argv[1:]
 
-# Sound: an Intel HD Audio card whose output QEMU writes to a wav file, at the rate
-# and format /init plays (host/init/src/audio.rs), so what Elm played can be checked.
-wav_path = os.path.join(tmp, "sound.wav")
-sound = ["-audiodev", f"wav,id=snd0,path={wav_path},out.frequency=48000,out.channels=2,out.format=s16",
-         "-device", "intel-hda", "-device", "hda-output,audiodev=snd0"]
+# Sound: two Intel HD Audio cards, each with an output QEMU writes to a wav file of its
+# own, at the rate and format /init plays (host/init/src/audio.rs), so what Elm played,
+# and where, can be checked. Elm plays on the first by default (elm/src/Sound.elm).
+wav_paths = [os.path.join(tmp, f"sound{i}.wav") for i in range(2)]
+sound = []
+for i, path in enumerate(wav_paths):
+    sound += ["-audiodev", f"wav,id=snd{i},path={path},out.frequency=48000,out.channels=2,out.format=s16",
+              "-device", f"intel-hda,id=hda{i}", "-device", f"hda-output,audiodev=snd{i},bus=hda{i}.0"]
 
 # Stands in for geojs.io and open-meteo.com: the guest reaches it at 10.0.2.2 through
 # QEMU's user-mode network, over the simulated wifi.
@@ -323,21 +328,64 @@ def button_row(shot):
     return []
 
 
-# The about page's "Test sound" button (there is a sound card) plays a tone, then a
-# few notes of music (elm/src/TestSound.elm), into build/sound.wav: checked below.
-row = button_row(shot)
-if len(row) != 2:
-    save_png(shot, f"{ROOT}/build/screenshot.png")
-    fail(f"expected the about page's Close and Test sound buttons, found {row} (build/screenshot.png)")
-x0, x1, y = row[1]
-click((x0 + x1) / 2 / w, (y + 6 * s) / h)
-time.sleep(3)
-press("About")
-time.sleep(1)
+def test_sound(shot):
+    """Clicks the about page's "Test sound" button (there is a sound card), which plays a
+    tone, then a few notes of music (elm/src/TestSound.elm), and closes the page. `shot`
+    has the page open."""
+    row = button_row(shot)
+    if len(row) != 2:
+        save_png(shot, f"{ROOT}/build/screenshot.png")
+        fail(f"expected the about page's Close and Test sound buttons, found {row} (build/screenshot.png)")
+    x0, x1, y = row[1]
+    click((x0 + x1) / 2 / w, (y + 6 * s) / h)
+    time.sleep(3)
+    press("About")
+    time.sleep(1)
+
+
+# Into the first sound card's wav file: checked below.
+test_sound(shot)
 closed = pixel(screen(), *middle)
 print(f"about page: {before}, open {opened}, closed {closed}")
 if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
     fail("the About button did not open and close the about page")
+
+if not usb:
+    # The sound panel (bottom right) lists both cards' outputs. Picking the second
+    # plays on it; then the test sound four times there, checked below: at full
+    # volume, after the panel's "-" (90%), after the keyboard's volume down key (80%),
+    # muted by the mute key (silence), and after the mute key again (80%).
+    shot = screen()
+    save_png(shot, f"{ROOT}/build/sound-panel.png")
+    try:
+        controls, outputs = toolbar.sound_panel(shot, s)
+    except RuntimeError as e:
+        fail(f"{e} (build/sound-panel.png)")
+    if len(outputs) != 2:
+        fail(f"expected the sound panel to list 2 outputs, found {outputs} (build/sound-panel.png)")
+    def playing_on():
+        return re.findall(r"\[audio\] playing .*", open(serial_path, errors="replace").read())[-1]
+
+    if "(hw:0,0)" not in playing_on():
+        fail(f"expected Elm to play on the first card by default: {playing_on()}")
+    click(outputs[1][0] / w, outputs[1][1] / h)
+    time.sleep(1)
+    if "(hw:1,0)" not in playing_on():
+        fail(f"expected the host to play on the second card once picked: {playing_on()}")
+    print("the sound panel lists both cards; the second plays once picked")
+
+    def about_test_sound():
+        press("About")
+        time.sleep(1)
+        test_sound(screen())
+
+    about_test_sound()
+    click(controls["-"][0] / w, controls["-"][1] / h)
+    about_test_sound()
+    for key in ["volumedown", "audiomute", "audiomute"]:
+        cmd("send-key", keys=[{"type": "qcode", "data": key}])
+        time.sleep(0.5)
+        about_test_sound()
 
 # The Calculator button opens the calculator under the toolbar, with the
 # keyboard going to it: 6 * 7 on the number pad, then Enter.
@@ -419,19 +467,38 @@ if not usb and "power button" not in open(serial_path, errors="replace").read():
     fail("QEMU stopped, but not through Elm OS's power-button handler")
 print("power button powers off")
 
-# The test sound, as QEMU's sound card played it (48000 Hz stereo 16-bit): the tone
-# (880 Hz at half the full level, 0.2 s), silence, the music (from 0.4 s, until about
-# 1.2 s), then silence while its last note has died away.
-shutil.copy(wav_path, f"{ROOT}/build/sound.wav")
-data = open(wav_path, "rb").read()
-pcm = array.array("h", data[data.index(b"data") + 8:])
-pcm = pcm[:len(pcm) // 2 * 2]
-left, right = pcm[0::2], pcm[1::2]
+# The test sound, as QEMU's first sound card played it (48000 Hz stereo 16-bit): the
+# tone (880 Hz at half the full level, 0.2 s), silence, the music (from 0.4 s, until
+# about 1.2 s), then silence while its last note has died away.
 RATE = 48000
 
 
 def rms(x):
     return math.sqrt(sum(v * v for v in x) / max(1, len(x)))
+
+
+def recording(path, name):
+    shutil.copy(path, f"{ROOT}/build/{name}")
+    data = open(path, "rb").read()
+    pcm = array.array("h", data[data.index(b"data") + 8:])
+    pcm = pcm[:len(pcm) // 2 * 2]
+    return pcm[0::2], pcm[1::2]
+
+
+def bursts(samples):
+    """Where each test sound starts: sound after a second or more of quiet (or none)."""
+    starts, quiet = [], RATE
+    for i in range(0, len(samples) - 48, 48):
+        if rms(samples[i:i + 48]) > 1000:
+            if quiet >= RATE:
+                starts.append(i)
+            quiet = 0
+        else:
+            quiet += 48
+    return starts
+
+
+left, right = recording(wav_paths[0], "sound.wav")
 
 
 def span(t0, t1):
@@ -456,4 +523,18 @@ if gap > 30 or after > 30:
     fail("expected silence between the tone and the music, and after it (build/sound.wav)")
 if music < 300:
     fail("expected the music after the tone (build/sound.wav)")
+if len(bursts(left)) != 1:
+    fail(f"expected the test sound once on the first card, before the second was picked; found it at "
+         f"{[round(b / RATE, 2) for b in bursts(left)]} s (build/sound.wav)")
+
+if not usb:
+    # On the second card: full volume, 90% and 80% (the volume cubed: 0.729 and 0.512 of
+    # full), muted (nothing), 80% again.
+    left1, _ = recording(wav_paths[1], "sound1.wav")
+    starts = bursts(left1)
+    peaks = [max(abs(v) for v in left1[b + 960:b + 8640]) for b in starts]
+    print(f"second card: test sounds at {[round(b / RATE, 2) for b in starts]} s, tone peaks {peaks}")
+    want = [1, 0.729, 0.512, 0.512]
+    if len(peaks) != len(want) or any(abs(p / peaks[0] - g) > 0.01 for p, g in zip(peaks, want)):
+        fail(f"expected the tone's peaks at {want} of the first's, and nothing while muted (build/sound1.wav)")
 print("PASS (screenshot in build/screenshot.png)")

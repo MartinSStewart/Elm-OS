@@ -2,13 +2,14 @@
 host/init/src/persist.rs), in QEMU, on a copy of build/data-empty.img.
 
   1. Boot, open the text editor and type "hello", open the calculator and work out
-     6 * 7. Once the screen shows it, wait for the host to say it has fsynced the log,
-     then kill QEMU: a power cut. Check every entry on the disk has the right length and CRC-32 (so Elm's
+     6 * 7, pick the second of the two sound cards in the sound panel and turn the
+     volume down with the keyboard's volume key. Once the screen shows it, wait for the
+     host to say it has fsynced the log, then kill QEMU: a power cut. Check every entry on the disk has the right length and CRC-32 (so Elm's
      CRC-32, compiled by eco, matches zlib's).
   2. Add half an entry to the end of the log, as a write cut short by the power would
-     leave it. Boot: the screen must show the editor and calculator as they were, and
-     the snapshot Elm writes at start must have the text in it and the log no torn
-     entry.
+     leave it. Boot: the screen must show the editor and calculator as they were, the
+     host must play on the second sound card at the lower volume, and the snapshot Elm
+     writes at start must have the text in it and the log no torn entry.
   3. Type " world" and restart with the toolbar's Restart button: Elm takes a snapshot
      before the restart, so the log is empty afterwards.
   4. Power cuts at random moments while typing, a few times over: every boot must
@@ -76,7 +77,10 @@ def boot():
          "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1",
          "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
          "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
-         "-audiodev", f"wav,id=snd0,path={os.path.join(tmp, f'sound{boots}.wav')}", "-device", "intel-hda", "-device", "hda-output,audiodev=snd0",
+         # Two sound cards, so that which plays is a choice (elm/src/Sound.elm).
+         *[arg for i in range(2) for arg in [
+             "-audiodev", f"wav,id=snd{i},path={os.path.join(tmp, f'sound{boots}-{i}.wav')}",
+             "-device", f"intel-hda,id=hda{i}", "-device", f"hda-output,audiodev=snd{i},bus=hda{i}.0"]],
          "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
     wait_for("[persist] mounted /dev/vda1 at /data")
     wait_for("[boot] first frame")
@@ -281,6 +285,15 @@ press("Calculator")
 for key in ["kp_6", "kp_multiply", "kp_7", "kp_enter"]:
     cmd("send-key", keys=[{"type": "qcode", "data": key}])
     time.sleep(0.3)
+# The second sound card, at 90% (the volume cubed: a gain of 0.729).
+try:
+    _, outputs = toolbar.sound_panel(screen(), s)
+except RuntimeError as e:
+    fail(str(e))
+click(*outputs[1])
+cmd("send-key", keys=[{"type": "qcode", "data": "volumedown"}])
+wait_for("(hw:1,0): 48000 Hz")
+wait_for("master gain 0.729")
 move(w - 5, h // 2)
 time.sleep(2)
 typed = screen()
@@ -306,6 +319,12 @@ if [e[0] for e in logged] != list(range(first_snap[4], first_snap[4] + len(logge
 
 replace_file("log", log + b"57 1234abcd [" + str(logged[-1][0] + 1).encode() + b",[0,[1,[")
 boot()
+wait_for("master gain 0.729")
+wait_for("(hw:1,0): 48000 Hz")
+# (Until the second card has appeared, Elm plays on the first.)
+if "(hw:1,0)" not in re.findall(r"\[audio\] playing .*", serial())[-1]:
+    fail("after the power cut, the host isn't playing on the second sound card, as picked")
+print("after the power cut, the second sound card plays, at 90%")
 move(w - 5, h // 2)
 time.sleep(2)
 restored = screen()

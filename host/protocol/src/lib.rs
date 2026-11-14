@@ -182,6 +182,13 @@ pub enum Effect {
     PauseMidi { paused: bool },
     /// The music's volume, 0 to 127 as in MIDI (127 at start).
     MidiVolume { volume: u8 },
+    /// Where sounds and music play, and how loud: `output` is one of the playback
+    /// devices `ToElm::Audio` listed, as (card, device), or null to play nothing (the
+    /// host closes the card); `gain` multiplies everything the mixer plays (1 is the
+    /// sounds' own level, 0 silence). The host plays nothing until Elm sends this, so
+    /// which output and how loud is Elm's choice, and so is the volume curve: the host
+    /// only applies a gain.
+    SoundOutput { output: Option<(u32, u32)>, gain: f32 },
 }
 
 /// A sound for `Effect::PlaySound`: mono samples at `rate` a second.
@@ -302,9 +309,24 @@ pub enum ToElm {
         #[serde(with = "serde_bytes")]
         bytes: Option<Vec<u8>>,
     },
-    /// The sound card the host plays on (its ALSA name), or null without one, when
-    /// sounds and music are taken and dropped. Sent again to each program the host starts.
-    Audio { device: Option<String> },
+    /// The sound cards' playback devices (outputs), by card and device number; empty
+    /// without a sound card. Sent at start, again whenever they change (a card's
+    /// driver finishes probing a moment after boot, a card comes or goes), and to
+    /// each program the host starts. Elm picks one with `Effect::SoundOutput`.
+    Audio { outputs: Vec<AudioOutput> },
+}
+
+/// A playback device: ALSA's hw:`card`,`device`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AudioOutput {
+    pub card: u32,
+    pub device: u32,
+    /// The card's and the device's names, such as "HDA Intel PCH, ALC257 Analog".
+    pub name: String,
+    /// A monitor's sound, over HDMI or DisplayPort, which only plays when a monitor
+    /// with speakers is plugged in.
+    pub hdmi: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -440,9 +462,10 @@ mod tests {
             Effect::StopMidi => "stopMidi",
             Effect::PauseMidi { .. } => "pauseMidi",
             Effect::MidiVolume { .. } => "midiVolume",
+            Effect::SoundOutput { .. } => "soundOutput",
         }
     }
-    const EFFECT_TAGS: usize = 26;
+    const EFFECT_TAGS: usize = 27;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -541,5 +564,9 @@ mod tests {
             vec![1, 20, 0xac, 0x02, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x3f, 0, 0, 0, 0x40]
         );
         assert_eq!(write_effects(&[Effect::MidiVolume { volume: 200 }]), vec![1, 25, 200]);
+        // A tuple is its fields in order; an Option a byte, then the value.
+        let output = Effect::SoundOutput { output: Some((1, 0)), gain: 0.5 };
+        assert_eq!(write_effects(&[output]), vec![1, 26, 1, 1, 0, 0, 0, 0, 0x3f]);
+        assert_eq!(write_effects(&[Effect::SoundOutput { output: None, gain: 0.0 }]), vec![1, 26, 0, 0, 0, 0, 0]);
     }
 }

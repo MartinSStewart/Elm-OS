@@ -2,15 +2,17 @@
 //! StopSound, PlayMidi, StopMidi, PauseMidi and MidiVolume effects) on the sound card,
 //! mixed by host/mixer.
 //!
-//! At start it waits up to AUDIO_WAIT for a playback device (/dev/snd/pcmC*D*p: the
-//! kernel's HD Audio driver probes its codecs a moment after boot), preferring the
-//! computer's own speakers and headphones to a monitor's HDMI or DisplayPort sound,
-//! and tells Elm which it plays on, or that there is none:
+//! Which output it plays on, and how loud, is Elm's choice, the way wifi is: the host
+//! lists the playback devices (/dev/snd/pcmC*D*p) and tells Elm,
 //!
-//!   {"t":"audio","device":"HDA Intel, Generic Analog"}    or "device":null
+//!   {"t":"audio","outputs":[{"card":0,"device":0,"name":"HDA Intel PCH, ALC257 Analog","hdmi":false}]}
 //!
-//! (elm.rs sends that again to each Elm program it starts). Without a device the
-//! effects are taken and dropped.
+//! at start and again whenever they change (the kernel's HD Audio driver probes its
+//! codecs a moment after boot, and cards can come and go: the outputs thread
+//! below hears of them from the kernel), and elm.rs sends the latest list to each Elm
+//! program it starts. Elm answers with SoundOutput: the output to play on, or none,
+//! and the master gain (its volume and mute). Until then nothing plays, and while
+//! there is no output, the effects are taken and dropped.
 //!
 //! /init is a static musl program, so it has no alsa-lib: it drives the device with
 //! ALSA's ioctls itself, which is all a program that only plays needs. 48000 frames a
@@ -20,7 +22,8 @@
 //! is full, which paces the thread. An underrun (the thread was late, and the card
 //! ran out) is put right by preparing the device again.
 //!
-//! Before playing it turns the card's outputs up (volume.rs): the kernel starts them muted.
+//! When it opens a card it turns the card's outputs up (volume.rs): the kernel starts
+//! them muted. The volume the user sets is the mixer's master gain, not the card's.
 //!
 //! When nothing has played for IDLE, the device is stopped and the thread sleeps until
 //! the next effect, so an idle computer isn't moving silence to its sound card.
@@ -34,11 +37,10 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use mixer::Mixer;
-use protocol::{Effect, ToElm};
+use protocol::{AudioOutput, Effect, ToElm};
 
 use crate::elm;
 
-const AUDIO_WAIT: Duration = Duration::from_secs(5);
 const RATES: [u32; 2] = [48000, 44100];
 const CHANNELS: u32 = 2;
 /// A period's length, at least, and how many periods the buffer holds, at most.
@@ -46,6 +48,9 @@ const PERIOD_MS: u32 = 10;
 const PERIODS: u32 = 4;
 const IDLE: Duration = Duration::from_secs(1);
 const STATS_EVERY: Duration = Duration::from_secs(10);
+/// How long a sound card takes to finish appearing once its first device has: the
+/// kernel adds its devices one by one, then its /proc/asound files, which have the names.
+const SETTLE: Duration = Duration::from_millis(200);
 
 fn queue() -> &'static Mutex<Option<Sender<Effect>>> {
     static QUEUE: OnceLock<Mutex<Option<Sender<Effect>>>> = OnceLock::new();
@@ -59,6 +64,10 @@ pub fn start() {
         .name("audio".into())
         .spawn(move || run(rx))
         .expect("start the audio thread");
+    std::thread::Builder::new()
+        .name("outputs".into())
+        .spawn(watch_outputs)
+        .expect("start the sound outputs thread");
 }
 
 /// One of Elm's sound effects, for the audio thread.
@@ -69,104 +78,211 @@ pub fn play(effect: Effect) {
 }
 
 fn run(rx: Receiver<Effect>) {
-    // Until the computer's own device shows up: a monitor's sound may be on a card of
-    // its own (a graphics card's), which can come first.
-    let start = Instant::now();
-    let mut found = devices();
-    while found.iter().all(|d| d.hdmi) && start.elapsed() < AUDIO_WAIT {
-        std::thread::sleep(Duration::from_millis(100));
-        found = devices();
-    }
-    let pcm = found.iter().find_map(|d| Pcm::open(d).map_err(|e| log!("audio", "{}: {e}", d.path)).ok());
-    let Some(mut pcm) = pcm else {
-        log!("audio", "no sound card");
-        *queue().lock().unwrap_or_else(|e| e.into_inner()) = None;
-        elm::send(&ToElm::Audio { device: None });
-        return;
+    let mut player = Player {
+        mixer: Mixer::new(RATES[0]),
+        pcm: None,
+        stats: std::env::var_os("ELMOS_STATS").is_some(),
+        mixing: Duration::ZERO,
+        played: Duration::ZERO,
+        periods: 0,
     };
-    log!(
-        "audio",
-        "playing on {} ({}): {} Hz, periods of {} frames, {} in the buffer",
-        pcm.name,
-        pcm.path,
-        pcm.rate,
-        pcm.period,
-        pcm.buffer / pcm.period
-    );
-    crate::volume::turn_up(pcm.card);
-    elm::send(&ToElm::Audio { device: Some(pcm.name.clone()) });
-
-    let mut mixer = Mixer::new(pcm.rate);
-    let mut frames = vec![0i16; pcm.period as usize * CHANNELS as usize];
-    let stats = std::env::var_os("ELMOS_STATS").is_some();
-    let (mut mixing, mut played, mut periods) = (Duration::ZERO, Duration::ZERO, 0u32);
-    let period_time = Duration::from_secs_f64(pcm.period as f64 / pcm.rate as f64);
-    loop {
-        // Asleep until Elm asks for a sound.
-        let Ok(effect) = rx.recv() else { return };
-        apply(&mut mixer, effect);
-        if let Err(e) = pcm.prepare() {
-            log!("audio", "couldn't start the sound card: {e}");
-            continue;
+    // Asleep until Elm asks for something.
+    while let Ok(effect) = rx.recv() {
+        player.take(effect);
+        if player.pcm.is_some() && player.mixer.playing() {
+            player.play(&rx);
         }
+    }
+}
+
+struct Player {
+    mixer: Mixer,
+    /// The output Elm chose, open.
+    pcm: Option<Pcm>,
+    stats: bool,
+    mixing: Duration,
+    played: Duration,
+    periods: u32,
+}
+
+impl Player {
+    fn take(&mut self, effect: Effect) {
+        match effect {
+            Effect::SoundOutput { output, gain } => {
+                let was = self.mixer.gain();
+                let open = self.pcm.as_ref().map(|p| (p.card, p.device));
+                if output != open {
+                    self.open(output);
+                }
+                let _ = self.mixer.apply(Effect::SoundOutput { output, gain });
+                if self.mixer.gain() != was {
+                    log!("audio", "master gain {:.3}", self.mixer.gain());
+                }
+            }
+            // Nowhere to play it.
+            _ if self.pcm.is_none() => {}
+            _ => {
+                if let Err(e) = self.mixer.apply(effect) {
+                    log!("audio", "{e}");
+                }
+            }
+        }
+    }
+
+    /// Closes the output playing now, if any, and opens `output`, if any. What was
+    /// playing carries on there, unless the card plays at another rate.
+    fn open(&mut self, output: Option<(u32, u32)>) {
+        if let Some(mut pcm) = self.pcm.take() {
+            pcm.stop();
+        }
+        let Some((card, device)) = output else {
+            log!("audio", "playing nothing");
+            self.mixer.reset(self.mixer.rate());
+            return;
+        };
+        let rates = if self.mixer.rate() == RATES[0] { RATES } else { [RATES[1], RATES[0]] };
+        match Pcm::open(card, device, rates) {
+            Ok(pcm) => {
+                let name = outputs().into_iter().find(|o| (o.card, o.device) == (card, device)).map(|o| o.name);
+                log!(
+                    "audio",
+                    "playing on {} (hw:{card},{device}): {} Hz, periods of {} frames, {} in the buffer",
+                    name.as_deref().unwrap_or("?"),
+                    pcm.rate,
+                    pcm.period,
+                    pcm.buffer / pcm.period
+                );
+                crate::volume::turn_up(card);
+                if pcm.rate != self.mixer.rate() {
+                    self.mixer.reset(pcm.rate);
+                }
+                self.pcm = Some(pcm);
+            }
+            Err(e) => {
+                log!("audio", "hw:{card},{device}: {e}");
+                self.mixer.reset(self.mixer.rate());
+            }
+        }
+    }
+
+    /// Plays until nothing has played for IDLE, or the output is closed.
+    fn play(&mut self, rx: &Receiver<Effect>) {
+        let mut frames = Vec::new();
         let mut quiet = Duration::ZERO;
         while quiet < IDLE {
             while let Ok(effect) = rx.try_recv() {
-                apply(&mut mixer, effect);
+                self.take(effect);
             }
+            let Some(pcm) = &mut self.pcm else { return };
+            if !pcm.running {
+                if let Err(e) = pcm.prepare() {
+                    log!("audio", "couldn't start the sound card: {e}");
+                    return;
+                }
+            }
+            let period_time = Duration::from_secs_f64(pcm.period as f64 / pcm.rate as f64);
+            frames.resize(pcm.period as usize * CHANNELS as usize, 0);
             let t = Instant::now();
-            mixer.mix(&mut frames);
-            mixing += t.elapsed();
+            self.mixer.mix(&mut frames);
+            self.mixing += t.elapsed();
             if let Err(e) = pcm.write(&frames) {
+                // Unplugged, say: the outputs thread tells Elm, which picks another.
                 log!("audio", "the sound card stopped: {e}");
+                self.open(None);
                 return;
             }
-            quiet = if mixer.playing() { Duration::ZERO } else { quiet + period_time };
-            periods += 1;
-            played += period_time;
-            if stats && played >= STATS_EVERY {
+            quiet = if self.mixer.playing() { Duration::ZERO } else { quiet + period_time };
+            self.periods += 1;
+            self.played += period_time;
+            if self.stats && self.played >= STATS_EVERY {
                 log!(
                     "audio",
                     "mixing took {:.2}% of a core, {:.0} us a period, over {:.1} s of sound",
-                    100.0 * mixing.as_secs_f64() / played.as_secs_f64(),
-                    mixing.as_secs_f64() * 1e6 / periods as f64,
-                    played.as_secs_f64()
+                    100.0 * self.mixing.as_secs_f64() / self.played.as_secs_f64(),
+                    self.mixing.as_secs_f64() * 1e6 / self.periods as f64,
+                    self.played.as_secs_f64()
                 );
-                (mixing, played, periods) = (Duration::ZERO, Duration::ZERO, 0);
+                (self.mixing, self.played, self.periods) = (Duration::ZERO, Duration::ZERO, 0);
             }
         }
-        pcm.stop();
+        if let Some(pcm) = &mut self.pcm {
+            pcm.stop();
+        }
     }
 }
 
-fn apply(mixer: &mut Mixer, effect: Effect) {
-    if let Err(e) = mixer.apply(effect) {
-        log!("audio", "{e}");
+// ---- the outputs
+
+/// Tells Elm the outputs, and again each time they change: the kernel announces each
+/// device it adds or removes on a netlink socket (its "uevents", which udev listens to
+/// on a desktop), so this thread sleeps until a sound device comes or goes.
+fn watch_outputs() {
+    let events = uevents();
+    if events.is_none() {
+        log!("audio", "can't listen for sound cards coming and going: {}", std::io::Error::last_os_error());
+    }
+    let mut sent = None;
+    loop {
+        let found = outputs();
+        if sent.as_ref() != Some(&found) {
+            let names: Vec<String> = found.iter().map(|o| format!("{} (hw:{},{})", o.name, o.card, o.device)).collect();
+            log!("audio", "outputs: {}", if names.is_empty() { "none".into() } else { names.join(", ") });
+            elm::send(&ToElm::Audio { outputs: found.clone() });
+            sent = Some(found);
+        }
+        let Some(fd) = events else { return };
+        // Each event is "add@/devices/...", then KEY=value lines, all ending in a 0.
+        let mut event = [0u8; 4096];
+        let sound = |event: &[u8]| event.split(|&b| b == 0).any(|line| line == b"SUBSYSTEM=sound");
+        loop {
+            // SAFETY: reads into our buffer; this waits for an event.
+            let n = unsafe { libc::recv(fd, event.as_mut_ptr() as *mut libc::c_void, event.len(), 0) };
+            if n > 0 && sound(&event[..n as usize]) {
+                break;
+            }
+        }
+        // The rest of the card, and its names, come with it.
+        std::thread::sleep(SETTLE);
+        loop {
+            // SAFETY: as above, without waiting.
+            let n = unsafe { libc::recv(fd, event.as_mut_ptr() as *mut libc::c_void, event.len(), libc::MSG_DONTWAIT) };
+            if n <= 0 {
+                break;
+            }
+        }
     }
 }
 
-// ---- finding the device
-
-struct Device {
-    path: String,
-    card: u32,
-    device: u32,
-    name: String,
-    hdmi: bool,
+/// A socket the kernel's uevents arrive on, or None if it can't be had.
+fn uevents() -> Option<i32> {
+    // SAFETY: plain system calls; the address is a valid sockaddr_nl.
+    unsafe {
+        let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, libc::NETLINK_KOBJECT_UEVENT);
+        if fd < 0 {
+            return None;
+        }
+        let mut address: libc::sockaddr_nl = std::mem::zeroed();
+        address.nl_family = libc::AF_NETLINK as u16;
+        address.nl_groups = 1; // the kernel's own events
+        let size = std::mem::size_of::<libc::sockaddr_nl>() as u32;
+        if libc::bind(fd, &address as *const libc::sockaddr_nl as *const libc::sockaddr, size) < 0 {
+            libc::close(fd);
+            return None;
+        }
+        Some(fd)
+    }
 }
 
-/// The playback devices, the computer's own first (by card and device number), then
-/// HDMI and DisplayPort ones, which only play if a monitor with speakers is plugged in.
-fn devices() -> Vec<Device> {
+/// The playback devices, in the kernel's order (by card, then device).
+fn outputs() -> Vec<AudioOutput> {
     let Ok(dir) = std::fs::read_dir("/dev/snd") else { return Vec::new() };
-    let mut found: Vec<Device> = dir
+    // " 0 [Intel   ]: HDA-Intel - HDA Intel PCH", and a device's info has "name: ALC257 Analog".
+    let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
+    let mut found: Vec<AudioOutput> = dir
         .filter_map(|e| {
             let name = e.ok()?.file_name().into_string().ok()?;
             let (card, device) = name.strip_prefix("pcmC")?.strip_suffix('p')?.split_once('D')?;
-            let (card, device) = (card.parse().ok()?, device.parse().ok()?);
-            // /proc/asound/cards has " 0 [Intel   ]: HDA-Intel - HDA Intel PCH", and the
-            // device's info "name: ALC257 Analog".
-            let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
+            let (card, device): (u32, u32) = (card.parse().ok()?, device.parse().ok()?);
             let card_name = cards
                 .lines()
                 .find(|l| l.trim_start().starts_with(&format!("{card} [")))
@@ -175,17 +291,15 @@ fn devices() -> Vec<Device> {
                 .unwrap_or_else(|| format!("card {card}"));
             let info = std::fs::read_to_string(format!("/proc/asound/card{card}/pcm{device}p/info")).unwrap_or_default();
             let pcm_name = info.lines().find_map(|l| l.strip_prefix("name: ")).map(str::trim).unwrap_or("");
-            let hdmi = pcm_name.contains("HDMI") || pcm_name.contains("DP");
-            Some(Device {
-                path: format!("/dev/snd/{name}"),
+            Some(AudioOutput {
                 card,
                 device,
                 name: if pcm_name.is_empty() { card_name } else { format!("{card_name}, {pcm_name}") },
-                hdmi,
+                hdmi: pcm_name.contains("HDMI") || pcm_name.contains("DP"),
             })
         })
         .collect();
-    found.sort_by_key(|d| (d.hdmi, d.card, d.device));
+    found.sort_by_key(|o| (o.card, o.device));
     found
 }
 
@@ -319,12 +433,13 @@ fn ioctl<T>(fd: i32, request: libc::c_ulong, arg: *mut T) -> Result<(), std::io:
 /// An open playback device, set up.
 struct Pcm {
     fd: i32,
-    path: String,
     card: u32,
-    name: String,
+    device: u32,
     rate: u32,
     period: u32,
     buffer: u32,
+    /// Prepared, and not stopped since.
+    running: bool,
 }
 
 impl Drop for Pcm {
@@ -335,16 +450,17 @@ impl Drop for Pcm {
 }
 
 impl Pcm {
-    fn open(device: &Device) -> Result<Pcm, String> {
-        let path = CString::new(device.path.as_str()).unwrap();
+    /// /dev/snd/pcmC`card`D`device`p, at the first of `rates` it can play.
+    fn open(card: u32, device: u32, rates: [u32; 2]) -> Result<Pcm, String> {
+        let path = CString::new(format!("/dev/snd/pcmC{card}D{device}p")).unwrap();
         // SAFETY: opens a file by a C string.
         let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
         if fd < 0 {
             return Err(format!("can't open it: {}", std::io::Error::last_os_error()));
         }
-        let mut pcm = Pcm { fd, path: device.path.clone(), card: device.card, name: device.name.clone(), rate: 0, period: 0, buffer: 0 };
+        let mut pcm = Pcm { fd, card, device, rate: 0, period: 0, buffer: 0, running: false };
         let mut why = String::new();
-        for rate in RATES {
+        for rate in rates {
             match pcm.set_up(rate) {
                 Ok(()) => return Ok(pcm),
                 Err(e) => why = format!("can't play {rate} Hz stereo 16-bit: {e}"),
@@ -385,12 +501,15 @@ impl Pcm {
     }
 
     fn prepare(&mut self) -> Result<(), std::io::Error> {
-        ioctl(self.fd, IOCTL_PREPARE, std::ptr::null_mut::<u8>())
+        ioctl(self.fd, IOCTL_PREPARE, std::ptr::null_mut::<u8>())?;
+        self.running = true;
+        Ok(())
     }
 
     /// Stops at once, dropping what is in the buffer.
     fn stop(&mut self) {
         let _ = ioctl(self.fd, IOCTL_DROP, std::ptr::null_mut::<u8>());
+        self.running = false;
     }
 
     /// Writes interleaved stereo frames, waiting while the buffer is full. After an

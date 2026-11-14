@@ -30,6 +30,8 @@
     "stopMidi",
     {"pauseMidi": {"paused": true}},
     {"midiVolume": {"volume": 100}},
+    {"soundOutput": {"output": [1, 0], "gain": 0.5}},
+    {"soundOutput": {"output": null, "gain": 0.0}},
     {"render": [{"triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}, {"picture": {"x": 10, "y": 20, "w": 6, "h": 3, "width": 2, "height": 1, "format": {"indexed": {"palette": [0, 0, 0, 255, 128, 0]}}, "pixels": [1, 0]}}]}
   ],
   "fromHost": [
@@ -56,8 +58,8 @@
     {"dataDisk": {"path": null, "httpInFlight": []}},
     {"switching": {"to": "3f2a9c1"}},
     {"reflashNeeded": {"build": "eca6a3aa4c51"}},
-    {"audio": {"device": "HDA Intel (hw:0,0)"}},
-    {"audio": {"device": null}},
+    {"audio": {"outputs": [{"card": 0, "device": 0, "name": "HDA Intel PCH, ALC257 Analog", "hdmi": false}, {"card": 0, "device": 3, "name": "HDA Intel PCH, HDMI 0", "hdmi": true}]}},
+    {"audio": {"outputs": []}},
     {"httpResponse": {"id": "weather", "status": 200, "body": "{}"}},
     {"httpError": {"id": "weather", "error": "timeout", "message": "the server took too long"}},
     {"httpError": {"id": "weather", "error": "badUrl", "message": "no host"}},

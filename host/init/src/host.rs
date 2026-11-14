@@ -302,7 +302,8 @@ impl Host {
                 | Effect::PlayMidi { .. }
                 | Effect::StopMidi
                 | Effect::PauseMidi { .. }
-                | Effect::MidiVolume { .. }) => audio::play(effect),
+                | Effect::MidiVolume { .. }
+                | Effect::SoundOutput { .. }) => audio::play(effect),
             }
         }
         if cursor_dirty {

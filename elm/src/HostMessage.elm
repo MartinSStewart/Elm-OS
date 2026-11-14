@@ -13,6 +13,7 @@ program (Main.persistConfig.fromHost).
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Postcard as P
+import Sound
 import Wifi
 import Wired
 
@@ -76,8 +77,9 @@ type ToElm
       -- The answer to Effect.ReadFile: the path, and the file's bytes, Nothing if it
       -- can't be read.
     | File String (Maybe Bytes)
-      -- The sound card the host plays on, if there is one (host/init/src/audio.rs).
-    | Audio (Maybe String)
+      -- The sound cards' outputs (host/init/src/audio.rs), again whenever they change;
+      -- empty without a sound card. Sound.elm picks one.
+    | Audio (List Sound.Output)
 
 
 type HttpFailure
@@ -195,7 +197,7 @@ decoder =
                         BD.map2 File P.decodeString (P.decodeMaybe P.decodeBytes)
 
                     26 ->
-                        BD.map Audio (P.decodeMaybe P.decodeString)
+                        BD.map Audio (P.decodeList soundOutput)
 
                     _ ->
                         BD.fail
@@ -250,6 +252,11 @@ security =
 wifiState : BD.Decoder Wifi.State
 wifiState =
     variants [ Wifi.Idle, Wifi.Connecting, Wifi.Dhcp, Wifi.Connected, Wifi.Failed ]
+
+
+soundOutput : BD.Decoder Sound.Output
+soundOutput =
+    BD.map4 Sound.Output P.decodeUnsigned P.decodeUnsigned P.decodeString P.decodeBool
 
 
 wiredLink : BD.Decoder Wired.Link

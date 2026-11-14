@@ -214,3 +214,62 @@ fn stop_pause_and_volume() {
     assert!(m.apply(Effect::PlayMidi { song: vec![1, 2, 3], instruments: bank(), looping: true }).is_err());
     assert!(m.apply(Effect::PlayMidi { song: song(), instruments: vec![0; 10], looping: true }).is_err());
 }
+
+fn master(gain: f32) -> Effect {
+    Effect::SoundOutput { output: Some((0, 0)), gain }
+}
+
+#[test]
+fn the_master_gain_scales_everything_after_sliding_to_it_over_one_mix() {
+    let mut m = Mixer::new(RATE);
+    m.apply(play(0, s16(&[1000; 100], RATE), 1.0, 0.5, 1.0)).unwrap();
+    m.apply(play(1, s16(&[2000; 100], RATE), 1.0, 1.0, 1.0)).unwrap();
+    assert_eq!(left(&mix(&mut m, 2)), vec![3000, 3000]);
+    // From 1 to a half over the next mix's four frames, then a half.
+    m.apply(master(0.5)).unwrap();
+    assert_eq!(left(&mix(&mut m, 4)), vec![2625, 2250, 1875, 1500]);
+    let out = mix(&mut m, 3);
+    assert_eq!(left(&out), vec![1500; 3]);
+    assert_eq!(right(&out), vec![1250; 3]);
+    // Above 1 is louder, and still clipped to 16 bits.
+    m.apply(master(20.0)).unwrap();
+    let _ = mix(&mut m, 1);
+    assert_eq!(left(&mix(&mut m, 2)), vec![32767, 32767]);
+}
+
+#[test]
+fn a_master_gain_of_0_is_silence_and_what_plays_carries_on() {
+    let mut m = Mixer::new(RATE);
+    m.apply(Effect::PlayMidi { song: song(), instruments: bank(), looping: true }).unwrap();
+    m.apply(play(0, s16(&[10000; 48000], RATE), 1.0, 1.0, 1.0)).unwrap();
+    m.apply(master(0.0)).unwrap();
+    let _ = mix(&mut m, 480);
+    assert_eq!(mix(&mut m, 4800), vec![0; 9600]);
+    assert!(m.playing(), "muted, the sound and the song still move on");
+    // Turned up again, both are heard where they had got to.
+    m.apply(master(1.0)).unwrap();
+    let _ = mix(&mut m, 480);
+    assert!(loudness(&mix(&mut m, 4800)) > 5000.0);
+    // While nothing plays, a new gain is there at once (a sound after muting is silent).
+    let _ = mix(&mut m, 2 * RATE as usize);
+    m.apply(Effect::StopMidi).unwrap();
+    m.apply(Effect::StopSound { voice: 0 }).unwrap();
+    let _ = mix(&mut m, 3 * RATE as usize);
+    assert!(!m.playing());
+    m.apply(master(0.0)).unwrap();
+    m.apply(play(0, s16(&[10000; 10], RATE), 1.0, 1.0, 1.0)).unwrap();
+    assert_eq!(mix(&mut m, 4), vec![0; 8]);
+    // A reset (another card) stops everything, and keeps the gain.
+    m.apply(master(0.5)).unwrap();
+    m.reset(44100);
+    assert_eq!(m.rate(), 44100);
+    assert!(!m.playing());
+    m.apply(play(0, s16(&[1000, 1000], 44100), 1.0, 1.0, 1.0)).unwrap();
+    assert_eq!(left(&mix(&mut m, 2)), vec![500, 500]);
+    // A gain that isn't a number, or is below 0, is silence.
+    for g in [f32::NAN, -1.0] {
+        m.apply(master(g)).unwrap();
+        let _ = mix(&mut m, 480);
+        assert_eq!(mix(&mut m, 10), vec![0; 20], "gain {g}");
+    }
+}

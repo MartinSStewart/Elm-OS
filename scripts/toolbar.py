@@ -1,4 +1,4 @@
-"""Where the toolbar's buttons are, for the QEMU tests to click them by name.
+"""Where the toolbar's buttons are, and the sound panel's, for the QEMU tests to click them.
 
 The labels come from Main.toolbar's source (the buttons shown when nothing asks
 "Restart?"), in order, and the buttons from a screenshot: each one has a
@@ -60,3 +60,35 @@ def buttons(shot, s):
     while bottom < h and _border(pixel(runs[0][0], bottom)):
         bottom += 1
     return {name: ((x0 + x1) // 2, (TOP * s + bottom) // 2) for name, (x0, x1) in zip(names, runs)}
+
+
+def sound_panel(shot, s):
+    """The sound panel's buttons (Main.soundPanel, in the bottom right corner): the
+    middle of each, in device pixels, as ({"-": (x, y), "+": ..., "Mute": ...}, [one
+    for each output, top to bottom]); no outputs when there is only one. Each button's
+    top border is a run of the border colour with no border above it and the button's
+    side going down from its left end."""
+    w, h, px = shot
+    pixel = lambda x, y: tuple(px[(y * w + x) * 3:(y * w + x) * 3 + 3])
+    found = []
+    for y in range(h - 260 * s, h - 2 * s):
+        x = w - 330 * s
+        while x < w:
+            if _border(pixel(x, y)):
+                x0 = x
+                while x < w and _border(pixel(x, y)):
+                    x += 1
+                # Not the panel's own border (wider than any button), nor a volume bar.
+                if 10 * s <= x - x0 <= 275 * s and not _border(pixel(x0 + 4 * s, y - 1)) \
+                        and _border(pixel(x0, y + 4 * s)):
+                    bottom = y
+                    while bottom < h and _border(pixel(x0, bottom)):
+                        bottom += 1
+                    found.append(((x0 + x) // 2, (y + bottom) // 2, y))
+            x += 1
+    rows = sorted(set(y for _, _, y in found))
+    if not rows or len([b for b in found if b[2] == rows[0]]) != 3:
+        raise RuntimeError(f"expected the sound panel's -, + and Mute buttons, found {found}")
+    controls = sorted((x, y) for x, y, top in found if top == rows[0])
+    outputs = [next((x, y) for x, y, top in found if top == row) for row in rows[1:]]
+    return dict(zip(["-", "+", "Mute"], controls)), outputs

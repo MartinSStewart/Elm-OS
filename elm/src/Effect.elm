@@ -112,6 +112,11 @@ type Effect
     | PauseMidi Bool
       -- 0 to 127, as in MIDI; 127 to start with.
     | MidiVolume Int
+      -- Where sounds and music play: one of the outputs the host listed
+      -- (HostMessage.Audio), or Nothing for none, and the master gain, which multiplies
+      -- everything (1 is the sounds' own level, 0 silence). The host plays nothing
+      -- until it gets this. Sound.elm makes it.
+    | SoundOutput { output : Maybe { card : Int, device : Int }, gain : Float }
 
 
 {-| A mono sound: `samples` at `rate` a second.
@@ -320,3 +325,9 @@ encode effect =
 
         MidiVolume volume ->
             Postcard.variant 25 [ Postcard.u8 volume ]
+
+        SoundOutput { output, gain } ->
+            Postcard.variant 26
+                [ Postcard.maybe (\{ card, device } -> BE.sequence [ Postcard.unsigned card, Postcard.unsigned device ]) output
+                , Postcard.float32 gain
+                ]

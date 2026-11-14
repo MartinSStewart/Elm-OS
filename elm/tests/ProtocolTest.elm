@@ -64,6 +64,8 @@ effects =
     , Effect.StopMidi
     , Effect.PauseMidi True
     , Effect.MidiVolume 100
+    , Effect.SoundOutput { output = Just { card = 1, device = 0 }, gain = 0.5 }
+    , Effect.SoundOutput { output = Nothing, gain = 0 }
     , Effect.Render
         (\() ->
             [ Scene.Triangles [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]

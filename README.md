@@ -131,7 +131,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `host/link/` | Linked into the Elm program: carries its ports over the socket to `/init` |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
-| `host/init/src/audio.rs` | Audio thread: finds the sound card and plays on it with ALSA's ioctls (no alsa-lib) |
+| `host/init/src/audio.rs` | Audio thread: lists the sound cards' outputs for Elm and plays on the one Elm picks with ALSA's ioctls (no alsa-lib) |
 | `host/mixer/` | Mixes Elm's sounds (each on a voice, resampled as it plays) and the music |
 | `host/synth/` | The music: an emulated OPL3 FM chip playing MIDI as DOS Doom's DMX library did |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
@@ -186,8 +186,12 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   DMX OP2 instrument bank for music. The host mixes them on a thread of its own at 48000 Hz,
   10 ms at a time, and stops the sound card while nothing plays. No message says a sound has
   ended, so `update` stays a function of its Msgs; the program knows how long its sounds
-  are. The about page says which sound card plays, and its Test sound button plays a tone
-  and a few notes (`elm/src/TestSound.elm`), which `make test` records from QEMU and checks.
+  are. Which output plays, and how loud, is Elm's choice, as wifi is: the host lists the
+  outputs (`Audio`), and Elm answers `SoundOutput` with one and a master gain
+  (`elm/src/Sound.elm` has the rule for the default, the volume curve and what is saved;
+  the panel in the bottom right shows them, and the keyboard's volume keys work anywhere).
+  The about page says which output plays, and its Test sound button plays a tone and a few
+  notes (`elm/src/TestSound.elm`), which `make test` records from QEMU and checks.
 - `wpa_supplicant` is built from w1.fi's source with its internal crypto instead of OpenSSL.
   That crypto has no elliptic curves, so WPA3-only (SAE) networks can't be joined; WPA2 and
   WPA2/WPA3 mixed networks work, with management frame protection when the router offers it.

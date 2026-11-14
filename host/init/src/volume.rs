@@ -1,12 +1,12 @@
 //! The sound card's own volume controls (ALSA's "mixer controls", /dev/snd/controlC*),
-//! set once before the audio thread plays (audio.rs).
+//! set when the audio thread opens a card (audio.rs).
 //!
 //! The kernel starts an HD Audio card with its master volume at the bottom and muted
 //! (sound/pci/hda/hda_codec.c, __snd_hda_add_vmaster), and leaves it to a desktop's
 //! startup (alsactl, PipeWire) to turn up. There is none here, so this does what
 //! `alsactl init` does for the outputs: each output's playback switch on and its
 //! playback volume at 0 dB (full level, no gain), where the card says where 0 dB is;
-//! the program sets its sounds' own levels. Only outputs: the "Playback" controls of an
+//! the program sets its sounds' own levels, and Elm the volume (the mixer's master gain). Only outputs: the "Playback" controls of an
 //! analog input (Mic, Line In) loop it back to the speakers, which would howl.
 
 use std::ffi::CString;

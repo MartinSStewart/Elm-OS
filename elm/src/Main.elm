@@ -1,9 +1,9 @@
-module Main exposing (Model, Msg, PowerAction, RendererInfo, SoundCard, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
+module Main exposing (Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
-password, join it; networks joined before are joined again by themselves), and the weather once either is connected, and a calculator
-(Calculator.elm) that opens from the toolbar.
+password, join it; networks joined before are joined again by themselves), and the weather once either is connected, a sound
+panel (the output and the volume, Sound.elm), and a calculator (Calculator.elm) that opens from the toolbar.
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
 including a Frame whenever the screen is ready for a frame (HostMessage.elm). `update` answers with a
@@ -27,6 +27,7 @@ import News exposing (NewsState(..))
 import Persist
 import Quantity exposing (Quantity)
 import Scene
+import Sound
 import Sprite
 import TestSound
 import TextInput
@@ -74,8 +75,8 @@ type Input
     | File String (Maybe (Transient Bytes))
       -- Where the data disk is, if there is one: a program's own files can go there too.
     | DataDisk (Maybe String)
-      -- The sound card the host plays on, if there is one (host/init/src/audio.rs).
-    | Audio (Maybe String)
+      -- The sound cards' outputs (host/init/src/audio.rs), again whenever they change.
+    | Audio (List Sound.Output)
 
 
 type alias SystemInfo =
@@ -219,8 +220,8 @@ toInput message =
         HostMessage.File path bytes ->
             Ok (File path (Maybe.map Transient.wrap bytes))
 
-        HostMessage.Audio device ->
-            Ok (Audio device)
+        HostMessage.Audio outputs ->
+            Ok (Audio outputs)
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -257,7 +258,8 @@ type alias Model =
     , scanning : Bool
     , wifiStatus : Wifi.Status
     , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
-    , soundCard : SoundCard
+    , soundOutputs : Maybe (List Sound.Output) -- Nothing until the host says
+    , sound : Sound.Settings
     , selected : Maybe Wifi.Network
     , -- save passwords here for networks that have been connected to before
       savedWifiPasswords : Dict String String
@@ -284,12 +286,6 @@ type alias Model =
 type PowerAction
     = PowerOff
     | Restart
-
-
-type SoundCard
-    = SoundCardUnknown -- until the host says
-    | NoSoundCard
-    | SoundCard String
 
 
 type WeatherState
@@ -320,6 +316,10 @@ type UiId
     | NewsButton
     | CloseAboutButton
     | TestSoundButton
+    | QuieterButton
+    | LouderButton
+    | MuteButton
+    | SoundOutputButton Sound.OutputId
     | CalculatorButton
     | PowerOffButton
     | RestartButton
@@ -353,7 +353,8 @@ init =
     , scanning = True
     , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
     , wired = []
-    , soundCard = SoundCardUnknown
+    , soundOutputs = Nothing
+    , sound = Sound.defaultSettings
     , selected = Nothing
     , savedWifiPasswords = Dict.empty
     , showPassword = False
@@ -411,6 +412,18 @@ idToString uiId =
 
         TestSoundButton ->
             "TestSoundButton"
+
+        QuieterButton ->
+            "QuieterButton"
+
+        LouderButton ->
+            "LouderButton"
+
+        MuteButton ->
+            "MuteButton"
+
+        SoundOutputButton { card, device } ->
+            "SoundOutputButton_" ++ String.fromInt card ++ "_" ++ String.fromInt device
 
         CalculatorButton ->
             "CalculatorButton"
@@ -483,7 +496,7 @@ step event model =
     case event of
         Screen w h ->
             -- The host's first message to each program it starts: it is listening for
-            -- effects now. The notices and the sound card are about the program before
+            -- effects now. The notices and the sound outputs are about the program before
             -- this one (the Model is the one it saved); the host sends ReflashNeeded and
             -- Audio again.
             ( { model
@@ -491,7 +504,7 @@ step event model =
                 , mouse = Coord.xy (w // 2) (h // 2)
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
-                , soundCard = SoundCardUnknown
+                , soundOutputs = Nothing
               }
             , BootInfo.start
             )
@@ -642,43 +655,26 @@ step event model =
                     ( model, [] )
 
         Key code down repeat ->
-            let
-                key : Key
-                key =
-                    Keyboard.fromCode model.shift code
-            in
-            if model.ctrl && model.shift && key == Character "Q" && down then
-                ( { model | showUiBorders = not model.showUiBorders }, [] )
+            if List.member code [ keyMute, keyVolumeDown, keyVolumeUp ] then
+                -- The volume keys work anywhere, even when an app has the keyboard.
+                if down && not (repeat && code == keyMute) then
+                    setSound
+                        (if code == keyMute then
+                            Sound.toggleMute model.sound
 
-            else if Keyboard.isShift code then
-                ( { model | shift = down }, [] )
+                         else if code == keyVolumeUp then
+                            Sound.louder model.sound
 
-            else if Keyboard.isCtrl code then
-                ( { model | ctrl = down }, [] )
+                         else
+                            Sound.quieter model.sound
+                        )
+                        model
 
-            else if not down then
-                ( model, [] )
-
-            else if model.uiState.focus == Just PasswordInput then
-                typeKey key model
-
-            else if model.uiState.focus == Just EditorInput then
-                ( editorKey key model, [] )
-
-            else if calculatorFocused model then
-                case ( model.ctrl, Calculator.fromKeyboard key ) of
-                    ( False, Just key2 ) ->
-                        if repeat && key2 /= Calculator.Backspace then
-                            ( model, [] )
-
-                        else
-                            ( { model | calculator = Calculator.press key2 model.calculator }, [] )
-
-                    _ ->
-                        ( model, [] )
+                else
+                    ( model, [] )
 
             else
-                ( model, [] )
+                uiKey code down repeat model
 
         Renderer renderer ->
             ( { model | renderer = Just renderer }, [] )
@@ -723,18 +719,10 @@ step event model =
         DataDisk _ ->
             ( model, [] )
 
-        Audio device ->
-            ( { model
-                | soundCard =
-                    case device of
-                        Just name ->
-                            SoundCard name
-
-                        Nothing ->
-                            NoSoundCard
-              }
-            , []
-            )
+        Audio outputs ->
+            -- Sent again after a restart (to a new program, or after a crash) too, so
+            -- the host hears what this program chooses.
+            ( { model | soundOutputs = Just outputs }, [ Sound.effect model.sound outputs ] )
 
         NetConfig urls ->
             ( { model
@@ -743,6 +731,81 @@ step event model =
               }
             , []
             )
+
+
+{-| The sound settings changed: the host plays on the output they make, at their gain,
+once it has said what outputs there are.
+-}
+setSound : Sound.Settings -> Model -> ( Model, List Effect )
+setSound settings model =
+    ( { model | sound = settings }
+    , case model.soundOutputs of
+        Just outputs ->
+            [ Sound.effect settings outputs ]
+
+        Nothing ->
+            []
+    )
+
+
+{-| Linux's key codes for the keyboard's volume keys (input-event-codes.h).
+-}
+keyMute : Int
+keyMute =
+    113
+
+
+keyVolumeDown : Int
+keyVolumeDown =
+    114
+
+
+keyVolumeUp : Int
+keyVolumeUp =
+    115
+
+
+{-| A key, for the UI.
+-}
+uiKey : Int -> Bool -> Bool -> Model -> ( Model, List Effect )
+uiKey code down repeat model =
+    let
+        pressed : Key
+        pressed =
+            Keyboard.fromCode model.shift code
+    in
+    if model.ctrl && model.shift && pressed == Character "Q" && down then
+        ( { model | showUiBorders = not model.showUiBorders }, [] )
+
+    else if Keyboard.isShift code then
+        ( { model | shift = down }, [] )
+
+    else if Keyboard.isCtrl code then
+        ( { model | ctrl = down }, [] )
+
+    else if not down then
+        ( model, [] )
+
+    else if model.uiState.focus == Just PasswordInput then
+        typeKey pressed model
+
+    else if model.uiState.focus == Just EditorInput then
+        ( editorKey pressed model, [] )
+
+    else if calculatorFocused model then
+        case ( model.ctrl, Calculator.fromKeyboard pressed ) of
+            ( False, Just key2 ) ->
+                if repeat && key2 /= Calculator.Backspace then
+                    ( model, [] )
+
+                else
+                    ( { model | calculator = Calculator.press key2 model.calculator }, [] )
+
+            _ ->
+                ( model, [] )
+
+    else
+        ( model, [] )
 
 
 {-| Once a network the user picked is joined, its password is kept, so it can be
@@ -955,6 +1018,23 @@ click model id uiState =
 
         TestSoundButton ->
             ( model, TestSound.effects )
+
+        QuieterButton ->
+            setSound (Sound.quieter model.sound) model
+
+        LouderButton ->
+            setSound (Sound.louder model.sound) model
+
+        MuteButton ->
+            setSound (Sound.toggleMute model.sound) model
+
+        SoundOutputButton outputId ->
+            case List.filter (\o -> Sound.outputId o == outputId) (Maybe.withDefault [] model.soundOutputs) of
+                output :: _ ->
+                    setSound (Sound.choose output model.sound) model
+
+                [] ->
+                    ( model, [] )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -1213,6 +1293,18 @@ dragSelect focus position model =
         TestSoundButton ->
             model
 
+        QuieterButton ->
+            model
+
+        LouderButton ->
+            model
+
+        MuteButton ->
+            model
+
+        SoundOutputButton _ ->
+            model
+
         CalculatorButton ->
             model
 
@@ -1412,15 +1504,20 @@ headingFont =
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
-wifi panel in the top right, the toolbar in the top left with the calculator under it
-when it is open, and the text editor or the about page in the middle when one is open.
+wifi panel in the top right, the sound panel in the bottom right, the toolbar in the top
+left with the calculator under it when it is open, and the text editor or the about page
+in the middle when one is open.
 -}
 screenUi : Model -> Ui.Element UiId
 screenUi model =
+    let
+        sound =
+            soundPanel model
+    in
     Ui.el
         { padding = { topLeft = Coord.origin, bottomRight = uiSize model }
         , inFront =
-            [ overlay model, networkPanel model, toolbar model ]
+            [ overlay model, networkPanel model, toolbar model, sound ]
                 ++ (if model.editorOpen then
                         [ editorWindow model ]
 
@@ -1450,12 +1547,12 @@ screenUi model =
                    )
                 ++ (case model.upgradingTo of
                         Just build ->
-                            [ notice model ("Upgrade to " ++ build ++ " in progress") ]
+                            [ notice model sound ("Upgrade to " ++ build ++ " in progress") ]
 
                         Nothing ->
                             case model.reflashNeeded of
                                 Just build ->
-                                    [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
+                                    [ notice model sound ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
 
                                 Nothing ->
                                     []
@@ -2253,6 +2350,137 @@ weatherIcon unit code =
 
 
 
+-- SOUND
+
+
+playingOn : Model -> Maybe Sound.Output
+playingOn model =
+    Sound.playingOn model.sound (Maybe.withDefault [] model.soundOutputs)
+
+
+{-| The panel in the bottom right, when there is a sound card: the volume, quieter and
+louder, mute, and the outputs to pick from when there is more than one. (Nothing while
+the host hasn't said, or without one.) The keyboard's volume keys do the same.
+-}
+soundPanel : Model -> Ui.Element UiId
+soundPanel model =
+    let
+        font =
+            bodyFont
+
+        width =
+            em 17
+
+        t =
+            Ui.text font
+
+        small =
+            Ui.paddingXY 6 3
+
+        -- About as wide as tall, for one character.
+        square =
+            Ui.paddingXY 9 3
+
+        -- Text lined up with the text in the buttons beside it.
+        label element =
+            Ui.el { padding = Ui.paddingXY 0 3, inFront = [], borderAndFill = Ui.NoBorderOrFill } element
+
+        settings =
+            model.sound
+
+        outputs =
+            Maybe.withDefault [] model.soundOutputs
+
+        title =
+            case outputs of
+                [ only ] ->
+                    "Sound (" ++ only.name ++ ")"
+
+                _ ->
+                    "Sound"
+
+        level =
+            if settings.muted then
+                "Muted"
+
+            else
+                String.fromInt settings.volume ++ "%"
+
+        controls =
+            Ui.leftAndRight width
+                (Ui.row { spacing = 6, padding = Ui.noPadding }
+                    [ Ui.button { id = QuieterButton, padding = square } (t "-")
+                    , label (volumeBars settings)
+                    , Ui.button { id = LouderButton, padding = square } (t "+")
+                    , label (t level)
+                    ]
+                )
+                (Ui.selectableButton { id = MuteButton, padding = small } settings.muted (t "Mute"))
+
+        outputRow output =
+            Ui.selectableButton { id = SoundOutputButton (Sound.outputId output), padding = Ui.paddingXY 4 2 }
+                (Maybe.map Sound.outputId (playingOn model) == Just (Sound.outputId output))
+                (Ui.text font (Sprite.ellipsis font (width |> Quantity.minus (Units.uiPixels 8)) (Sound.label outputs output)))
+    in
+    case playingOn model of
+        Just _ ->
+            Ui.bottomRight { size = uiSize model }
+                (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+                    (Ui.el
+                        { padding = Ui.paddingXY 6 6
+                        , inFront = []
+                        , borderAndFill = Ui.defaultElBorderAndFill
+                        }
+                        (Ui.column { spacing = 4, padding = Ui.noPadding }
+                            (t (Sprite.ellipsis font width title)
+                                :: controls
+                                :: (if List.length outputs > 1 then
+                                        List.map outputRow outputs
+
+                                    else
+                                        []
+                                   )
+                            )
+                        )
+                    )
+                )
+
+        Nothing ->
+            Ui.none
+
+
+{-| The volume as ten bars rising left to right, filled up to it; all grey when muted.
+-}
+volumeBars : Sound.Settings -> Ui.Element id
+volumeBars settings =
+    let
+        filled =
+            if settings.muted then
+                0
+
+            else
+                settings.volume // Sound.volumeStep
+
+        bar i =
+            let
+                h =
+                    4 + i
+            in
+            Sprite.rectangle
+                (if i < filled then
+                    Color.rgb255 40 40 40
+
+                 else
+                    Color.outlineColor
+                )
+                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
+                (Coord.xy (i * 5) (14 - h))
+                (Coord.xy 3 h)
+    in
+    Ui.quads { size = Coord.xy 48 14, triangles = List.concatMap bar (List.range 0 9) }
+
+
+
 -- TOOLBAR AND ABOUT PAGE
 
 
@@ -2329,14 +2557,18 @@ toolbarHeight =
     8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodyFont)
 
 
-{-| In the bottom right corner: while the host switches to a newer build, or when the
-newest build needs the USB stick flashed again. The next program starts without it
-(`Screen`).
+{-| In the bottom right corner, above the sound panel: while the host switches to a newer
+build, or when the newest build needs the USB stick flashed again. The next program
+starts without it (`Screen`).
 -}
-notice : Model -> String -> Ui.Element UiId
-notice model text =
+notice : Model -> Ui.Element UiId -> String -> Ui.Element UiId
+notice model below text =
     Ui.bottomRight { size = uiSize model }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+        (Ui.el
+            { padding = { topLeft = Coord.xy 8 8, bottomRight = Coord.xy 8 (Coord.yRaw (Ui.size below)) }
+            , inFront = []
+            , borderAndFill = Ui.NoBorderOrFill
+            }
             (Ui.el
                 { padding = Ui.paddingXY 10 6
                 , inFront = []
@@ -2449,14 +2681,16 @@ aboutPage model =
                                 |> String.join "; "
                     )
                 , line "Sound"
-                    (case model.soundCard of
-                        SoundCard name ->
-                            name
+                    (case model.soundOutputs of
+                        Just outputs ->
+                            case Sound.playingOn model.sound outputs of
+                                Just output ->
+                                    Sound.label outputs output
 
-                        NoSoundCard ->
-                            "no sound card found"
+                                Nothing ->
+                                    "no sound card found"
 
-                        SoundCardUnknown ->
+                        Nothing ->
                             "?"
                     )
                 , t ""
@@ -2472,11 +2706,11 @@ aboutPage model =
                 , t ""
                 , Ui.row { spacing = 6, padding = Ui.noPadding }
                     (Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
-                        :: (case model.soundCard of
-                                SoundCard _ ->
+                        :: (case playingOn model of
+                                Just _ ->
                                     [ Ui.button { id = TestSoundButton, padding = Ui.paddingXY 6 3 } (t "Test sound") ]
 
-                                _ ->
+                                Nothing ->
                                     []
                            )
                     )
