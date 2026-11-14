@@ -30,10 +30,12 @@ constructor tag 0xFFFF. `tools/eco-patched/0001-eco-containers.patch` (against e
 - `Builder/Stuff.elm`, `Package.elm`: `eco/containers` is a bundled package, found at
   `share/eco/containers/containers-kernel-cpp` like eco/kernel, so no `--local-package` is needed.
 
-`make ECO_PATCHED=1` builds and uses that eco (`tools/build-patched-eco.sh`: about 10 minutes the first
-time, needs LLVM/MLIR 21 from apt.llvm.org: `sudo tools/build-patched-eco.sh --install-deps`).
-`make ECO_PATCHED=1 test-containers` runs `tests/` natively and in Node. Plain `make`, CI and
-`make docker` still use the stock rc3, which has neither the kernel nor the bundled package.
+`make` builds and uses that eco by default (`tools/build-patched-eco.sh`: about 10 minutes the first
+time, needs LLVM/MLIR 21 from apt.llvm.org: `sudo tools/build-patched-eco.sh --install-deps`); CI and
+`make docker` do too. `make ECO_PATCHED=0` uses the stock rc3, which has neither the kernel nor the
+bundled package. `make test-containers` runs `tests/` natively and in Node (it's part of `make check`).
+The build also copies the package, with a docs.json, into `~/.elm/0.19.1/packages/eco/containers/1.0.0`
+(or `$ELM_HOME`), where editors such as the IntelliJ Elm plugin, and elm-review, look for packages.
 
 Known gap: in JavaScript (`make dev`), `==` on SeqDicts is still structural. It comes from elm/core's
 JS kernel, which only knows Dict and Set; lamdera patches its elm/core for this.

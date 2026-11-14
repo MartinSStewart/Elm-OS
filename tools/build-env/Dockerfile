@@ -9,8 +9,6 @@ FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce
 
 ARG SNAPSHOT=20261106T000000Z
 ARG RUST_VERSION=1.97.0
-ARG ECO_URL=https://github.com/eco-lang/eco-compiler/releases/download/v0.2.0-rc3/eco-0.2.0-rc3-x86_64-linux-musl.tar.gz
-ARG ECO_SHA256=02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 
@@ -31,15 +29,16 @@ RUN echo "Acquire::Retries \"10\";" > /etc/apt/apt.conf.d/80retries && \
     git config --system --add safe.directory '*'
 
 # Rust, at the version host/rust-toolchain.toml names.
-ENV RUSTUP_HOME=/opt/rustup PATH=/opt/cargo/bin:/opt/eco/bin:$PATH
+ENV RUSTUP_HOME=/opt/rustup PATH=/opt/cargo/bin:$PATH
 RUN curl -fsSL https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init -o /tmp/rustup-init && \
     chmod +x /tmp/rustup-init && \
     CARGO_HOME=/opt/cargo /tmp/rustup-init -y --no-modify-path --profile minimal \
       --default-toolchain "$RUST_VERSION" --target x86_64-unknown-linux-musl && \
     rm /tmp/rustup-init && chmod -R a+rX /opt/rustup /opt/cargo
 
-# eco, the Elm compiler, from its release bundle.
-RUN curl -fsSL "$ECO_URL" -o /tmp/eco.tar.gz && \
-    echo "$ECO_SHA256  /tmp/eco.tar.gz" | sha256sum -c --quiet && \
-    mkdir -p /opt/eco && tar xzf /tmp/eco.tar.gz -C /opt/eco && rm /tmp/eco.tar.gz && \
-    chmod -R a+rX /opt/eco
+# eco, the Elm compiler: make installs the release versions.mk pins and builds it patched for
+# eco/containers (tools/build-patched-eco.sh) into build-docker/home/.cache, kept between runs.
+# The patched build needs LLVM/MLIR 21 from apt.llvm.org, which keeps only its latest builds, so
+# unlike the rest of this image these packages aren't pinned by the Ubuntu snapshot.
+COPY build-patched-eco-deps.sh /tmp/
+RUN sh /tmp/build-patched-eco-deps.sh && rm -rf /var/lib/apt/lists/* /tmp/build-patched-eco-deps.sh

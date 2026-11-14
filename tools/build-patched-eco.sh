@@ -7,8 +7,8 @@
 #
 # STOCK_DIR is the pinned eco release, installed by tools/install-eco.sh: it compiles the patched
 # compiler, and its musl runtime is what Elm programs link with. DIR gets the patched eco in the same
-# layout (DIR/bin/eco, DIR/elmos-bin/eco, DIR/lib/eco-runtime, DIR/share/eco), and DIR/src the
-# patched eco source.
+# layout (DIR/bin/eco, DIR/elmos-bin/eco, DIR/lib/eco-runtime, DIR/share/eco), and DIR/built the
+# patched eco binary and the headers its kernels compile against (the source is deleted after the build).
 #
 # It skips eco's 9-stage bootstrap: the stock eco compiles the patched compiler (about 2 minutes),
 # and only eco's C++ backend is built from source (about 7 minutes on 4 cores), against the
@@ -25,23 +25,9 @@
 set -euo pipefail
 
 LLVM=/usr/lib/llvm-21
-APT_PACKAGES="llvm-21-dev libmlir-21-dev mlir-21-tools clang-21 lld-21 libunwind-21-dev libc++-21-dev
-  libc++abi-21-dev libzstd-dev ninja-build cmake time libzip-dev libcurl4-openssl-dev libssl-dev zlib1g-dev
-  libxml2-dev nodejs g++ git"
 
 if [ "${1:-}" = --install-deps ]; then
-    . /etc/os-release
-    # Ubuntu derivatives such as Linux Mint name their own release in VERSION_CODENAME and the
-    # Ubuntu one it is built on in UBUNTU_CODENAME; apt.llvm.org only knows Debian and Ubuntu names.
-    codename=${UBUNTU_CODENAME:-$VERSION_CODENAME}
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/llvm.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" \
-        > /etc/apt/sources.list.d/llvm-21.list
-    apt-get update
-    # shellcheck disable=SC2086
-    apt-get install -y --no-install-recommends $APT_PACKAGES
-    exit 0
+    exec sh "$(dirname "$0")/build-env/build-patched-eco-deps.sh"
 fi
 
 stock=$1 dir=$2
@@ -78,13 +64,25 @@ if [ "$(cat "$dir/.eco-built" 2>/dev/null)" != "$ECO_COMMIT $patch_hash" ]; then
     cd "$dir/src"
     PATH=$LLVM/bin:$PATH cmake --preset build -DCMAKE_BUILD_TYPE=Release -DECO_GC_STATS=OFF \
         -DMLIR_DIR=$LLVM/lib/cmake/mlir -DLLVM_DIR=$LLVM/lib/cmake/llvm -DLLVM_INSTALL_PREFIX=$LLVM \
-        -DCMAKE_PREFIX_PATH="$dir/deps/prefix" -DFETCHCONTENT_SOURCE_DIR_LLHTTP="$dir/deps/llhttp" >&2
+        -DCMAKE_PREFIX_PATH="$dir/deps/prefix" -DFETCHCONTENT_SOURCE_DIR_LLHTTP="$dir/deps/llhttp" \
+        -DNODE_EXECUTABLE="$(command -v node || echo /bin/true)" \
+        -DPNPM_EXECUTABLE="$(command -v pnpm || echo /bin/true)" >&2
+    # (Configure insists on node and pnpm, which only the bootstrap stages skipped here use.)
     # Stage 7a's job, done by the stock eco instead of a bootstrapped one: the compiler's MLIR.
     (cd build/compiler/build-kernel && "$stock/elmos-bin/eco" make --optimize --kernel-package eco/compiler \
         --local-package eco/kernel="$dir/src/eco-kernel-cpp" --output=bin/eco-compiler-boot.mlir \
         src/Terminal/Main.elm >&2)
     # eco-quick lowers that MLIR and links it with the C++ backend, as the bootstrap's `eco` target does.
     PATH=$LLVM/bin:$PATH cmake --build build --target eco-quick >&2
+    # Keep the binary and the headers the kernels compile against; the source and build tree
+    # (about 550 MB) go.
+    rm -rf "$dir/built"
+    mkdir -p "$dir/built/headers/runtime" "$dir/built/headers/elm-kernel-cpp"
+    cp build/compiler/build-kernel/bin/eco-quick "$dir/built/eco"
+    cp -r runtime/src runtime/include "$dir/built/headers/runtime/"
+    cp -r elm-kernel-cpp/src "$dir/built/headers/elm-kernel-cpp/"
+    cd "$dir"
+    rm -rf "$dir/src" "$dir/deps"
     echo "$ECO_COMMIT $patch_hash" > "$dir/.eco-built"
     rm -f "$dir/.runtime-built"
 fi
@@ -92,11 +90,11 @@ fi
 # ---- the bundle: the patched eco binary with the stock runtime, patched
 if [ "$(cat "$dir/.runtime-built" 2>/dev/null)" != "$patch_hash $containers_hash" ]; then
     log "Assembling the patched eco bundle in $dir"
-    src=$dir/src
+    src=$dir/built/headers
     tmp=$(mktemp -d "$dir/.bundle.XXXXXX")
     trap 'rm -rf "$tmp"' EXIT
     mkdir -p "$tmp/bin" "$tmp/lib" "$tmp/share"
-    cp "$src/build/compiler/build-kernel/bin/eco-quick" "$tmp/bin/eco"
+    cp "$dir/built/eco" "$tmp/bin/eco"
     cp -r "$stock/lib/eco-runtime" "$tmp/lib/eco-runtime"
     cp -r "$stock/share/eco" "$tmp/share/eco"
     cp -r "$stock/include" "$tmp/include"
@@ -139,4 +137,23 @@ EOF
     rm -rf "$dir/home/.eco/0.2.0/packages/eco/containers"
     echo "$patch_hash $containers_hash" > "$dir/.runtime-built"
     log "Patched eco ready: $dir/elmos-bin/eco"
+fi
+
+# ---- eco/containers in Elm's own package cache (~/.elm, or $ELM_HOME), with its docs.json, where
+# tools that only know the Elm compiler look for the packages elm.json names: editors such as the
+# IntelliJ Elm plugin, and elm-review. Neither elm nor lamdera can install it there themselves.
+elm_pkg=${ELM_HOME:-$HOME/.elm}/0.19.1/packages/eco/containers/1.0.0
+if [ "$(cat "$dir/.elm-home-built" 2>/dev/null)" != "$containers_hash $elm_pkg" ]; then
+    log "Copying eco/containers into $elm_pkg"
+    tmp=$(mktemp -d "$dir/.elm-home.XXXXXX")
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r "$repo/eco-containers/elm.json" "$repo/eco-containers/src" "$repo/eco-containers/LICENSE" \
+        "$repo/eco-containers/README.md" "$tmp/"
+    (cd "$tmp" && "$dir/elmos-bin/eco" make --docs=docs.json >/dev/null 2>&1) || {
+        log "build-patched-eco: eco couldn't make eco/containers' docs.json"; exit 1; }
+    rm -rf "$tmp/eco-stuff" "$tmp/elm-stuff"
+    mkdir -p "$(dirname "$elm_pkg")"
+    rm -rf "$elm_pkg"
+    mv "$tmp" "$elm_pkg"
+    echo "$containers_hash $elm_pkg" > "$dir/.elm-home-built"
 fi
