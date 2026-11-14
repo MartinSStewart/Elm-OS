@@ -1,0 +1,323 @@
+From 3162310c33e51f9233ea8f990b28fb5bb4c3135a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 14 Nov 2026 12:10:33 +0000
+Subject: [PATCH] Compare eco/containers SeqDicts by their entries, and bundle
+ the package
+
+A SeqDict keeps its entries in insertion order in an Array where removing an entry leaves a
+Nothing, so two SeqDicts with the same entries in the same order can differ inside, and the
+structural `==` called them unequal. The compiler now gives `SeqDict.SeqDict_elm_builtin` in
+eco/containers the reserved constructor tag 0xFFFB (`CtorTag.seqDict`), as it gives Dict nodes
+0xFFFF, and `Utils.equal` compares two such values by their entries in insertion order
+(`seqDictEq`, walking them with `forEachSeqDictEntry` from the new `core/SeqDict.hpp`).
+
+Resolve eco/containers like eco/kernel and eco/system: `bundledPackages` looks for it under
+`share/eco/containers/containers-kernel-cpp` next to the executable.
+---
+ compiler/src/Builder/Stuff.elm               |  1 +
+ compiler/src/Compiler/Elm/Package.elm        |  9 +-
+ compiler/src/Compiler/IR/Runtime/CtorTag.elm | 39 ++++++---
+ elm-kernel-cpp/src/core/SeqDict.hpp          | 88 ++++++++++++++++++++
+ elm-kernel-cpp/src/core/Utils.cpp            | 32 +++++++
+ runtime/src/allocator/Heap.hpp               |  1 +
+ 6 files changed, 159 insertions(+), 11 deletions(-)
+ create mode 100644 elm-kernel-cpp/src/core/SeqDict.hpp
+
+diff --git a/compiler/src/Builder/Stuff.elm b/compiler/src/Builder/Stuff.elm
+index 7ce1e2e0..464415bc 100644
+--- a/compiler/src/Builder/Stuff.elm
++++ b/compiler/src/Builder/Stuff.elm
+@@ -363,6 +363,7 @@ bundledPackages : List ( Pkg.Name, FilePath )
+ bundledPackages =
+     [ ( Pkg.ecoKernel, "../share/eco/kernel/eco-kernel-cpp" )
+     , ( Pkg.ecoSystem, "../share/eco/system/system-kernel-cpp" )
++    , ( Pkg.ecoContainers, "../share/eco/containers/containers-kernel-cpp" )
+     ]
+ 
+ 
+diff --git a/compiler/src/Compiler/Elm/Package.elm b/compiler/src/Compiler/Elm/Package.elm
+index 2ee3bf10..65b5fd87 100644
+--- a/compiler/src/Compiler/Elm/Package.elm
++++ b/compiler/src/Compiler/Elm/Package.elm
+@@ -2,7 +2,7 @@ module Compiler.Elm.Package exposing
+     ( Name, Author, Project
+     , compareName, toString, toChars, toUrl, toJsonString
+     , isKernel
+-    , dummyName, kernel, ecoKernel, ecoSystem, core, virtualDom, json, bytes, webgl, linearAlgebra
++    , dummyName, kernel, ecoKernel, ecoSystem, ecoContainers, core, virtualDom, json, bytes, webgl, linearAlgebra
+     , suggestions, nearbyNames
+     , encode, decoder, keyDecoder
+     , nameEncoder, nameDecoder, parser
+@@ -225,6 +225,13 @@ ecoSystem =
+     toName eco "system"
+ 
+ 
++{-| The package name `eco/containers`.
++-}
++ecoContainers : Name
++ecoContainers =
++    toName eco "containers"
++
++
+ {-| The package name `elm/core`.
+ -}
+ core : Name
+diff --git a/compiler/src/Compiler/IR/Runtime/CtorTag.elm b/compiler/src/Compiler/IR/Runtime/CtorTag.elm
+index bb2df79b..02b1e60f 100644
+--- a/compiler/src/Compiler/IR/Runtime/CtorTag.elm
++++ b/compiler/src/Compiler/IR/Runtime/CtorTag.elm
+@@ -12,10 +12,12 @@ type's constructors built it. For most constructors it is the zero-based
+ position at which the constructor is declared in its type, its declaration
+ index. The exception is a reserved tag: a value at the top of the 16-bit range
+ the runtime keeps tags in, which the runtime recognises and treats specially.
+-The one reserved tag given to a constructor is 0xFFFF, for `elm/core`'s
+-`Dict.RBNode_elm_builtin`, so that the runtime compares two dictionaries by
+-their contents in key order rather than by the shape of their trees.
+-`effective` computes the tag.
++Two constructors get one: 0xFFFF, for `elm/core`'s `Dict.RBNode_elm_builtin`,
++so that the runtime compares two dictionaries by their contents in key order
++rather than by the shape of their trees; and 0xFFFB, for `eco/containers`'
++`SeqDict.SeqDict_elm_builtin`, so that it compares two of those by their entries
++in insertion order rather than by their hash trie and the holes that removing
++entries leaves. `effective` computes the tag.
+ 
+ A nullary constructor, one with no fields, needs no heap object. It can be
+ represented by a single word marked as a constant that holds the constructor's
+@@ -34,6 +36,7 @@ constructor's name and the module that declares it, so a program's own
+ constructor named `Nothing`, `True` or `False` is an ordinary one.
+ 
+ The numbers here must equal the runtime's: 0xFFFF its `CTOR_DICT_RBNODE`,
++0xFFFB its `CTOR_SEQDICT`,
+ 0xFFFD its `CONSTANT_TAG`, and 1023 (`HeapLimits.maxNullaryCtorIndex`) its
+ `NULL_CONS_MAX`. Nothing in the compiler checks that they agree.
+ 
+@@ -45,6 +48,7 @@ The numbers here must equal the runtime's: 0xFFFF its `CTOR_DICT_RBNODE`,
+ import Compiler.Core.Index as Index
+ import Compiler.Core.Name exposing (Name)
+ import Compiler.Elm.ModuleName as ModuleName
++import Compiler.Elm.Package as Pkg
+ import Compiler.IR.Runtime.HeapLimits as HeapLimits
+ import System.Crash exposing (crash)
+ 
+@@ -69,6 +73,21 @@ dictRBNode =
+     0xFFFF
+ 
+ 
++{-| The reserved runtime tag of `eco/containers`' `SeqDict.SeqDict_elm_builtin`,
++the one constructor of a `SeqDict`. It must equal the runtime's `CTOR_SEQDICT`.
++-}
++seqDict : Int
++seqDict =
++    0xFFFB
++
++
++{-| The module that declares `SeqDict_elm_builtin`.
++-}
++seqDictModule : ModuleName.Canonical
++seqDictModule =
++    ModuleName.Canonical Pkg.ecoContainers "SeqDict"
++
++
+ {-| The runtime tag reported for the shared empty constant word, which
+ `Nothing` uses along with `()`, `{}`, `[]` and `""`. Those values cannot be
+ told apart by their word, so they all report this one tag. It must equal the
+@@ -158,7 +177,8 @@ checkNullConsCapacity name tag =
+ 
+ {-| Returns the runtime tag of the constructor `name`, declared at position
+ `index` in a type of module `home`. This is the declaration index, except for
+-`Dict.RBNode_elm_builtin` in `elm/core`, which gets the reserved tag 0xFFFF.
++`Dict.RBNode_elm_builtin` in `elm/core`, which gets the reserved tag 0xFFFF, and
++`SeqDict.SeqDict_elm_builtin` in `eco/containers`, which gets 0xFFFB.
+ 
+ For `Nothing` the result is still its declaration index, although at run time a
+ `Nothing` reports `constantTag`.
+@@ -166,12 +186,11 @@ For `Nothing` the result is still its declaration index, although at run time a
+ -}
+ effective : ModuleName.Canonical -> Name -> Index.ZeroBased -> Int
+ effective home name index =
+-    if home == ModuleName.dict then
+-        if name == "RBNode_elm_builtin" then
+-            dictRBNode
++    if home == ModuleName.dict && name == "RBNode_elm_builtin" then
++        dictRBNode
+ 
+-        else
+-            Index.toMachine index
++    else if name == "SeqDict_elm_builtin" && home == seqDictModule then
++        seqDict
+ 
+     else
+         Index.toMachine index
+diff --git a/elm-kernel-cpp/src/core/SeqDict.hpp b/elm-kernel-cpp/src/core/SeqDict.hpp
+new file mode 100644
+index 00000000..6d7ca5d2
+--- /dev/null
++++ b/elm-kernel-cpp/src/core/SeqDict.hpp
+@@ -0,0 +1,88 @@
++//===- SeqDict.hpp - Walking the entries of an eco/containers SeqDict -------===//
++//
++// `eco/containers`' `SeqDict` keeps its entries twice: in a hash trie, for lookups, and in insertion order
++// in an Elm `Array (Maybe ( Int, k, v ))`, where removing an entry leaves a `Nothing`. Two SeqDicts that
++// hold the same entries in the same order can differ in both (a removed entry leaves a hole in one but not
++// the other), so `==` and `FNV.hash` compare and hash the entries in insertion order instead, which
++// `forEachSeqDictEntry` walks.
++//
++// The compiler gives `SeqDict_elm_builtin` the reserved constructor tag `CTOR_SEQDICT`, which must equal
++// `Compiler.IR.Runtime.CtorTag.seqDict`. Its fields are the trie's bitmap, the trie, and the record
++// `{ array : Array (Maybe ( Int, k, v )), size : Int }`. An `Array` is elm/core's `Array_elm_builtin length
++// startShift tree tail`, whose tree is a `JsArray` (an `ElmArray`) of `SubTree (JsArray node)` and
++// `Leaf (JsArray element)` nodes, elements in order from the leftmost leaf, then the tail.
++//
++// The walk allocates nothing, so no collection can run, and no object moves, while it runs.
++//
++//===----------------------------------------------------------------------===//
++
++#pragma once
++
++#include "allocator/Allocator.hpp"
++#include "allocator/Heap.hpp"
++#include "allocator/HeapHelpers.hpp"
++
++namespace Elm::Kernel {
++
++/// The constructor tag the compiler gives `SeqDict.SeqDict_elm_builtin` in eco/containers.
++constexpr u16 CTOR_SEQDICT = 0xFFFB;
++
++namespace SeqDictDetail {
++
++/// The constructor index of elm/core's `Array.SubTree`; `Leaf` is the other one.
++constexpr u16 kArraySubTree = 0;
++
++/// Calls `f` on each `Just ( hash, key, value )` element of the `ElmArray` at `hp`, in order. Returns false
++/// as soon as `f` does.
++template <typename F>
++bool eachEntryIn(HPointer hp, F& f) {
++    if (alloc::isConstant(hp)) return true;
++    auto* arr = static_cast<ElmArray*>(Allocator::instance().resolve(hp));
++    for (u32 i = 0; i < arr->length; ++i) {
++        HPointer elem = arr->elements[i].p; // `Maybe` elements are boxed.
++        if (alloc::isConstant(elem)) continue; // Nothing: a removed entry.
++        auto* just = static_cast<Custom*>(Allocator::instance().resolve(elem));
++        auto* t = static_cast<Tuple3*>(Allocator::instance().resolve(just->values[0].p));
++        u32 kinds = t->header.unboxed;
++        if (!f(t->b, tupleFieldKind(kinds, 1), t->c, tupleFieldKind(kinds, 2))) return false;
++    }
++    return true;
++}
++
++/// Walks the Array tree nodes in the `ElmArray` at `hp`, in order.
++template <typename F>
++bool eachEntryInTree(HPointer hp, F& f) {
++    if (alloc::isConstant(hp)) return true;
++    auto* nodes = static_cast<ElmArray*>(Allocator::instance().resolve(hp));
++    for (u32 i = 0; i < nodes->length; ++i) {
++        auto* node = static_cast<Custom*>(Allocator::instance().resolve(nodes->elements[i].p));
++        bool ok = node->ctor == kArraySubTree ? eachEntryInTree(node->values[0].p, f)
++                                              : eachEntryIn(node->values[0].p, f);
++        if (!ok) return false;
++    }
++    return true;
++}
++
++} // namespace SeqDictDetail
++
++/// Calls `f(key, keyKind, value, valueKind)` on each entry of the SeqDict `seqDict` (a `Custom` whose ctor is
++/// `CTOR_SEQDICT`) in insertion order, where a kind is 0 for a boxed slot and 1, 2 or 3 for an unboxed
++/// Int, Float or Char. Stops as soon as `f` returns false, and returns whether it never did.
++template <typename F>
++bool forEachSeqDictEntry(Custom* seqDict, F f) {
++    auto& allocator = Allocator::instance();
++    auto* intDict = static_cast<Record*>(allocator.resolve(seqDict->values[2].p));
++    // The record's two fields are `array` and `size`; the Array is the one that is a heap Custom (the size
++    // is an Int, unboxed or boxed).
++    Custom* array = nullptr;
++    for (u32 i = 0; i < intDict->header.size; ++i) {
++        if (recordSlotKind(intDict, i) != 0 || alloc::isConstant(intDict->values[i].p)) continue;
++        void* o = allocator.resolve(intDict->values[i].p);
++        if (static_cast<Header*>(o)->tag == Tag_Custom) array = static_cast<Custom*>(o);
++    }
++    if (array == nullptr) return true;
++    return SeqDictDetail::eachEntryInTree(array->values[2].p, f) &&
++           SeqDictDetail::eachEntryIn(array->values[3].p, f);
++}
++
++} // namespace Elm::Kernel
+diff --git a/elm-kernel-cpp/src/core/Utils.cpp b/elm-kernel-cpp/src/core/Utils.cpp
+index 20c2d238..08be6cc4 100644
+--- a/elm-kernel-cpp/src/core/Utils.cpp
++++ b/elm-kernel-cpp/src/core/Utils.cpp
+@@ -4,6 +4,7 @@
+ #include "allocator/RuntimeExports.h"
+ #include "allocator/StringOps.hpp"
+ #include "allocator/ListOps.hpp"
++#include "SeqDict.hpp"
+ 
+ #include <cassert>
+ #include <utility>
+@@ -101,6 +102,7 @@ using EqDeferred = std::vector<std::pair<void*, void*>>;
+ 
+ static bool eqHelp(void* a, void* b, int depth, EqDeferred& deferred);
+ static bool dictEq(void* a, void* b, int depth, EqDeferred& deferred);
++static bool seqDictEq(Custom* a, Custom* b, int depth, EqDeferred& deferred);
+ 
+ /// Returns whether slots `a` and `b`, of kinds `aKind` and `bKind`, hold equal values, with `depth` the
+ /// nesting depth `eqHelp` bounds and `deferred` the pairs it leaves for `equal`.
+@@ -631,6 +633,11 @@ static bool eqHelp(void* a, void* b, int depth, EqDeferred& deferred) {
+                 return dictEq(a, b, depth, deferred);
+             }
+ 
++            // Two SeqDicts with the same entries in the same order may differ inside (see SeqDict.hpp).
++            if (ac->ctor == CTOR_SEQDICT && bc->ctor == CTOR_SEQDICT) {
++                return seqDictEq(ac, bc, depth, deferred);
++            }
++
+             if (ac->ctor != bc->ctor) return false;
+ 
+             u32 fieldCount = ac->header.size;
+@@ -703,6 +710,31 @@ static bool eqHelp(void* a, void* b, int depth, EqDeferred& deferred) {
+ /// `RBNode_elm_builtin color key value left right`, in slots 0 to 4. Colours are ignored, since two trees
+ /// holding the same pairs can colour their nodes differently. A non-Dict node, such as a Custom with
+ /// another constructor on one side, ends that tree's walk.
++/// Returns whether the SeqDicts `a` and `b` hold equal entries in the same insertion order, with `depth` the
++/// nesting depth `eqHelp` bounds and `deferred` the pairs it leaves for `equal`.
++static bool seqDictEq(Custom* a, Custom* b, int depth, EqDeferred& deferred) {
++    struct Entry { Elm::Unboxable key, value; uint32_t keyKind, valueKind; };
++    std::vector<Entry> as, bs;
++    auto collect = [](std::vector<Entry>& out) {
++        return [&out](Elm::Unboxable k, uint32_t kk, Elm::Unboxable v, uint32_t vk) {
++            out.push_back(Entry{k, v, kk, vk});
++            return true;
++        };
++    };
++    forEachSeqDictEntry(a, collect(as));
++    forEachSeqDictEntry(b, collect(bs));
++    if (as.size() != bs.size()) return false;
++    auto& allocator = Allocator::instance();
++    for (size_t i = 0; i < as.size(); ++i) {
++        if (!eqUnboxableSlot(allocator, as[i].key, bs[i].key, as[i].keyKind, bs[i].keyKind, depth, deferred) ||
++            !eqUnboxableSlot(allocator, as[i].value, bs[i].value, as[i].valueKind, bs[i].valueKind, depth,
++                             deferred)) {
++            return false;
++        }
++    }
++    return true;
++}
++
+ static bool dictEq(void* a, void* b, int depth, EqDeferred& deferred) {
+     auto& allocator = Allocator::instance();
+ 
+diff --git a/runtime/src/allocator/Heap.hpp b/runtime/src/allocator/Heap.hpp
+index a0dd1f2a..f393d221 100644
+--- a/runtime/src/allocator/Heap.hpp
++++ b/runtime/src/allocator/Heap.hpp
+@@ -389,6 +389,7 @@ inline u64 nullConsWordFor(u32 idx) {
+ // The top of the u16 range is reserved for tags the compiler never gives a declared constructor, and its
+ // four values are distinct: 0xFFFC `CTOR_Router` and 0xFFFE `CTOR_StackFrame` (HeapHelpers.hpp), 0xFFFD
+ // this one, and 0xFFFF `CTOR_DICT_RBNODE` (Dict nodes, elm-kernel-cpp and `Compiler.IR.Runtime.CtorTag`).
++// 0xFFFB is `CTOR_SEQDICT`, the constructor of an eco/containers SeqDict (elm-kernel-cpp core/SeqDict.hpp).
+ #define CONSTANT_TAG 0xFFFD
+ 
+ // Returns the `Forward::forward_ptr` value for the address `newObj`: the address divided by 8.
+-- 
+2.43.0
+

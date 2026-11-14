@@ -29,6 +29,9 @@
 #                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make eco        install the eco versions.mk pins (any make does) and print where it is
+#   make ECO_PATCHED=1 ...  use eco patched for eco/containers (SeqDict, SeqSet; see
+#                   eco-containers/README.md), built from source the first time (~10 min)
+#   make ECO_PATCHED=1 test-containers  test eco/containers natively and in Node
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
 #                   the same commit gives the same bytes on any machine (make docker TARGET=all)
 #
@@ -48,17 +51,33 @@ include versions.mk
 # one, isn't replaced or used: other projects may need another version. Every rule here
 # runs this copy, and it goes first on PATH for the tools they start (elm-review,
 # elm-test). `make ECO=/path/to/eco` uses another eco instead and installs nothing.
+#
+# `make ECO_PATCHED=1` uses that release patched for eco/containers (tools/eco-patched,
+# eco-containers/README.md) instead, built from source by tools/build-patched-eco.sh into
+# ECO_PATCHED_DIR (about 10 minutes the first time; it needs LLVM/MLIR 21 from apt.llvm.org).
 ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)
+ECO_PATCHED_DIR ?= $(ECO_DIR)-patched
 ifeq ($(origin ECO),undefined)
 # elmos-bin/eco runs bin/eco with a package cache of its own (ECO_DIR/home/.eco), not
 # ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
+ifeq ($(ECO_PATCHED),1)
+ECO        := $(ECO_PATCHED_DIR)/elmos-bin/eco
+export PATH := $(ECO_PATCHED_DIR)/elmos-bin:$(PATH)
+else
 ECO        := $(ECO_DIR)/elmos-bin/eco
 export PATH := $(ECO_DIR)/elmos-bin:$(PATH)
+endif
 # Not for the goals that don't need eco.
 ifneq ($(filter-out clean refresh check-fresh check-run-deps usb-write docker,$(or $(MAKECMDGOALS),all)),)
 $(shell tools/install-eco.sh $(ECO_VER) $(ECO_SHA256) $(ECO_DIR))
 ifneq ($(.SHELLSTATUS),0)
 $(error Couldn't install eco $(ECO_VER) into $(ECO_DIR); see above)
+endif
+ifeq ($(ECO_PATCHED),1)
+$(shell tools/build-patched-eco.sh $(ECO_DIR) $(ECO_PATCHED_DIR))
+ifneq ($(.SHELLSTATUS),0)
+$(error Couldn't build the patched eco into $(ECO_PATCHED_DIR); see above)
+endif
 endif
 endif
 endif
@@ -92,7 +111,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas test-containers migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -667,6 +686,31 @@ bench: $(BUILD)/wire/.done
 	  $(abspath $(BUILD)/wire/src) $(abspath elm/bench/src) $(BUILD)/bench/elm.json
 	cd $(BUILD)/bench && $(ECO) make $(abspath elm/bench/src/Bench.elm) --optimize --output=bench
 	$(BUILD)/bench/bench
+
+# ---- eco/containers (eco-containers/README.md): its tests, natively and in Node, with the
+# patched eco, which has its kernel and its `==`: make ECO_PATCHED=1 test-containers.
+test-containers: | check-deps
+	@[ "$(ECO_PATCHED)" = 1 ] || { echo "eco/containers needs the patched eco: make ECO_PATCHED=1 test-containers" >&2; exit 1; }
+	@mkdir -p $(BUILD)/containers
+	cd eco-containers/tests && $(ECO) make src/Main.elm \
+	  --output=$(abspath $(BUILD)/containers/tests.o)
+	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $(BUILD)/containers/tests \
+	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
+	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
+	  $(BUILD)/containers/tests.o \
+	  --start-group \
+	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
+	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
+	    $(PROJECT_LIBS_REST) \
+	  --end-group \
+	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libzip.a $(RT)/libz.a \
+	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a $(RT)/libcurl.a $(RT)/libssl.a $(RT)/libcrypto.a \
+	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
+	$(BUILD)/containers/tests 2>&1 | tee $(BUILD)/containers/native.txt; grep -q PASS $(BUILD)/containers/native.txt
+	cd eco-containers/tests && $(ECO) make src/MainJs.elm --optimize \
+	  --output=$(abspath $(BUILD)/containers/tests.js)
+	node -e "require('$(abspath $(BUILD)/containers/tests.js)').Elm.MainJs.init().ports.result.subscribe(e => \
+	  { console.log(e.length ? 'eco/containers in JS FAIL: ' + e.join('; ') : 'eco/containers in JS: PASS'); process.exitCode = e.length ? 1 : 0 })"
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
