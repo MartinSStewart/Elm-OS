@@ -12,6 +12,8 @@ module Wifi exposing
 {-| What the host's networking thread (host/net.c) tells Elm about the wifi card.
 -}
 
+import Ipv4 exposing (Ipv4)
+
 
 type Device
     = Unknown
@@ -54,4 +56,4 @@ type State
 
 
 type alias Status =
-    { state : State, ssid : Ssid, ip : String, error : String }
+    { state : State, ssid : Ssid, ip : Maybe Ipv4, error : String }

@@ -9,6 +9,7 @@ about the computer's Ethernet cards. There is nothing to choose or type: plug in
 cable and the host gets an address.
 -}
 
+import Ipv4 exposing (Ipv4)
 
 
 type State
@@ -19,11 +20,9 @@ type State
 
 
 type alias Link =
-    { name : String, state : State, ip : String }
+    { name : String, state : State, ip : Ipv4 }
 
 
 isConnected : List Link -> Bool
 isConnected links =
     List.any (\link -> link.state == Connected) links
-
-

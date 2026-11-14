@@ -12,6 +12,7 @@ program (Main.persistConfig.fromHost).
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
+import Ipv4
 import Postcard as P
 import Wifi
 import Wired
@@ -154,12 +155,24 @@ decoder =
                     12 ->
                         BD.map4
                             (\state ssid ip error ->
-                                WifiStatus { state = state, ssid = Wifi.stringToSsid ssid, ip = ip, error = error }
+                                case Ipv4.fromString ip of
+                                    Ok ip2 ->
+                                        WifiStatus
+                                            { state = state
+                                            , ssid = Wifi.stringToSsid ssid
+                                            , ip = Just ip2
+                                            , error = error
+                                            }
+                                            |> BD.succeed
+
+                                    Err _ ->
+                                        BD.fail
                             )
                             wifiState
                             P.decodeString
                             P.decodeString
                             P.decodeString
+                            |> BD.andThen identity
 
                     13 ->
                         BD.map Wired (P.decodeList wiredLink)
@@ -264,10 +277,19 @@ wifiState =
 
 wiredLink : BD.Decoder Wired.Link
 wiredLink =
-    BD.map3 Wired.Link
+    BD.map3
+        (\a b ip ->
+            case Ipv4.fromString ip of
+                Ok ip2 ->
+                    BD.succeed { name = a, state = b, ip = ip2 }
+
+                Err _ ->
+                    BD.fail
+        )
         P.decodeString
         (variants [ Wired.NoCable, Wired.Dhcp, Wired.Connected, Wired.Failed ])
         P.decodeString
+        |> BD.andThen identity
 
 
 httpFailure : BD.Decoder HttpFailure

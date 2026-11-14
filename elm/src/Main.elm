@@ -21,6 +21,7 @@ import Duration exposing (Duration)
 import Effect exposing (Effect, HttpError(..))
 import HackerNews
 import HostMessage
+import Ipv4
 import Json.Decode as D
 import Keyboard exposing (Key(..))
 import News exposing (NewsState(..))
@@ -335,7 +336,7 @@ init =
     , wifiDevice = Wifi.Unknown
     , networks = []
     , scanning = True
-    , wifiStatus = { state = Wifi.Idle, ssid = Wifi.stringToSsid "", ip = "", error = "" }
+    , wifiStatus = { state = Wifi.Idle, ssid = Wifi.stringToSsid "", ip = Nothing, error = "" }
     , wired = []
     , selected = Nothing
     , savedWifiPasswords = SeqDict.empty
@@ -698,7 +699,7 @@ reconnect model =
             if model.wifiStatus.state == Wifi.Idle then
                 ( { model
                     | weather = weatherWithoutWifi model
-                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
                   }
                 , [ Effect.WifiConnect { ssid = network.ssid, password = Just password } ]
                 )
@@ -1004,7 +1005,7 @@ connect model =
                             Ok password2 ->
                                 ( { model
                                     | weather = weatherWithoutWifi model
-                                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+                                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
                                   }
                                 , [ Effect.WifiConnect { ssid = network.ssid, password = Just password2 } ]
                                 )
@@ -1012,7 +1013,7 @@ connect model =
                             Err error ->
                                 ( { model
                                     | wifiStatus =
-                                        { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = error }
+                                        { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = error }
                                   }
                                 , []
                                 )
@@ -1023,7 +1024,7 @@ connect model =
             else
                 ( { model
                     | weather = weatherWithoutWifi model
-                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
+                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
                   }
                 , [ Effect.WifiConnect { ssid = network.ssid, password = Nothing } ]
                 )
@@ -1813,7 +1814,23 @@ networkPanel model =
                             t (fit ("Getting an address on " ++ ssid))
 
                         Wifi.Connected ->
-                            Ui.colorText connectedColor bodySize font (fit ("Connected to " ++ ssid ++ ", " ++ status.ip))
+                            Ui.colorText
+                                connectedColor
+                                bodySize
+                                font
+                                (fit
+                                    ("Connected to "
+                                        ++ ssid
+                                        ++ ", "
+                                        ++ (case status.ip of
+                                                Just ip ->
+                                                    Ipv4.toString ip
+
+                                                Nothing ->
+                                                    ""
+                                           )
+                                    )
+                                )
 
                         Wifi.Failed ->
                             Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width status.error)
@@ -1931,6 +1948,7 @@ wiredRows model =
         t =
             Ui.text bodySize font
 
+        link : Wired.Link -> List (Ui.Element id)
         link l =
             [ t ("Wired (" ++ l.name ++ ")")
             , case l.state of
@@ -1941,10 +1959,18 @@ wiredRows model =
                     t "Getting an address…"
 
                 Wired.Connected ->
-                    Ui.colorText connectedColor bodySize font (Sprite.ellipsis bodySize font width ("Connected, " ++ l.ip))
+                    Ui.colorText
+                        connectedColor
+                        bodySize
+                        font
+                        (Sprite.ellipsis bodySize font width ("Connected, " ++ Ipv4.toString l.ip))
 
                 Wired.Failed ->
-                    Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
+                    Ui.colorText
+                        Color.errorColor
+                        bodySize
+                        font
+                        (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
             ]
 
         divider =
@@ -2385,35 +2411,6 @@ aboutPage model =
 
         field f =
             Maybe.map f system |> Maybe.withDefault "?"
-
-        wifiText =
-            case model.wifiDevice of
-                Wifi.Card name ->
-                    case model.wifiStatus.state of
-                        Wifi.Connected ->
-                            name
-                                ++ ", connected to "
-                                ++ Wifi.ssidToString model.wifiStatus.ssid
-                                ++ " as "
-                                ++ model.wifiStatus.ip
-
-                        Wifi.Idle ->
-                            name ++ ", not connected"
-
-                        Wifi.Connecting ->
-                            name ++ ", not connected"
-
-                        Wifi.Dhcp ->
-                            name ++ ", not connected"
-
-                        Wifi.Failed ->
-                            name ++ ", not connected"
-
-                Wifi.NoCard ->
-                    "no wifi card found"
-
-                Wifi.Unknown ->
-                    "?"
     in
     Ui.center { size = uiSize model }
         (Ui.el
@@ -2443,31 +2440,6 @@ aboutPage model =
 
                         Nothing ->
                             "?"
-                    )
-                , line "Wifi" wifiText
-                , line "Wired"
-                    (case model.wired of
-                        [] ->
-                            "no wired card found"
-
-                        links ->
-                            links
-                                |> List.map
-                                    (\l ->
-                                        case l.state of
-                                            Wired.Connected ->
-                                                l.name ++ ", connected as " ++ l.ip
-
-                                            Wired.NoCable ->
-                                                l.name ++ ", no cable"
-
-                                            Wired.Dhcp ->
-                                                l.name ++ ", not connected"
-
-                                            Wired.Failed ->
-                                                l.name ++ ", not connected"
-                                    )
-                                |> String.join "; "
                     )
                 , t ""
                 , t
