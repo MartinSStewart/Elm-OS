@@ -111,7 +111,7 @@ steps =
                                 { loaded | isOpen = True }
                         in
                         timed "snapshot of HackerNews.Model" (\() -> E.encode 0 (HackerNews.w3_encode_Model open) |> String.length)
-                            |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize, 1x)" (\() -> Sprite.textSize (Units.scaleFor (Units.devicePixels 1280)) Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
+                            |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize)" (\() -> Sprite.textSize Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
                             |> Task.andThen (\_ -> frame (Coord.xy 1280 800) open)
                             |> Task.andThen (\_ -> frame (Coord.xy 2560 1600) open)
                     )
@@ -127,7 +127,7 @@ frame screen model =
             Units.scaleFor (Coord.x screen)
 
         element () =
-            HackerNews.view identity (Ui.init scale) (Coord.toUi scale screen) model
+            HackerNews.view identity Ui.init (Coord.toUi scale screen) model
 
         named label =
             String.fromInt (Units.scaleInt scale) ++ "x " ++ label

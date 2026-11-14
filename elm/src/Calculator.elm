@@ -645,8 +645,8 @@ width =
 {-| The calculator's window. `focused` when keys go to it: then its display has the
 focus colour around it.
 -}
-view : Ui.Model a -> Bool -> Model -> Element UiId
-view uiState focused model =
+view : Bool -> Model -> Element UiId
+view focused model =
     let
         displayPadding =
             6
@@ -656,17 +656,17 @@ view uiState focused model =
 
         line fontSize color text =
             Ui.topRight { size = Coord.xy inner (Quantity.unwrap (Sprite.lineHeight fontSize)) }
-                (Ui.colorText uiState color fontSize sans text)
+                (Ui.colorText color fontSize sans text)
 
         big =
             display model
 
         bigLine =
-            if Coord.xRaw (Sprite.textSize uiState.scale Big sans big) <= inner then
+            if Coord.xRaw (Sprite.textSize Big sans big) <= inner then
                 line Big Color.black big
 
             else
-                line Small Color.black (Sprite.ellipsis uiState.scale Small sans (Units.uiPixels inner) big)
+                line Small Color.black (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
 
         displayBox =
             Ui.el
@@ -690,8 +690,8 @@ view uiState focused model =
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text uiState Small sans "Calculator")
-                (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text uiState Small sans "×"))
+                (Ui.text Small sans "Calculator")
+                (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
     in
     Ui.elWithId Panel
         { padding = Ui.paddingXY 8 8
@@ -701,7 +701,7 @@ view uiState focused model =
         (Ui.column { spacing = spacing, padding = Ui.noPadding }
             (title
                 :: displayBox
-                :: List.map (keyRow uiState model) keys
+                :: List.map (keyRow model) keys
             )
         )
 
@@ -718,8 +718,8 @@ keys =
 
 {-| A row of buttons; the third number is how many columns a button spans.
 -}
-keyRow : Ui.Model a -> Model -> List ( Key, String, Int ) -> Element UiId
-keyRow uiState model row =
+keyRow : Model -> List ( Key, String, Int ) -> Element UiId
+keyRow model row =
     Ui.row { spacing = spacing, padding = Ui.noPadding }
         (List.map
             (\( key, label, columns ) ->
@@ -739,7 +739,7 @@ keyRow uiState model row =
                 Ui.selectableButton
                     { id = KeyButton key, padding = Ui.noPadding }
                     (isPendingOperator model key)
-                    (Ui.center { size = size } (Ui.text uiState fontSize sans label))
+                    (Ui.center { size = size } (Ui.text fontSize sans label))
             )
             row
         )

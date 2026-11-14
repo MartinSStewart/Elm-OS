@@ -152,19 +152,15 @@ type ElementState
     | ViewportState ViewportModel
 
 
-{-| `scale` is the screen's UI scale. Text is laid out differently at each scale (see
-Sprite), so `text` and the other text elements take the Model to measure at it.
--}
 type alias Model id =
     { focus : Maybe id
     , uiState : Dict String ElementState
-    , scale : UiScale
     }
 
 
-init : UiScale -> Model id
-init scale =
-    { focus = Nothing, uiState = Dict.empty, scale = scale }
+init : Model id
+init =
+    { focus = Nothing, uiState = Dict.empty }
 
 
 type alias ViewportModel =
@@ -463,44 +459,44 @@ paddingXY x y =
 
 {-| Black text. '\\n' starts a new line.
 -}
-text : Model a -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-text model fontSize font =
-    colorText model Color.black fontSize font
+text : Sprite.FontSize -> Sprite.Font -> String -> Element id
+text fontSize font =
+    colorText Color.black fontSize font
 
 
-colorText : Model a -> Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-colorText model color fontSize font text2 =
-    customText model fontSize [ { text = text2, color = color, font = font } ]
+colorText : Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+colorText color fontSize font text2 =
+    customText fontSize [ { text = text2, color = color, font = font } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
 font size, so every line is the same height whichever fonts it mixes. '\\n' in any of
-them starts a new line. It's measured at the Model's UI scale, which it will be drawn at.
+them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
-    Ui.customText uiState Sprite.Small
+    Ui.customText Sprite.Small
         [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
         , { text = "make check", color = Color.black, font = Sprite.Mono }
         , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
         ]
 
 -}
-customText : Model a -> Sprite.FontSize -> List Sprite.Segment -> Element id
-customText model fontSize segments =
+customText : Sprite.FontSize -> List Sprite.Segment -> Element id
+customText fontSize segments =
     Text
         { fontSize = fontSize
         , segments = segments
-        , cachedSize = Sprite.customTextSize model.scale fontSize segments
+        , cachedSize = Sprite.customTextSize fontSize segments
         }
 
 
 {-| `customText` with word wrap: lines are broken between words so that none is wider
 than `maxWidth` (see Sprite.wrapLines). '\\n' still starts a new line too.
 -}
-customTextWrapped : Model a -> Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
-customTextWrapped model fontSize maxWidth segments =
+customTextWrapped : Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
+customTextWrapped fontSize maxWidth segments =
     let
         ( wrapped, cachedSize ) =
-            Sprite.wrapWithSize model.scale fontSize maxWidth segments
+            Sprite.wrapWithSize fontSize maxWidth segments
     in
     Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
 
