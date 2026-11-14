@@ -149,4 +149,9 @@ impl CpuDisplay {
     pub fn cursor_move(&self, x: i32, y: i32) {
         drm::move_cursor(&self.card, self.crtc, x, y);
     }
+
+    /// Takes the cursor off its plane (`cursor_draw` puts it back).
+    pub fn cursor_hide(&self) {
+        drm::set_cursor(&self.card, self.crtc, 0, CURSOR_PLANE as u32);
+    }
 }

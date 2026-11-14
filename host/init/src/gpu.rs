@@ -5,7 +5,8 @@
 //!   its stdin  <- frames: each a scene (common/src/scene.rs)
 //!   its stdout -> "ok W H CURSOR RENDERER" once the display is up; then "f GPU_NS"
 //!                 for each frame shown, or "d" for one skipped
-//!   its fd 3   <- cursor commands: "m X Y" moves it, "c RGBA S" redraws it
+//!   its fd 3   <- cursor commands: "m X Y" moves it, "c RGBA S" redraws it, "h"
+//!                 hides it
 
 use common::scene::{self, Layer};
 use std::fs::File;
@@ -170,6 +171,11 @@ impl Gpu {
 
     pub fn cursor_move(&mut self, x: i32, y: i32) {
         self.cursor_command(&format!("m {x} {y}\n"));
+    }
+
+    /// Takes the cursor off its plane ("c" puts it back).
+    pub fn cursor_hide(&mut self) {
+        self.cursor_command("h\n");
     }
 
     pub fn cursor_redraw(&mut self, fill: u32, scale: usize) {

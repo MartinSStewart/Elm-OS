@@ -15,7 +15,8 @@
 //!             0xRRGGBBAA colour, as Elm sends them), or a picture.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m X Y" moves it, "c RGBA S"
-//!             redraws it with that fill colour at scale S.
+//!             redraws it with that fill colour at scale S, "h" hides it (takes it
+//!             off the plane, until the next "c").
 //!
 //! Every triangle samples the texture atlas, which we upload once. A picture is two
 //! triangles that sample its pixels, an L8 (luminance) texture of palette indices, and
@@ -388,6 +389,9 @@ impl CursorPlane {
                 (Some("m"), Some(x), Some(y)) => drm::move_cursor(&self.card, self.crtc, x as i32, y as i32),
                 (Some("c"), Some(fill), Some(scale)) => {
                     self.draw(fill as u32, scale.max(1) as usize);
+                }
+                (Some("h"), None, None) => {
+                    drm::set_cursor(&self.card, self.crtc, 0, CURSOR_PLANE as u32);
                 }
                 _ => {}
             }

@@ -116,15 +116,10 @@ impl Host {
     }
 
     fn cursor_move(&mut self) {
-        if !self.hw_cursor {
+        if !self.hw_cursor || self.inputs.captured {
             return;
         }
-        // A captured pointer is hidden: off the screen.
-        let (x, y) = if self.inputs.captured {
-            (-100, -100)
-        } else {
-            (self.inputs.mouse_x, self.inputs.mouse_y)
-        };
+        let (x, y) = (self.inputs.mouse_x, self.inputs.mouse_y);
         match &mut self.renderer {
             Renderer::Gpu(g) => g.cursor_move(x, y),
             Renderer::Cpu(d, _) => d.cursor_move(x, y),
@@ -132,8 +127,34 @@ impl Host {
         }
     }
 
-    fn cursor_redraw(&mut self) {
+    /// Elm captured the pointer, or let it go. A captured pointer is hidden: off its
+    /// plane, not just moved off the screen, because a virtual machine's window
+    /// (QEMU's, with virtio-gpu) shows the guest's cursor as long as it has an image,
+    /// wherever it is; the host's own pointer then shows the guest's arrow.
+    fn set_captured(&mut self, capture: bool) {
+        if capture == self.inputs.captured {
+            return;
+        }
+        self.inputs.captured = capture;
+        log!("host", "pointer {}", if capture { "captured, cursor hidden" } else { "released" });
         if !self.hw_cursor {
+            return;
+        }
+        if capture {
+            match &mut self.renderer {
+                Renderer::Gpu(g) => g.cursor_hide(),
+                Renderer::Cpu(d, _) => d.cursor_hide(),
+                Renderer::Nothing => {}
+            }
+        } else {
+            self.cursor_redraw();
+            self.cursor_move();
+        }
+    }
+
+    fn cursor_redraw(&mut self) {
+        // A captured pointer's cursor stays hidden; `set_captured` draws it again.
+        if !self.hw_cursor || self.inputs.captured {
             return;
         }
         let (fill, scale) = (self.cursor_fill, self.cursor_scale);
@@ -223,10 +244,7 @@ impl Host {
                 FromElm::Connected(program) => {
                     self.program = program;
                     // The new program hasn't captured the pointer.
-                    if self.inputs.captured {
-                        self.inputs.captured = false;
-                        self.cursor_move();
-                    }
+                    self.set_captured(false);
                     if self.elm_started_at.is_none() && program == 1 {
                         self.elm_started_at = Some(now());
                     }
@@ -277,12 +295,7 @@ impl Host {
                 Effect::WriteBytes { path, bytes } => persist::write_file(path, bytes),
                 Effect::Log { text } => log!("elm", "{}", text),
                 Effect::SwitchReady => elm::switch_ready(self.program),
-                Effect::CapturePointer { capture } => {
-                    if capture != self.inputs.captured {
-                        self.inputs.captured = capture;
-                        self.cursor_move();
-                    }
-                }
+                Effect::CapturePointer { capture } => self.set_captured(capture),
             }
         }
         if cursor_dirty {
