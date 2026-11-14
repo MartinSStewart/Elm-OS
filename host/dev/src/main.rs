@@ -397,7 +397,8 @@ impl Runner {
                 files::request(elm::program(), files::Request::ReadBytes { path, offset, length })
             }
             Effect::Sha256 { path, length } => files::request(elm::program(), files::Request::Sha256 { path, length }),
-            Effect::WriteSys { path, text } => log!("dev", "not writing {text:?} to {path} (Elm OS only)"),
+            // Elm OS only (e.g. the CPU governor); the Elm program asks often, so stay quiet.
+            Effect::WriteSys { .. } => {}
             Effect::AppendFile { path, text } => self.write_data(&path, &text, true),
             Effect::WriteFile { path, text } => self.write_data(&path, &text, false),
             Effect::Log { text } => log!("elm", "{text}"),
