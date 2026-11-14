@@ -11,7 +11,6 @@ module HackerNews exposing
     , UiId(..)
     , gotHttpRequest
     , httpRequestIdToString
-    , idToString
     , init
     , onClick
     , stringToHttpRequestId
@@ -50,28 +49,6 @@ type UiId
     | CommentsViewport PostId
     | BackButton
     | CommentToggle Int
-
-
-idToString : UiId -> String
-idToString id =
-    case id of
-        NewsPostButton (PostId postId) ->
-            "NewsPostButton_" ++ postId
-
-        OpenButton ->
-            "OpenButton"
-
-        PostsViewport ->
-            "PostsViewport"
-
-        CommentsViewport (PostId postId) ->
-            "CommentsViewport_" ++ postId
-
-        BackButton ->
-            "BackButton"
-
-        CommentToggle index ->
-            "CommentToggle_" ++ String.fromInt index
 
 
 type Effect

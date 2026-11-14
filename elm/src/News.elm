@@ -6,7 +6,6 @@ module News exposing
     , Topic
     , UiId(..)
     , decoder
-    , idToString
     , lastDays
     , parseWikitext
     , request
@@ -34,7 +33,6 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 import Color exposing (Color)
 import Coord
 import Date exposing (Date)
-import Dict
 import Duration
 import Effect
 import Json.Decode as D
@@ -81,13 +79,6 @@ type NewsState
 
 type UiId
     = NewsViewport
-
-
-idToString : UiId -> String
-idToString id =
-    case id of
-        NewsViewport ->
-            "newsViewport"
 
 
 view : (UiId -> id) -> Ui.Model id -> NewsState -> Element id

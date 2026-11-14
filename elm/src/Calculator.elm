@@ -8,7 +8,6 @@ module Calculator exposing
     , expression
     , format
     , fromKeyboard
-    , idToString
     , init
     , press
     , view
@@ -605,19 +604,6 @@ type UiId
     = KeyButton Key
     | CloseButton
     | Panel
-
-
-idToString : UiId -> String
-idToString uiId =
-    case uiId of
-        KeyButton _ ->
-            "KeyButton"
-
-        CloseButton ->
-            "CloseButton"
-
-        Panel ->
-            "Panel"
 
 
 spacing : Int

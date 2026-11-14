@@ -17,7 +17,6 @@ import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
-import Dict exposing (Dict)
 import Duration exposing (Duration)
 import Effect exposing (Effect, HttpError(..))
 import HackerNews
@@ -359,76 +358,6 @@ init =
     , uiState = Ui.init
     , showUiBorders = False
     }
-
-
-idToString : UiId -> String
-idToString uiId =
-    case uiId of
-        RefreshButton ->
-            "RefreshButton"
-
-        NetworkButton string ->
-            "NetworkButton_" ++ Wifi.ssidToString string
-
-        PasswordInput ->
-            "PasswordInput"
-
-        ShowPasswordButton ->
-            "ShowPasswordButton"
-
-        ConnectButton ->
-            "ConnectButton"
-
-        DisconnectButton ->
-            "DisconnectButton"
-
-        WeatherButton ->
-            "WeatherButton"
-
-        AboutButton ->
-            "AboutButton"
-
-        NewsButton ->
-            "NewsButton"
-
-        CloseAboutButton ->
-            "CloseAboutButton"
-
-        CalculatorButton ->
-            "CalculatorButton"
-
-        PowerOffButton ->
-            "PowerOffButton"
-
-        RestartButton ->
-            "RestartButton"
-
-        ConfirmPowerButton ->
-            "ConfirmPowerButton"
-
-        CancelPowerButton ->
-            "CancelPowerButton"
-
-        CalculatorUiId uiId2 ->
-            "CalculatorUiId_" ++ Calculator.idToString uiId2
-
-        EditorButton ->
-            "EditorButton"
-
-        EditorInput ->
-            "EditorInput"
-
-        EditorWindow ->
-            "EditorWindow"
-
-        CloseEditorButton ->
-            "CloseEditorButton"
-
-        NewsUiId uiId2 ->
-            News.idToString uiId2
-
-        HackerNewsUiId uiId2 ->
-            HackerNews.idToString uiId2
 
 
 {-| How many frame intervals the average and maximum are over.
@@ -1070,14 +999,14 @@ connect model =
         Just network ->
             if needsPassword network then
                 case SeqDict.get PasswordInput model.uiState.uiState of
-                    Just (TextInputState password2) ->
-                        case Wpa2Password.fromString password2.current.text of
-                            Ok password ->
+                    Just (TextInputState password) ->
+                        case Wpa2Password.fromString password.current.text of
+                            Ok password2 ->
                                 ( { model
                                     | weather = weatherWithoutWifi model
                                     , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = "", error = "" }
                                   }
-                                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password } ]
+                                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password2 } ]
                                 )
 
                             Err error ->
