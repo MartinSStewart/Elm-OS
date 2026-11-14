@@ -241,9 +241,18 @@ def snapshot_text():
 def editor_text(snap):
     """The text editor's text in a snapshot ([format, version, modelHash, msgHash, next,
     model], see Persist.elm): Model is a record encoded as an array, in Main.Model's field
-    order (MODEL_FIELDS); then `editor` (TextInputMultiline.Model: [input, scroll],
-    TextInput.Model: [current, undo, redo], State: [cursor, size, text])."""
-    return snap[5][MODEL_FIELDS.index("editor")][0][0][2]
+    order (MODEL_FIELDS). The editor's box is in `uiState` (Ui.Model: [focus, uiState]),
+    whose Dict (an array of [key, value]) has it under "EditorInput", as Ui.ElementState's
+    variant 1, TextInputMultilineState: TextInputMultiline.Model is [input, scroll,
+    goalX], TextInput.Model [current, undo, redo] and State [cursor, size, text]. "" if
+    the editor hasn't been opened."""
+    elements = dict((key, value) for key, value in snap[5][MODEL_FIELDS.index("uiState")][1])
+    state = elements.get("EditorInput")
+    if state is None:
+        return ""
+    if state[0] != 1:
+        fail(f"EditorInput's state isn't a TextInputMultilineState: {state!r:.200}")
+    return state[1][0][0][2]
 
 
 def model_fields():
