@@ -4,9 +4,15 @@
 #   gpu/    /usr/bin/elmos-gpu, the GPU renderer (dynamically linked, because Mesa is)
 #   common/ the texture atlas and the display (KMS) calls both use
 #   protocol/ the messages between Elm and the host, and their tests (cargo test -p protocol)
+#   synth/  the music synthesizer (an emulated OPL3 playing MIDI), and its tests (cargo test -p synth)
 [workspace]
-members = ["common", "protocol", "init", "link", "gpu"]
+members = ["common", "protocol", "init", "link", "gpu", "synth"]
 resolver = "2"
+
+# The synthesizer makes sound in real time, so it is optimised even in debug builds
+# (and its tests, which render minutes of music, finish in seconds).
+[profile.dev.package.synth]
+opt-level = 3
 
 [profile.release]
 panic = "abort"

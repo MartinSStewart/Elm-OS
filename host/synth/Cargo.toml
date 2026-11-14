@@ -1,0 +1,9 @@
+[package]
+name = "synth"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The music synthesizer the audio thread plays MIDI with (see src/lib.rs): plain Rust,
+# no dependencies, so `cargo test -p synth` runs on the build machine.
+[dependencies]
