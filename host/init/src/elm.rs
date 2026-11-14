@@ -223,6 +223,12 @@ pub fn send(msg: &ToElm) {
     link().ready.notify_all();
 }
 
+/// The messages waiting for a program, taken off the queue: for tests.
+#[cfg(test)]
+pub fn take_queued() -> Vec<ToElm> {
+    state().queue.drain(..).map(|q| q.msg).collect()
+}
+
 /// A logged message that program number `program` asked to have again
 /// (Effect::ReplayLog, persist.rs), with its number: not logged again.
 pub fn replayed(program: u64, seq: u64, msg: ToElm) {

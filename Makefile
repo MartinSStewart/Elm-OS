@@ -24,8 +24,9 @@
 #   make check-migration  fail if the Model's types changed with no migration (make check,
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
+#   make host-tests  /init's unit tests (host/init: touchpad scrolling, error screen text)
 #   make check      the tests that don't boot anything: check-migration, review, review-tests,
-#                   elm-tests, test-wire, protocol-tests, dev-check, test-containers (CI runs these, then test
+#                   elm-tests, test-wire, protocol-tests, host-tests, dev-check, test-containers (CI runs these, then test
 #                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make eco        install the eco versions.mk pins (any make does) and print where it is
@@ -114,7 +115,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas test-containers migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas test-containers migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -738,6 +739,10 @@ elm-tests: $(BUILD)/wire/.done
 protocol-tests:
 	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p protocol --target-dir $(abspath $(BUILD)/cargo-tools)
 
+# /init's unit tests, on the build machine (they need nothing of eco's or musl's).
+host-tests:
+	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p elmos-host --target-dir $(abspath $(BUILD)/cargo-tools)
+
 # One after the other: they share npx's and eco's caches.
 # That the dev runner (host/dev) still compiles: it stands in for /init, so a new
 # message in host/protocol must be handled there too.
@@ -745,7 +750,7 @@ dev-check:
 	$(CARGO) check -q --locked --manifest-path host/Cargo.toml -p elmos-dev --target-dir $(abspath $(BUILD)/cargo-tools)
 
 check:
-	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests dev-check test-containers
+	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.

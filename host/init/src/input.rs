@@ -10,6 +10,11 @@
 //! straight from these numbers, without waiting for Elm or a frame.
 //! A touchpad reports absolute finger positions too, but it should feel like a
 //! mouse: the pointer moves by how far the finger moves, and a quick tap clicks.
+//! Two fingers moving together scroll instead, "naturally" (the content follows the
+//! fingers, as on phones and by default on macOS, Windows and GNOME). This reads the
+//! kernel's single-touch emulation (ABS_X/ABS_Y follow one finger, BTN_TOOL_DOUBLETAP
+//! says two are down) rather than every ABS_MT_* slot, which is enough while the
+//! fingers move together; pinches and swipes would need the slots.
 //!
 //! Sends Elm:
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
@@ -36,6 +41,10 @@ const REL_X: u16 = 0;
 const REL_Y: u16 = 1;
 const REL_WHEEL: u16 = 8;
 const ABS_X: u16 = 0;
+/// Viewports scroll 150 UI pixels a wheel click (Ui.scroll), so a two-finger scroll
+/// sends a click per 150 UI pixels the pointer would have moved: the content keeps up
+/// with the fingers.
+const UI_PIXELS_PER_CLICK: f64 = 150.0;
 const ABS_Y: u16 = 1;
 const KEY_POWER: u16 = 116;
 const BTN_MISC: u16 = 0x100;
@@ -95,6 +104,8 @@ struct Device {
     tap_moved: i32,
     tap_clicked: bool,
     fingers: i32, // most fingers down during this touch
+    tools: u8,    // bit n: the BTN_TOOL_* for n + 1 fingers is down
+    scroll: f64,  // two-finger scrolling, in device pixels, not yet a whole click
     touch_start: f64,
     frac_x: f64,
     frac_y: f64,
@@ -149,7 +160,11 @@ impl Device {
                 ""
             }
         );
-        Some(Device {
+        Some(Device::new(file, name, has_abs, touchpad, ax, ay))
+    }
+
+    fn new(file: File, name: &str, has_abs: bool, touchpad: bool, ax: AbsInfo, ay: AbsInfo) -> Device {
+        Device {
             file,
             name: name.to_owned(),
             has_abs,
@@ -163,6 +178,8 @@ impl Device {
             tap_moved: 0,
             tap_clicked: false,
             fingers: 0,
+            tools: 0,
+            scroll: 0.0,
             touch_start: 0.0,
             frac_x: 0.0,
             frac_y: 0.0,
@@ -170,7 +187,7 @@ impl Device {
             rel_y: 0,
             last_motion: 0.0,
             velocity: 0.0,
-        })
+        }
     }
 }
 
@@ -299,6 +316,8 @@ impl Inputs {
         }
         let is_x = code == ABS_X;
         let bit = if is_x { 1 } else { 2 };
+        // two fingers or more down now: scrolling
+        let scrolling = dev.tools > 1;
         if dev.have_last & bit == 0 {
             // the finger just landed: only remember where
             if is_x {
@@ -322,6 +341,22 @@ impl Inputs {
         };
         let delta = (value - *last) as f64 * scale + *frac;
         *last = value;
+        if scrolling {
+            *frac = 0.0;
+            dev.tap_moved += delta.abs() as i32;
+            if is_x {
+                return; // nothing scrolls sideways yet
+            }
+            // Fingers moving down (y growing) pull the content down: the wheel turning up.
+            dev.scroll += delta;
+            let per_click = UI_PIXELS_PER_CLICK * self.scale;
+            let clicks = (dev.scroll / per_click).trunc();
+            if clicks != 0.0 {
+                dev.scroll -= clicks * per_click;
+                elm::send(&ToElm::Wheel { dy: clicks as i32 });
+            }
+            return;
+        }
         let whole = delta as i32;
         *frac = delta - whole as f64;
         if whole == 0 {
@@ -414,6 +449,7 @@ impl Inputs {
                         dev.tap_moved = 0;
                         dev.tap_clicked = false;
                         dev.fingers = 1;
+                        dev.scroll = 0.0;
                         dev.frac_x = 0.0;
                         dev.frac_y = 0.0;
                         dev.touch_start = event_time;
@@ -437,14 +473,17 @@ impl Inputs {
                 } else if touchpad && (BTN_TOOL_FINGER..=BTN_TOOL_QUADTAP).contains(&ev.code) {
                     // The number of fingers changed, and the reported position may jump to another finger.
                     dev.have_last = 0;
+                    let f = match ev.code {
+                        BTN_TOOL_FINGER => 1,
+                        BTN_TOOL_DOUBLETAP => 2,
+                        BTN_TOOL_TRIPLETAP => 3,
+                        _ => 4,
+                    };
                     if down {
-                        let f = match ev.code {
-                            BTN_TOOL_FINGER => 1,
-                            BTN_TOOL_DOUBLETAP => 2,
-                            BTN_TOOL_TRIPLETAP => 3,
-                            _ => 4,
-                        };
+                        dev.tools |= 1 << (f - 1);
                         dev.fingers = dev.fingers.max(f);
+                    } else {
+                        dev.tools &= !(1 << (f - 1));
                     }
                 } else if ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE {
                     if touchpad {
@@ -472,5 +511,114 @@ impl Inputs {
         }
         self.mouse_x = self.mouse_x.clamp(0, w as i32 - 1);
         self.mouse_y = self.mouse_y.clamp(0, h as i32 - 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 100 x 60 mm touchpad, 10 units per mm, on a 1000 pixel wide screen: a unit
+    /// is 1.5 pixels of pointer motion.
+    fn touchpad() -> Inputs {
+        let axis = |maximum| AbsInfo {
+            maximum,
+            resolution: 10,
+            ..AbsInfo::default()
+        };
+        let mut inputs = Inputs::new(1000, 600);
+        let null = File::open("/dev/null").unwrap();
+        inputs
+            .devices
+            .push(Device::new(null, "test", true, true, axis(1000), axis(600)));
+        inputs
+    }
+
+    fn send(inputs: &mut Inputs, events: &[(u16, u16, i32)]) -> Vec<ToElm> {
+        let mut moved = false;
+        for &(type_, code, value) in events {
+            let ev = InputEvent {
+                type_,
+                code,
+                value,
+                ..InputEvent::default()
+            };
+            inputs.handle(0, &ev, 1000, 600, &mut moved);
+        }
+        elm::take_queued()
+            .into_iter()
+            .filter(|m| !matches!(m, ToElm::Mouse { .. }))
+            .collect()
+    }
+
+    fn wheel(msgs: &[ToElm]) -> i32 {
+        msgs.iter()
+            .map(|m| if let ToElm::Wheel { dy } = m { *dy } else { 0 })
+            .sum()
+    }
+
+    // One test, as the queue it reads is shared by every test thread.
+    #[test]
+    fn touchpad_moves_and_scrolls() {
+        let mut t = touchpad();
+        let syn = (EV_SYN, SYN_REPORT, 0);
+        // One finger: the pointer moves and nothing scrolls.
+        let (x0, y0) = (t.mouse_x, t.mouse_y);
+        send(
+            &mut t,
+            &[
+                (EV_KEY, BTN_TOUCH, 1),
+                (EV_KEY, BTN_TOOL_FINGER, 1),
+                (EV_ABS, ABS_X, 500),
+                (EV_ABS, ABS_Y, 300),
+                syn,
+            ],
+        );
+        let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 340), syn]);
+        assert_eq!(wheel(&msgs), 0);
+        assert_eq!((t.mouse_x, t.mouse_y), (x0, y0 + 60));
+        // A second finger lands: moving down 200 units (300 pixels) is two clicks up,
+        // and the pointer stays put.
+        send(
+            &mut t,
+            &[
+                (EV_KEY, BTN_TOOL_FINGER, 0),
+                (EV_KEY, BTN_TOOL_DOUBLETAP, 1),
+                (EV_ABS, ABS_Y, 100),
+                syn,
+            ],
+        );
+        let mut msgs = Vec::new();
+        for y in (110..=300).step_by(10) {
+            msgs.extend(send(
+                &mut t,
+                &[(EV_ABS, ABS_X, 500 + y % 3), (EV_ABS, ABS_Y, y), syn],
+            ));
+        }
+        assert_eq!(wheel(&msgs), 2);
+        assert_eq!((t.mouse_x, t.mouse_y), (x0, y0 + 60));
+        // Moving back up 100 units scrolls one click down.
+        let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 200), syn]);
+        assert_eq!(wheel(&msgs), -1);
+        // Lifting the fingers after scrolling isn't a tap.
+        let msgs = send(
+            &mut t,
+            &[(EV_KEY, BTN_TOOL_DOUBLETAP, 0), (EV_KEY, BTN_TOUCH, 0), syn],
+        );
+        assert!(msgs.is_empty(), "{:?}", msgs.len());
+        // At a UI scale of 2, the same scroll is half the clicks.
+        t.scale = 2.0;
+        send(
+            &mut t,
+            &[
+                (EV_KEY, BTN_TOUCH, 1),
+                (EV_KEY, BTN_TOOL_DOUBLETAP, 1),
+                (EV_ABS, ABS_X, 500),
+                (EV_ABS, ABS_Y, 100),
+                syn,
+            ],
+        );
+        let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 300), syn]);
+        assert_eq!(wheel(&msgs), 1);
     }
 }
