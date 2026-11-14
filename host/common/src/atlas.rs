@@ -78,11 +78,14 @@ pub fn build() -> Vec<u8> {
             }
         }
     }
-    for y in 248..256 {
-        a[y * ATLAS_W + 248..y * ATLAS_W + 256].fill(255);
+    for y in SOLID.start as usize..SOLID.end as usize {
+        a[y * ATLAS_W + SOLID.start as usize..y * ATLAS_W + SOLID.end as usize].fill(255);
     }
     a
 }
+
+/// The atlas's solid block (x and y from 248 up to 256): wholly covered.
+pub const SOLID: std::ops::Range<f32> = 248.0..256.0;
 
 /// The size of a display's cursor plane image.
 pub const CURSOR_PLANE: usize = 64;

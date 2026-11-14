@@ -16,6 +16,8 @@ pub struct CpuDisplay {
     scanout: *mut u32,
     /// Drawn here, then copied to the screen: reading back the scanout buffer is slow.
     pub back: Vec<u32>,
+    /// What the screen shows, to copy only the rows that changed.
+    front: Vec<u32>,
     cursor_handle: u32,
 }
 
@@ -73,24 +75,59 @@ impl CpuDisplay {
             crtc: out.crtc,
             scanout,
             back: vec![0; stride * h as usize],
+            front: vec![0; stride * h as usize],
             cursor_handle: 0,
         })
     }
 
+    /// Shows `back`: copies the rows that changed since the last frame to the screen,
+    /// and tells the display which part changed (virtio-gpu only uploads that much of
+    /// a dumb buffer, and an upload of the whole screen takes milliseconds in QEMU).
+    /// Each run of changed rows is one rectangle, as wide as its changes.
     pub fn present(&mut self) {
-        // SAFETY: scanout maps stride * h pixels, the size of `back`.
-        unsafe { std::ptr::copy_nonoverlapping(self.back.as_ptr(), self.scanout, self.back.len()) };
-        // virtio-gpu only uploads a dumb buffer when told which part changed.
-        let mut clip = drm::ClipRect {
-            x1: 0,
-            y1: 0,
-            x2: self.w as u16,
-            y2: self.h as u16,
-        };
+        let (w, h, stride) = (self.w as usize, self.h as usize, self.stride);
+        let mut clips: Vec<drm::ClipRect> = Vec::new();
+        let mut band: Option<(usize, usize, usize)> = None; // first row, left, right
+        for y in 0..=h {
+            let changed = (y < h).then(|| {
+                let row = &self.back[y * stride..y * stride + w];
+                let old = &mut self.front[y * stride..y * stride + w];
+                let left = row.iter().zip(old.iter()).position(|(a, b)| a != b)?;
+                let right = w - row.iter().rev().zip(old.iter().rev()).position(|(a, b)| a != b).unwrap_or(0);
+                old[left..right].copy_from_slice(&row[left..right]);
+                // SAFETY: scanout maps stride * h pixels; this is within row y.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(row[left..].as_ptr(), self.scanout.add(y * stride + left), right - left)
+                };
+                Some((left, right))
+            });
+            match (changed.flatten(), band) {
+                (Some((l, r)), Some((top, bl, br))) => band = Some((top, bl.min(l), br.max(r))),
+                (Some((l, r)), None) => band = Some((y, l, r)),
+                (None, Some((top, l, r))) => {
+                    clips.push(drm::ClipRect { x1: l as u16, y1: top as u16, x2: r as u16, y2: y as u16 });
+                    band = None;
+                }
+                (None, None) => {}
+            }
+        }
+        if clips.is_empty() {
+            return;
+        }
+        if clips.len() > 16 {
+            // Many small changes: one rectangle around them all.
+            let all = drm::ClipRect {
+                x1: clips.iter().map(|c| c.x1).min().unwrap_or(0),
+                y1: clips[0].y1,
+                x2: clips.iter().map(|c| c.x2).max().unwrap_or(0),
+                y2: clips[clips.len() - 1].y2,
+            };
+            clips = vec![all];
+        }
         let mut dirty = drm::FbDirty {
             fb_id: self.fb_id,
-            num_clips: 1,
-            clips_ptr: &mut clip as *mut _ as u64,
+            num_clips: clips.len() as u32,
+            clips_ptr: clips.as_mut_ptr() as u64,
             ..Default::default()
         };
         drm::ioctl(&self.card, drm::IOCTL_MODE_DIRTYFB, &mut dirty);
