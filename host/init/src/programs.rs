@@ -37,7 +37,9 @@ pub fn valid_name(name: &str) -> bool {
 pub fn path(build: &Build) -> PathBuf {
     match build {
         Some(name) => persist::Disk::path(&format!("programs/{name}/elm")),
-        None => PathBuf::from(BUILT_IN),
+        // ELMOS_ELM (kernel command line) runs another program as the built-in build:
+        // for scripts/test-errors.py, or to try a program by hand.
+        None => PathBuf::from(std::env::var("ELMOS_ELM").unwrap_or_else(|_| BUILT_IN.to_owned())),
     }
 }
 
@@ -103,7 +105,8 @@ pub fn keep_snapshot() -> bool {
 }
 
 /// The new build failed: puts back the snapshot from before it started (which it may
-/// have migrated and rewritten), and empties the log, which may hold its Msgs.
+/// have migrated and rewritten), and empties the message log, which may hold messages
+/// only the new build got.
 pub fn roll_back() -> bool {
     persist::on_disk(|d| {
         let ok = match d.read("snapshot-before-switch") {
@@ -112,7 +115,7 @@ pub fn roll_back() -> bool {
                 d.remove("snapshot");
                 true
             }
-        } && d.write("log", "");
+        } && d.empty_log();
         d.remove("snapshot-before-switch");
         ok
     })

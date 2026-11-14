@@ -30,7 +30,9 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
-use crate::{elm, http, net, persist, raster};
+use common::raster;
+
+use crate::{elm, error_screen, http, net, persist};
 
 /// Elm draws only when asked.
 ///
@@ -255,14 +257,24 @@ impl Host {
                 Effect::WriteSys { path, text } => files::write_sys(path, text),
                 Effect::AppendFile { path, text } => persist::append_file(path, text),
                 Effect::WriteFile { path, text } => persist::write_file(path, text),
-                Effect::Log { text } => log!("elm", "{}", text),
+                Effect::Log { text } => {
+                    log!("elm", "{}", text);
+                    elm::note_output(&format!("[elm] {text}"));
+                }
                 Effect::SwitchReady => elm::switch_ready(self.program),
+                Effect::ReadSnapshot => persist::read_snapshot(self.program),
+                Effect::WriteSnapshot { text, seq } => persist::write_snapshot(text, seq),
+                Effect::ReplayLog { after } => elm::replay_log(self.program, after),
             }
         }
         if cursor_dirty {
             self.cursor_redraw();
         }
-        if let Some(tris) = scene {
+        if let Some(mut tris) = scene {
+            // An error screen (error_screen.rs) is drawn in place of Elm's frames.
+            if let Some(error) = error_screen::current(self.w, self.h) {
+                tris = error;
+            }
             let start = now();
             if self.awaiting_render {
                 self.stats.elm.push(start - self.asked_at);
@@ -311,6 +323,13 @@ fn send_system() {
             .map(|s| s.trim().to_owned())
             .unwrap_or_else(|_| "unknown".into()),
     });
+}
+
+/// When the host thread should panic, for ELMOS_TEST_PANIC=main (f64 bits; 0: never).
+static PANIC_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn panic_at(t: f64) {
+    PANIC_AT.store(t.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn run() -> ! {
@@ -368,6 +387,7 @@ pub fn run() -> ! {
     host.stats = Stats::new();
     host.stats.send(host.gpu_pid());
     let mut last_stats = now();
+    let mut last_tick = now();
     // The first frame is asked for once the Elm program has started (FromElm::Connected).
     elm::start();
     let mut last_scan = now();
@@ -382,9 +402,9 @@ pub fn run() -> ! {
         fds.extend(input_fds.iter().map(|&fd| sys::pollfd(fd)));
 
         // Sleep until the next thing that is due: an input device scan (about once a
-        // second), stats, a tap's release, the CPU renderer's next frame, or the frame
+        // second), stats, a tick, a tap's release, the CPU renderer's next frame, or the frame
         // timeout.
-        let mut due = (last_scan + 1.0).min(last_stats + 0.5);
+        let mut due = (last_scan + 1.0).min(last_stats + 0.5).min(last_tick + 1.0);
         if let Some(t) = host.inputs.tap_release_at {
             due = due.min(t);
         }
@@ -400,6 +420,10 @@ pub fn run() -> ! {
         sys::poll(&mut fds, sys::until(due));
 
         let t = now();
+        let panic_at = f64::from_bits(PANIC_AT.load(std::sync::atomic::Ordering::Relaxed));
+        if panic_at > 0.0 && t >= panic_at {
+            panic!("ELMOS_TEST_PANIC=main asked for this panic");
+        }
         host.inputs.release_tap(t);
         if t - last_scan >= 1.0 {
             host.inputs.scan();
@@ -409,8 +433,26 @@ pub fn run() -> ! {
             host.stats.send(host.gpu_pid());
             last_stats = t;
         }
+        // The Elm program's clock (BootInfo's checks): from here rather than a
+        // Time.every in Elm, so it is in the message log like everything else.
+        if t - last_tick >= 1.0 {
+            elm::send(&ToElm::Tick);
+            last_tick = t;
+        }
         if fds[0].revents != 0 {
-            host.run_effects();
+            if error_screen::panicked() {
+                // Elm's effects wait: the thread that panicked may hold their lock.
+                effects::clear_wake();
+            } else {
+                host.run_effects();
+            }
+        }
+        // An error screen shown or changed since the last turn (one hidden is replaced
+        // by Elm's next frame).
+        if let Some(tris) = error_screen::changed(host.w, host.h) {
+            if !tris.is_empty() {
+                host.draw(&tris);
+            }
         }
         if fds[1].revents != 0 {
             let done = match &mut host.renderer {

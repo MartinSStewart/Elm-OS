@@ -7,6 +7,7 @@ module Color exposing
     , fillColor3
     , focusedUiColor
     , highlightColor
+    , lightFont
     , outlineColor
     , rgb
     , rgb255
@@ -51,6 +52,11 @@ toInt (Color c) =
 black : Color
 black =
     rgb255 0 0 0
+
+
+lightFont : Color
+lightFont =
+    rgb255 50 50 50
 
 
 white : Color

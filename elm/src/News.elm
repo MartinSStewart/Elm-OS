@@ -35,6 +35,7 @@ import Color exposing (Color)
 import Coord
 import Date exposing (Date)
 import Dict
+import Duration
 import Effect
 import Json.Decode as D
 import Quantity
@@ -74,7 +75,7 @@ type NewsState
     = NewsNotRequested
     | LoadingNews (Maybe (List Day))
     | LoadedNews (List Day)
-    | NewsFailed String
+    | NewsFailed Effect.HttpError
 
 
 type UiId
@@ -97,7 +98,7 @@ view idMap uiState news =
         }
         (Ui.column
             { spacing = 4, padding = Ui.noPadding }
-            [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) "Wikipedia: Current events"
+            [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
             , case news of
                 NewsNotRequested ->
                     Ui.none
@@ -108,13 +109,13 @@ view idMap uiState news =
                             daysView idMap uiState days
 
                         Nothing ->
-                            Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) "Loading..."
+                            Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
 
                 LoadedNews days ->
                     daysView idMap uiState days
 
                 NewsFailed string ->
-                    Ui.text (Sprite.Sans Sprite.Italic Sprite.Small) string
+                    Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
             ]
         )
 
@@ -130,10 +131,10 @@ daysView idMap uiState days =
                         (\topic ->
                             Ui.column
                                 { spacing = 8, padding = Ui.noPadding }
-                                [ Ui.text (Sprite.Sans Sprite.Bold Sprite.Small) topic.heading
+                                [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
                                 , Ui.column
                                     { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
-                                    (List.map (itemView 140) topic.items)
+                                    (List.map (itemView uiState 140) topic.items)
                                 ]
                         )
                         topics
@@ -146,8 +147,8 @@ daysView idMap uiState days =
                     ++ String.fromInt (Date.day date)
                     ++ ", "
                     ++ String.fromInt (Date.year date)
-                    |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
-                    |> Ui.minWidth (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
+                    |> Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular)
+                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
                     |> Ui.el
                         { padding = Ui.paddingXY 12 4
                         , inFront = []
@@ -188,8 +189,8 @@ itemSpacing =
     6
 
 
-itemView : Int -> Item -> Element id
-itemView width (Item item) =
+itemView : Ui.Model id -> Int -> Item -> Element id
+itemView uiState width (Item item) =
     let
         inlineText : String
         inlineText =
@@ -199,7 +200,7 @@ itemView width (Item item) =
         { spacing = itemSpacing, padding = Ui.noPadding }
         [ Ui.row
             { spacing = 6, padding = Ui.noPadding }
-            [ Ui.text (Sprite.Sans Sprite.Regular Sprite.Small) "•"
+            [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular) "•"
             , String.foldl
                 (\char { lastSpace, lastBreak, index, lines } ->
                     if index - lastBreak > width then
@@ -229,11 +230,11 @@ itemView width (Item item) =
                 |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
                 |> List.reverse
                 |> String.join "\n"
-                |> Ui.text (Sprite.Sans Sprite.Regular Sprite.Small)
+                |> Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular)
             ]
         , Ui.column
             { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }
-            (List.map (itemView (width - 2)) item.children)
+            (List.map (itemView uiState (width - 2)) item.children)
         ]
 
 
@@ -267,8 +268,8 @@ request id dates =
             -- Wikimedia asks every program to say who it is and how to reach its authors,
             -- and may refuse ones that don't.
             [ ( "User-Agent", "ElmOS/0.1 (https://github.com/MartinSStewart/Elm-OS)" ) ]
-        , body = ""
-        , timeoutMs = Just 30000
+        , body = Effect.noBody
+        , timeoutMs = Just (Duration.seconds 30)
         }
 
 

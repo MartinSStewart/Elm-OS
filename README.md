@@ -35,8 +35,10 @@ make run-cpu      # QEMU window, drawn on the CPU
 make test         # headless boot test, saves build/screenshot.png
 make test-gpu     # the same test on the GPU
 make test-persist # power cuts and a restart: the Model must come back
+make test-errors  # the error screen: a crash loop, a hang, panics in /init
 make test-wire    # the encoder/decoder generator (tools/wire) on every kind of type
 make check        # every test that doesn't boot: elm-review, Elm unit tests, test-wire, protocol
+make bench        # times the Hacker News app on a saved 3,236-comment page, natively (elm/bench)
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 
@@ -50,6 +52,27 @@ renamed it), rather than leaving a driver out without saying so.
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
 wifi network to join: **Elm OS test network**, password `password`. `make run` keeps what Elm
 OS saves in `build/data-qemu.img`; delete it to start afresh.
+
+## Work on the Elm code without booting the OS
+
+```sh
+make dev          # the Elm program in a window on your desktop (X11 or Wayland), with Node
+make dev-native   # the same with the native build that goes into Elm OS (slower to rebuild)
+```
+
+`make dev` skips the kernel and QEMU: it runs the Elm program in a window, with
+`build/elmos-dev` (host/dev) standing in for `/init`. It talks the same protocol, draws
+with the same rasteriser and atlas, sends HTTP out for real, and makes up the wifi (join
+**Elm OS test network** with `password`). Each time you save a file in `elm/src` it
+rebuilds the program (eco's JavaScript build: a few seconds) and switches to it with the
+Model carried over, as a switch on Elm OS does. Build errors show in the terminal. The
+Model is kept in `build/dev-data`; remove that directory to start afresh.
+
+The JavaScript build behaves like the native one except for numbers: Ints are 53-bit
+floats there, and `//` and Bitwise work on 32 bits. eco's native crashes and speed
+don't show either, so try a change in `make dev-native` or `make run` before relying on it.
+It compiles with `--optimize`, which roughly halves the time Elm takes per frame there,
+except while `elm/src` uses `Debug`, which `--optimize` refuses.
 
 ## Staying up to date
 
@@ -122,15 +145,16 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | --- | --- |
 | `elm/src/` | The Elm program (`Main.elm`), UI framework, sprite encoding, wifi panel and weather |
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
-| `elm/src/Persist.elm` | Saving the Model: Msg log, snapshots, replay at start |
+| `elm/src/Persist.elm` | Saving the Model: snapshots, replaying the host's message log at start |
 | `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
 | `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
-| `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU renderer, HTTP |
+| `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU rendering, HTTP |
 | `host/link/` | Linked into the Elm program: carries its ports over the socket to `/init` |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
 | `host/init/src/persist.rs` | Mounts the "Elm OS data" partition and writes Elm's files on it |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
-| `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
+| `host/common/` | Shared: the texture atlas (pixel font, Noto Sans glyphs), the CPU rasteriser, DRM/KMS ioctls |
+| `host/dev/` | `make dev`: stands in for `/init` on your desktop, to run the Elm program in a window |
 | `host/protocol/` | Every message between Elm and the host as Rust types, with an example of each (`examples.json`) that both sides are tested against |
 | `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
 | `versions.mk` | Pinned kernel and hostap versions, updated by `make refresh` |
@@ -148,6 +172,19 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   answers to the old program's file reads are dropped. The data disk message lists the HTTP
   requests the host is still answering, so `Persist.elm` doesn't report them as interrupted.
   This is the base for switching to a newer build of the Elm program without restarting.
+- When something goes wrong that the Elm program can't show, the host draws an error screen
+  itself (`host/init/src/error_screen.rs`, in the pixel font):
+  - The Elm program ends five times in a row within 30 s of starting (a crash loop), or hangs
+    (a frame unanswered for 30 s, `ELMOS_HANG_SECS`; the host stops it): the host stops
+    starting it and shows how each run ended (exit status or signal, or hung) and the last
+    lines it wrote on stderr or `Effect.Log`. Enter starts it again. The program's stderr goes
+    through the host, line by line, to the console as before.
+  - `/init` panics on a thread other than the host thread: the message stays on screen, and
+    Enter restarts the computer. If the host thread itself panicked (or is stuck), the message
+    is saved in `/data/host-panic.txt` and the computer restarts; the next boot shows it before
+    starting Elm, until Enter. The USB stick's kernel has `panic=10` in case `/init` dies anyway.
+  - For testing: `ELMOS_ELM=<path>` runs another program in place of the built-in build, and
+    `ELMOS_TEST_PANIC=thread|main` makes `/init` panic ten seconds after it starts.
 - Elm uses no effect packages besides `Time`: everything Elm sends goes out as bytes on
   one port, `Effect.toHost`: the `Effect`s (cursor colour, wifi scan/connect/disconnect,
   power, HTTP, files) as JSON, and each frame's scene as triangles, each message
@@ -178,35 +215,39 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 
 ### Saving the Model
 
-`elm/src/Persist.elm` wraps the program so its Model survives restarts and power cuts. Every Msg
-is appended to a log on the data disk, and now and then (at start, when the log reaches
-256 KB, and before powering off or restarting) the whole Model is written as a snapshot, which
-empties the log. At start the snapshot is loaded and the log replayed through `update`, then
-`Main.resume` drops what belonged to the last boot (screen, network, stats) and keeps what the
-user did. This works because `update` is deterministic: time, input and every answer from the
-host arrive as Msgs. Drawing is left out of `update` (`Main.draw`), so replaying is quick.
+`elm/src/Persist.elm` wraps the program so its Model survives restarts and power cuts. The host
+appends every message it sends Elm to a log on the data disk before sending it, numbered (the
+bytes it sends, so Elm encodes nothing per message), and now and then (at start, when the
+messages since the last one add up to 256 KB, and before powering off or restarting) Elm writes
+the whole Model as a snapshot with the number of the last message it has, and the host drops
+the logged messages up to there. At start Elm loads the snapshot and asks the host for the
+logged messages after it, and replays them through `update`. This works because `update` is
+deterministic: time (`HostMessage.Tick`, `Frame`), input and every answer from the host arrive as
+messages from the host, which is why Persist gives the program no subscriptions of its own.
+Drawing is left out of `update` (`Main.draw`), so replaying is quick.
 
 - **Where:** the GPT partition named "Elm OS data" (ext4): the second partition on the USB stick,
   and `build/data-qemu.img` in QEMU. `host/init/src/persist.rs` waits up to 5 s for it at start
   (a USB stick appears a second or two after boot; `ELMOS_DATA_WAIT` on the kernel command line
   changes that), mounts it at `/data` and tells Elm. Without one, nothing is saved.
-- **Files:** `/data/snapshot` and `/data/log`. Each entry is a line: its length in bytes, its
-  CRC-32, and JSON (see below), so a write cut short by a power cut is recognised and
-  ignored, along with anything after it. Log entries are numbered, so entries the snapshot already
-  has are skipped if the power goes between writing the snapshot and emptying the log.
-- **Writes:** the host only appends to and replaces files in `/data`, in the order Elm asks.
-  A snapshot goes to a new file, which is fsynced and renamed over the old one. Appends are
-  fsynced within a second (a USB stick is slow to fsync and wears), so a power cut loses at most
-  the last second.
+- **Files:** `/data/snapshot` is one line: its length in bytes, its CRC-32, and JSON (see below).
+  `/data/log` is binary (`host/common/src/msglog.rs`): each entry has its length, CRC-32 and
+  number. Either way a write cut short by a power cut is recognised and ignored, along with
+  anything after it. Messages the snapshot already has are skipped by their numbers.
+- **Writes:** one host thread does them, in order. A snapshot goes to a new file, which is
+  fsynced and renamed over the old one, and only then is the log trimmed (rewritten the same
+  way). Log appends are fsynced within a second (a USB stick is slow to fsync and wears), so a
+  power cut loses at most the last second.
 - **HTTP requests in flight:** a request doesn't outlive the host, so the snapshot keeps the ids
-  of requests not yet answered (worked out from the logged Msgs, so no extra write before each
+  of requests not yet answered (worked out from the logged messages, so no extra write before each
   request), and after a restart or power cut each gets `Effect.Interrupted` as its answer. As
   with a timeout, whether the server got it is unknown. A second request with an id that is
   still waiting isn't sent.
 - **Changing types:** see "Versions and migrations" below. The snapshot says which version of
-  the Model's types wrote it, and an older one is migrated. Msgs are never migrated: a log
-  written by a build with a different Msg type is skipped. A snapshot that can't be read is
-  kept as `/data/snapshot-unreadable` and the Model starts afresh.
+  the Model's types wrote it, and an older one is migrated. The log holds the host's messages, not
+  Msgs, so it replays into a newer build too, and the Msg type can change freely (it needn't be
+  serializable). A snapshot that can't be read is kept as `/data/snapshot-unreadable` and the
+  Model starts afresh.
 
 ### Versions and migrations
 
@@ -324,6 +365,7 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   last snapshot are lost when the Msg type or the Model's version changes, since only the Model
   is migrated (a restart or power-off takes a snapshot first, so only a power cut loses any).
   The encoders and decoders make the Elm program about 0.8 MB bigger.
-- A hung (rather than crashed) Elm program isn't detected or restarted yet.
+- A crash loop caused by the saved Model needs the data disk wiped by hand (or a fix); the error
+  screen doesn't offer to start without it yet.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and
   virgl drivers would shrink it a lot.

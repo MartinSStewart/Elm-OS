@@ -12,13 +12,15 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 -}
 
 import BootInfo
+import Bytes exposing (Bytes)
 import Calculator
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
 import Dict exposing (Dict)
 import Duration exposing (Duration)
-import Effect exposing (Effect)
+import Effect exposing (Effect, HttpError(..))
+import HackerNews
 import HostMessage
 import Json.Decode as D
 import Keyboard exposing (Key(..))
@@ -44,7 +46,7 @@ type Input
     = Screen Int Int
       -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
     | Frame Float
-    | HttpResponse String (Result Effect.HttpError { status : Int, body : String })
+    | HttpResponse String (Result HttpError { status : Int, body : Bytes })
     | Mouse Int Int
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
@@ -200,6 +202,15 @@ toInput message =
         HostMessage.ReflashNeeded build ->
             Ok (ReflashNeeded build)
 
+        HostMessage.Tick ->
+            Err "Tick is a Msg of its own (fromHost)"
+
+        HostMessage.Snapshot _ ->
+            Err "the snapshot is for Persist.elm"
+
+        HostMessage.ReplayDone _ ->
+            Err "ReplayDone is for Persist.elm"
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -247,6 +258,7 @@ type alias Model =
     , aboutOpen : Bool
     , newsOpen : Bool
     , news : NewsState
+    , hackerNews : HackerNews.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
@@ -268,7 +280,7 @@ type WeatherState
     | FindingPlace
     | LoadingForecast Weather.Place
     | GotWeather Weather.Place Weather.Forecast
-    | WeatherFailed String
+    | WeatherFailed HttpError
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -301,6 +313,7 @@ type UiId
     | EditorWindow
     | CloseEditorButton
     | NewsUiId News.UiId
+    | HackerNewsUiId HackerNews.UiId
 
 
 init : Model
@@ -334,13 +347,14 @@ init =
     , aboutOpen = False
     , newsOpen = False
     , news = NewsNotRequested
+    , hackerNews = HackerNews.init
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
     , editorOpen = False
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
-    , uiState = Ui.init
+    , uiState = Ui.init (Units.scaleFor (Units.devicePixels 640))
     , showUiBorders = False
     }
 
@@ -411,6 +425,9 @@ idToString uiId =
         NewsUiId uiId2 ->
             News.idToString uiId2
 
+        HackerNewsUiId uiId2 ->
+            HackerNews.idToString uiId2
+
 
 {-| How many frame intervals the average and maximum are over.
 -}
@@ -454,6 +471,7 @@ step event model =
             -- still applies.
             ( { model
                 | screenSize = Coord.xy w h
+                , uiState = setScale (Units.scaleFor (Units.devicePixels w)) model.uiState
                 , mouse = Coord.xy (w // 2) (h // 2)
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
@@ -463,11 +481,14 @@ step event model =
 
         Frame time ->
             let
+                -- The host's clock starts again at each boot, but lastFrame is saved with
+                -- the Model, so the first frame after a restart can come "before" the last
+                -- one. A negative (or huge) step would break the animations.
                 elapsedTime : Duration
                 elapsedTime =
                     case model.lastFrame of
                         Just lastFrame ->
-                            time - lastFrame |> Duration.milliseconds
+                            time - lastFrame |> clamp 0 1000 |> Duration.milliseconds
 
                         Nothing ->
                             Quantity.zero
@@ -489,41 +510,47 @@ step event model =
             ( next, [ Effect.Render (\() -> view model) ] )
 
         HttpResponse id result ->
-            case Effect.stringToHttpRequestId id of
+            case stringToHttpRequestId id of
                 Just id2 ->
                     let
-                        decoded : D.Decoder value -> Result (Result Effect.HttpError Int) value
+                        decoded : D.Decoder value -> Result HttpError value
                         decoded decoder =
                             case result of
                                 Ok response ->
                                     if response.status >= 200 && response.status < 300 then
-                                        D.decodeString decoder response.body |> Result.mapError (\_ -> Ok response.status)
+                                        case Effect.bodyToString response.body of
+                                            Just text ->
+                                                D.decodeString decoder text
+                                                    |> Result.mapError (\error -> FailedToDecodeBody (D.errorToString error))
+
+                                            Nothing ->
+                                                Err (Effect.badBody response)
 
                                     else
-                                        Err (Ok response.status)
+                                        Err (Effect.badBody response)
 
                                 Err error ->
-                                    Err (Err error)
+                                    Err error
                     in
                     case id2 of
-                        Effect.GeoRequest ->
+                        GeoRequest ->
                             case model.weather of
                                 FindingPlace ->
                                     case decoded Weather.decodePlace of
                                         Ok place ->
                                             ( { model | weather = LoadingForecast place }
-                                            , [ Effect.get Effect.ForecastRequest (Weather.forecastUrl model.weatherUrl place) ]
+                                            , [ httpGet ForecastRequest (Weather.forecastUrl model.weatherUrl place) ]
                                             )
 
                                         Err error ->
-                                            ( { model | weather = WeatherFailed ("Finding where we are: " ++ Weather.errorText error) }
+                                            ( { model | weather = WeatherFailed error }
                                             , []
                                             )
 
                                 _ ->
                                     ( model, [] )
 
-                        Effect.ForecastRequest ->
+                        ForecastRequest ->
                             ( case model.weather of
                                 LoadingForecast place ->
                                     case decoded Weather.decodeForecast of
@@ -531,20 +558,25 @@ step event model =
                                             { model | weather = GotWeather place forecast }
 
                                         Err error ->
-                                            { model | weather = WeatherFailed ("Getting the forecast: " ++ Weather.errorText error) }
+                                            { model | weather = WeatherFailed error }
 
                                 _ ->
                                     model
                             , []
                             )
 
-                        Effect.NewsRequest ->
+                        NewsRequest ->
                             ( case decoded News.decoder of
                                 Ok data ->
                                     { model | news = LoadedNews data }
 
                                 Err error ->
-                                    { model | news = NewsFailed ("Loading news: " ++ Weather.errorText error) }
+                                    { model | news = NewsFailed error }
+                            , []
+                            )
+
+                        HackerNewsRequest request2 ->
+                            ( { model | hackerNews = HackerNews.gotHttpRequest request2 result model.hackerNews }
                             , []
                             )
 
@@ -599,7 +631,7 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case Ui.hover (uiMouse model) (screenUi model) of
+            case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (Ui.hover (uiMouse model) (screenUi model)) of
                 ( id, { ui } ) :: _ ->
                     ( { model | uiState = Ui.onWheel (idToString id) clicks ui model.uiState }, [] )
 
@@ -785,7 +817,7 @@ nonEmpty value default =
 
 fetchWeather : Model -> ( Model, List Effect )
 fetchWeather model =
-    ( { model | weather = FindingPlace }, [ Effect.get Effect.GeoRequest model.geoUrl ] )
+    ( { model | weather = FindingPlace }, [ httpGet GeoRequest model.geoUrl ] )
 
 
 click : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
@@ -844,12 +876,11 @@ click model id uiState =
             in
             case ( isOpen, model.news ) of
                 ( _, LoadingNews _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False }, [] )
+                    ( { model | newsOpen = isOpen }, [] )
 
                 ( True, _ ) ->
                     ( { model
                         | newsOpen = isOpen
-                        , editorOpen = False
                         , news =
                             case model.news of
                                 LoadedNews days ->
@@ -947,6 +978,68 @@ click model id uiState =
 
         NewsUiId _ ->
             ( model, [] )
+
+        HackerNewsUiId uiId ->
+            let
+                ( hackerNews, effects ) =
+                    HackerNews.onClick uiId model.hackerNews
+            in
+            List.foldl
+                (\effect ( model2, effects2 ) ->
+                    case effect of
+                        HackerNews.HttpRequest requestId url ->
+                            ( model2, httpGet (HackerNewsRequest requestId) url :: effects2 )
+                )
+                ( { model | hackerNews = hackerNews }, [] )
+                effects
+                |> Tuple.mapSecond List.reverse
+
+
+httpGet : HttpRequestId -> String -> Effect
+httpGet id url =
+    Effect.Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = Effect.noBody, timeoutMs = Just (Duration.seconds 30) }
+
+
+type HttpRequestId
+    = GeoRequest
+    | ForecastRequest
+    | NewsRequest
+    | HackerNewsRequest HackerNews.HttpRequestId
+
+
+httpRequestIdToString : HttpRequestId -> String
+httpRequestIdToString request =
+    case request of
+        GeoRequest ->
+            "geo"
+
+        ForecastRequest ->
+            "forecast"
+
+        NewsRequest ->
+            "news"
+
+        HackerNewsRequest request2 ->
+            "hackernews_" ++ HackerNews.httpRequestIdToString request2
+
+
+stringToHttpRequestId : String -> Maybe HttpRequestId
+stringToHttpRequestId string =
+    case String.split "_" string of
+        [ "geo" ] ->
+            Just GeoRequest
+
+        [ "forecast" ] ->
+            Just ForecastRequest
+
+        [ "news" ] ->
+            Just NewsRequest
+
+        "hackernews" :: rest ->
+            HackerNews.stringToHttpRequestId rest |> Maybe.map HackerNewsRequest
+
+        _ ->
+            Nothing
 
 
 {-| Keys go to the calculator after a click on it, until a click somewhere else.
@@ -1178,6 +1271,9 @@ dragSelect focus position model =
         NewsUiId _ ->
             model
 
+        HackerNewsUiId _ ->
+            model
+
 
 {-| A key for the text editor. Its copies go in the same clipboard as the password box's.
 -}
@@ -1303,10 +1399,16 @@ view model =
 
 
 {-| Device pixels per UI pixel: 2 on screens at least 2000 pixels wide, otherwise 1.
+Kept in the Ui.Model (set whenever the screen size is) so views that make text have it.
 -}
 uiScale : Model -> UiScale
 uiScale model =
-    Units.scaleFor (Coord.x model.screenSize)
+    model.uiState.scale
+
+
+setScale : UiScale -> Ui.Model id -> Ui.Model id
+setScale scale uiState =
+    { uiState | scale = scale }
 
 
 {-| The screen's size in UI pixels.
@@ -1330,16 +1432,23 @@ em n =
     Units.uiPixels (16 * n)
 
 
-bodyFont : Sprite.Font
-bodyFont =
-    Sprite.Sans Sprite.Regular Sprite.Small
+{-| The UI's font: Noto Sans Regular.
+-}
+sans : Sprite.Font
+sans =
+    Sprite.Sans Sprite.Regular
+
+
+bodySize : Sprite.FontSize
+bodySize =
+    Sprite.Small
 
 
 {-| For titles and the temperature: the next size up.
 -}
-headingFont : Sprite.Font
-headingFont =
-    Sprite.Sans Sprite.Regular Sprite.Big
+headingSize : Sprite.FontSize
+headingSize =
+    Sprite.Big
 
 
 {-| Everything the UI framework draws: the debug panel in the bottom left corner, the
@@ -1379,6 +1488,15 @@ screenUi model =
                     else
                         []
                    )
+                ++ (if model.hackerNews.isOpen then
+                        [ Ui.topRight
+                            { size = uiSize model }
+                            (HackerNews.view HackerNewsUiId model.uiState (uiSize model) model.hackerNews)
+                        ]
+
+                    else
+                        []
+                   )
                 ++ (case model.upgradingTo of
                         Just build ->
                             [ notice model ("Upgrade to " ++ build ++ " in progress") ]
@@ -1403,26 +1521,27 @@ overlay model =
     let
         -- The debug overlay keeps town-collab's pixel font.
         mono =
-            Sprite.Mono Sprite.Small
+            Sprite.Mono
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.text mono (String.padRight 10 ' ' label), Ui.text mono value ]
+                [ Ui.text model.uiState Sprite.Small mono (String.padRight 10 ' ' label), Ui.text model.uiState Sprite.Small mono value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
                     Ui.row { spacing = 4, padding = Ui.noPadding }
-                        [ Ui.text mono (String.padRight 10 ' ' "Renderer")
-                        , badge mono gpu
-                        , Ui.text mono
+                        [ Ui.text model.uiState Sprite.Small mono (String.padRight 10 ' ' "Renderer")
+                        , badge Sprite.Small gpu
+                        , Ui.text model.uiState Sprite.Small
+                            mono
                             ((if gpu then
                                 "GPU, "
 
                               else
                                 "CPU, "
                              )
-                                ++ Sprite.ellipsis mono (Units.uiPixels (40 * 10)) name
+                                ++ Sprite.ellipsis (uiScale model) Sprite.Small mono (Units.uiPixels (40 * 10)) name
                             )
                         ]
 
@@ -1502,7 +1621,7 @@ overlay model =
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
                 (Ui.column { spacing = 3, padding = Ui.noPadding }
-                    ([ Ui.text mono "Elm OS debug"
+                    ([ Ui.text model.uiState Sprite.Small mono "Elm OS debug"
                      , line "Build" (BootInfo.buildText model.bootInfo)
                      , line "Screen"
                         (String.fromInt (Coord.xRaw model.screenSize)
@@ -1530,11 +1649,11 @@ overlay model =
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
 -}
-badge : Sprite.Font -> Bool -> Ui.Element id
-badge font gpu =
+badge : Sprite.FontSize -> Bool -> Ui.Element id
+badge fontSize gpu =
     let
         side =
-            Sprite.lineHeight font
+            Sprite.lineHeight fontSize
 
         size =
             ( side, side )
@@ -1624,14 +1743,26 @@ persistConfig : Persist.Config Model Msg
 persistConfig =
     { init = init
     , update = update
-    , fromHost = \message -> GotInput (Result.andThen toInput message)
-
-    -- An idle eco program exits; a timer keeps the event loop alive. It also paces
-    -- BootInfo's battery checks and USB stick search.
-    , subscriptions = \_ -> Time.every 1000 (\_ -> Tick)
+    , fromHost = fromHost
     , httpAnswered = httpAnswered
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     }
+
+
+{-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
+checks and USB stick search.
+-}
+fromHost : Result String HostMessage.ToElm -> Msg
+fromHost message =
+    case message of
+        Ok HostMessage.Tick ->
+            Tick
+
+        Ok other ->
+            GotInput (toInput other)
+
+        Err problem ->
+            GotInput (Err problem)
 
 
 httpAnswered : Msg -> Maybe String
@@ -1669,16 +1800,16 @@ networkPanel : Model -> Ui.Element UiId
 networkPanel model =
     let
         font =
-            bodyFont
+            sans
 
         width =
             panelWidth
 
         t =
-            Ui.text font
+            Ui.text model.uiState bodySize font
 
         fit string =
-            Sprite.ellipsis font width string
+            Sprite.ellipsis (uiScale model) bodySize font width string
 
         small =
             Ui.paddingXY 6 3
@@ -1739,10 +1870,10 @@ networkPanel model =
                             t (fit ("Getting an address on " ++ status.ssid))
 
                         Wifi.Connected ->
-                            Ui.colorText connectedColor font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
+                            Ui.colorText model.uiState connectedColor bodySize font (fit ("Connected to " ++ status.ssid ++ ", " ++ status.ip))
 
                         Wifi.Failed ->
-                            Ui.colorText Color.errorColor font (Sprite.wrap font width status.error)
+                            Ui.colorText model.uiState Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width status.error)
 
         networkRows =
             case model.wifiDevice of
@@ -1773,7 +1904,7 @@ networkPanel model =
                         []
 
                     else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText Color.errorColor font "That kind of network isn't supported yet" ]
+                        [ Ui.colorText model.uiState Color.errorColor bodySize font "That kind of network isn't supported yet" ]
 
                     else
                         (if needsPassword selected then
@@ -1797,7 +1928,7 @@ networkPanel model =
                             []
                         )
                             ++ [ Ui.button { id = ConnectButton, padding = small }
-                                    (t (Sprite.ellipsis font (width |> Quantity.minus (Units.uiPixels 12)) ("Connect to " ++ selected.ssid)))
+                                    (t (Sprite.ellipsis (uiScale model) bodySize font (width |> Quantity.minus (Units.uiPixels 12)) ("Connect to " ++ selected.ssid)))
                                ]
 
                 Nothing ->
@@ -1841,13 +1972,13 @@ wiredRows : Model -> List (Ui.Element UiId)
 wiredRows model =
     let
         font =
-            bodyFont
+            sans
 
         width =
             panelWidth
 
         t =
-            Ui.text font
+            Ui.text model.uiState bodySize font
 
         link l =
             [ t ("Wired (" ++ l.name ++ ")")
@@ -1859,10 +1990,10 @@ wiredRows model =
                     t "Getting an address…"
 
                 Wired.Connected ->
-                    Ui.colorText connectedColor font (Sprite.ellipsis font width ("Connected, " ++ l.ip))
+                    Ui.colorText model.uiState connectedColor bodySize font (Sprite.ellipsis (uiScale model) bodySize font width ("Connected, " ++ l.ip))
 
                 Wired.Failed ->
-                    Ui.colorText Color.errorColor font (Sprite.wrap font width "Cable plugged in, but no address from the network (DHCP)")
+                    Ui.colorText model.uiState Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width "Cable plugged in, but no address from the network (DHCP)")
             ]
 
         divider =
@@ -1899,7 +2030,7 @@ networkRow : Model -> Wifi.Network -> Ui.Element UiId
 networkRow model network =
     let
         font =
-            bodyFont
+            sans
 
         connectedHere =
             model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
@@ -1942,9 +2073,9 @@ networkRow model network =
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
             (Ui.row { spacing = 6, padding = Ui.noPadding }
-                [ bars, Ui.text font (Sprite.ellipsis font nameWidth network.ssid) ]
+                [ bars, Ui.text model.uiState bodySize font (Sprite.ellipsis (uiScale model) bodySize font nameWidth network.ssid) ]
             )
-            (Ui.text font label)
+            (Ui.text model.uiState bodySize font label)
         )
 
 
@@ -1989,7 +2120,7 @@ signalBars dbm =
 -}
 passwordStyle : Model -> TextInput.Style
 passwordStyle model =
-    { font = bodyFont, width = em 14, masked = not model.showPassword }
+    { font = sans, fontSize = bodySize, width = em 14, masked = not model.showPassword, scale = uiScale model }
 
 
 passwordInput : Model -> Ui.Element UiId
@@ -2012,13 +2143,13 @@ weatherRows : Model -> List (Ui.Element UiId)
 weatherRows model =
     let
         font =
-            bodyFont
+            sans
 
         width =
             panelWidth
 
         t =
-            Ui.text font
+            Ui.text model.uiState bodySize font
 
         small =
             Ui.paddingXY 6 3
@@ -2049,23 +2180,23 @@ weatherRows model =
             [ divider, t "Weather: finding where we are…" ]
 
         LoadingForecast place ->
-            [ divider, t (Sprite.ellipsis font width ("Weather in " ++ place.name ++ "…")) ]
+            [ divider, t (Sprite.ellipsis (uiScale model) bodySize font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
             [ divider
-            , Ui.colorText Color.errorColor font (Sprite.wrap font width error)
+            , Ui.colorText model.uiState Color.errorColor bodySize font (Sprite.wrap (uiScale model) bodySize font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
         GotWeather place forecast ->
             [ divider
             , Ui.leftAndRight width
-                (t (Sprite.ellipsis font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
+                (t (Sprite.ellipsis (uiScale model) bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
             , Ui.row { spacing = 8, padding = Ui.noPadding }
                 [ weatherIcon 3 forecast.code
                 , Ui.column { spacing = 3, padding = Ui.noPadding }
-                    [ Ui.text headingFont (fixed 1 forecast.temperature ++ "°C")
+                    [ Ui.text model.uiState headingSize sans (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -2081,7 +2212,7 @@ weatherRows model =
                     (\i day ->
                         Ui.row { spacing = 6, padding = Ui.noPadding }
                             [ weatherIcon 1 day.code
-                            , Ui.minWidth (em 6)
+                            , Ui.left (em 6)
                                 (t
                                     (if i == 0 then
                                         "Today"
@@ -2090,13 +2221,13 @@ weatherRows model =
                                         Weather.weekday day.date
                                     )
                                 )
-                            , Ui.minWidth (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
                             , t (Weather.describe day.code)
                             ]
                     )
                     forecast.days
                 )
-            , Ui.colorText Color.outlineColor font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            , Ui.colorText model.uiState Color.outlineColor bodySize font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
             ]
 
 
@@ -2191,7 +2322,7 @@ toolbar : Model -> Ui.Element UiId
 toolbar model =
     let
         t =
-            Ui.text bodyFont
+            Ui.text model.uiState bodySize sans
 
         small =
             Ui.paddingXY 6 3
@@ -2228,7 +2359,8 @@ toolbar model =
 
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
-                    , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "News")
+                    , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "Wikipedia")
+                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } model.hackerNews.isOpen (t "Hacker news")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
@@ -2249,7 +2381,7 @@ calculatorWindow model =
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
             }
-            (Calculator.view (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
+            (Calculator.view model.uiState (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
         )
 
 
@@ -2257,7 +2389,7 @@ calculatorWindow model =
 -}
 toolbarHeight : Int
 toolbarHeight =
-    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodyFont)
+    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodySize)
 
 
 {-| In the bottom right corner: while the host switches to a newer build, or when the
@@ -2273,7 +2405,7 @@ notice model text =
                 , inFront = []
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
-                (Ui.text bodyFont text)
+                (Ui.text model.uiState bodySize sans text)
             )
         )
 
@@ -2282,17 +2414,17 @@ aboutPage : Model -> Ui.Element UiId
 aboutPage model =
     let
         font =
-            bodyFont
+            sans
 
         t =
-            Ui.text font
+            Ui.text model.uiState bodySize font
 
         valueWidth =
             em 26
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.minWidth (em 5) (t label), t (Sprite.ellipsis font valueWidth value) ]
+                [ Ui.left (em 5) (t label), t (Sprite.ellipsis (uiScale model) bodySize font valueWidth value) ]
 
         system =
             model.system
@@ -2332,7 +2464,7 @@ aboutPage model =
             , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
             }
             (Ui.column { spacing = 4, padding = Ui.noPadding }
-                [ Ui.text headingFont "Elm OS"
+                [ Ui.text model.uiState headingSize sans "Elm OS"
                 , t "A Linux kernel that boots straight into one Elm program."
                 , t ""
                 , line "Version" (field .commit)
@@ -2381,7 +2513,8 @@ aboutPage model =
                     )
                 , t ""
                 , t
-                    (Sprite.wrap font
+                    (Sprite.wrap (uiScale model) bodySize
+                        font
                         (em 31)
                         ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
                             ++ "The UI framework and the debug overlay's pixel font are from town-collab. "
@@ -2408,9 +2541,11 @@ editorStyle model =
         ( screenWidth, screenHeight ) =
             Coord.toTuple (uiSize model)
     in
-    { font = bodyFont
+    { font = sans
+    , fontSize = bodySize
     , width = Quantity.min (em 40) (Units.uiPixels (screenWidth - 40))
-    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodyFont))
+    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodySize))
+    , scale = uiScale model
     }
 
 
@@ -2421,7 +2556,7 @@ editorWindow : Model -> Ui.Element UiId
 editorWindow model =
     let
         t =
-            Ui.text bodyFont
+            Ui.text model.uiState bodySize sans
 
         style =
             editorStyle model
@@ -2466,7 +2601,7 @@ editorWindow model =
             }
             (Ui.column { spacing = 6, padding = Ui.noPadding }
                 [ Ui.leftAndRight style.width
-                    (Ui.text headingFont "Text editor")
+                    (Ui.text model.uiState headingSize sans "Text editor")
                     (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
                 , Ui.textInputMultiline
                     { id = EditorInput
@@ -2475,7 +2610,13 @@ editorWindow model =
                     }
                 , Ui.leftAndRight style.width
                     (t status)
-                    (Ui.colorText Color.outlineColor bodyFont "Ctrl+Z undo, Ctrl+Y redo")
+                    (Ui.customText model.uiState bodySize
+                        [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
+                        , { text = " undo, ", color = Color.outlineColor, font = sans }
+                        , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
+                        , { text = " redo", color = Color.outlineColor, font = sans }
+                        ]
+                    )
                 ]
             )
         )

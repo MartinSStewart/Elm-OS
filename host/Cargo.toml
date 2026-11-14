@@ -2,10 +2,11 @@
 #   init/   /init (PID 1): starts, supervises and talks to the Elm program
 #   link/   linked into the Elm program (a static library): its ports over the socket to /init
 #   gpu/    /usr/bin/elmos-gpu, the GPU renderer (dynamically linked, because Mesa is)
-#   common/ the texture atlas and the display (KMS) calls both use
+#   common/ the texture atlas, the CPU rasteriser and the display (KMS) calls they share
 #   protocol/ the messages between Elm and the host, and their tests (cargo test -p protocol)
+#   dev/    `make dev`: runs the Elm program in a window on your own desktop, without the OS
 [workspace]
-members = ["common", "protocol", "init", "link", "gpu"]
+members = ["common", "protocol", "init", "link", "gpu", "dev"]
 resolver = "2"
 
 [profile.release]

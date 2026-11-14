@@ -17,6 +17,8 @@ module Ui exposing
     , colorText
     , column
     , customButton
+    , customText
+    , customTextWrapped
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , el
@@ -26,9 +28,9 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , left
     , leftAndRight
     , map
-    , minWidth
     , noPadding
     , none
     , onAnimationFrame
@@ -36,7 +38,9 @@ module Ui exposing
     , onWheel
     , paddingXY
     , quads
+    , right
     , row
+    , scrolls
     , selectableButton
     , setFocus
     , size
@@ -118,9 +122,8 @@ type Element id
     = TextInput (TextInputData id)
     | TextInputMultiline (TextInputMultilineData id)
     | Text
-        { color : Color
-        , font : Sprite.Font
-        , text : String
+        { fontSize : Sprite.FontSize
+        , segments : List Sprite.Segment
         , cachedSize : Coord UiPixels
         }
     | Button (ButtonData id) (Element id)
@@ -149,15 +152,19 @@ type ElementState
     | ViewportState ViewportModel
 
 
+{-| `scale` is the screen's UI scale. Text is laid out differently at each scale (see
+Sprite), so `text` and the other text elements take the Model to measure at it.
+-}
 type alias Model id =
     { focus : Maybe id
     , uiState : Dict String ElementState
+    , scale : UiScale
     }
 
 
-init : Model id
-init =
-    { focus = Nothing, uiState = Dict.empty }
+init : UiScale -> Model id
+init scale =
+    { focus = Nothing, uiState = Dict.empty, scale = scale }
 
 
 type alias ViewportModel =
@@ -205,7 +212,10 @@ onAnimationFrame timeElapsed model =
                             in
                             { viewport2
                                 | offset =
-                                    if diff |> Quantity.lessThan distance then
+                                    -- Also mends an offset that a negative frame time made
+                                    -- NaN (NaN is never less than anything), which a saved
+                                    -- Model may still hold.
+                                    if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
                                         target
 
                                     else if viewport2.offset |> Quantity.lessThan target then
@@ -373,6 +383,44 @@ onWheel id clicks element model =
             { model | uiState = Dict.insert id (ViewportState state3) model.uiState }
 
 
+{-| Whether the wheel does something over this element. The wheel goes to the
+innermost hovered element that scrolls, so wheeling over a button inside a viewport
+scrolls the viewport.
+-}
+scrolls : Element id -> Bool
+scrolls element =
+    case element of
+        Viewport _ _ ->
+            True
+
+        TextInputMultiline _ ->
+            True
+
+        TextInput _ ->
+            False
+
+        Text _ ->
+            False
+
+        Button _ _ ->
+            False
+
+        Row _ _ ->
+            False
+
+        Column _ _ ->
+            False
+
+        Single _ _ ->
+            False
+
+        Quads _ ->
+            False
+
+        Empty ->
+            False
+
+
 initViewportModel : ViewportModel
 initViewportModel =
     { offset = Quantity.zero, target = Quantity.zero }
@@ -413,26 +461,48 @@ paddingXY x y =
 -- TEXT
 
 
-textHelper : Color -> Sprite.Font -> String -> Element id
-textHelper color font text2 =
+{-| Black text. '\\n' starts a new line.
+-}
+text : Model a -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+text model fontSize font =
+    colorText model Color.black fontSize font
+
+
+colorText : Model a -> Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+colorText model color fontSize font text2 =
+    customText model fontSize [ { text = text2, color = color, font = font } ]
+
+
+{-| Runs of text one after another, each in its own colour and font. They all share one
+font size, so every line is the same height whichever fonts it mixes. '\\n' in any of
+them starts a new line. It's measured at the Model's UI scale, which it will be drawn at.
+
+    Ui.customText uiState Sprite.Small
+        [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
+        , { text = "make check", color = Color.black, font = Sprite.Mono }
+        , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
+        ]
+
+-}
+customText : Model a -> Sprite.FontSize -> List Sprite.Segment -> Element id
+customText model fontSize segments =
     Text
-        { color = color
-        , font = font
-        , text = text2
-        , cachedSize = Sprite.textSize font text2
+        { fontSize = fontSize
+        , segments = segments
+        , cachedSize = Sprite.customTextSize model.scale fontSize segments
         }
 
 
-{-| Black text. '\\n' starts a new line.
+{-| `customText` with word wrap: lines are broken between words so that none is wider
+than `maxWidth` (see Sprite.wrapLines). '\\n' still starts a new line too.
 -}
-text : Sprite.Font -> String -> Element id
-text font =
-    textHelper Color.black font
-
-
-colorText : Color -> Sprite.Font -> String -> Element id
-colorText color font =
-    textHelper color font
+customTextWrapped : Model a -> Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
+customTextWrapped model fontSize maxWidth segments =
+    let
+        ( wrapped, cachedSize ) =
+            Sprite.wrapWithSize model.scale fontSize maxWidth segments
+    in
+    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
 
 
 
@@ -663,7 +733,7 @@ align fx fy areaSize child =
         ( childX, childY ) =
             Coord.toTuple (size child)
 
-        left =
+        left2 =
             (sizeX - childX) * fx // 2
 
         top =
@@ -671,8 +741,8 @@ align fx fy areaSize child =
     in
     Single
         { padding =
-            { topLeft = Coord.xy left top
-            , bottomRight = Coord.xy (sizeX - childX - left) (sizeY - childY - top)
+            { topLeft = Coord.xy left2 top
+            , bottomRight = Coord.xy (sizeX - childX - left2) (sizeY - childY - top)
             }
         , inFront = []
         , borderAndFill = NoBorderOrFill
@@ -684,21 +754,26 @@ align fx fy areaSize child =
 
 {-| A child at the left of a space at least `width` wide, for lining things up in columns.
 -}
-minWidth : Quantity Int UiPixels -> Element id -> Element id
-minWidth width child =
+left : Quantity Int UiPixels -> Element id -> Element id
+left width child =
     align 0 0 ( Quantity.max width (Coord.x (size child)), Coord.y (size child) ) child
 
 
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
-leftAndRight width left right =
-    row { spacing = 0, padding = noPadding } [ minWidth (width |> Quantity.minus (Coord.x (size right))) left, right ]
+leftAndRight width leftChild rightChild =
+    row { spacing = 0, padding = noPadding } [ left (width |> Quantity.minus (Coord.x (size rightChild))) leftChild, rightChild ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
 center data =
     align 1 1 data.size
+
+
+right : { width : Quantity Int UiPixels } -> Element id -> Element id
+right data element =
+    align 2 0 ( data.width, Coord.y (size element) ) element
 
 
 topLeft : { size : Coord UiPixels } -> Element id -> Element id
@@ -1038,7 +1113,18 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         data.state.input.current
 
                 Text data ->
-                    Sprite.text scale data.color data.font viewport3 data.text position
+                    (if showUiBorder then
+                        borderAndFillView
+                            scale
+                            viewport3
+                            position
+                            (BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 })
+                            data.cachedSize
+
+                     else
+                        []
+                    )
+                        ++ Sprite.customText scale data.fontSize viewport3 data.segments position
 
                 Button data child ->
                     borderAndFillView

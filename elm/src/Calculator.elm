@@ -627,17 +627,12 @@ spacing =
 
 buttonSize : Coord UiPixels
 buttonSize =
-    Coord.xy 48 (Quantity.unwrap (Sprite.lineHeight bigFont) + 6)
+    Coord.xy 48 (Quantity.unwrap (Sprite.lineHeight Big) + 6)
 
 
-bigFont : Font
-bigFont =
-    Sans Regular Big
-
-
-smallFont : Font
-smallFont =
-    Sans Regular Small
+sans : Font
+sans =
+    Sans Regular
 
 
 {-| Four buttons and the gaps between them.
@@ -650,8 +645,8 @@ width =
 {-| The calculator's window. `focused` when keys go to it: then its display has the
 focus colour around it.
 -}
-view : Bool -> Model -> Element UiId
-view focused model =
+view : Ui.Model a -> Bool -> Model -> Element UiId
+view uiState focused model =
     let
         displayPadding =
             6
@@ -659,19 +654,19 @@ view focused model =
         inner =
             width - 2 * displayPadding
 
-        line font color text =
-            Ui.topRight { size = Coord.xy inner (Quantity.unwrap (Sprite.lineHeight font)) }
-                (Ui.colorText color font text)
+        line fontSize color text =
+            Ui.topRight { size = Coord.xy inner (Quantity.unwrap (Sprite.lineHeight fontSize)) }
+                (Ui.colorText uiState color fontSize sans text)
 
         big =
             display model
 
         bigLine =
-            if Coord.xRaw (Sprite.textSize bigFont big) <= inner then
-                line bigFont Color.black big
+            if Coord.xRaw (Sprite.textSize uiState.scale Big sans big) <= inner then
+                line Big Color.black big
 
             else
-                line smallFont Color.black (Sprite.ellipsis smallFont (Units.uiPixels inner) big)
+                line Small Color.black (Sprite.ellipsis uiState.scale Small sans (Units.uiPixels inner) big)
 
         displayBox =
             Ui.el
@@ -690,13 +685,13 @@ view focused model =
                         }
                 }
                 (Ui.column { spacing = 0, padding = Ui.noPadding }
-                    [ line smallFont (Color.rgb255 110 100 90) (expression model), bigLine ]
+                    [ line Small (Color.rgb255 110 100 90) (expression model), bigLine ]
                 )
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text smallFont "Calculator")
-                (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text smallFont "×"))
+                (Ui.text uiState Small sans "Calculator")
+                (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text uiState Small sans "×"))
     in
     Ui.elWithId Panel
         { padding = Ui.paddingXY 8 8
@@ -706,7 +701,7 @@ view focused model =
         (Ui.column { spacing = spacing, padding = Ui.noPadding }
             (title
                 :: displayBox
-                :: List.map (keyRow model) keys
+                :: List.map (keyRow uiState model) keys
             )
         )
 
@@ -723,8 +718,8 @@ keys =
 
 {-| A row of buttons; the third number is how many columns a button spans.
 -}
-keyRow : Model -> List ( Key, String, Int ) -> Element UiId
-keyRow model row =
+keyRow : Ui.Model a -> Model -> List ( Key, String, Int ) -> Element UiId
+keyRow uiState model row =
     Ui.row { spacing = spacing, padding = Ui.noPadding }
         (List.map
             (\( key, label, columns ) ->
@@ -734,17 +729,17 @@ keyRow model row =
                             (columns * Coord.xRaw buttonSize + (columns - 1) * spacing)
                             (Coord.yRaw buttonSize)
 
-                    font =
+                    fontSize =
                         if String.length label > 1 then
-                            smallFont
+                            Small
 
                         else
-                            bigFont
+                            Big
                 in
                 Ui.selectableButton
                     { id = KeyButton key, padding = Ui.noPadding }
                     (isPendingOperator model key)
-                    (Ui.center { size = size } (Ui.text font label))
+                    (Ui.center { size = size } (Ui.text uiState fontSize sans label))
             )
             row
         )

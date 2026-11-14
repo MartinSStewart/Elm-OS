@@ -1,9 +1,11 @@
-module App exposing (Kind(..), Model, Msg, config, init, sample, sampleMsg)
+module App exposing (Kind(..), Model, Msg, config, init, sample)
 
 {-| A program whose Model and Msg have every kind of type tools/wire handles.
 -}
 
 import Array exposing (Array)
+import Bytes exposing (Bytes)
+import Bytes.Encode
 import Dict exposing (Dict)
 import Json.Encode
 import Persist
@@ -62,6 +64,7 @@ type Msg
     | Many Int String (List Msg)
     | Inline { x : Int, y : ( Int, Int ) }
     | Paint Colour
+    | Got Bytes
 
 
 init : Model
@@ -100,17 +103,11 @@ sample =
     }
 
 
-sampleMsg : Msg
-sampleMsg =
-    Many 1 "two" [ NoOp, Set sample, Inline { x = 1, y = ( 2, 3 ) }, Paint Green ]
-
-
 config : Persist.Config Model Msg
 config =
     { init = init
     , update = \_ model -> ( model, [] )
     , fromHost = \_ -> NoOp
-    , subscriptions = \_ -> Sub.none
     , httpAnswered = \_ -> Nothing
     , httpInterrupted = \_ -> NoOp
     }

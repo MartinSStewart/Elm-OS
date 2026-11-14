@@ -51,13 +51,13 @@ v1Sample =
     }
 
 
-{-| A snapshot as a build of version 1 would have written it, and a log after it.
+{-| A snapshot as a build of version 1 would have written it (in the format before the
+host logged messages).
 -}
-v1Files : { snapshot : Maybe String, log : Maybe String }
-v1Files =
-    { snapshot =
-        Just
-            (Persist.frame
+v1Snapshot : Maybe String
+v1Snapshot =
+    Just
+        (Persist.frame
                 (E.encode 0
                     (E.list identity
                         [ E.string "elmos-persist-4"
@@ -70,9 +70,7 @@ v1Files =
                         ]
                     )
                 )
-            )
-    , log = Just (Persist.frame "[4,[0]]" ++ Persist.frame "[5,[0]]")
-    }
+        )
 
 
 suite : Test
@@ -89,18 +87,19 @@ suite =
                     _ ->
                         Expect.fail "didn't migrate"
             )
-        , test "restoring a version 1 snapshot migrates it, and skips the old log"
+        , test "restoring a version 1 snapshot migrates it"
             (\_ ->
                 let
                     restored =
-                        Persist.restore App.config ElmOs.codecs v1Files
+                        Persist.restore App.config ElmOs.codecs v1Snapshot
                 in
                 Expect.all
                     [ \r -> r.model.kind |> Expect.equal (App.Beta 3)
-                    , \r -> r.replayed |> Expect.equal 0
-                    , \r -> r.next |> Expect.equal 6
+
+                    -- Its Msg log is gone: the host's log starts from 1.
+                    , \r -> r.seq |> Expect.equal (Just 0)
                     , \r -> r.unreadable |> Expect.equal Nothing
-                    , \r -> r.notes |> Expect.equal [ "migrated the Model from version 1 to 2", "skipped 2 logged Msgs, which an older build wrote" ]
+                    , \r -> r.notes |> Expect.equal [ "migrated the Model from version 1 to 2" ]
                     ]
                     restored
             )
@@ -111,9 +110,9 @@ suite =
                         Persist.frame "[\"0123abcd\",3,[]]"
 
                     restored =
-                        Persist.restore App.config ElmOs.codecs { snapshot = Just old, log = Nothing }
+                        Persist.restore App.config ElmOs.codecs (Just old)
                 in
-                ( restored.unreadable, restored.next ) |> Expect.equal ( Just old, 0 )
+                ( restored.unreadable, restored.seq ) |> Expect.equal ( Just old, Nothing )
             )
         , test "a snapshot from a newer version is kept, and the Model starts afresh"
             (\_ ->
@@ -121,7 +120,7 @@ suite =
                     newer =
                         Persist.frame "[\"elmos-persist-4\",3,\"00000000\",\"00000000\",0,[],[]]"
                 in
-                (Persist.restore App.config ElmOs.codecs { snapshot = Just newer, log = Nothing }).notes
+                (Persist.restore App.config ElmOs.codecs (Just newer)).notes
                     |> Expect.equal [ "the snapshot is of version 3 of the Model, newer than this build's 2; starting afresh, and keeping it as snapshot-unreadable" ]
             )
         ]

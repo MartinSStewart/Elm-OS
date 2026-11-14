@@ -1,6 +1,8 @@
 module NewsTest exposing (suite)
 
+import Bytes
 import Date exposing (Date)
+import Duration
 import Effect
 import Expect
 import Json.Decode as D
@@ -113,17 +115,27 @@ suite =
             )
         , test "the request"
             (\_ ->
-                News.request "news" [ date 2026 11 8, date 2026 11 7 ]
-                    |> Expect.equal
-                        (Effect.Http
-                            { id = "news"
-                            , method = "GET"
-                            , url = "https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=revisions&rvprop=content&rvslots=main&titles=Portal:Current_events/2026_November_8%7CPortal:Current_events/2026_November_7"
-                            , headers = [ ( "User-Agent", "ElmOS/0.1 (https://github.com/MartinSStewart/Elm-OS)" ) ]
-                            , body = ""
-                            , timeoutMs = Just 30000
-                            }
-                        )
+                -- Bytes can't be compared with ==, so the body is compared as its width.
+                case News.request "news" [ date 2026 11 8, date 2026 11 7 ] of
+                    Effect.Http request ->
+                        { id = request.id
+                        , method = request.method
+                        , url = request.url
+                        , headers = request.headers
+                        , bodyWidth = Bytes.width request.body
+                        , timeoutMs = request.timeoutMs
+                        }
+                            |> Expect.equal
+                                { id = "news"
+                                , method = "GET"
+                                , url = "https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=revisions&rvprop=content&rvslots=main&titles=Portal:Current_events/2026_November_8%7CPortal:Current_events/2026_November_7"
+                                , headers = [ ( "User-Agent", "ElmOS/0.1 (https://github.com/MartinSStewart/Elm-OS)" ) ]
+                                , bodyWidth = 0
+                                , timeoutMs = Just (Duration.seconds 30)
+                                }
+
+                    _ ->
+                        Expect.fail "not an HTTP request"
             )
         ]
 

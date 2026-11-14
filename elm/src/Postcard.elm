@@ -1,6 +1,6 @@
 module Postcard exposing
     ( bytes, float64, int, list, maybe, string, unsigned, variant
-    , decodeBool, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
+    , decodeBool, decodeBytes, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
     )
 
 {-| The binary format of the messages between Elm and the host: postcard, which the
@@ -18,7 +18,7 @@ Elm's Int is exact up to 2^53, which is as far as these go.
 
 # Decoders
 
-@docs decodeBool, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
+@docs decodeBool, decodeBytes, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
 
 -}
 
@@ -165,6 +165,13 @@ decodeFloat64 =
 decodeString : BD.Decoder String
 decodeString =
     decodeUnsigned |> BD.andThen BD.string
+
+
+{-| A byte string (serde_bytes): its length, then the bytes.
+-}
+decodeBytes : BD.Decoder Bytes
+decodeBytes =
+    decodeUnsigned |> BD.andThen BD.bytes
 
 
 decodeList : BD.Decoder a -> BD.Decoder (List a)

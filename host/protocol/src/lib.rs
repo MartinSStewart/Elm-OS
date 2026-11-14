@@ -94,6 +94,15 @@ pub enum Effect {
     /// The answer to `ToElm::Switching`: the snapshot is written (the effects before
     /// this one), so the host can stop this program and start the new one.
     SwitchReady,
+    /// Answered with `ToElm::Snapshot`: the data disk's snapshot file, as it is.
+    ReadSnapshot,
+    /// Replaces the snapshot with `text` (the host frames it: length and CRC-32,
+    /// elm/src/Persist.elm reads them), atomically, and then drops the messages up to
+    /// number `seq` from the log, which the snapshot has in it.
+    WriteSnapshot { text: String, seq: u64 },
+    /// Sends the logged messages numbered after `after` that went to earlier programs
+    /// (each with its number), then `ToElm::ReplayDone`.
+    ReplayLog { after: u64 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -111,8 +120,9 @@ pub struct HttpRequest {
     pub url: String,
     #[serde(default)]
     pub headers: Vec<(String, String)>,
-    #[serde(default)]
-    pub body: String,
+    /// Bytes, so any kind of body can be sent (an empty one for none).
+    #[serde(default, with = "serde_bytes")]
+    pub body: Vec<u8>,
     pub timeout_ms: Option<f64>,
 }
 
@@ -166,8 +176,13 @@ pub enum ToElm {
         path: Option<String>,
         http_in_flight: Vec<String>,
     },
-    /// Any status, 404 included.
-    HttpResponse { id: String, status: u16, body: String },
+    /// Any status, 404 included. The body as it came, so not necessarily text.
+    HttpResponse {
+        id: String,
+        status: u16,
+        #[serde(with = "serde_bytes")]
+        body: Vec<u8>,
+    },
     HttpError { id: String, error: HttpFailure, message: String },
     /// Sorted; null if the directory can't be listed.
     Dir { path: String, entries: Option<Vec<String>> },
@@ -185,6 +200,35 @@ pub enum ToElm {
     /// computer can't switch to it: its USB stick needs flashing again. Sent again to
     /// each program the host starts.
     ReflashNeeded { build: String },
+    /// Once a second, so the program's clock-driven work is in the log too.
+    Tick,
+    /// The answer to `Effect::ReadSnapshot`: the snapshot file's text, null if there
+    /// is none.
+    Snapshot { text: Option<String> },
+    /// After `Effect::ReplayLog`'s messages: the number of the last message that went
+    /// to an earlier program. Messages numbered after it are new.
+    ReplayDone { upto: u64 },
+}
+
+/// Whether the host writes this message in the log (on the data disk) before sending
+/// it, so that replaying the log gives back what the program did: every message but
+/// the ones about the log itself.
+pub fn is_logged(msg: &ToElm) -> bool {
+    !matches!(msg, ToElm::DataDisk { .. } | ToElm::Snapshot { .. } | ToElm::ReplayDone { .. })
+}
+
+/// What goes on the socket to the Elm program for one message: its number in the log
+/// (an Option<u64> in postcard: 0, or 1 and a varint), then the message
+/// (`ToElm::to_bytes`).
+pub fn from_host_payload(seq: Option<u64>, message: &[u8]) -> Vec<u8> {
+    let mut out = postcard::to_allocvec(&seq).expect("an Option<u64> always encodes");
+    out.extend_from_slice(message);
+    out
+}
+
+/// The number and the message's bytes, from `from_host_payload`'s.
+pub fn read_from_host_payload(payload: &[u8]) -> Option<(Option<u64>, &[u8])> {
+    postcard::take_from_bytes::<Option<u64>>(payload).ok()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -246,6 +290,11 @@ impl ToElm {
     /// What goes on the socket to the Elm program.
     pub fn to_bytes(&self) -> Vec<u8> {
         postcard::to_allocvec(self).expect("a ToElm always encodes")
+    }
+
+    /// Reads what `to_bytes` wrote (a message in the log, persist.rs).
+    pub fn from_bytes(bytes: &[u8]) -> Option<ToElm> {
+        postcard::from_bytes(bytes).ok()
     }
 }
 
@@ -310,9 +359,12 @@ mod tests {
             Effect::WriteFile { .. } => "writeFile",
             Effect::Log { .. } => "log",
             Effect::SwitchReady => "switchReady",
+            Effect::ReadSnapshot => "readSnapshot",
+            Effect::WriteSnapshot { .. } => "writeSnapshot",
+            Effect::ReplayLog { .. } => "replayLog",
         }
     }
-    const EFFECT_TAGS: usize = 16;
+    const EFFECT_TAGS: usize = 19;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -340,9 +392,12 @@ mod tests {
             ToElm::Sha256 { .. } => "sha256",
             ToElm::Switching { .. } => "switching",
             ToElm::ReflashNeeded { .. } => "reflashNeeded",
+            ToElm::Tick => "tick",
+            ToElm::Snapshot { .. } => "snapshot",
+            ToElm::ReplayDone { .. } => "replayDone",
         }
     }
-    const TO_ELM_TAGS: usize = 24;
+    const TO_ELM_TAGS: usize = 27;
 
     #[test]
     fn reads_the_render_example() {
@@ -398,5 +453,14 @@ mod tests {
         // Variant 2 (Mouse), zigzagged -1 and 300.
         assert_eq!(ToElm::Mouse { x: -1, y: 300 }.to_bytes(), vec![2, 1, 0xd8, 0x04]);
         assert!(read_effects(&[1, 99]).is_err());
+    }
+
+    #[test]
+    fn messages_carry_their_number() {
+        let tick = ToElm::Tick.to_bytes();
+        assert_eq!(from_host_payload(None, &tick), [vec![0], tick.clone()].concat());
+        assert_eq!(from_host_payload(Some(300), &tick), [vec![1, 0xac, 0x02], tick.clone()].concat());
+        assert_eq!(read_from_host_payload(&from_host_payload(Some(300), &tick)), Some((Some(300), &tick[..])));
+        assert_eq!(read_from_host_payload(&from_host_payload(None, &tick)), Some((None, &tick[..])));
     }
 }

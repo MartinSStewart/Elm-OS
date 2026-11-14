@@ -2,6 +2,7 @@ module Units exposing
     ( DevicePixels
     , UiPixels
     , UiScale
+    , devicePixels
     , scaleFor
     , scaleInt
     , toDevice
@@ -42,6 +43,11 @@ type alias UiScale =
 
 uiPixels : number -> Quantity number UiPixels
 uiPixels =
+    Quantity
+
+
+devicePixels : number -> Quantity number DevicePixels
+devicePixels =
     Quantity
 
 

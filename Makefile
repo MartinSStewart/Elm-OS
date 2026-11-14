@@ -2,6 +2,8 @@
 #
 #   make            build build/bzImage and build/initramfs.cpio
 #   make run        boot it in QEMU in a window, 1920 x 1080 (QEMU_RES=WxH to change)
+#   make dev        run the Elm program in a window on this computer, without the OS,
+#                   rebuilding it in seconds as elm/src changes (see "the dev runner" below)
 #   make test       boot headless, inject input, check a screenshot (CPU fallback)
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
@@ -23,7 +25,8 @@
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
 #   make check      the tests that don't boot anything: check-migration, review, review-tests,
-#                   elm-tests, test-wire, protocol-tests (CI runs these, then test and test-persist)
+#                   elm-tests, test-wire, protocol-tests, dev-check (CI runs these, then test
+#                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make eco        install the eco versions.mk pins (any make does) and print where it is
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
@@ -90,7 +93,8 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-update release measure-frames
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
+        dev dev-native dev-check bench
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
 
@@ -154,7 +158,10 @@ KMAKE     = SOURCE_DATE_EPOCH=$(KERNEL_EPOCH) $(MAKE) -C $(KERNEL_SRC) KBUILD_BU
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
 # ELMOS_UPDATES=1: follow the deployed branch (host/init/src/update.rs); QEMU runs don't.
-USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_UPDATES=1
+# panic=10: if /init dies anyway (its panic hook, host/init/src/error_screen.rs, normally
+# shows the message or restarts), the kernel restarts the computer after 10 s rather
+# than freezing.
+USB_CMDLINE ?= console=ttyS0 console=tty0 loglevel=4 panic=10 mac80211_hwsim.radios=0 ELMOS_UPDATES=1
 
 kernel-src: $(KERNEL_SRC)/Makefile
 
@@ -227,7 +234,7 @@ $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/k
 # ---- the /init binary: the host (Rust, host/init) + Elm program, one static executable
 
 # The Elm program is compiled from build/wire, a copy of elm/ with encoders and
-# decoders for the Model and Msg added by tools/wire (for Persist.elm), and the
+# decoders for the Model added by tools/wire (for Persist.elm), and the
 # program's entry module, ElmOs.elm. Errors still name src/<Module>.elm and the
 # original line numbers.
 $(BUILD)/elm.o: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
@@ -595,6 +602,10 @@ test-persist: all $(BUILD)/data-empty.img | check-run-deps
 test-switch: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-switch.py
 
+# The error screen: a crash loop, a hang, and panics in /init (see the script).
+test-errors: all $(BUILD)/data-empty.img | check-run-deps
+	python3 scripts/test-errors.py
+
 # Following the deployed branch, against a stand-in for GitHub (see the script).
 test-update: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-update.py
@@ -602,6 +613,60 @@ test-update: all $(BUILD)/data-empty.img | check-run-deps
 # How fast Elm answers frames, on the desktop in QEMU (see the script).
 measure-frames: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/measure-frames.py
+
+# ---- the dev runner: the Elm program in a window on this computer, without the OS
+#
+# host/dev (elmos-dev) stands in for /init: it starts the Elm program the way /init
+# does and talks the same protocol, draws its scene with the same rasteriser and atlas,
+# passes HTTP and file reads through to this computer, makes up the wifi, and keeps the
+# data disk in DEV_DATA. It rebuilds the program whenever elm/src changes and switches
+# to the new build with the Model carried over (as a switch on Elm OS does). See
+# host/dev/src/main.rs.
+#
+#   make dev         eco's JavaScript build of the program, run by Node: rebuilt in a
+#                    few seconds. JavaScript isn't the native build: Ints are 53-bit
+#                    floats there (and `//` and Bitwise are 32-bit), and eco's native
+#                    bugs and speed don't show. So check with dev-native, or `make run`.
+#   make dev-native  the native build/elm that goes into Elm OS: the same bytes, but
+#                    eco takes a minute or more to compile it.
+#
+# DEV_SIZE sets the window's size (it can be resized too). To start afresh, remove the
+# DEV_DATA directory.
+DEV_SIZE ?= 1920x1080
+DEV_DATA ?= $(BUILD)/dev-data
+DEV_SRC  := $(HOST_SRC) $(shell find host/dev -name '*.rs' -o -name '*.js' -o -name Cargo.toml)
+
+# --optimize halves the time Elm takes a frame in JavaScript, but refuses Debug.log
+# and the rest of Debug, so it is left out while elm/src uses them.
+$(BUILD)/elm.js: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
+	cd $(BUILD)/wire && $(ECO) make src/ElmOs.elm $$(grep -rqE '\bDebug\.' $(abspath elm/src) || echo --optimize) --output=$(abspath $@)
+
+# For this computer, not Elm OS: no musl target, and the window library is dynamic.
+$(BUILD)/elmos-dev: $(DEV_SRC)
+	cd host && $(CARGO) build --release --locked -p elmos-dev --target-dir $(abspath $(BUILD)/cargo-dev)
+	cp $(BUILD)/cargo-dev/release/elmos-dev $@
+
+DEV_RUN = $(BUILD)/elmos-dev --size $(DEV_SIZE) --data $(DEV_DATA) --commit "$$(git describe --always --dirty 2>/dev/null)" \
+            --watch elm/src --watch elm/elm.json
+
+dev: $(BUILD)/elm.js $(BUILD)/elmos-dev
+	$(DEV_RUN) --rebuild '$(MAKE) -s --no-print-directory $(BUILD)/elm.js' $(BUILD)/elm.js
+
+dev-native: $(BUILD)/elm $(BUILD)/elmos-dev
+	$(DEV_RUN) --rebuild '$(MAKE) -s --no-print-directory $(BUILD)/elm' $(BUILD)/elm
+
+# Times the Hacker News app's slow steps (parsing a big comment page, logging and
+# snapshotting it, laying it out) natively on a saved page: elm/bench. BENCH_ITEM picks
+# the item page (elm/bench/fixtures/hn-item-<id>.html.gz).
+BENCH_ITEM ?= elm/bench/fixtures/hn-item-50467087.html.gz
+
+bench: $(BUILD)/wire/.done
+	@mkdir -p $(BUILD)/bench/gen
+	python3 -I elm/bench/make-fixture.py $(BUILD)/bench/gen/Fixture.elm elm/bench/fixtures/hn-top.html.gz $(BENCH_ITEM)
+	python3 -I -c 'import json,sys; d=json.load(open("elm/elm.json")); d["source-directories"]=[sys.argv[1],sys.argv[2],"gen"]; json.dump(d,open(sys.argv[3],"w"),indent=4)' \
+	  $(abspath $(BUILD)/wire/src) $(abspath elm/bench/src) $(BUILD)/bench/elm.json
+	cd $(BUILD)/bench && $(ECO) make $(abspath elm/bench/src/Bench.elm) --optimize --output=bench
+	$(BUILD)/bench/bench
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
@@ -629,8 +694,13 @@ protocol-tests:
 	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p protocol --target-dir $(abspath $(BUILD)/cargo-tools)
 
 # One after the other: they share npx's and eco's caches.
+# That the dev runner (host/dev) still compiles: it stands in for /init, so a new
+# message in host/protocol must be handled there too.
+dev-check:
+	$(CARGO) check -q --locked --manifest-path host/Cargo.toml -p elmos-dev --target-dir $(abspath $(BUILD)/cargo-tools)
+
 check:
-	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests
+	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests dev-check
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.

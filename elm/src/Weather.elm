@@ -2,12 +2,11 @@ module Weather exposing
     ( Day
     , Forecast
     , Place
+    , decodeForecast
+    , decodePlace
     , defaultGeoUrl
     , defaultWeatherUrl
     , describe
-    , decodeForecast
-    , decodePlace
-    , errorText
     , forecastUrl
     , weekday
     )
@@ -18,7 +17,6 @@ Both go over HTTPS: Main asks the host for them with Effect.get, and the host fe
 them with rustls (host/init/src/http.rs).
 -}
 
-import Effect
 import Json.Decode as D
 
 
@@ -214,32 +212,6 @@ describe code =
 
         _ ->
             "Weather code " ++ String.fromInt code
-
-
-{-| Why there is no weather: the request failed, the server said no, or its answer
-wasn't what we expected (Nothing).
--}
-errorText : Result Effect.HttpError Int -> String
-errorText error =
-    case error of
-        Err (Effect.BadUrl url) ->
-            "Bad URL " ++ url
-
-        Err Effect.Timeout ->
-            "The server took too long"
-
-        Err (Effect.NetworkError _) ->
-            "Couldn't reach the server"
-
-        Err Effect.Interrupted ->
-            "A restart came before the answer"
-
-        Ok status ->
-            if status >= 200 && status < 300 then
-                "Didn't understand the server's answer"
-
-            else
-                "The server answered " ++ String.fromInt status
 
 
 {-| "2026-11-06" to "Fri", by Sakamoto's method.

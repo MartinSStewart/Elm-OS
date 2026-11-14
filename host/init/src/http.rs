@@ -3,9 +3,11 @@
 //! list, compiled in from the webpki-roots crate, so /init needs no OpenSSL and no
 //! certificate files. `make refresh` updates both with `cargo update`.
 //!
-//!   {"t":"http","id":ID,"method":M,"url":U,"headers":[[NAME,VALUE],...],"body":B,"timeoutMs":MS|null}
-//!   -> {"t":"httpResponse","id":ID,"status":N,"body":B}   any status, 404 included
-//!   -> {"t":"httpError","id":ID,"error":"badUrl"|"timeout"|"network","message":M}
+//!   Effect::Http { id, method, url, headers, body, timeoutMs }
+//!   -> ToElm::HttpResponse { id, status, body }   any status, 404 included
+//!   -> ToElm::HttpError { id, error: badUrl | timeout | network, message }
+//!
+//! Bodies both ways are bytes, as they are on the wire: nothing here reads them as text.
 
 use protocol::{HttpFailure, ToElm};
 use std::sync::OnceLock;
@@ -35,7 +37,7 @@ enum Failure {
     Network(String),
 }
 
-fn run(req: &Request) -> Result<(u16, String), Failure> {
+fn run(req: &Request) -> Result<(u16, Vec<u8>), Failure> {
     let mut builder = ureq::http::Request::builder()
         .method(req.method.as_str())
         .uri(req.url.as_str());
@@ -63,7 +65,7 @@ fn run(req: &Request) -> Result<(u16, String), Failure> {
         .body_mut()
         .with_config()
         .limit(MAX_BODY)
-        .read_to_string()
+        .read_to_vec()
         .map_err(|e| match e {
             ureq::Error::Timeout(_) => Failure::Timeout,
             e => Failure::Network(e.to_string()),

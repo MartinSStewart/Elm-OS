@@ -4,6 +4,7 @@ module Wire exposing
     , andIndex
     , decodeArray
     , decodeBool
+    , decodeBytes
     , decodeChar
     , decodeCustom
     , decodeDict
@@ -24,6 +25,7 @@ module Wire exposing
     , decodeValue
     , encodeArray
     , encodeBool
+    , encodeBytes
     , encodeChar
     , encodeCustom
     , encodeDict
@@ -54,6 +56,10 @@ tools/wire/src/Generate.elm.
 -}
 
 import Array exposing (Array)
+import Bitwise
+import Bytes exposing (Bytes)
+import Bytes.Decode as BD
+import Bytes.Encode as BE
 import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
@@ -103,6 +109,113 @@ encodeFloat f =
 encodeString : String -> Value
 encodeString =
     E.string
+
+
+{-| Base64 (RFC 4648, with + and / and = padding), so a body of any bytes fits in a
+JSON string, a third bigger than the bytes.
+-}
+encodeBytes : Bytes -> Value
+encodeBytes bytes =
+    E.string (toBase64 bytes)
+
+
+toBase64 : Bytes -> String
+toBase64 bytes =
+    let
+        u8 : BD.Decoder Int
+        u8 =
+            BD.unsignedInt8
+
+        u32 : BD.Decoder Int
+        u32 =
+            BD.unsignedInt32 Bytes.BE
+
+        -- Twelve bytes (sixteen characters) a step while there are that many: a big HTTP
+        -- body is megabytes, and fewer, bigger steps make it several times quicker.
+        step : ( Int, List String ) -> BD.Decoder (BD.Step ( Int, List String ) (List String))
+        step ( left, done ) =
+            if left >= 12 then
+                BD.map3
+                    (\a b c ->
+                        BD.Loop
+                            ( left - 12
+                            , String.fromList
+                                (base64Chars (Bitwise.shiftRightZfBy 8 a)
+                                    (base64Chars
+                                        (Bitwise.or (Bitwise.shiftLeftBy 16 (Bitwise.and 0xFF a)) (Bitwise.shiftRightZfBy 16 b))
+                                        (base64Chars
+                                            (Bitwise.or (Bitwise.shiftLeftBy 8 (Bitwise.and 0xFFFF b)) (Bitwise.shiftRightZfBy 24 c))
+                                            (base64Chars (Bitwise.and 0x00FFFFFF c) [])
+                                        )
+                                    )
+                                )
+                                :: done
+                            )
+                    )
+                    u32
+                    u32
+                    u32
+
+            else if left >= 3 then
+                BD.map3 (\a b c -> BD.Loop ( left - 3, base64Chunk a b c 4 :: done )) u8 u8 u8
+
+            else if left == 2 then
+                BD.map2 (\a b -> BD.Done ((base64Chunk a b 0 3 ++ "=") :: done)) u8 u8
+
+            else if left == 1 then
+                BD.map (\a -> BD.Done ((base64Chunk a 0 0 2 ++ "==") :: done)) u8
+
+            else
+                BD.succeed (BD.Done done)
+    in
+    BD.decode (BD.loop ( Bytes.width bytes, [] ) step) bytes
+        |> Maybe.withDefault []
+        |> List.reverse
+        |> String.concat
+
+
+{-| The four characters of 24 bits, in front of `rest`.
+-}
+base64Chars : Int -> List Char -> List Char
+base64Chars n rest =
+    base64Char (Bitwise.shiftRightZfBy 18 n)
+        :: base64Char (Bitwise.and 63 (Bitwise.shiftRightZfBy 12 n))
+        :: base64Char (Bitwise.and 63 (Bitwise.shiftRightZfBy 6 n))
+        :: base64Char (Bitwise.and 63 n)
+        :: rest
+
+
+{-| The first `count` characters of the base64 of these three bytes.
+-}
+base64Chunk : Int -> Int -> Int -> Int -> String
+base64Chunk a b c count =
+    let
+        n : Int
+        n =
+            a * 65536 + b * 256 + c
+    in
+    [ n // 262144, modBy 64 (n // 4096), modBy 64 (n // 64), modBy 64 n ]
+        |> List.take count
+        |> List.map base64Char
+        |> String.fromList
+
+
+base64Char : Int -> Char
+base64Char sextet =
+    if sextet < 26 then
+        Char.fromCode (65 + sextet)
+
+    else if sextet < 52 then
+        Char.fromCode (71 + sextet)
+
+    else if sextet < 62 then
+        Char.fromCode (sextet - 4)
+
+    else if sextet == 62 then
+        '+'
+
+    else
+        '/'
 
 
 encodeBool : Bool -> Value
@@ -250,6 +363,86 @@ decodeFloat =
 decodeString : Decoder String
 decodeString =
     D.string
+
+
+decodeBytes : Decoder Bytes
+decodeBytes =
+    D.string
+        |> D.andThen
+            (\text ->
+                case fromBase64 text of
+                    Just bytes ->
+                        D.succeed bytes
+
+                    Nothing ->
+                        D.fail "not base64"
+            )
+
+
+{-| Reads what `toBase64` writes: 6 bits a character, padding ignored.
+-}
+fromBase64 : String -> Maybe Bytes
+fromBase64 text =
+    String.foldl
+        (\char state ->
+            case state of
+                Just { bits, count, out } ->
+                    if char == '=' then
+                        state
+
+                    else
+                        fromBase64Char char
+                            |> Maybe.map
+                                (\value ->
+                                    let
+                                        all : Int
+                                        all =
+                                            bits * 64 + value
+                                    in
+                                    if count + 6 >= 8 then
+                                        let
+                                            rest : Int
+                                            rest =
+                                                2 ^ (count - 2)
+                                        in
+                                        { bits = modBy rest all, count = count - 2, out = BE.unsignedInt8 (all // rest) :: out }
+
+                                    else
+                                        { bits = all, count = count + 6, out = out }
+                                )
+
+                Nothing ->
+                    Nothing
+        )
+        (Just { bits = 0, count = 0, out = [] })
+        text
+        |> Maybe.map (\{ out } -> BE.encode (BE.sequence (List.reverse out)))
+
+
+fromBase64Char : Char -> Maybe Int
+fromBase64Char char =
+    let
+        code : Int
+        code =
+            Char.toCode char
+    in
+    if code >= 65 && code <= 90 then
+        Just (code - 65)
+
+    else if code >= 97 && code <= 122 then
+        Just (code - 71)
+
+    else if code >= 48 && code <= 57 then
+        Just (code + 4)
+
+    else if char == '+' then
+        Just 62
+
+    else if char == '/' then
+        Just 63
+
+    else
+        Nothing
 
 
 decodeBool : Decoder Bool
