@@ -13,7 +13,7 @@ is a desktop without wifi: a wired Intel e1000e card, which must get an address.
 --gpu needs QEMU's OpenGL support and a host GPU (or Mesa's llvmpipe). It uses
 QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128).
 """
-import hashlib, http.server, json, os, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
+import array, hashlib, http.server, json, math, os, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 import toolbar
 
@@ -296,7 +296,42 @@ middle = (w // 2, h // 2 - 60 * s)
 before = pixel(first, *middle)
 press("About")
 time.sleep(1)
-opened = pixel(screen(), *middle)
+shot = screen()
+opened = pixel(shot, *middle)
+
+
+def button_row(shot):
+    """The buttons along the about page's bottom (Close, and Test sound when there is
+    a sound card): the lowest row of short runs of the buttons' border colour, as
+    (x0, x1, y) of each top border, left to right."""
+    w, h, _ = shot
+    # The page is in the middle of the screen, the panels at the sides.
+    for y in range(h - 1, h // 8, -1):
+        runs, x = [], w // 4
+        while x < w * 3 // 4:
+            if toolbar._border(pixel(shot, x, y)):
+                x0 = x
+                while x < w and toolbar._border(pixel(shot, x, y)):
+                    x += 1
+                if 20 * s <= x - x0 <= 200 * s:
+                    runs.append((x0, x, y))
+            x += 1
+        # A button's top border, not its bottom: the colour carries on down its side.
+        if runs and all(toolbar._border(pixel(shot, x0, y + 4 * s)) for x0, _, _ in runs) \
+                and not toolbar._border(pixel(shot, runs[0][0] + 4 * s, y - 1)):
+            return runs
+    return []
+
+
+# The about page's "Test sound" button (there is a sound card) plays a tone, then a
+# few notes of music (elm/src/TestSound.elm), into build/sound.wav: checked below.
+row = button_row(shot)
+if len(row) != 2:
+    save_png(shot, f"{ROOT}/build/screenshot.png")
+    fail(f"expected the about page's Close and Test sound buttons, found {row} (build/screenshot.png)")
+x0, x1, y = row[1]
+click((x0 + x1) / 2 / w, (y + 6 * s) / h)
+time.sleep(3)
 press("About")
 time.sleep(1)
 closed = pixel(screen(), *middle)
@@ -383,4 +418,42 @@ except subprocess.TimeoutExpired:
 if not usb and "power button" not in open(serial_path, errors="replace").read():
     fail("QEMU stopped, but not through Elm OS's power-button handler")
 print("power button powers off")
+
+# The test sound, as QEMU's sound card played it (48000 Hz stereo 16-bit): the tone
+# (880 Hz at half the full level, 0.2 s), silence, the music (from 0.4 s, until about
+# 1.2 s), then silence while its last note has died away.
+shutil.copy(wav_path, f"{ROOT}/build/sound.wav")
+data = open(wav_path, "rb").read()
+pcm = array.array("h", data[data.index(b"data") + 8:])
+pcm = pcm[:len(pcm) // 2 * 2]
+left, right = pcm[0::2], pcm[1::2]
+RATE = 48000
+
+
+def rms(x):
+    return math.sqrt(sum(v * v for v in x) / max(1, len(x)))
+
+
+def span(t0, t1):
+    return left[int(t0 * RATE):int(t1 * RATE)]
+
+
+start = next((i for i in range(0, len(left), 48) if rms(left[i:i + 48]) > 1000), None)
+if start is None:
+    fail(f"the test sound isn't in the sound card's output ({len(left) / RATE:.2f} s of it, build/sound.wav)")
+t0 = start / RATE
+if t0 > 0 and rms(left[:start]) > 30:
+    fail(f"sound before the test sound (rms {rms(left[:start]):.0f}, build/sound.wav)")
+tone, tone_right = left[start + 960:start + 8640], right[start + 960:start + 8640]  # 0.02 to 0.18 s
+cycles = sum(1 for a, b in zip(tone, tone[1:]) if a < 0 <= b)
+freq, peak = cycles / 0.16, max(abs(v) for v in tone)
+gap, music, after = rms(span(t0 + 0.24, t0 + 0.38)), rms(span(t0 + 0.5, t0 + 1.1)), rms(span(t0 + 2.2, t0 + 3.0))
+print(f"test sound at {t0:.2f} s in the recording: tone {freq:.0f} Hz, peak {peak}; then rms {gap:.0f}, "
+      f"music rms {music:.0f}, then rms {after:.0f}")
+if abs(freq - 880) > 25 or abs(peak - 16384) > 1600 or tone != tone_right:
+    fail("expected the tone at 880 Hz, at half the full level, the same on both speakers (build/sound.wav)")
+if gap > 30 or after > 30:
+    fail("expected silence between the tone and the music, and after it (build/sound.wav)")
+if music < 300:
+    fail("expected the music after the tone (build/sound.wav)")
 print("PASS (screenshot in build/screenshot.png)")
