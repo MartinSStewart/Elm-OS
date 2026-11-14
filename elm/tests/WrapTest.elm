@@ -61,14 +61,13 @@ suite =
         , test "no line is wider than the width, in Noto Sans at 2x" (\() -> fitsWidth twoX)
         , test "the pixel font is twice as wide in device pixels at 2x, so wraps the same"
             (\() -> Sprite.wrapLines twoX Small (Units.uiPixels 100) [ mono "aaaa bbbb cccc" ] |> Expect.equal (Sprite.wrapLines oneX Small (Units.uiPixels 100) [ mono "aaaa bbbb cccc" ]))
-        , test "Noto Sans at 2x is measured with the 2x face, not twice the 1x one"
+        , test "Noto Sans at 2x is laid out exactly like 1x (unhinted advances)"
             (\() ->
                 let
-                    width scale =
-                        Sprite.textSize scale Small (Sans Regular) "The quick brown fox jumps over the lazy dog" |> Tuple.first |> Quantity.unwrap
+                    carets scale =
+                        Sprite.caretPositions scale Small (Sans Regular) "The quick brown fox jumps over the lazy dog, AVAWAY." |> List.map Quantity.unwrap
                 in
-                -- The faces are hinted separately, so their advances aren't in proportion.
-                width twoX |> Expect.notEqual (width oneX)
+                carets twoX |> Expect.equal (carets oneX)
             )
         ]
 

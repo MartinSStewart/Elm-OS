@@ -8,9 +8,9 @@
 # The Elm program is one static binary that talks to the host only over its socket, so
 # what it needs from the host is that socket's protocol: the messages (Effect, ToElm)
 # and how they are framed, all in host/protocol (src/lib.rs, src/link.rs; host/link
-# includes link.rs). So this is a SHA-256 of those, without their comments, blank lines
-# or tests: a change to the rest of the host, the kernel or wpa_supplicant (or to a
-# comment) keeps it, and devices keep taking new builds; they keep their own host
+# includes link.rs), and the texture atlas Elm draws from (its size and Noto Sans's
+# glyphs). So this is a SHA-256 of those, without comments, blank lines or tests: a
+# change to the rest of the host, the kernel or wpa_supplicant (or to a comment) keeps it, and devices keep taking new builds; they keep their own host
 # until the stick is flashed again.
 #
 # The catch: a build that counts on something new in the host that isn't in the
@@ -21,7 +21,13 @@
 # Files as they are in the working tree, so an uncommitted change counts.
 set -eu
 cd "$(dirname "$0")/.."
+{
 for f in host/protocol/src/lib.rs host/protocol/src/link.rs; do
   # Up to the tests; without // comments (doc comments too) and blank lines.
   sed -e '/^#\[cfg(test)\]/,$d' -e 's://.*$::' -e 's/[[:space:]]*$//' -e '/^$/d' "$f"
-done | sha256sum | cut -d' ' -f1
+done
+# The texture atlas too: Elm has where each glyph is in it compiled in (NotoSans.elm),
+# so a build for another atlas draws the wrong glyphs.
+grep -E '^pub const ATLAS_[WH]' host/common/src/atlas.rs
+sha256sum < host/common/src/noto_sans.rle
+} | sha256sum | cut -d' ' -f1

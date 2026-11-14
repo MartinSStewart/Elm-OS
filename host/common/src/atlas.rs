@@ -1,7 +1,7 @@
 //! The texture atlas that every triangle samples (see elm/src/Sprite.elm), shared by
 //! both renderers: /init's CPU rasteriser and elmos-gpu.
 //!
-//! 1024 x 2048 pixels, one byte each: how much of the pixel is covered, 0 to 255.
+//! 2048 x 4096 pixels, one byte each: how much of the pixel is covered, 0 to 255.
 //! A triangle's colour is multiplied by it, so the atlas only holds shapes:
 //!
 //!   x 0-250, y 0-180     town-collab's 10 x 18 pixel font, 25 glyphs to a row
@@ -9,13 +9,18 @@
 //!   x 16-28, y 184-203   the mouse cursor's fill; Elm draws the two in different colours
 //!   x 248-256, y 248-256 solid, for flat colours
 //!   everywhere else      Noto Sans (regular, bold, italic, bold italic) at a few
-//!                        sizes, antialiased (tools/make-noto-sans.py;
-//!                        elm/src/NotoSans.elm says where each glyph is)
+//!                        sizes, antialiased, each glyph at four quarter-pixel
+//!                        offsets (tools/make-noto-sans.py; elm/src/NotoSans.elm
+//!                        says where each glyph is)
+//!
+//! Elm has the atlas's layout compiled in (NotoSans.elm), so the atlas is part of the
+//! host version (tools/host-version.sh): a build made for another atlas would draw the
+//! wrong glyphs.
 
 use crate::font;
 
-pub const ATLAS_W: usize = 1024;
-pub const ATLAS_H: usize = 2048;
+pub const ATLAS_W: usize = 2048;
+pub const ATLAS_H: usize = 4096;
 
 /// Noto Sans's glyphs over the whole atlas, run-length coded: a 0 byte is followed by
 /// how many 0s (1-255) it stands for, and any other byte is itself.

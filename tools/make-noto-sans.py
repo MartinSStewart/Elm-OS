@@ -27,13 +27,19 @@ import sys
 import freetype
 from PIL import Image, ImageFont
 
-# FreeType's autohinter at its normal strength, which fits stems to whole pixels across
-# as well as down. The font's own hints (and the light autohinter) only fit them
-# vertically, which leaves a 16 px stem smeared over two columns at 64% and 77%.
-LOAD = freetype.FT_LOAD_RENDER | freetype.FT_LOAD_FORCE_AUTOHINT | freetype.FT_LOAD_TARGET_NORMAL
+# Drawn the way browsers draw text on Linux ("slight" hinting): FreeType's light
+# autohinter fits horizontal stems and edges to whole pixels vertically and leaves
+# glyphs alone horizontally, so their shapes and widths are the font's own at every
+# size. Horizontally a glyph can then start anywhere, so each one is drawn SUBPIXELS
+# times, shifted right by 0, 1/4, 2/4 and 3/4 of a pixel, and Elm draws the copy
+# nearest to where the pen is (Sprite.sansRun). Drawing one copy at a fractional
+# position instead would blur it twice: once when it was antialiased and again when
+# it was resampled.
+LOAD = freetype.FT_LOAD_RENDER | freetype.FT_LOAD_FORCE_AUTOHINT | freetype.FT_LOAD_TARGET_LIGHT
+SUBPIXELS = 4
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ATLAS_W, ATLAS_H = 1024, 2048
+ATLAS_W, ATLAS_H = 2048, 4096
 # The pixel font, cursor and solid block live in the top left 256 x 256.
 SIZES = [16, 24, 32, 48]
 CHARS = (
@@ -62,17 +68,35 @@ for _, file, sha in FONTS:
 atlas = Image.new("L", (ATLAS_W, ATLAS_H), 0)
 
 
-def glyph_image(face, ch):
-    """The glyph's coverage, where its top left is from the pen (on the baseline), and
-    its advance in 1/64 pixels (hinted, so whole pixels)."""
+def glyph_image(face, ch, shift):
+    """The glyph's coverage drawn `shift` 1/64 pixels right of the pen, and where its
+    top left is from the pen (on the baseline)."""
+    face.set_transform(freetype.Matrix(0x10000, 0, 0, 0x10000), freetype.Vector(shift, 0))
     face.load_char(ch, LOAD)
     g = face.glyph
     b = g.bitmap
-    left, top, advance = g.bitmap_left, -g.bitmap_top, g.advance.x
     if b.width == 0 or b.rows == 0:
-        return None, left, top, advance
+        return None, 0, 0
     rows = [bytes(b.buffer[y * b.pitch : y * b.pitch + b.width]) for y in range(b.rows)]
-    return Image.frombytes("L", (b.width, b.rows), b"".join(rows)), left, top, advance
+    return Image.frombytes("L", (b.width, b.rows), b"".join(rows)), g.bitmap_left, -g.bitmap_top
+
+
+def glyph_copies(face, ch):
+    """The glyph's SUBPIXELS copies side by side, each in a cell of the same size, GAP
+    apart, and where a cell's top left is from the pen (on the baseline) when the
+    copy is the one to draw."""
+    drawn = [glyph_image(face, ch, k * 64 // SUBPIXELS) for k in range(SUBPIXELS)]
+    drawn = [d for d in drawn if d[0] is not None]
+    if not drawn:
+        return None, 0, 0
+    left = min(l for _, l, _ in drawn)
+    top = min(t for _, _, t in drawn)
+    w = max(l + im.width for im, l, _ in drawn) - left
+    h = max(t + im.height for im, _, t in drawn) - top
+    strip = Image.new("L", (SUBPIXELS * w + (SUBPIXELS - 1) * GAP, h), 0)
+    for k, (im, l, t) in enumerate(drawn):
+        strip.paste(im, (k * (w + GAP) + l - left, t - top))
+    return strip, left, top
 
 
 # Shelf packing, tallest first, into the free parts of the atlas.
@@ -113,14 +137,19 @@ work = []
 for name, file, _ in FONTS:
     path = os.path.join(font_dir, file)
     faces = []
+    # Advances aren't hinted, so they're the font's own: in font units (1/1000 em,
+    # like the kerning), the same at every size.
+    unscaled = freetype.Face(path)
+    assert unscaled.units_per_EM == 1000, f"{file}: Elm takes advances and kerning in 1/1000 em"
     for size in SIZES:
         face = freetype.Face(path)
         face.set_pixel_sizes(0, size)
         ascent, descent = face.size.ascender // 64, -face.size.descender // 64
         glyphs = {}
         for code in [32] + CHARS:
-            im, left, top, advance = glyph_image(face, chr(code))
-            glyphs[code] = [0, 0, 0, 0, left, top, advance]
+            im, left, top = glyph_copies(face, chr(code))
+            unscaled.load_char(chr(code), freetype.FT_LOAD_NO_SCALE)
+            glyphs[code] = [0, 0, 0, 0, left, top, unscaled.glyph.advance.x]
             if im is not None:
                 work.append((im.height, im.width, glyphs[code], im))
         faces.append((size, ascent, descent, glyphs))
@@ -130,7 +159,7 @@ for name, file, _ in FONTS:
 for h, w, g, im in sorted(work, key=lambda g: (-g[0], -g[1])):
     x, y = place(w, h)
     atlas.paste(im, (x, y))
-    g[0:4] = [x, y, w, h]
+    g[0:4] = [x, y, (w - (SUBPIXELS - 1) * GAP) // SUBPIXELS, h]
 
 # Run-length coding: a 0 byte is followed by how many 0s (1-255) it stands for; any
 # other byte is itself.
@@ -156,15 +185,17 @@ def elm_char(code):
 
 
 lines = [
-    "module NotoSans exposing (Face, Glyph, Variant, bold, boldItalic, italic, regular)",
+    "module NotoSans exposing (Face, Glyph, Variant, bold, boldItalic, gap, italic, regular, subpixels)",
     "",
     "{-| Generated by tools/make-noto-sans.py: don't edit by hand.",
     "",
     "Noto Sans Regular, Bold, Italic and Bold Italic (SIL Open Font License 1.1), each drawn at",
     "each size and packed into the host's texture atlas (host/common/src/noto\\_sans.rle).",
     "",
-    "A glyph is the rectangle `x`, `y`, `w`, `h` of the atlas, drawn `left` pixels right of the pen",
-    "and `top` pixels below the baseline (so usually negative). `advance` is in 1/64 pixels.",
+    f"A glyph is drawn {SUBPIXELS} times, shifted right by 0, 1/{SUBPIXELS}, ... of a pixel; copy k is the rectangle",
+    f"`x + k * (w + {GAP})`, `y`, `w`, `h` of the atlas, drawn `left` pixels right of the pen (rounded to",
+    "the nearest copy) and `top` pixels below the baseline (so usually negative). `advance` is",
+    "unhinted, in font units (1/1000 em), the same at every size.",
     "",
     "-}",
     "",
@@ -184,6 +215,18 @@ lines = [
     "-}",
     "type alias Variant =",
     "    { faces : List Face, kerning : Dict ( Char, Char ) Int }",
+    "",
+    "",
+    "{-| How many copies of each glyph there are, each shifted right by 1/subpixels pixels more.",
+    "-}",
+    "subpixels : Int",
+    f"subpixels =\n    {SUBPIXELS}",
+    "",
+    "",
+    "{-| How far apart the copies are in the atlas.",
+    "-}",
+    "gap : Int",
+    f"gap =\n    {GAP}",
     "",
     "",
     "g : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> ( Char, Glyph )",

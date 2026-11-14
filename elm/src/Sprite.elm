@@ -25,7 +25,7 @@ module Sprite exposing
 
 {-| Turning things into textured triangles for the render port, after town-collab's Sprite.
 
-Every triangle samples the host's texture atlas (host/common/src/atlas.rs, 1024 x 2048
+Every triangle samples the host's texture atlas (host/common/src/atlas.rs, 2048 x 4096
 pixels) and multiplies the sample by its colour:
 
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-250, y 0-180, 25 to a row,
@@ -36,10 +36,12 @@ pixels) and multiplies the sample by its colour:
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
 UI pixels and `toDevice` scales them; text is drawn straight in device pixels, so on a
-2x screen it uses the font drawn at twice the size rather than blown up pixels. Text
-is also laid out with that font's own (hinted) advances and kerning, so measuring,
-wrapping and caret positions all take the UI scale: text can be a little wider or
-narrower at 2x than twice its width at 1x, and wrap in different places.
+2x screen it uses the font drawn at twice the size rather than blown up pixels. Noto
+Sans is laid out like a browser lays it out: with the font's own unhinted advances and
+kerning, so text at 2x is twice as wide as at 1x (to 1/64 of a device pixel) and wraps
+in the same places. Glyphs start at fractional pixels across; the atlas has each one
+drawn at four quarter-pixel offsets, and the nearest is drawn (`sansRun`). Down, each
+line's baseline is on a whole pixel, which the light hinting fits the glyphs to.
 
 -}
 
@@ -376,6 +378,14 @@ missingGlyph f =
     Dict.get '?' f.glyphs |> Maybe.withDefault { x = 0, y = 0, w = 0, h = 0, left = 0, top = 0, advance = 0 }
 
 
+{-| A distance in font units (1/1000 em) in 1/64 device pixels, for a face of `size`
+device pixels. In Float: the product can go past what JS's `//` keeps (32 bits).
+-}
+unitsTo64 : Int -> Int -> Int
+unitsTo64 size units =
+    round (toFloat (units * size * 64) / 1000)
+
+
 {-| How far a line's baseline is below its top, and how far its bottom is below the
 baseline, in UI pixels: enough for both Noto Sans (all its styles share these) and the
 pixel font. 18 and 5 at `Small` (Noto Sans's), 28 and 8 at `Big` (the pixel font's
@@ -412,10 +422,9 @@ lineHeightRaw fontSize =
 
 
 {-| Where each character of one line of text starts, in 1/64 device pixels from the
-left, and where the line ends, at a UI scale (device pixels per UI pixel). Noto Sans is
-laid out with the face drawn for the device size, with its own hinted advances and
-kerning, so text at 2x is not exactly twice as wide as at 1x: each scale has its own
-layout, and wraps and measures by it.
+left, and where the line ends, at a UI scale (device pixels per UI pixel). Noto Sans's
+advances and kerning are in font units, so this is the same at every scale up to
+rounding to 1/64 device pixels.
 -}
 layoutLine : Int -> FontSize -> Font -> String -> ( List ( Int, Char ), Int )
 layoutLine s fontSize font string =
@@ -440,7 +449,9 @@ layoutLine s fontSize font string =
             ( List.map (\( at, char, _ ) -> ( at, char )) placed, end )
 
 
-{-| Noto Sans's glyphs for one line, with where each starts (1/64 pixels), kerned.
+{-| Noto Sans's glyphs for one line, with where each starts (1/64 device pixels), kerned.
+The pen moves in font units and is only turned into pixels for each glyph, so rounding
+never adds up along the line.
 -}
 layoutSans : Dict ( Char, Char ) Int -> NotoSans.Face -> String -> ( List ( Int, Char, NotoSans.Glyph ), Int )
 layoutSans kerning f string =
@@ -453,7 +464,7 @@ layoutSans kerning f string =
                 at =
                     case Dict.get ( previous, char ) kerning of
                         Just k ->
-                            pen + (k * f.size * 64 + 500) // 1000
+                            pen + k
 
                         Nothing ->
                             pen
@@ -461,12 +472,12 @@ layoutSans kerning f string =
                 glyph =
                     Dict.get char f.glyphs |> Maybe.withDefault missing
             in
-            ( at + glyph.advance, char, ( at, char, glyph ) :: acc )
+            ( at + glyph.advance, char, ( unitsTo64 f.size at, char, glyph ) :: acc )
 
         ( end, _, placed ) =
             String.foldl step ( 0, ' ', [] ) string
     in
-    ( List.reverse placed, end )
+    ( List.reverse placed, unitsTo64 f.size end )
 
 
 {-| Where each segment of one line starts, in 1/64 device pixels from the left, and
@@ -584,15 +595,15 @@ customText uiScale fontSize clip segments position =
                 |> List.concatMap
                     (\( start, segment ) ->
                         let
-                            left =
-                                x * s + (start + 32) // 64
+                            left64 =
+                                x * s * 64 + start
                         in
                         case segment.font of
                             Mono ->
-                                monoRun s fontSize deviceClip segment.color ( left, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+                                monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
 
                             Sans style ->
-                                sansRun s fontSize (variant style) deviceClip segment.color ( left, (top + ascent) * s ) segment.text
+                                sansRun s fontSize (variant style) deviceClip segment.color ( left64, (top + ascent) * s ) segment.text
                     )
         )
         (segmentLines segments)
@@ -627,18 +638,28 @@ monoRun s fontSize deviceClip color ( left, top ) string =
         |> List.concat
 
 
-{-| One line of Noto Sans, from where it starts on the baseline in device pixels, laid
-out and drawn with the face for the device size (as `layoutLine` measures it).
+{-| One line of Noto Sans, from where it starts on the baseline (across in 1/64 device
+pixels, down in device pixels), laid out as `layoutLine` measures it and drawn with the
+face for the device size. Each glyph goes on the whole pixel left of where its pen is,
+in the atlas copy shifted right by the nearest number of 1/`NotoSans.subpixels` pixels
+to the rest, so its shape is never resampled.
 -}
 sansRun : Int -> FontSize -> NotoSans.Variant -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> List (Triangle DevicePixels)
-sansRun s fontSize v deviceClip color ( left, baseline ) string =
+sansRun s fontSize v deviceClip color ( left64, baseline ) string =
     layoutSans v.kerning (face v (sansSize fontSize * s)) string
         |> Tuple.first
         |> List.concatMap
             (\( at, _, glyph ) ->
                 let
+                    -- where the pen is, in 1/subpixels device pixels
+                    steps =
+                        round (toFloat ((left64 + at) * NotoSans.subpixels) / 64)
+
+                    copy =
+                        modBy NotoSans.subpixels steps
+
                     pen =
-                        (at + 32) // 64
+                        (steps - copy) // NotoSans.subpixels
                 in
                 if glyph.w == 0 then
                     []
@@ -646,9 +667,9 @@ sansRun s fontSize v deviceClip color ( left, baseline ) string =
                 else
                     clippedSprite color
                         deviceClip
-                        ( left + pen + glyph.left, baseline + glyph.top )
+                        ( pen + glyph.left, baseline + glyph.top )
                         ( glyph.w, glyph.h )
-                        ( glyph.x, glyph.y )
+                        ( glyph.x + copy * (glyph.w + NotoSans.gap), glyph.y )
                         ( glyph.w, glyph.h )
             )
 
@@ -1061,7 +1082,7 @@ width64 s fontSize font string =
             let
                 m : Metrics
                 m =
-                    metrics s style fontSize
+                    metrics style
             in
             String.foldl
                 (\char ( pen, previous ) ->
@@ -1088,19 +1109,20 @@ width64 s fontSize font string =
                 ( 0, Char.toCode ' ' )
                 string
                 |> Tuple.first
+                |> unitsTo64 (face (variant style) (sansSize fontSize * s)).size
 
 
-{-| A Noto Sans face's advances and kerning (1/64 device pixels), in Arrays indexed by
-character code: an Array.get is a good deal quicker than a Dict.get with a Char, let
-alone a pair of them. `kerning` has, for each character, how much closer or further
-the characters after it go.
+{-| A Noto Sans style's advances and kerning (font units, the same at every size), in
+Arrays indexed by character code: an Array.get is a good deal quicker than a Dict.get
+with a Char, let alone a pair of them. `kerning` has, for each character, how much
+closer or further the characters after it go.
 -}
 type alias Metrics =
     { advances : Array Int, missingAdvance : Int, kerning : Array (Dict Int Int) }
 
 
-makeMetrics : Int -> Style -> FontSize -> Metrics
-makeMetrics s style fontSize =
+makeMetrics : Style -> Metrics
+makeMetrics style =
     let
         v : NotoSans.Variant
         v =
@@ -1108,7 +1130,7 @@ makeMetrics s style fontSize =
 
         f : NotoSans.Face
         f =
-            face v (sansSize fontSize * s)
+            face v 0
 
         missing : Int
         missing =
@@ -1124,7 +1146,7 @@ makeMetrics s style fontSize =
                 (\( first, second ) k acc ->
                     Dict.update
                         (Char.toCode first)
-                        (\after -> Just (Dict.insert (Char.toCode second) ((k * f.size * 64 + 500) // 1000) (Maybe.withDefault Dict.empty after)))
+                        (\after -> Just (Dict.insert (Char.toCode second) k (Maybe.withDefault Dict.empty after)))
                         acc
                 )
                 Dict.empty
@@ -1144,169 +1166,39 @@ makeMetrics s style fontSize =
     }
 
 
-{-| The metrics for a style and size at a UI scale. Those for 1x and 2x, the scales
-`Units.scaleFor` gives, are made once; any other scale makes them again every time.
+{-| The metrics for a style, made once.
 -}
-metrics : Int -> Style -> FontSize -> Metrics
-metrics s style fontSize =
-    case s of
-        1 ->
-            metrics1x style fontSize
-
-        2 ->
-            metrics2x style fontSize
-
-        _ ->
-            makeMetrics s style fontSize
-
-
-metrics1x : Style -> FontSize -> Metrics
-metrics1x style fontSize =
+metrics : Style -> Metrics
+metrics style =
     case style of
         Regular ->
-            case fontSize of
-                Small ->
-                    regularSmall1x
-
-                Big ->
-                    regularBig1x
+            regularMetrics
 
         Bold ->
-            case fontSize of
-                Small ->
-                    boldSmall1x
-
-                Big ->
-                    boldBig1x
+            boldMetrics
 
         Italic ->
-            case fontSize of
-                Small ->
-                    italicSmall1x
-
-                Big ->
-                    italicBig1x
+            italicMetrics
 
         BoldItalic ->
-            case fontSize of
-                Small ->
-                    boldItalicSmall1x
-
-                Big ->
-                    boldItalicBig1x
+            boldItalicMetrics
 
 
-metrics2x : Style -> FontSize -> Metrics
-metrics2x style fontSize =
-    case style of
-        Regular ->
-            case fontSize of
-                Small ->
-                    regularSmall2x
-
-                Big ->
-                    regularBig2x
-
-        Bold ->
-            case fontSize of
-                Small ->
-                    boldSmall2x
-
-                Big ->
-                    boldBig2x
-
-        Italic ->
-            case fontSize of
-                Small ->
-                    italicSmall2x
-
-                Big ->
-                    italicBig2x
-
-        BoldItalic ->
-            case fontSize of
-                Small ->
-                    boldItalicSmall2x
-
-                Big ->
-                    boldItalicBig2x
+regularMetrics : Metrics
+regularMetrics =
+    makeMetrics Regular
 
 
-regularSmall1x : Metrics
-regularSmall1x =
-    makeMetrics 1 Regular Small
+boldMetrics : Metrics
+boldMetrics =
+    makeMetrics Bold
 
 
-regularBig1x : Metrics
-regularBig1x =
-    makeMetrics 1 Regular Big
+italicMetrics : Metrics
+italicMetrics =
+    makeMetrics Italic
 
 
-boldSmall1x : Metrics
-boldSmall1x =
-    makeMetrics 1 Bold Small
-
-
-boldBig1x : Metrics
-boldBig1x =
-    makeMetrics 1 Bold Big
-
-
-italicSmall1x : Metrics
-italicSmall1x =
-    makeMetrics 1 Italic Small
-
-
-italicBig1x : Metrics
-italicBig1x =
-    makeMetrics 1 Italic Big
-
-
-boldItalicSmall1x : Metrics
-boldItalicSmall1x =
-    makeMetrics 1 BoldItalic Small
-
-
-boldItalicBig1x : Metrics
-boldItalicBig1x =
-    makeMetrics 1 BoldItalic Big
-
-
-regularSmall2x : Metrics
-regularSmall2x =
-    makeMetrics 2 Regular Small
-
-
-regularBig2x : Metrics
-regularBig2x =
-    makeMetrics 2 Regular Big
-
-
-boldSmall2x : Metrics
-boldSmall2x =
-    makeMetrics 2 Bold Small
-
-
-boldBig2x : Metrics
-boldBig2x =
-    makeMetrics 2 Bold Big
-
-
-italicSmall2x : Metrics
-italicSmall2x =
-    makeMetrics 2 Italic Small
-
-
-italicBig2x : Metrics
-italicBig2x =
-    makeMetrics 2 Italic Big
-
-
-boldItalicSmall2x : Metrics
-boldItalicSmall2x =
-    makeMetrics 2 BoldItalic Small
-
-
-boldItalicBig2x : Metrics
-boldItalicBig2x =
-    makeMetrics 2 BoldItalic Big
+boldItalicMetrics : Metrics
+boldItalicMetrics =
+    makeMetrics BoldItalic
