@@ -20,7 +20,7 @@ type State
 
 
 type alias Link =
-    { name : String, state : State, ip : Ipv4 }
+    { name : String, state : State, ip : Maybe Ipv4 }
 
 
 isConnected : List Link -> Bool

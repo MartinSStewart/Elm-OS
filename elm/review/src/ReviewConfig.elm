@@ -69,6 +69,8 @@ rules =
     , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm" ]
     , NoUnused.Modules.rule
     , NoUnused.Parameters.rule
+        -- Unsafe.unreachable recurses on purpose, to crash with a stack overflow.
+        |> Review.Rule.ignoreErrorsForFiles [ "src/Unsafe.elm" ]
     , ReviewPipelineStyles.rule
         [ ReviewPipelineStyles.forbid ReviewPipelineStyles.leftPizzaPipelines
             |> ReviewPipelineStyles.andTryToFixThemBy ReviewPipelineStyles.Fixes.convertingToParentheticalApplication

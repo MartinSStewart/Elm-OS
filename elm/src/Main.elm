@@ -1963,7 +1963,18 @@ wiredRows model =
                         connectedColor
                         bodySize
                         font
-                        (Sprite.ellipsis bodySize font width ("Connected, " ++ Ipv4.toString l.ip))
+                        (Sprite.ellipsis
+                            bodySize
+                            font
+                            width
+                            (case l.ip of
+                                Just ip ->
+                                    "Connected, " ++ Ipv4.toString ip
+
+                                Nothing ->
+                                    "Connected"
+                            )
+                        )
 
                 Wired.Failed ->
                     Ui.colorText

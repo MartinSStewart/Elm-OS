@@ -4,7 +4,6 @@ module WifiTest exposing (suite)
 joined it (Main.reconnect, Main.savePassword).
 -}
 
-import Dict
 import Effect exposing (Effect)
 import Expect
 import HostMessage
@@ -82,7 +81,7 @@ suite =
                 run [ status Wifi.Idle "", scan ] saved
                     |> Tuple.second
                     |> connects
-                    |> Expect.equal [ "Home secret" ]
+                    |> Expect.equal [ "Home password" ]
             )
         , test "after a failure, scans don't try again"
             (\_ ->

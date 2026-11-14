@@ -1,16 +1,9 @@
 module Ipv4Tests exposing (suite)
 
-import Bytes
-import Date exposing (Date)
-import Duration
-import Effect
 import Expect
-import Fuzz
+import Fuzz exposing (Fuzzer)
 import Ipv4
-import Json.Decode as D
-import News exposing (Inline(..), Item(..))
-import Test exposing (Test, describe, test)
-import Time
+import Test exposing (Test, describe)
 
 
 suite : Test
@@ -20,6 +13,7 @@ suite =
         ]
 
 
+fuzzIpv4Strings : Fuzzer String
 fuzzIpv4Strings =
     Fuzz.map4
         (\a b c d -> String.fromInt a ++ "." ++ String.fromInt b ++ "." ++ String.fromInt c ++ "." ++ String.fromInt d)
@@ -27,8 +21,3 @@ fuzzIpv4Strings =
         (Fuzz.intRange 0 255)
         (Fuzz.intRange 0 255)
         (Fuzz.intRange 0 255)
-
-
-date : Int -> Int -> Int -> Date
-date year month dayOfMonth =
-    Date.fromCalendarDate year (Date.numberToMonth month) dayOfMonth

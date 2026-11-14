@@ -1,7 +1,6 @@
 module HackerNewsTest exposing (suite)
 
 import Bytes.Encode
-import Dict
 import Expect
 import HackerNews exposing (HackerNewsState(..), PostId(..), UiId(..))
 import Json.Encode as E

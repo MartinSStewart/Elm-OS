@@ -3,7 +3,7 @@
   "toHost": [
     {"cursor": {"rgba": 4278190335, "scale": 2}},
     "wifiScan",
-    {"wifiConnect": {"ssid": "Home", "password": "secret"}},
+    {"wifiConnect": {"ssid": "Home", "password": "password"}},
     "wifiDisconnect",
     {"power": {"action": "off"}},
     {"power": {"action": "restart"}},

@@ -12,7 +12,7 @@ program (Main.persistConfig.fromHost).
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
-import Ipv4
+import Ipv4 exposing (Ipv4)
 import Postcard as P
 import Wifi
 import Wired
@@ -155,18 +155,16 @@ decoder =
                     12 ->
                         BD.map4
                             (\state ssid ip error ->
-                                case Ipv4.fromString ip of
-                                    Ok ip2 ->
+                                BD.map
+                                    (\ip2 ->
                                         WifiStatus
                                             { state = state
                                             , ssid = Wifi.stringToSsid ssid
-                                            , ip = Just ip2
+                                            , ip = ip2
                                             , error = error
                                             }
-                                            |> BD.succeed
-
-                                    Err _ ->
-                                        BD.fail
+                                    )
+                                    (maybeIpv4 ip)
                             )
                             wifiState
                             P.decodeString
@@ -278,18 +276,27 @@ wifiState =
 wiredLink : BD.Decoder Wired.Link
 wiredLink =
     BD.map3
-        (\a b ip ->
-            case Ipv4.fromString ip of
-                Ok ip2 ->
-                    BD.succeed { name = a, state = b, ip = ip2 }
-
-                Err _ ->
-                    BD.fail
-        )
+        (\name state ip -> BD.map (\ip2 -> { name = name, state = state, ip = ip2 }) (maybeIpv4 ip))
         P.decodeString
         (variants [ Wired.NoCable, Wired.Dhcp, Wired.Connected, Wired.Failed ])
         P.decodeString
         |> BD.andThen identity
+
+
+{-| The host sends "" while there is no address yet.
+-}
+maybeIpv4 : String -> BD.Decoder (Maybe Ipv4)
+maybeIpv4 text =
+    if text == "" then
+        BD.succeed Nothing
+
+    else
+        case Ipv4.fromString text of
+            Ok ip ->
+                BD.succeed (Just ip)
+
+            Err () ->
+                BD.fail
 
 
 httpFailure : BD.Decoder HttpFailure
