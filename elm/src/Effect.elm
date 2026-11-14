@@ -4,6 +4,8 @@ port module Effect exposing
     , HttpRequest
     , HttpRequestId(..)
     , PowerAction(..)
+    , SampleFormat(..)
+    , Sound
     , encode
     , fromHost
     , get
@@ -93,6 +95,37 @@ type Effect
     | ReadFile { path : String }
       -- WriteFile with bytes: replaces the file on the data disk at once, atomically.
     | WriteBytes { path : String, bytes : Bytes }
+      -- Sound (host/init/src/audio.rs). PlaySound plays a sound on a voice (any
+      -- number), replacing what that voice was playing. `left` and `right` are the
+      -- speakers' gains (1 plays the samples at their own level), and `speed` how fast
+      -- (1 is the sound's own rate, 2 an octave up). SetSound changes a playing voice;
+      -- after it ends, nothing. There is no message when a sound ends: the program
+      -- knows how long it is, which keeps `update` a function of its Msgs.
+    | PlaySound { voice : Int, sound : Sound, left : Float, right : Float, speed : Float }
+    | SetSound { voice : Int, left : Float, right : Float, speed : Float }
+    | StopSound Int
+      -- Music: a Standard MIDI File played on an emulated OPL3 FM synthesizer
+      -- (host/synth), with the instruments in a DMX OP2 bank (the GENMIDI lump of
+      -- Doom, Heretic, Hexen and Strife), over and over if `looping`. One song at a time.
+    | PlayMidi { song : Bytes, instruments : Bytes, looping : Bool }
+    | StopMidi
+    | PauseMidi Bool
+      -- 0 to 127, as in MIDI; 127 to start with.
+    | MidiVolume Int
+
+
+{-| A mono sound: `samples` at `rate` a second.
+-}
+type alias Sound =
+    { rate : Int, format : SampleFormat, samples : Bytes }
+
+
+{-| U8: a byte a sample, 128 is silence (as in WAV files and Doom's sounds). S16: two
+bytes a sample, signed, little-endian.
+-}
+type SampleFormat
+    = U8
+    | S16
 
 
 type PowerAction
@@ -253,3 +286,37 @@ encode effect =
 
         WriteBytes { path, bytes } ->
             Postcard.variant 18 [ Postcard.string path, Postcard.bytes bytes ]
+
+        PlaySound { voice, sound, left, right, speed } ->
+            Postcard.variant 19
+                [ Postcard.unsigned voice
+                , Postcard.unsigned sound.rate
+                , case sound.format of
+                    U8 ->
+                        Postcard.variant 0 []
+
+                    S16 ->
+                        Postcard.variant 1 []
+                , Postcard.bytes sound.samples
+                , Postcard.float32 left
+                , Postcard.float32 right
+                , Postcard.float32 speed
+                ]
+
+        SetSound { voice, left, right, speed } ->
+            Postcard.variant 20 [ Postcard.unsigned voice, Postcard.float32 left, Postcard.float32 right, Postcard.float32 speed ]
+
+        StopSound voice ->
+            Postcard.variant 21 [ Postcard.unsigned voice ]
+
+        PlayMidi { song, instruments, looping } ->
+            Postcard.variant 22 [ Postcard.bytes song, Postcard.bytes instruments, Postcard.bool looping ]
+
+        StopMidi ->
+            Postcard.variant 23 []
+
+        PauseMidi paused ->
+            Postcard.variant 24 [ Postcard.bool paused ]
+
+        MidiVolume volume ->
+            Postcard.variant 25 [ Postcard.u8 volume ]

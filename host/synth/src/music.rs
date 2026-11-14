@@ -927,6 +927,11 @@ impl Music {
         self.paused = false;
     }
 
+    /// A song has started and isn't stopped, paused or over (a looping one never is).
+    pub(crate) fn playing(&self) -> bool {
+        !self.tracks.is_empty() && !self.paused && (self.running_tracks > 0 || self.looping)
+    }
+
     /// I_OPL_PauseSong: the notes stop sounding (percussion is left to ring out).
     pub(crate) fn pause(&mut self) {
         self.paused = true;

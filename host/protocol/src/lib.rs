@@ -156,6 +156,51 @@ pub enum Effect {
         #[serde(with = "serde_bytes")]
         bytes: Vec<u8>,
     },
+    /// Plays `sound` on `voice` (any number the program picks), from its start,
+    /// replacing whatever that voice was playing. `left` and `right` are the gains of
+    /// the two speakers (1 plays the samples at their own level), and `speed` how fast
+    /// to play it (1 is the sound's own rate, 2 an octave up). The host mixes every
+    /// voice and the music (host/init/src/audio.rs). No answer, and nothing when it
+    /// ends: the program knows how long its sounds are.
+    PlaySound { voice: u32, sound: Sound, left: f32, right: f32, speed: f32 },
+    /// Changes a playing voice's gains and speed; nothing if it has ended.
+    SetSound { voice: u32, left: f32, right: f32, speed: f32 },
+    StopSound { voice: u32 },
+    /// Plays a Standard MIDI File with the instruments in a DMX OP2 bank (the GENMIDI
+    /// format Doom, Heretic, Hexen and Strife share) on an emulated OPL3 FM synthesizer
+    /// (host/synth), from the start, over and over if `looping`. Replaces the song
+    /// playing; one that can't be read is logged and stops the music.
+    PlayMidi {
+        #[serde(with = "serde_bytes")]
+        song: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        instruments: Vec<u8>,
+        looping: bool,
+    },
+    StopMidi,
+    /// Pauses the song, or carries on from where it was.
+    PauseMidi { paused: bool },
+    /// The music's volume, 0 to 127 as in MIDI (127 at start).
+    MidiVolume { volume: u8 },
+}
+
+/// A sound for `Effect::PlaySound`: mono samples at `rate` a second.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Sound {
+    pub rate: u32,
+    pub format: SampleFormat,
+    #[serde(with = "serde_bytes")]
+    pub samples: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum SampleFormat {
+    /// A byte a sample, 128 is silence (as in WAV files and Doom's sound lumps).
+    U8,
+    /// Two bytes a sample, signed, little-endian.
+    S16,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -257,6 +302,9 @@ pub enum ToElm {
         #[serde(with = "serde_bytes")]
         bytes: Option<Vec<u8>>,
     },
+    /// The sound card the host plays on (its ALSA name), or null without one, when
+    /// sounds and music are taken and dropped. Sent again to each program the host starts.
+    Audio { device: Option<String> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -385,9 +433,16 @@ mod tests {
             Effect::CapturePointer { .. } => "capturePointer",
             Effect::ReadFile { .. } => "readFile",
             Effect::WriteBytes { .. } => "writeBytes",
+            Effect::PlaySound { .. } => "playSound",
+            Effect::SetSound { .. } => "setSound",
+            Effect::StopSound { .. } => "stopSound",
+            Effect::PlayMidi { .. } => "playMidi",
+            Effect::StopMidi => "stopMidi",
+            Effect::PauseMidi { .. } => "pauseMidi",
+            Effect::MidiVolume { .. } => "midiVolume",
         }
     }
-    const EFFECT_TAGS: usize = 19;
+    const EFFECT_TAGS: usize = 26;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -417,9 +472,10 @@ mod tests {
             ToElm::ReflashNeeded { .. } => "reflashNeeded",
             ToElm::MouseMotion { .. } => "mouseMotion",
             ToElm::File { .. } => "file",
+            ToElm::Audio { .. } => "audio",
         }
     }
-    const TO_ELM_TAGS: usize = 26;
+    const TO_ELM_TAGS: usize = 27;
 
     #[test]
     fn reads_the_render_example() {
@@ -478,5 +534,12 @@ mod tests {
         // Variant 2 (Mouse), zigzagged -1 and 300.
         assert_eq!(ToElm::Mouse { x: -1, y: 300 }.to_bytes(), vec![2, 1, 0xd8, 0x04]);
         assert!(read_effects(&[1, 99]).is_err());
+        // f32 is 4 bytes little-endian; u8 one byte as it is, not a varint.
+        let set = Effect::SetSound { voice: 300, left: 1.0, right: 0.5, speed: 2.0 };
+        assert_eq!(
+            write_effects(&[set]),
+            vec![1, 20, 0xac, 0x02, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x3f, 0, 0, 0, 0x40]
+        );
+        assert_eq!(write_effects(&[Effect::MidiVolume { volume: 200 }]), vec![1, 25, 200]);
     }
 }

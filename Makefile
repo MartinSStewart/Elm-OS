@@ -22,8 +22,9 @@
 #   make check-migration  fail if the Model's types changed with no migration (make check,
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
+#   make mixer-tests  test the audio thread's mixer (host/mixer)
 #   make check      the tests that don't boot anything: check-migration, review, review-tests,
-#                   elm-tests, test-wire, protocol-tests (CI runs these, then test and test-persist)
+#                   elm-tests, test-wire, protocol-tests, mixer-tests (CI runs these, then test and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
 #   make eco        install the eco versions.mk pins (any make does) and print where it is
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
@@ -89,7 +90,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests mixer-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-update release measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -353,7 +354,7 @@ release: $(BUILD)/elm $(BUILD)/host-version | check-migration
 # assembly, which cargo compiles with musl-gcc.
 CARGO       ?= cargo
 RUST_TARGET := x86_64-unknown-linux-musl
-HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
+HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu host/mixer host/synth -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
 # Paths to this checkout and to cargo's crate sources end up in panic messages and in
 # ring's C code; map them to fixed names so the output doesn't depend on where they are.
 CARGO_HOME_DIR := $(or $(CARGO_HOME),$(HOME)/.cargo)
@@ -635,9 +636,14 @@ elm-tests: $(BUILD)/wire/.done
 protocol-tests:
 	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p protocol --target-dir $(abspath $(BUILD)/cargo-tools)
 
+# The audio thread's mixer (host/mixer): resampling, gains, speed, stopping and
+# replacing sounds, clipping, and the music mixed in. On the build machine too.
+mixer-tests:
+	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p mixer --target-dir $(abspath $(BUILD)/cargo-tools)
+
 # One after the other: they share npx's and eco's caches.
 check:
-	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests
+	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests mixer-tests
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.

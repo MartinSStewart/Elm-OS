@@ -1,5 +1,5 @@
 module Postcard exposing
-    ( bool, bytes, float64, int, list, maybe, string, unsigned, variant
+    ( bool, bytes, float32, float64, int, list, maybe, string, u8, unsigned, variant
     , decodeBool, decodeBytes, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
     )
 
@@ -13,7 +13,7 @@ Elm's Int is exact up to 2^53, which is as far as these go.
 
 # Encoders
 
-@docs bool, bytes, float64, int, list, maybe, string, unsigned, variant
+@docs bool, bytes, float32, float64, int, list, maybe, string, u8, unsigned, variant
 
 
 # Decoders
@@ -52,6 +52,26 @@ quotient n d =
     floor (toFloat n / toFloat d)
 
 
+{-| Rust's u8: one byte as it is (not a varint, unlike the wider integers).
+-}
+u8 : Int -> BE.Encoder
+u8 n =
+    BE.unsignedInt8 (clamp 0 255 n)
+
+
+{-| A byte, 0 or 1.
+-}
+bool : Bool -> BE.Encoder
+bool b =
+    BE.unsignedInt8
+        (if b then
+            1
+
+         else
+            0
+        )
+
+
 {-| A signed integer: zigzagged (0, -1, 1, -2 ... become 0, 1, 2, 3 ...), then a varint.
 -}
 int : Int -> BE.Encoder
@@ -75,6 +95,13 @@ float64 =
     BE.float64 LE
 
 
+{-| Rust's f32: 4 bytes, rounded to the nearest 32-bit float.
+-}
+float32 : Float -> BE.Encoder
+float32 =
+    BE.float32 LE
+
+
 {-| Its length in bytes, then its UTF-8.
 -}
 string : String -> BE.Encoder
@@ -82,20 +109,7 @@ string s =
     BE.sequence [ unsigned (BE.getStringWidth s), BE.string s ]
 
 
-{-| A byte: 1 for True, 0 for False.
--}
-bool : Bool -> BE.Encoder
-bool b =
-    BE.unsignedInt8
-        (if b then
-            1
-
-         else
-            0
-        )
-
-
-{-| A byte string (serde_bytes): its length, then the bytes.
+{-| A byte string (serde\_bytes): its length, then the bytes.
 -}
 bytes : Bytes -> BE.Encoder
 bytes b =
@@ -175,7 +189,7 @@ decodeFloat64 =
     BD.float64 LE
 
 
-{-| A byte string (serde_bytes): its length, then the bytes.
+{-| A byte string (serde\_bytes): its length, then the bytes.
 -}
 decodeBytes : BD.Decoder Bytes
 decodeBytes =

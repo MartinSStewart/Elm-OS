@@ -76,6 +76,8 @@ type ToElm
       -- The answer to Effect.ReadFile: the path, and the file's bytes, Nothing if it
       -- can't be read.
     | File String (Maybe Bytes)
+      -- The sound card the host plays on, if there is one (host/init/src/audio.rs).
+    | Audio (Maybe String)
 
 
 type HttpFailure
@@ -191,6 +193,9 @@ decoder =
 
                     25 ->
                         BD.map2 File P.decodeString (P.decodeMaybe P.decodeBytes)
+
+                    26 ->
+                        BD.map Audio (P.decodeMaybe P.decodeString)
 
                     _ ->
                         BD.fail

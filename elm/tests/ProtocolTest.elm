@@ -56,6 +56,14 @@ effects =
     , Effect.CapturePointer True
     , Effect.ReadFile { path = "/usr/share/doom/freedoom1.wad" }
     , Effect.WriteBytes { path = "/data/doom/doomsav0.dsg", bytes = BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 0, 1, 255 ])) }
+    , Effect.PlaySound { voice = 3, sound = { rate = 11025, format = Effect.U8, samples = byteList [ 128, 255, 0, 128 ] }, left = 1, right = 0.5, speed = 1 }
+    , Effect.PlaySound { voice = 0, sound = { rate = 48000, format = Effect.S16, samples = byteList [ 0, 0, 255, 127, 0, 128 ] }, left = 0.25, right = 0.25, speed = 2 }
+    , Effect.SetSound { voice = 3, left = 0.5, right = 1, speed = 0.5 }
+    , Effect.StopSound 3
+    , Effect.PlayMidi { song = byteList [ 77, 84, 104, 100 ], instruments = byteList [ 35, 79, 80, 76 ], looping = True }
+    , Effect.StopMidi
+    , Effect.PauseMidi True
+    , Effect.MidiVolume 100
     , Effect.Render
         (\() ->
             [ Scene.Triangles [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]
@@ -72,6 +80,11 @@ effects =
             ]
         )
     ]
+
+
+byteList : List Int -> Bytes
+byteList list =
+    BE.encode (BE.sequence (List.map BE.unsignedInt8 list))
 
 
 {-| What the host sends gets read: Persist takes it, or the program reads it without

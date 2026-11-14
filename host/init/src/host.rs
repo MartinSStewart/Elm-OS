@@ -31,7 +31,7 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
-use crate::{elm, http, net, persist, raster};
+use crate::{audio, elm, http, net, persist, raster};
 
 /// Elm draws only when asked.
 ///
@@ -296,6 +296,13 @@ impl Host {
                 Effect::Log { text } => log!("elm", "{}", text),
                 Effect::SwitchReady => elm::switch_ready(self.program),
                 Effect::CapturePointer { capture } => self.set_captured(capture),
+                effect @ (Effect::PlaySound { .. }
+                | Effect::SetSound { .. }
+                | Effect::StopSound { .. }
+                | Effect::PlayMidi { .. }
+                | Effect::StopMidi
+                | Effect::PauseMidi { .. }
+                | Effect::MidiVolume { .. }) => audio::play(effect),
             }
         }
         if cursor_dirty {

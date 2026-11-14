@@ -1,0 +1,11 @@
+[package]
+name = "mixer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# What the audio thread plays (see src/lib.rs): Elm's sounds and the music, mixed.
+# Plain Rust with no system calls, so `cargo test -p mixer` runs on any machine.
+[dependencies]
+protocol = { path = "../protocol" }
+synth = { path = "../synth" }

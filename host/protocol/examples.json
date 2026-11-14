@@ -22,6 +22,14 @@
     {"capturePointer": {"capture": true}},
     {"readFile": {"path": "/usr/share/doom/freedoom1.wad"}},
     {"writeBytes": {"path": "/data/doom/doomsav0.dsg", "bytes": [0, 1, 255]}},
+    {"playSound": {"voice": 3, "sound": {"rate": 11025, "format": "u8", "samples": [128, 255, 0, 128]}, "left": 1.0, "right": 0.5, "speed": 1.0}},
+    {"playSound": {"voice": 0, "sound": {"rate": 48000, "format": "s16", "samples": [0, 0, 255, 127, 0, 128]}, "left": 0.25, "right": 0.25, "speed": 2.0}},
+    {"setSound": {"voice": 3, "left": 0.5, "right": 1.0, "speed": 0.5}},
+    {"stopSound": {"voice": 3}},
+    {"playMidi": {"song": [77, 84, 104, 100], "instruments": [35, 79, 80, 76], "looping": true}},
+    "stopMidi",
+    {"pauseMidi": {"paused": true}},
+    {"midiVolume": {"volume": 100}},
     {"render": [{"triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}, {"picture": {"x": 10, "y": 20, "w": 6, "h": 3, "width": 2, "height": 1, "format": {"indexed": {"palette": [0, 0, 0, 255, 128, 0]}}, "pixels": [1, 0]}}]}
   ],
   "fromHost": [
@@ -48,6 +56,8 @@
     {"dataDisk": {"path": null, "httpInFlight": []}},
     {"switching": {"to": "3f2a9c1"}},
     {"reflashNeeded": {"build": "eca6a3aa4c51"}},
+    {"audio": {"device": "HDA Intel (hw:0,0)"}},
+    {"audio": {"device": null}},
     {"httpResponse": {"id": "weather", "status": 200, "body": "{}"}},
     {"httpError": {"id": "weather", "error": "timeout", "message": "the server took too long"}},
     {"httpError": {"id": "weather", "error": "badUrl", "message": "no host"}},

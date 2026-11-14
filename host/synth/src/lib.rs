@@ -106,6 +106,13 @@ impl Synth {
         }
     }
 
+    /// Whether a song is playing: one has started and isn't stopped, paused or (unless
+    /// it loops) over. Its last notes may still be dying away once it isn't, so a host
+    /// that stops rendering to save time should carry on for a second or two.
+    pub fn playing(&self) -> bool {
+        self.music.playing()
+    }
+
     /// The music's volume, 0 to 127 (higher is taken as 127). It works as DMX's
     /// does: it caps every MIDI channel's volume, so it changes the notes' levels on
     /// the chip, not the output's.

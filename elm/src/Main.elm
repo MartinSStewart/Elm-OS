@@ -1,4 +1,4 @@
-module Main exposing (Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
+module Main exposing (Model, Msg, PowerAction, RendererInfo, SoundCard, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
@@ -28,6 +28,7 @@ import Persist
 import Quantity exposing (Quantity)
 import Scene
 import Sprite
+import TestSound
 import TextInput
 import TextInputMultiline
 import Time
@@ -73,6 +74,8 @@ type Input
     | File String (Maybe (Transient Bytes))
       -- Where the data disk is, if there is one: a program's own files can go there too.
     | DataDisk (Maybe String)
+      -- The sound card the host plays on, if there is one (host/init/src/audio.rs).
+    | Audio (Maybe String)
 
 
 type alias SystemInfo =
@@ -216,6 +219,9 @@ toInput message =
         HostMessage.File path bytes ->
             Ok (File path (Maybe.map Transient.wrap bytes))
 
+        HostMessage.Audio device ->
+            Ok (Audio device)
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -251,6 +257,7 @@ type alias Model =
     , scanning : Bool
     , wifiStatus : Wifi.Status
     , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
+    , soundCard : SoundCard
     , selected : Maybe Wifi.Network
     , -- save passwords here for networks that have been connected to before
       savedWifiPasswords : Dict String String
@@ -277,6 +284,12 @@ type alias Model =
 type PowerAction
     = PowerOff
     | Restart
+
+
+type SoundCard
+    = SoundCardUnknown -- until the host says
+    | NoSoundCard
+    | SoundCard String
 
 
 type WeatherState
@@ -306,6 +319,7 @@ type UiId
     | AboutButton
     | NewsButton
     | CloseAboutButton
+    | TestSoundButton
     | CalculatorButton
     | PowerOffButton
     | RestartButton
@@ -339,6 +353,7 @@ init =
     , scanning = True
     , wifiStatus = { state = Wifi.Idle, ssid = "", ip = "", error = "" }
     , wired = []
+    , soundCard = SoundCardUnknown
     , selected = Nothing
     , savedWifiPasswords = Dict.empty
     , showPassword = False
@@ -393,6 +408,9 @@ idToString uiId =
 
         CloseAboutButton ->
             "CloseAboutButton"
+
+        TestSoundButton ->
+            "TestSoundButton"
 
         CalculatorButton ->
             "CalculatorButton"
@@ -465,14 +483,15 @@ step event model =
     case event of
         Screen w h ->
             -- The host's first message to each program it starts: it is listening for
-            -- effects now. The notices are about the program before this one (the
-            -- Model is the one it saved); the host sends ReflashNeeded again if it
-            -- still applies.
+            -- effects now. The notices and the sound card are about the program before
+            -- this one (the Model is the one it saved); the host sends ReflashNeeded and
+            -- Audio again.
             ( { model
                 | screenSize = Coord.xy w h
                 , mouse = Coord.xy (w // 2) (h // 2)
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
+                , soundCard = SoundCardUnknown
               }
             , BootInfo.start
             )
@@ -704,6 +723,19 @@ step event model =
         DataDisk _ ->
             ( model, [] )
 
+        Audio device ->
+            ( { model
+                | soundCard =
+                    case device of
+                        Just name ->
+                            SoundCard name
+
+                        Nothing ->
+                            NoSoundCard
+              }
+            , []
+            )
+
         NetConfig urls ->
             ( { model
                 | geoUrl = nonEmpty urls.geoUrl Weather.defaultGeoUrl
@@ -920,6 +952,9 @@ click model id uiState =
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
+
+        TestSoundButton ->
+            ( model, TestSound.effects )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -1173,6 +1208,9 @@ dragSelect focus position model =
             model
 
         CloseAboutButton ->
+            model
+
+        TestSoundButton ->
             model
 
         CalculatorButton ->
@@ -2410,6 +2448,17 @@ aboutPage model =
                                     )
                                 |> String.join "; "
                     )
+                , line "Sound"
+                    (case model.soundCard of
+                        SoundCard name ->
+                            name
+
+                        NoSoundCard ->
+                            "no sound card found"
+
+                        SoundCardUnknown ->
+                            "?"
+                    )
                 , t ""
                 , t
                     (Sprite.wrap font
@@ -2421,7 +2470,16 @@ aboutPage model =
                         )
                     )
                 , t ""
-                , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
+                , Ui.row { spacing = 6, padding = Ui.noPadding }
+                    (Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
+                        :: (case model.soundCard of
+                                SoundCard _ ->
+                                    [ Ui.button { id = TestSoundButton, padding = Ui.paddingXY 6 3 } (t "Test sound") ]
+
+                                _ ->
+                                    []
+                           )
+                    )
                 ]
             )
         )

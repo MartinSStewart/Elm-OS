@@ -5,8 +5,9 @@
 #   common/ the texture atlas and the display (KMS) calls both use
 #   protocol/ the messages between Elm and the host, and their tests (cargo test -p protocol)
 #   synth/  the music synthesizer (an emulated OPL3 playing MIDI), and its tests (cargo test -p synth)
+#   mixer/  what the audio thread plays: Elm's sounds and the music, mixed (cargo test -p mixer)
 [workspace]
-members = ["common", "protocol", "init", "link", "gpu", "synth"]
+members = ["common", "protocol", "init", "link", "gpu", "synth", "mixer"]
 resolver = "2"
 
 # The synthesizer makes sound in real time, so it is optimised even in debug builds

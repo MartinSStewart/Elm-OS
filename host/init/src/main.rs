@@ -7,7 +7,8 @@
 //!   - the Elm threads (elm.rs): start the Elm program, read what it sends, write to it,
 //!   - the networking thread (net/): wifi through wpa_supplicant, and DHCP,
 //!   - one short-lived thread per HTTP request Elm makes (http.rs),
-//!   - the persist thread (persist.rs): mounts the data disk and writes Elm's files on it.
+//!   - the persist thread (persist.rs): mounts the data disk and writes Elm's files on it,
+//!   - the audio thread (audio.rs): plays Elm's sounds and music on the sound card.
 //!
 //! The Elm program talks to the host over a Unix socket (protocol::link): JSON on
 //! Elm's ports, plus the scene as bytes:
@@ -18,8 +19,8 @@
 //!   fromHost host -> Elm: one message at a time, {"t": KIND, ...}. See
 //!            elm/src/Main.elm's decoder, and where each is sent: host.rs (screen,
 //!            frame, input, renderer, stats, system, boot), files.rs (dir, files, bytes,
-//!            sha256), persist.rs (dataDisk), net/ (wifi*, netConfig) and
-//!            http.rs (httpResponse, httpError).
+//!            sha256), persist.rs (dataDisk), net/ (wifi*, netConfig),
+//!            http.rs (httpResponse, httpError) and audio.rs (audio).
 
 /// One line on stderr (the serial console), written with one write, so that a line
 /// another process (the Elm program, wpa_supplicant) writes meanwhile can't land in
@@ -30,6 +31,7 @@ macro_rules! log {
     };
 }
 
+mod audio;
 mod display;
 mod effects;
 mod elm;
@@ -42,6 +44,7 @@ mod net;
 mod persist;
 mod programs;
 mod update;
+mod volume;
 mod raster;
 mod stats;
 mod sys;
@@ -63,6 +66,7 @@ fn main() {
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
     persist::start();
     net::start();
+    audio::start();
     // Starts the Elm program once the display is up (elm::start), and never returns.
     host::run()
 }
