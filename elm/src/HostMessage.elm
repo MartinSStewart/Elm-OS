@@ -70,6 +70,9 @@ type ToElm
     | Switching String
       -- The newest deployed build, which needs the USB stick flashed again (Main.elm).
     | ReflashNeeded String
+      -- While the pointer is captured (Effect.CapturePointer): how far the mouse moved,
+      -- in its own counts (not accelerated or scaled), right and down positive.
+    | MouseMotion Int Int
 
 
 type HttpFailure
@@ -179,6 +182,9 @@ decoder =
 
                     23 ->
                         BD.map ReflashNeeded P.decodeString
+
+                    24 ->
+                        BD.map2 MouseMotion P.decodeInt P.decodeInt
 
                     _ ->
                         BD.fail

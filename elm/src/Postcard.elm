@@ -1,6 +1,6 @@
 module Postcard exposing
-    ( bytes, float64, int, list, maybe, string, unsigned, variant
-    , decodeBool, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
+    ( bool, bytes, float64, int, list, maybe, string, unsigned, variant
+    , decodeBool, decodeBytes, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
     )
 
 {-| The binary format of the messages between Elm and the host: postcard, which the
@@ -13,12 +13,12 @@ Elm's Int is exact up to 2^53, which is as far as these go.
 
 # Encoders
 
-@docs bytes, float64, int, list, maybe, string, unsigned, variant
+@docs bool, bytes, float64, int, list, maybe, string, unsigned, variant
 
 
 # Decoders
 
-@docs decodeBool, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
+@docs decodeBool, decodeBytes, decodeFloat64, decodeInt, decodeList, decodeMaybe, decodeString, decodeUnsigned, decodeTuple
 
 -}
 
@@ -80,6 +80,19 @@ float64 =
 string : String -> BE.Encoder
 string s =
     BE.sequence [ unsigned (BE.getStringWidth s), BE.string s ]
+
+
+{-| A byte: 1 for True, 0 for False.
+-}
+bool : Bool -> BE.Encoder
+bool b =
+    BE.unsignedInt8
+        (if b then
+            1
+
+         else
+            0
+        )
 
 
 {-| A byte string (serde_bytes): its length, then the bytes.
@@ -160,6 +173,13 @@ decodeBool =
 decodeFloat64 : BD.Decoder Float
 decodeFloat64 =
     BD.float64 LE
+
+
+{-| A byte string (serde_bytes): its length, then the bytes.
+-}
+decodeBytes : BD.Decoder Bytes
+decodeBytes =
+    decodeUnsigned |> BD.andThen BD.bytes
 
 
 decodeString : BD.Decoder String

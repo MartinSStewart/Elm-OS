@@ -63,6 +63,8 @@ type Input
     | Switching String
       -- The newest deployed build needs the USB stick flashed again (host/init/src/update.rs).
     | ReflashNeeded String
+      -- While the pointer is captured (Effect.CapturePointer): the mouse's motion.
+    | MouseMotion Int Int
 
 
 type alias SystemInfo =
@@ -199,6 +201,9 @@ toInput message =
 
         HostMessage.ReflashNeeded build ->
             Ok (ReflashNeeded build)
+
+        HostMessage.MouseMotion dx dy ->
+            Ok (MouseMotion dx dy)
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -676,6 +681,10 @@ step event model =
 
         ReflashNeeded build ->
             ( { model | reflashNeeded = Just build }, [] )
+
+        MouseMotion _ _ ->
+            -- Nothing captures the pointer yet.
+            ( model, [] )
 
         NetConfig urls ->
             ( { model

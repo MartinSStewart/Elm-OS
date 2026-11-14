@@ -83,6 +83,10 @@ type Effect
       -- with a newer build, host/init/src/elm.rs): the snapshot is written. Persist
       -- writes one before it.
     | SwitchReady
+      -- While True, the host hides the pointer and keeps it where it is, and sends the
+      -- mouse's motion (HostMessage.MouseMotion) instead of where it is (Mouse). Buttons
+      -- and the wheel come as usual. For games, 3D views, drawing.
+    | CapturePointer Bool
 
 
 type PowerAction
@@ -243,3 +247,6 @@ encode effect =
 
         SwitchReady ->
             Postcard.variant 15 []
+
+        CapturePointer capture ->
+            Postcard.variant 16 [ Postcard.bool capture ]

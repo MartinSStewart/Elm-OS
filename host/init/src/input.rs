@@ -11,8 +11,14 @@
 //! A touchpad reports absolute finger positions too, but it should feel like a
 //! mouse: the pointer moves by how far the finger moves, and a quick tap clicks.
 //!
+//! While Elm has captured the pointer (Effect::CapturePointer, for a game, say), the
+//! pointer stays where it is and the motion goes to Elm as it comes from the device:
+//! a mouse's counts, not accelerated or scaled (a touchpad's movement in pixels, as it
+//! would move the pointer). A tablet's absolute positions are ignored then.
+//!
 //! Sends Elm:
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
+//!   {"t":"mouseMotion","dx":X,"dy":Y}    instead, while the pointer is captured
 //!   {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
 //!   {"t":"wheel","dy":N}                 scroll wheel clicks, positive away from you (up)
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
@@ -187,6 +193,8 @@ pub struct Inputs {
     tap_button: i32,
     /// The UI scale: device pixels per mouse count, before acceleration.
     pub scale: f64,
+    /// Elm has captured the pointer: motion goes to Elm, and the pointer stays put.
+    pub captured: bool,
     // what's left of the pointer's motion after rounding to whole pixels
     frac_x: f64,
     frac_y: f64,
@@ -219,6 +227,7 @@ impl Inputs {
             tap_release_at: None,
             tap_button: 0,
             scale: 1.0,
+            captured: false,
             frac_x: 0.0,
             frac_y: 0.0,
         }
@@ -327,12 +336,17 @@ impl Inputs {
         if whole == 0 {
             return;
         }
+        dev.tap_moved += whole.abs();
+        if self.captured {
+            let (dx, dy) = if is_x { (whole, 0) } else { (0, whole) };
+            elm::send(&ToElm::MouseMotion { dx, dy });
+            return;
+        }
         if is_x {
             self.mouse_x += whole
         } else {
             self.mouse_y += whole
         }
-        dev.tap_moved += whole.abs();
         *moved = true;
     }
 
@@ -342,7 +356,11 @@ impl Inputs {
         match ev.type_ {
             EV_SYN if ev.code == SYN_REPORT => {
                 let dev = &mut self.devices[i];
-                if dev.rel_x != 0 || dev.rel_y != 0 {
+                if (dev.rel_x != 0 || dev.rel_y != 0) && self.captured {
+                    elm::send(&ToElm::MouseMotion { dx: dev.rel_x, dy: dev.rel_y });
+                    dev.rel_x = 0;
+                    dev.rel_y = 0;
+                } else if dev.rel_x != 0 || dev.rel_y != 0 {
                     let (dx, dy) = (dev.rel_x as f64, dev.rel_y as f64);
                     dev.rel_x = 0;
                     dev.rel_y = 0;
@@ -385,6 +403,7 @@ impl Inputs {
                     self.touchpad_axis(i, ev.code, ev.value, w, moved);
                 }
             }
+            EV_ABS if has_abs && self.captured => {}
             EV_ABS if has_abs => {
                 let d = &self.devices[i];
                 if ev.code == ABS_X {

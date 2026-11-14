@@ -52,6 +52,7 @@ effects =
     , Effect.WriteFile { path = "/data/snapshot", text = "" }
     , Effect.Log "couldn't read a message from the host"
     , Effect.SwitchReady
+    , Effect.CapturePointer True
     , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
     ]
 

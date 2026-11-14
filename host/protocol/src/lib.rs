@@ -94,6 +94,11 @@ pub enum Effect {
     /// The answer to `ToElm::Switching`: the snapshot is written (the effects before
     /// this one), so the host can stop this program and start the new one.
     SwitchReady,
+    /// While `capture` is on, the pointer stays where it is and is hidden, and the
+    /// mouse's motion comes as `ToElm::MouseMotion` rather than `ToElm::Mouse`: for
+    /// games, 3D views, drawing. Buttons and the wheel come as usual. A new Elm program
+    /// starts with it off.
+    CapturePointer { capture: bool },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -185,6 +190,10 @@ pub enum ToElm {
     /// computer can't switch to it: its USB stick needs flashing again. Sent again to
     /// each program the host starts.
     ReflashNeeded { build: String },
+    /// While the pointer is captured (`Effect::CapturePointer`): how far the mouse
+    /// moved, in its own counts (evdev's relative motion, neither accelerated nor
+    /// scaled), right and down positive.
+    MouseMotion { dx: i32, dy: i32 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -310,9 +319,10 @@ mod tests {
             Effect::WriteFile { .. } => "writeFile",
             Effect::Log { .. } => "log",
             Effect::SwitchReady => "switchReady",
+            Effect::CapturePointer { .. } => "capturePointer",
         }
     }
-    const EFFECT_TAGS: usize = 16;
+    const EFFECT_TAGS: usize = 17;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -340,9 +350,10 @@ mod tests {
             ToElm::Sha256 { .. } => "sha256",
             ToElm::Switching { .. } => "switching",
             ToElm::ReflashNeeded { .. } => "reflashNeeded",
+            ToElm::MouseMotion { .. } => "mouseMotion",
         }
     }
-    const TO_ELM_TAGS: usize = 24;
+    const TO_ELM_TAGS: usize = 25;
 
     #[test]
     fn reads_the_render_example() {

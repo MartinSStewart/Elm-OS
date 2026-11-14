@@ -85,13 +85,14 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Bytes { .. }
         | ToElm::Sha256 { .. }
         | ToElm::Switching { .. }
-        | ToElm::ReflashNeeded { .. } => return None,
+        | ToElm::ReflashNeeded { .. }
+        | ToElm::MouseMotion { .. } => return None,
     })
 }
 
 /// Only worth sending to the program running now.
 fn only_now(msg: &ToElm) -> bool {
-    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. })
+    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::MouseMotion { .. })
 }
 
 fn http_answer(msg: &ToElm) -> Option<&str> {

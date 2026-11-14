@@ -118,7 +118,12 @@ impl Host {
         if !self.hw_cursor {
             return;
         }
-        let (x, y) = (self.inputs.mouse_x, self.inputs.mouse_y);
+        // A captured pointer is hidden: off the screen.
+        let (x, y) = if self.inputs.captured {
+            (-100, -100)
+        } else {
+            (self.inputs.mouse_x, self.inputs.mouse_y)
+        };
         match &mut self.renderer {
             Renderer::Gpu(g) => g.cursor_move(x, y),
             Renderer::Cpu(d, _) => d.cursor_move(x, y),
@@ -209,6 +214,11 @@ impl Host {
                 }
                 FromElm::Connected(program) => {
                     self.program = program;
+                    // The new program hasn't captured the pointer.
+                    if self.inputs.captured {
+                        self.inputs.captured = false;
+                        self.cursor_move();
+                    }
                     if self.elm_started_at.is_none() && program == 1 {
                         self.elm_started_at = Some(now());
                     }
@@ -257,6 +267,12 @@ impl Host {
                 Effect::WriteFile { path, text } => persist::write_file(path, text),
                 Effect::Log { text } => log!("elm", "{}", text),
                 Effect::SwitchReady => elm::switch_ready(self.program),
+                Effect::CapturePointer { capture } => {
+                    if capture != self.inputs.captured {
+                        self.inputs.captured = capture;
+                        self.cursor_move();
+                    }
+                }
             }
         }
         if cursor_dirty {
