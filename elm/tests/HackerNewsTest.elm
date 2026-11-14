@@ -5,6 +5,7 @@ import Dict
 import Expect
 import HackerNews exposing (HackerNewsState(..), PostId(..), UiId(..))
 import Json.Encode as E
+import SeqDict
 import Test exposing (Test, describe, test)
 
 
@@ -43,7 +44,19 @@ commentsPage =
 suite : Test
 suite =
     describe "HackerNews"
-        [ test "keeps the comments of the 10 posts opened last" (\() -> openPosts 12 HackerNews.init |> .comments |> Dict.keys |> List.sort |> Expect.equal (List.map String.fromInt (List.range 3 12) |> List.sort))
+        [ test "keeps the comments of the 10 posts opened last"
+            (\() ->
+                openPosts 12 HackerNews.init
+                    |> .comments
+                    |> SeqDict.keys
+                    |> List.sortBy HackerNews.postIdToString
+                    |> Expect.equal
+                        (List.map
+                            (\int -> String.fromInt int |> HackerNews.PostId)
+                            (List.range 3 12)
+                            |> List.sortBy HackerNews.postIdToString
+                        )
+            )
         , test "opening a post again keeps it"
             (\() ->
                 openPosts 10 HackerNews.init
@@ -52,7 +65,7 @@ suite =
                     |> HackerNews.onClick (NewsPostButton (PostId "11"))
                     |> Tuple.first
                     |> .comments
-                    |> Dict.member "1"
+                    |> SeqDict.member (HackerNews.PostId "1")
                     |> Expect.equal True
             )
         , test "reads the comment counts of the posts"

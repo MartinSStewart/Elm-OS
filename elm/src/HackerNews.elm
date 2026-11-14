@@ -13,6 +13,7 @@ module HackerNews exposing
     , httpRequestIdToString
     , init
     , onClick
+    , postIdToString
     , stringToHttpRequestId
     , view
     )

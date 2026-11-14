@@ -22,6 +22,8 @@ import Quantity
 import Sprite
 import Test exposing (Test, describe, test)
 import Units
+import Unsafe
+import Wifi
 
 
 {-| Each Effect, in the order of examples.json's toHost.
@@ -30,7 +32,7 @@ effects : List Effect
 effects =
     [ Effect.SetCursor { color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
     , Effect.WifiScan
-    , Effect.WifiConnect { ssid = "Home", password = "secret" }
+    , Effect.WifiConnect { ssid = Wifi.stringToSsid "Home", password = Unsafe.wpa2Password "password" |> Just }
     , Effect.WifiDisconnect
     , Effect.Power Effect.PowerOff
     , Effect.Power Effect.Restart

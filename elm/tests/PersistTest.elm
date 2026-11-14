@@ -1,15 +1,16 @@
 module PersistTest exposing (suite)
 
-import ElmOs
-import Json.Decode as D
-import Json.Encode as E
 import Dict exposing (Dict)
 import Effect exposing (Effect)
+import ElmOs
 import Expect
 import HostMessage
+import Json.Decode as D
+import Json.Encode as E
 import Main
 import Persist
 import Test exposing (Test, describe, test)
+import Unsafe
 import Wifi
 
 
@@ -23,7 +24,14 @@ session =
     , Ok (HostMessage.Frame 1000.5)
     , Ok (HostMessage.Frame 1017.25)
     , Ok (HostMessage.Mouse 300 20)
-    , Ok (HostMessage.WifiStatus { state = Wifi.Connected, ssid = "Home", ip = "10.0.0.2", error = "" })
+    , Ok
+        (HostMessage.WifiStatus
+            { state = Wifi.Connected
+            , ssid = Wifi.stringToSsid "Home"
+            , ip = Just (Unsafe.ipv4 "10.0.0.2")
+            , error = ""
+            }
+        )
     , Ok (HostMessage.Key 30 True False)
     , Ok (HostMessage.Key 30 False False)
     , Ok (HostMessage.Frame 1034)
@@ -270,7 +278,7 @@ suite =
 
                     -- Nothing is reset on a restart: the last boot's wifi is there until
                     -- the host says otherwise.
-                    , \_ -> Maybe.map (\m -> m.wifiStatus.ssid) second |> Expect.equal (Just "Home")
+                    , \_ -> Maybe.map (\m -> m.wifiStatus.ssid) second |> Expect.equal (Just (Wifi.stringToSsid "Home"))
                     ]
                     ()
             )
