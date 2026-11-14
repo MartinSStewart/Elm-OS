@@ -10,13 +10,17 @@
 //!             Then "f GPU_NS\n" each time a frame is on the screen, with how long
 //!             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
 //!             a frame skipped because a newer one was already waiting.
-//!   stdin  <- frames: u32 n, then n Tri (common/src/atlas.rs): per triangle x, y, u, v
-//!             for each corner and an 0xRRGGBBAA colour, as Elm sends them.
+//!   stdin  <- frames: each a scene (common/src/scene.rs), layers drawn in order: Tri
+//!             (common/src/atlas.rs; per triangle x, y, u, v for each corner and an
+//!             0xRRGGBBAA colour, as Elm sends them), or a picture.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m X Y" moves it, "c RGBA S"
 //!             redraws it with that fill colour at scale S.
 //!
-//! Every triangle samples the texture atlas, which we upload once.
+//! Every triangle samples the texture atlas, which we upload once. A picture is two
+//! triangles that sample its pixels, an L8 (luminance) texture of palette indices, and
+//! look each index up in its palette, a 256 x 1 RGB texture; each is uploaded again
+//! only when it changes.
 //!
 //! The display path is the standard one (as in kmscube): GBM gives the GPU buffers
 //! that KMS can show, EGL renders into them, and each finished frame is shown with a
@@ -29,8 +33,9 @@
 
 mod ffi;
 
-use common::atlas::{self, Tri, ATLAS_H, ATLAS_W, CURSOR_PLANE};
+use common::atlas::{self, ATLAS_H, ATLAS_W, CURSOR_PLANE};
 use common::drm;
+use common::scene::{self, Layer, Picture};
 use ffi::*;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
@@ -85,6 +90,126 @@ varying vec2 v_uv;
 varying vec4 v_col;
 void main() { gl_FragColor = vec4(v_col.rgb, v_col.a * texture2D(atlas, v_uv).a); }
 ";
+
+/// Pictures: the same positions, and uv from 0 to 1 across the image.
+const PICTURE_VS: &str = "attribute vec2 pos;
+attribute vec2 uv;
+uniform vec2 screen;
+varying vec2 v_uv;
+void main() {
+    vec2 ndc = pos / screen * 2.0 - 1.0;
+    gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
+    v_uv = uv;
+}
+";
+
+/// The index under the pixel's centre (nearest), then its colour in the palette's
+/// 256 texels. highp for the same reason as FS: a 320 pixel wide image scaled to
+/// 1920 must land on the right one.
+const PICTURE_FS: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D pixels;
+uniform sampler2D palette;
+varying vec2 v_uv;
+void main() {
+    float index = texture2D(pixels, v_uv).r * 255.0;
+    gl_FragColor = vec4(texture2D(palette, vec2((index + 0.5) / 256.0, 0.5)).rgb, 1.0);
+}
+";
+
+/// A picture's textures, kept from frame to frame (one per picture in the scene, in
+/// order) so that an image or palette that hasn't changed isn't uploaded again.
+#[derive(Default)]
+struct PictureTextures {
+    pixels: GLuint,
+    palette: GLuint,
+    width: u32,
+    height: u32,
+    uploaded: Vec<u8>,
+    uploaded_palette: Vec<u8>,
+}
+
+unsafe fn nearest_texture() -> GLuint {
+    let mut tex = 0;
+    glGenTextures(1, &mut tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    tex
+}
+
+impl PictureTextures {
+    /// Binds its textures to units 1 (pixels) and 2 (palette), uploading what changed.
+    unsafe fn bind(&mut self, p: &Picture) {
+        // Not on unit 0, where the atlas stays bound: making a texture binds it.
+        glActiveTexture(GL_TEXTURE0 + 1);
+        if self.pixels == 0 {
+            self.pixels = nearest_texture();
+            self.palette = nearest_texture();
+        }
+        glActiveTexture(GL_TEXTURE0 + 1);
+        glBindTexture(GL_TEXTURE_2D, self.pixels);
+        if (self.width, self.height) != (p.width, p.height) {
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_LUMINANCE as i32,
+                p.width as i32,
+                p.height as i32,
+                0,
+                GL_LUMINANCE,
+                GL_UNSIGNED_BYTE,
+                p.pixels.as_ptr() as *const c_void,
+            );
+            (self.width, self.height) = (p.width, p.height);
+            self.uploaded.clone_from(&p.pixels);
+        } else if self.uploaded != p.pixels {
+            glTexSubImage2D(
+                GL_TEXTURE_2D,
+                0,
+                0,
+                0,
+                p.width as i32,
+                p.height as i32,
+                GL_LUMINANCE,
+                GL_UNSIGNED_BYTE,
+                p.pixels.as_ptr() as *const c_void,
+            );
+            self.uploaded.clone_from(&p.pixels);
+        }
+        glActiveTexture(GL_TEXTURE0 + 2);
+        glBindTexture(GL_TEXTURE_2D, self.palette);
+        if self.uploaded_palette != p.palette || self.uploaded_palette.is_empty() {
+            let mut rgb = [0u8; 768];
+            rgb[..p.palette.len()].copy_from_slice(&p.palette);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGB as i32,
+                256,
+                1,
+                0,
+                GL_RGB,
+                GL_UNSIGNED_BYTE,
+                rgb.as_ptr() as *const c_void,
+            );
+            self.uploaded_palette.clone_from(&p.palette);
+        }
+        glActiveTexture(GL_TEXTURE0);
+    }
+}
+
+/// What to draw from the vertex buffer, in order.
+enum Draw {
+    Tris { first: i32, count: i32 },
+    /// The picture in `layer`, with the textures in `slot`.
+    Picture { first: i32, layer: usize, slot: usize },
+}
 
 unsafe fn compile(kind: GLenum, src: &str) -> GLuint {
     let s = glCreateShader(kind);
@@ -281,18 +406,13 @@ struct Vertex {
     rgba: [u8; 4],
 }
 
-/// Reads one frame from /init: a count, then that many triangles. None when /init is gone.
-fn read_frame(input: &mut File, tris: &mut Vec<Tri>) -> Option<()> {
-    let mut n = [0u8; 4];
-    input.read_exact(&mut n).ok()?;
-    let n = u32::from_ne_bytes(n) as usize;
-    if n > 1_000_000 {
-        die("absurd triangle count");
+/// Reads one frame from /init (common/src/scene.rs). None when /init is gone.
+fn read_frame(input: &mut File, layers: &mut Vec<Layer>) -> Option<()> {
+    match scene::read(input, layers) {
+        Ok(()) => Some(()),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => die(&format!("a scene we can't read: {e}")),
+        Err(_) => None,
     }
-    tris.resize(n, Tri::default());
-    // SAFETY: Tri is plain data; we fill exactly n of them.
-    let bytes = unsafe { std::slice::from_raw_parts_mut(tris.as_mut_ptr() as *mut u8, n * Tri::SIZE) };
-    input.read_exact(bytes).ok()
 }
 
 fn has_more(input: &File) -> bool {
@@ -417,6 +537,18 @@ fn main() {
             die("no GPU driver, only software GL");
         }
 
+        let picture_prog = glCreateProgram();
+        glAttachShader(picture_prog, compile(GL_VERTEX_SHADER, PICTURE_VS));
+        glAttachShader(picture_prog, compile(GL_FRAGMENT_SHADER, PICTURE_FS));
+        for (i, name) in [c"pos", c"uv"].iter().enumerate() {
+            glBindAttribLocation(picture_prog, i as GLuint, name.as_ptr());
+        }
+        glLinkProgram(picture_prog);
+        glUseProgram(picture_prog);
+        glUniform2f(glGetUniformLocation(picture_prog, c"screen".as_ptr()), w as f32, h as f32);
+        glUniform1i(glGetUniformLocation(picture_prog, c"pixels".as_ptr()), 1);
+        glUniform1i(glGetUniformLocation(picture_prog, c"palette".as_ptr()), 2);
+
         let prog = glCreateProgram();
         glAttachShader(prog, compile(GL_VERTEX_SHADER, VS));
         glAttachShader(prog, compile(GL_FRAGMENT_SHADER, FS));
@@ -530,11 +662,13 @@ fn main() {
 
         // SAFETY: /init's pipe is our stdin.
         let mut input = File::from_raw_fd(0);
-        let mut tris: Vec<Tri> = Vec::new();
+        let mut layers: Vec<Layer> = Vec::new();
         let mut verts: Vec<Vertex> = Vec::new();
+        let mut draws: Vec<Draw> = Vec::new();
+        let mut pictures: Vec<PictureTextures> = Vec::new();
         let mut stdout = std::io::stdout();
         'frames: loop {
-            if read_frame(&mut input, &mut tris).is_none() {
+            if read_frame(&mut input, &mut layers).is_none() {
                 break; // /init went away
             }
             // Frames can arrive faster than the screen refreshes (a touchpad reports
@@ -542,23 +676,52 @@ fn main() {
             // Draw only the newest, or the backlog in the pipe makes the screen lag.
             // Each frame skipped is reported as "d", so /init knows it is done with it.
             while has_more(&input) {
-                if read_frame(&mut input, &mut tris).is_none() {
+                if read_frame(&mut input, &mut layers).is_none() {
                     break 'frames;
                 }
                 let _ = writeln!(stdout, "d");
             }
+            // Every layer's vertices go in one buffer; then each is drawn in turn.
             verts.clear();
-            for t in &tris {
-                let rgba = t.rgba.to_be_bytes();
-                for p in &t.p {
-                    verts.push(Vertex {
-                        x: p[0],
-                        y: p[1],
-                        u: p[2],
-                        v: p[3],
-                        rgba,
-                    });
+            draws.clear();
+            let mut slot = 0;
+            for (index, layer) in layers.iter().enumerate() {
+                let first = verts.len() as i32;
+                match layer {
+                    Layer::Tris(tris) => {
+                        for t in tris {
+                            let rgba = t.rgba.to_be_bytes();
+                            for p in &t.p {
+                                verts.push(Vertex {
+                                    x: p[0],
+                                    y: p[1],
+                                    u: p[2],
+                                    v: p[3],
+                                    rgba,
+                                });
+                            }
+                        }
+                        draws.push(Draw::Tris { first, count: verts.len() as i32 - first });
+                    }
+                    Layer::Picture(p) => {
+                        let (x0, y0) = (p.x as f32, p.y as f32);
+                        let (x1, y1) = (x0 + p.w as f32, y0 + p.h as f32);
+                        let corner = |x, y, u, v| Vertex { x, y, u, v, rgba: [255; 4] };
+                        verts.extend([
+                            corner(x0, y0, 0.0, 0.0),
+                            corner(x1, y0, 1.0, 0.0),
+                            corner(x0, y1, 0.0, 1.0),
+                            corner(x1, y0, 1.0, 0.0),
+                            corner(x1, y1, 1.0, 1.0),
+                            corner(x0, y1, 0.0, 1.0),
+                        ]);
+                        draws.push(Draw::Picture { first, layer: index, slot });
+                        slot += 1;
+                    }
                 }
+            }
+            if pictures.len() < slot {
+                pictures.resize_with(slot, PictureTextures::default);
             }
             timer.begin();
             glClear(GL_COLOR_BUFFER_BIT);
@@ -568,7 +731,31 @@ fn main() {
                 verts.as_ptr() as *const c_void,
                 GL_STREAM_DRAW,
             );
-            glDrawArrays(GL_TRIANGLES, 0, verts.len() as i32);
+            let mut current = prog;
+            for draw in &draws {
+                match *draw {
+                    Draw::Tris { first, count } => {
+                        if current != prog {
+                            glUseProgram(prog);
+                            current = prog;
+                        }
+                        glDrawArrays(GL_TRIANGLES, first, count);
+                    }
+                    Draw::Picture { first, layer, slot } => {
+                        if let Layer::Picture(p) = &layers[layer] {
+                            if current != picture_prog {
+                                glUseProgram(picture_prog);
+                                current = picture_prog;
+                            }
+                            pictures[slot].bind(p);
+                            glDrawArrays(GL_TRIANGLES, first, 6);
+                        }
+                    }
+                }
+            }
+            if current != prog {
+                glUseProgram(prog);
+            }
             let gpu_ns = timer.end();
             eglSwapBuffers(dpy, surf);
 

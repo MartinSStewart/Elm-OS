@@ -35,8 +35,8 @@ import Bytes exposing (Bytes)
 import Bytes.Encode as BE
 import Color exposing (Color)
 import Postcard
-import Sprite exposing (Triangle)
-import Units exposing (DevicePixels, UiScale)
+import Scene
+import Units exposing (UiScale)
 
 
 port toHost : Bytes -> Cmd msg
@@ -46,7 +46,8 @@ port fromHost : (Bytes -> msg) -> Sub msg
 
 
 type Effect
-    = Render (() -> List (Triangle DevicePixels))
+    = -- The frame's scene (Scene.elm): its layers, drawn in order.
+      Render (() -> List Scene.Layer)
       -- The mouse cursor's fill colour and the UI scale. The host draws the cursor on
       -- the display's cursor plane and moves it as the mouse moves, without waiting
       -- for a frame. The scale sets the cursor's size and how fast the mouse moves it,
@@ -177,22 +178,13 @@ message effects =
     BE.encode (Postcard.list encode effects)
 
 
-{-| 52 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
-x, y, u, v of each corner as 32-bit floats (screen pixels, atlas pixels), then the
-colour as an unsigned 32-bit 0xRRGGBBAA.
--}
-renderBytes : List (Triangle DevicePixels) -> Bytes
-renderBytes triangles =
-    BE.encode (BE.sequence (List.map Sprite.encoder triangles))
-
-
 {-| One Effect, as protocol::Effect: its variant's number there, then its fields.
 -}
 encode : Effect -> BE.Encoder
 encode effect =
     case effect of
-        Render triangles ->
-            Postcard.variant 0 [ Postcard.bytes (renderBytes (triangles ())) ]
+        Render layers ->
+            Postcard.variant 0 [ Postcard.list Scene.encode (layers ()) ]
 
         SetCursor { color, scale } ->
             Postcard.variant 1 [ Postcard.unsigned (Color.toInt color), Postcard.unsigned (Units.scaleInt scale) ]

@@ -5,6 +5,7 @@ module Ui exposing
     , ElementState(..)
     , InputType(..)
     , Model
+    , PictureData
     , RowColumn
     , TextInputData
     , TextInputMultilineData
@@ -35,6 +36,7 @@ module Ui exposing
     , onMouseDown
     , onWheel
     , paddingXY
+    , picture
     , quads
     , row
     , selectableButton
@@ -56,7 +58,8 @@ drawing textured triangles for the render port instead of WebGL meshes.
 Elements know their size when they are made, so laying out is one pass: a row puts
 its children side by side, a column stacks them, `el` adds padding, a border and a
 fill, and the alignment helpers (`center`, `topRight`, ...) pad a child out to a
-given size. `view` turns the tree into triangles, and `hover` finds the elements
+given size. `view` turns the tree into the scene's layers (Scene.elm): triangles,
+and the pictures of `picture` elements, in drawing order. `hover` finds the elements
 with ids under a point.
 
 Everything here is in UI pixels (Units.elm); only `view` turns them into device pixels,
@@ -74,7 +77,9 @@ import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Duration exposing (Duration, Seconds)
+import Bytes exposing (Bytes)
 import Quantity exposing (Quantity, Rate)
+import Scene
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -135,8 +140,20 @@ type Element id
         }
         (Element id)
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
+    | Picture PictureData
     | Empty
     | Viewport (ViewportData id) (Element id)
+
+
+{-| An image (Scene.Image) drawn scaled to the element's size.
+-}
+type alias PictureData =
+    { size : Coord UiPixels
+    , width : Int
+    , height : Int
+    , format : Scene.PixelFormat
+    , pixels : Bytes
+    }
 
 
 type alias ViewportData id =
@@ -303,6 +320,9 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
         Quads _ ->
             ( { model | focus = Nothing }, Nothing )
 
+        Picture _ ->
+            ( { model | focus = Nothing }, Nothing )
+
         Empty ->
             ( { model | focus = Nothing }, Nothing )
 
@@ -349,6 +369,9 @@ onWheel id clicks element model =
             model
 
         Quads _ ->
+            model
+
+        Picture _ ->
             model
 
         Empty ->
@@ -638,6 +661,9 @@ map f element =
         Quads data ->
             Quads data
 
+        Picture data ->
+            Picture data
+
         Empty ->
             Empty
 
@@ -650,6 +676,14 @@ map f element =
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
 quads =
     Quads
+
+
+{-| An image of `width` x `height` pixels (Scene.Image), scaled to `size` by nearest
+neighbour. It is drawn whole, even where a viewport would cut it off.
+-}
+picture : PictureData -> Element id
+picture =
+    Picture
 
 
 {-| Put a child somewhere in an area of the given size. `fx` and `fy` go from 0 (left, top) to 2 (right, bottom).
@@ -746,6 +780,9 @@ size element =
             data.cachedSize
 
         Quads data ->
+            data.size
+
+        Picture data ->
             data.size
 
         Empty ->
@@ -908,6 +945,9 @@ hoverHelper hovers point position element =
         Quads _ ->
             hovers
 
+        Picture _ ->
+            hovers
+
         Empty ->
             hovers
 
@@ -977,6 +1017,9 @@ findInputHelper id position element =
         Quads _ ->
             Nothing
 
+        Picture _ ->
+            Nothing
+
         Empty ->
             Nothing
 
@@ -1003,11 +1046,11 @@ findFirst f list =
 -- DRAWING
 
 
-{-| The triangles that draw the UI in drawing order (back to front), given the hovered and
+{-| The layers that draw the UI in drawing order (back to front), given the hovered and
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 -}
-view : UiScale -> Bool -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view : UiScale -> Bool -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List Scene.Layer
 view scale showUiBorder maybeHover focus screenSize element =
     viewList
         scale
@@ -1019,13 +1062,13 @@ view scale showUiBorder maybeHover focus screenSize element =
         element
 
 
-viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
+viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List Scene.Layer
 viewList scale showUiBorder maybeHover focus viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (size element) } of
         Just viewport3 ->
             case element of
                 TextInput data ->
-                    TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state.current
+                    triangles (TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state.current)
 
                 TextInputMultiline data ->
                     TextInputMultiline.view
@@ -1036,9 +1079,10 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         (focus == Just data.id)
                         data.state.scroll
                         data.state.input.current
+                        |> triangles
 
                 Text data ->
-                    Sprite.text scale data.color data.font viewport3 data.text position
+                    triangles (Sprite.text scale data.color data.font viewport3 data.text position)
 
                 Button data child ->
                     borderAndFillView
@@ -1055,16 +1099,18 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
+                        |> triangles
+                        |> withChildren scale showUiBorder maybeHover focus viewport3 position data child
 
                 Row data children ->
                     childPositions True data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                        |> List.map (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                        |> Scene.concat
 
                 Column data children ->
                     childPositions False data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                        |> List.map (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                        |> Scene.concat
 
                 Single data child ->
                     borderAndFillView
@@ -1089,11 +1135,31 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
+                        |> triangles
+                        |> withChildren scale showUiBorder maybeHover focus viewport3 position data child
 
                 Quads data ->
-                    Sprite.move position data.triangles |> Sprite.toDevice scale
+                    Sprite.move position data.triangles |> Sprite.toDevice scale |> triangles
+
+                Picture data ->
+                    let
+                        ( x, y ) =
+                            Coord.toTuple (Coord.toDevice scale position)
+
+                        ( w, h ) =
+                            Coord.toTuple (Coord.toDevice scale data.size)
+                    in
+                    [ Scene.Picture
+                        { x = x
+                        , y = y
+                        , w = w
+                        , h = h
+                        , width = data.width
+                        , height = data.height
+                        , format = data.format
+                        , pixels = data.pixels
+                        }
+                    ]
 
                 Empty ->
                     []
@@ -1110,6 +1176,39 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
 
         Nothing ->
             []
+
+
+{-| A layer of triangles, or none.
+-}
+triangles : List (Triangle DevicePixels) -> List Scene.Layer
+triangles list =
+    if List.isEmpty list then
+        []
+
+    else
+        [ Scene.Triangles list ]
+
+
+{-| What an element with a child (a button, an `el`) draws after its border and fill:
+the child, and then its `inFront` elements.
+-}
+withChildren :
+    UiScale
+    -> Bool
+    -> Maybe id
+    -> Maybe id
+    -> Bounds UiPixels
+    -> Coord UiPixels
+    -> { a | padding : Bounds UiPixels, inFront : List (Element id) }
+    -> Element id
+    -> List Scene.Layer
+    -> List Scene.Layer
+withChildren scale showUiBorder maybeHover focus area position data child own =
+    Scene.concat
+        (own
+            :: viewList scale showUiBorder maybeHover focus area (Coord.plus data.padding.topLeft position) child
+            :: List.map (viewList scale showUiBorder maybeHover focus area position) data.inFront
+        )
 
 
 borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)

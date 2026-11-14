@@ -26,7 +26,8 @@ import Keyboard exposing (Key(..))
 import News exposing (NewsState(..))
 import Persist
 import Quantity exposing (Quantity)
-import Sprite exposing (Triangle)
+import Scene
+import Sprite
 import TextInput
 import TextInputMultiline
 import Time
@@ -1305,7 +1306,7 @@ cursorColor model =
 -- VIEW
 
 
-view : Model -> List (Triangle DevicePixels)
+view : Model -> List Scene.Layer
 view model =
     let
         ui =
@@ -1314,18 +1315,22 @@ view model =
         hovered =
             Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
     in
-    Ui.view (uiScale model) model.showUiBorders hovered model.uiState.focus model.screenSize ui
-        ++ Sprite.cursor
-            (if Maybe.map .hardwareCursor model.renderer == Just True then
-                -- The host moves the real cursor; this orange one trails it by however
-                -- long a frame takes to get from the mouse to the screen.
-                Color.rgb255 255 150 40
+    Scene.append
+        (Ui.view (uiScale model) model.showUiBorders hovered model.uiState.focus model.screenSize ui)
+        [ Scene.Triangles
+            (Sprite.cursor
+                (if Maybe.map .hardwareCursor model.renderer == Just True then
+                    -- The host moves the real cursor; this orange one trails it by however
+                    -- long a frame takes to get from the mouse to the screen.
+                    Color.rgb255 255 150 40
 
-             else
-                cursorColor model
+                 else
+                    cursorColor model
+                )
+                (uiScale model)
+                model.mouse
             )
-            (uiScale model)
-            model.mouse
+        ]
 
 
 {-| Device pixels per UI pixel: 2 on screens at least 2000 pixels wide, otherwise 1.

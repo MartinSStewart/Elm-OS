@@ -20,7 +20,8 @@
 //!   {"t":"system","kernel":K,"cpu":C,"commit":G}   for the about page
 //!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
-use common::atlas::{self, Tri};
+use common::atlas;
+use common::scene::Layer;
 use protocol::{PowerAction, ToElm};
 
 use crate::display::CpuDisplay;
@@ -155,9 +156,9 @@ impl Host {
         self.cpu_next_at = None;
     }
 
-    fn draw(&mut self, tris: &[Tri]) {
+    fn draw(&mut self, layers: &[Layer]) {
         if let Renderer::Gpu(g) = &mut self.renderer {
-            if g.send_frame(tris) {
+            if g.send_frame(layers) {
                 return;
             }
             log!("host", "GPU renderer stopped; drawing on the CPU");
@@ -169,8 +170,15 @@ impl Host {
         }
         if let Renderer::Cpu(d, atlas) = &mut self.renderer {
             d.back.fill(0);
-            for t in tris {
-                raster::fill_triangle(&mut d.back, d.stride, d.w, d.h, atlas, t);
+            for layer in layers {
+                match layer {
+                    Layer::Tris(tris) => {
+                        for t in tris {
+                            raster::fill_triangle(&mut d.back, d.stride, d.w, d.h, atlas, t);
+                        }
+                    }
+                    Layer::Picture(p) => raster::draw_picture(&mut d.back, d.stride, d.w, d.h, p),
+                }
             }
             d.present();
         }
@@ -208,8 +216,8 @@ impl Host {
         let mut cursor_dirty = false;
         for sent in effects::take() {
             let effect = match sent {
-                FromElm::Render(tris) => {
-                    scene = Some(tris); // only the newest gets drawn
+                FromElm::Render(layers) => {
+                    scene = Some(layers); // only the newest gets drawn
                     continue;
                 }
                 FromElm::Connected(program) => {
@@ -280,12 +288,12 @@ impl Host {
         if cursor_dirty {
             self.cursor_redraw();
         }
-        if let Some(tris) = scene {
+        if let Some(layers) = scene {
             let start = now();
             if self.awaiting_render {
                 self.stats.elm.push(start - self.asked_at);
             }
-            self.draw(&tris);
+            self.draw(&layers);
             self.stats.draw.push(now() - start);
             self.scene_drawn();
         }

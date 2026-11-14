@@ -1,6 +1,42 @@
-//! The CPU rasteriser: draws Elm's textured triangles into the back buffer.
+//! The CPU rasteriser: draws Elm's textured triangles and pictures into the back buffer.
 
 use common::atlas::{Tri, ATLAS_H, ATLAS_W};
+use common::scene::Picture;
+
+/// A picture scaled into its rectangle of `back` (w x h pixels, `stride` per row),
+/// clipped to the screen: each pixel shows the picture's pixel under its centre,
+/// through the palette. A row of the screen that shows the same row of the picture as
+/// the one above it (when it is scaled up) is a copy of that one.
+pub fn draw_picture(back: &mut [u32], stride: usize, w: u32, h: u32, p: &Picture) {
+    if p.w == 0 || p.h == 0 || p.width == 0 || p.height == 0 {
+        return;
+    }
+    let x0 = p.x.max(0);
+    let x1 = (p.x as i64 + p.w as i64).min(w as i64) as i32;
+    let y0 = p.y.max(0);
+    let y1 = (p.y as i64 + p.h as i64).min(h as i64) as i32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let colors = p.colors();
+    let columns: Vec<usize> = (x0..x1).map(|x| Picture::source_index((x - p.x) as u32, p.w, p.width) as usize).collect();
+    let (left, right) = (x0 as usize, x1 as usize);
+    let mut last: Option<(usize, u32)> = None; // the screen row drawn last, and its picture row
+    for y in y0..y1 {
+        let source = Picture::source_index((y - p.y) as u32, p.h, p.height);
+        let start = y as usize * stride;
+        match last {
+            Some((above, row)) if row == source => back.copy_within(above + left..above + right, start + left),
+            _ => {
+                let pixels = &p.pixels[source as usize * p.width as usize..][..p.width as usize];
+                for (dst, &column) in back[start + left..start + right].iter_mut().zip(&columns) {
+                    *dst = colors[pixels[column] as usize];
+                }
+            }
+        }
+        last = Some((start, source));
+    }
+}
 
 fn edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (bx - ax) * (py - ay) - (by - ay) * (px - ax)

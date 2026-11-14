@@ -169,6 +169,12 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   the host hands them to the renderer nearly as they are. With JSON, encoding and parsing
   them took most of Elm's time per frame: `make measure-frames` measured 88 ms per frame
   with JSON and 15 ms with bytes (QEMU without KVM, virgl GPU), 10 fps then and 37 fps now.
+- A frame's scene is layers, drawn in order (`elm/src/Scene.elm`): triangles as above, or a
+  picture, an image of palette indices with its palette (256 colours at most) that the
+  renderer scales to a rectangle of the screen, nearest neighbour (`Ui.picture` puts one in
+  the UI). The CPU renderer draws it through the palette row by row (`raster.rs`); the GPU
+  renderer keeps it in an 8-bit texture and looks each index up in a 256 x 1 palette
+  texture, uploading either again only when it changes.
 - The other port payloads are JSON; see `elm/src/Effect.elm` and the decoders in `elm/src/Main.elm`.
 - `wpa_supplicant` is built from w1.fi's source with its internal crypto instead of OpenSSL.
   That crypto has no elliptic curves, so WPA3-only (SAE) networks can't be joined; WPA2 and

@@ -1,7 +1,7 @@
 //! What Elm sends on its one output port, `toHost`: lists of effects (protocol::Effect,
 //! postcard-encoded; elm/src/Effect.elm encodes them). Each frame's scene is one of them
-//! (Effect::Render, read by protocol::read_render). Some are answered on `fromHost`:
-//! HTTP requests, and reading files and devices (files.rs).
+//! (Effect::Render: layers of triangles, read by protocol::read_render, and pictures).
+//! Some are answered on `fromHost`: HTTP requests, and reading files and devices (files.rs).
 //!
 //! The types are in host/protocol, with an example of each message that both sides are
 //! tested against.
@@ -13,6 +13,7 @@
 use std::sync::{Mutex, OnceLock};
 
 use common::atlas::Tri;
+use common::scene::{Layer, Picture};
 
 use crate::sys::Waker;
 pub use protocol::Effect;
@@ -25,7 +26,7 @@ enum Sent {
 /// What Elm sent, in order.
 pub enum FromElm {
     Effect(Effect),
-    Render(Vec<Tri>),
+    Render(Vec<Layer>),
     /// A new Elm program (this number, see elm::answer) has started: what follows is
     /// from it.
     Connected(u64),
@@ -84,6 +85,40 @@ pub fn wake_fd() -> i32 {
     inbox().waker.fd()
 }
 
+/// The renderers' scene from Elm's: the layers that can be read (the others are
+/// logged and left out).
+fn scene(layers: Vec<protocol::Layer>) -> Vec<Layer> {
+    layers
+        .into_iter()
+        .filter_map(|layer| match layer {
+            protocol::Layer::Triangles(bytes) => match protocol::read_render(&bytes) {
+                Some(tris) => Some(Layer::Tris(tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect())),
+                None => {
+                    log!("host", "couldn't read Elm's triangles: {} bytes", bytes.len());
+                    None
+                }
+            },
+            protocol::Layer::Picture(p) => {
+                if !p.is_whole() {
+                    log!("host", "a {}x{} picture with {} bytes of pixels: not drawing it", p.width, p.height, p.pixels.len());
+                    return None;
+                }
+                let protocol::PixelFormat::Indexed { palette } = p.format;
+                Some(Layer::Picture(Picture {
+                    x: p.x,
+                    y: p.y,
+                    w: p.w,
+                    h: p.h,
+                    width: p.width,
+                    height: p.height,
+                    palette,
+                    pixels: p.pixels,
+                }))
+            }
+        })
+        .collect()
+}
+
 /// Everything Elm has sent since the last call, in order.
 pub fn take() -> Vec<FromElm> {
     inbox().waker.clear();
@@ -95,12 +130,7 @@ pub fn take() -> Vec<FromElm> {
             Sent::Effects(list) => {
                 for effect in list {
                     match effect {
-                        Effect::Render(bytes) => match protocol::read_render(&bytes) {
-                            Some(tris) => effects.push(FromElm::Render(
-                                tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
-                            )),
-                            None => log!("host", "couldn't read Elm's scene: {} bytes", bytes.len()),
-                        },
+                        Effect::Render(layers) => effects.push(FromElm::Render(scene(layers))),
                         effect => effects.push(FromElm::Effect(effect)),
                     }
                 }

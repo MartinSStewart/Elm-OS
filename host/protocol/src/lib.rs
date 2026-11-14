@@ -33,10 +33,59 @@ pub struct RenderTriangle {
     pub rgba: u32,
 }
 
-/// How many bytes each triangle takes in `Effect::Render`.
+/// How many bytes each triangle takes in `Layer::Triangles`.
 pub const RENDER_TRIANGLE_BYTES: usize = 52;
 
-/// Reads the scene in `Effect::Render`: 52 bytes a triangle, the 12 numbers of its
+/// One layer of the scene `Effect::Render` draws. The layers are drawn in order, each
+/// over the ones before it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub enum Layer {
+    /// Triangles as `read_render` reads them. A byte string, so eco and the host copy
+    /// it rather than look at each number.
+    Triangles(#[serde(with = "serde_bytes")] Vec<u8>),
+    Picture(Picture),
+}
+
+/// An image, scaled to the rectangle `x`, `y`, `w`, `h` (screen pixels) by nearest
+/// neighbour: each screen pixel shows the image's pixel under its centre.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Picture {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    /// The image's own size, in its pixels.
+    pub width: u32,
+    pub height: u32,
+    pub format: PixelFormat,
+    /// `width` * `height` pixels in `format`, row by row from the top left.
+    #[serde(with = "serde_bytes")]
+    pub pixels: Vec<u8>,
+}
+
+/// How a `Picture`'s pixels give colours. (Room for more, such as RGBA.)
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum PixelFormat {
+    /// A byte a pixel, an index into the palette: up to 256 colours of 3 bytes, red,
+    /// green and blue (VGA's way, GIF's and PNG-8's). An index past the palette's end is black.
+    Indexed {
+        #[serde(with = "serde_bytes")]
+        palette: Vec<u8>,
+    },
+}
+
+impl Picture {
+    /// Whether its pixels are the size it says, and its palette no more than 256 colours.
+    pub fn is_whole(&self) -> bool {
+        let PixelFormat::Indexed { palette } = &self.format;
+        self.pixels.len() as u64 == self.width as u64 * self.height as u64 && palette.len() <= 768
+    }
+}
+
+/// Reads a `Layer::Triangles`: 52 bytes a triangle, the 12 numbers of its
 /// corners as 32-bit floats and then its colour as an unsigned 32-bit integer, all
 /// little-endian. None if the length isn't a whole number of triangles.
 pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
@@ -63,9 +112,8 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum Effect {
-    /// The scene to draw, once a frame: triangles as `read_render` reads them. A byte
-    /// string, so eco and the host copy it rather than look at each number.
-    Render(#[serde(with = "serde_bytes")] Vec<u8>),
+    /// The scene to draw, once a frame: its layers, drawn in order.
+    Render(Vec<Layer>),
     /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
     /// sets the cursor's size and how far mouse motion moves it.
     Cursor { rgba: u32, scale: u32 },
@@ -376,13 +424,16 @@ mod tests {
     #[test]
     fn reads_the_render_example() {
         let render = examples("toHost").into_iter().find(|e| tag(e) == "render").unwrap();
-        let Effect::Render(bytes) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
+        let Effect::Render(layers) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
+        let [Layer::Triangles(bytes), Layer::Picture(picture)] = &layers[..] else { panic!("not the example's layers") };
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
-            read_render(&bytes),
+            read_render(bytes),
             Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff }])
         );
         assert_eq!(read_render(&bytes[1..]), None);
+        assert!(picture.is_whole());
+        assert!(!Picture { pixels: vec![0], ..picture.clone() }.is_whole());
     }
 
     #[test]

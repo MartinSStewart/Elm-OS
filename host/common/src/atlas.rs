@@ -113,7 +113,7 @@ pub fn cursor_image(scale: usize, fill: u32) -> Vec<u32> {
 /// x, y, u, v for each corner (screen and atlas pixels), then the colour as 0xRRGGBBAA.
 /// elmos-gpu reads these from a pipe, so the layout is fixed (52 bytes).
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct Tri {
     pub p: [[f32; 4]; 3],
     pub rgba: u32,

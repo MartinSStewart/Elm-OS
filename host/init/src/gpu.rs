@@ -2,12 +2,12 @@
 //! binary, and Mesa's drivers are shared libraries that can't be loaded into it, so
 //! the renderer is its own dynamically linked program that owns the display.
 //!
-//!   its stdin  <- frames: u32 count, then that many Tri (common/src/atlas.rs)
+//!   its stdin  <- frames: each a scene (common/src/scene.rs)
 //!   its stdout -> "ok W H CURSOR RENDERER" once the display is up; then "f GPU_NS"
 //!                 for each frame shown, or "d" for one skipped
 //!   its fd 3   <- cursor commands: "m X Y" moves it, "c RGBA S" redraws it
 
-use common::atlas::Tri;
+use common::scene::{self, Layer};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -159,9 +159,8 @@ impl Gpu {
     }
 
     /// Hands a frame over. False if the renderer is gone.
-    pub fn send_frame(&mut self, tris: &[Tri]) -> bool {
-        let n = tris.len() as u32;
-        self.frames.write_all(&n.to_ne_bytes()).is_ok() && self.frames.write_all(Tri::as_bytes(tris)).is_ok()
+    pub fn send_frame(&mut self, layers: &[Layer]) -> bool {
+        scene::write(&mut self.frames, layers).is_ok()
     }
 
     /// Non-blocking: if the pipe is backed up, skip it (the next move fixes the position).

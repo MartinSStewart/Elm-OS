@@ -18,6 +18,7 @@ import Persist
 import Postcard
 import ProtocolExamples
 import Quantity
+import Scene
 import Sprite
 import Test exposing (Test, describe, test)
 import Units
@@ -55,7 +56,21 @@ effects =
     , Effect.CapturePointer True
     , Effect.ReadFile { path = "/usr/share/doom/freedoom1.wad" }
     , Effect.WriteBytes { path = "/data/doom/doomsav0.dsg", bytes = BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 0, 1, 255 ])) }
-    , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
+    , Effect.Render
+        (\() ->
+            [ Scene.Triangles [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]
+            , Scene.Picture
+                { x = 10
+                , y = 20
+                , w = 6
+                , h = 3
+                , width = 2
+                , height = 1
+                , format = Scene.Indexed (BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 0, 0, 0, 255, 128, 0 ])))
+                , pixels = BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 1, 0 ]))
+                }
+            ]
+        )
     ]
 
 

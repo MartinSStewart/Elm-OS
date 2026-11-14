@@ -1,5 +1,5 @@
 {
-  "comment": "One example of every message between Elm and the host (src/lib.rs), as JSON to be readable: an enum variant is {\"name\": fields}, or just \"name\" without fields. On the wire they are postcard; cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) that the Elm side's bytes are Rust's (cargo run -p protocol --bin protocol-examples). toHost is in the same order as ProtocolTest.effects. The render example is one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252).",
+  "comment": "One example of every message between Elm and the host (src/lib.rs), as JSON to be readable: an enum variant is {\"name\": fields}, or just \"name\" without fields. On the wire they are postcard; cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) that the Elm side's bytes are Rust's (cargo run -p protocol --bin protocol-examples). toHost is in the same order as ProtocolTest.effects. The render example is two layers: one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252), then a 2 x 1 picture (orange, then black) scaled to 6 x 3 screen pixels at (10, 20).",
   "toHost": [
     {"cursor": {"rgba": 4278190335, "scale": 2}},
     "wifiScan",
@@ -22,7 +22,7 @@
     {"capturePointer": {"capture": true}},
     {"readFile": {"path": "/usr/share/doom/freedoom1.wad"}},
     {"writeBytes": {"path": "/data/doom/doomsav0.dsg", "bytes": [0, 1, 255]}},
-    {"render": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}
+    {"render": [{"triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}, {"picture": {"x": 10, "y": 20, "w": 6, "h": 3, "width": 2, "height": 1, "format": {"indexed": {"palette": [0, 0, 0, 255, 128, 0]}}, "pixels": [1, 0]}}]}
   ],
   "fromHost": [
     {"screen": {"w": 1280, "h": 800}},
