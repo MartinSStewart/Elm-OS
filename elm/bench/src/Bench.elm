@@ -14,7 +14,7 @@ import Effect
 import Fixture
 import HackerNews
 import Html.Parser
-import Json.Encode as E
+import Wire
 import Sprite
 import Task exposing (Task)
 import Time
@@ -110,7 +110,7 @@ steps =
                             open =
                                 { loaded | isOpen = True }
                         in
-                        timed "snapshot of HackerNews.Model" (\() -> E.encode 0 (HackerNews.w3_encode_Model open) |> String.length)
+                        timed "snapshot of HackerNews.Model" (\() -> Wire.toBytes (HackerNews.w3_encode_Model open) |> Bytes.width)
                             |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize)" (\() -> Sprite.textSize Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
                             |> Task.andThen (\_ -> frame (Coord.xy 1280 800) open)
                             |> Task.andThen (\_ -> frame (Coord.xy 2560 1600) open)
@@ -127,12 +127,17 @@ frame screen model =
             Units.scaleFor (Coord.x screen)
 
         element () =
-            HackerNews.view identity Ui.init (Coord.toUi scale screen) model
+            HackerNews.view Ui.noLazyCache identity Ui.init (Coord.toUi scale screen) model
+
+        -- The next frame's, with the `Ui.lazy` elements of this one.
+        elementAgain lastFrame () =
+            HackerNews.view (Ui.lazyCache [ lastFrame ]) identity Ui.init (Coord.toUi scale screen) model
 
         named label =
             String.fromInt (Units.scaleInt scale) ++ "x " ++ label
     in
     timed (named "view (build the Element)") (\() -> element ())
+        |> Task.andThen (\ui -> timed (named "view again, nothing changed (Ui.lazy, only if tools/wire turned it into lazyWith)") (elementAgain ui) |> Task.map (\_ -> ui))
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
         |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
         |> Task.andThen
@@ -141,7 +146,7 @@ frame screen model =
                     _ =
                         Debug.log "triangles" (List.length triangles)
                 in
-                timed (named "encode Render") (\() -> Effect.message [ Effect.Render (\() -> triangles) ] |> Bytes.width)
+                timed (named "encode Render") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = triangles } ]) ] |> Bytes.width)
             )
         |> Task.andThen
             (\bytes ->
@@ -149,7 +154,29 @@ frame screen model =
                     _ =
                         Debug.log "render bytes" bytes
                 in
-                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> Ui.view scale False Nothing Nothing screen (element ())) ] |> Bytes.width)
+                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen (element ()) } ]) ] |> Bytes.width)
+            )
+        |> Task.andThen
+            (\_ ->
+                let
+                    first =
+                        element ()
+
+                    _ =
+                        Debug.log (named "Ui.lazy draws the same triangles")
+                            (Ui.view scale False Nothing Nothing screen (elementAgain first ()) == Ui.view scale False Nothing Nothing screen first)
+                in
+                timed (named "whole frame, nothing changed (Ui.lazy)")
+                    (\() ->
+                        let
+                            ui =
+                                elementAgain first ()
+                        in
+                        ( Ui.hover (Coord.xy 400 300) ui |> List.length
+                        , Ui.lazyCache [ ui ]
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen ui } ]) ] |> Bytes.width
+                        )
+                    )
             )
         |> Task.map (\_ -> ())
 

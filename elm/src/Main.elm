@@ -1773,7 +1773,7 @@ displayUi model display =
                     (\() ->
                         Ui.topRight
                             { size = size }
-                            (HackerNews.view HackerNewsUiId model.uiState size model.hackerNews)
+                            (HackerNews.view Ui.noLazyCache HackerNewsUiId model.uiState size model.hackerNews)
                     )
                 ++ (if isMain then
                         case model.upgradingTo of

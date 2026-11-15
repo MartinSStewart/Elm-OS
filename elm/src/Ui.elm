@@ -4,6 +4,7 @@ module Ui exposing
     , Element(..)
     , ElementState(..)
     , InputType(..)
+    , LazyCache
     , Model
     , RowColumn
     , TextInputData
@@ -28,10 +29,14 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , lazy3
+    , lazyCache
+    , lazyWith
     , left
     , leftAndRight
     , map
     , noPadding
+    , noLazyCache
     , none
     , onAnimationFrame
     , onMouseDown
@@ -74,8 +79,12 @@ for now: underlined text and sprites from town-collab's texture.
 -}
 
 import Bounds exposing (Bounds)
+import Bytes exposing (Bytes)
+import Bytes.Decode as BD
+import Bytes.Encode as BE
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Dict exposing (Dict)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
 import SeqDict exposing (SeqDict)
@@ -140,6 +149,8 @@ type Element id
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
     | Viewport (ViewportData id) (Element id)
+      -- What `lazyWith` made: which call it was, and the arguments it was made from.
+    | Lazy { name : String, args : Bytes } (Element id)
 
 
 type alias ViewportData id =
@@ -314,6 +325,9 @@ onMouseDown onClick relativePositionToUi cursor id element model =
         Viewport _ _ ->
             ( { model | focus = Nothing }, Nothing )
 
+        Lazy _ _ ->
+            ( { model | focus = Nothing }, Nothing )
+
 
 onWheel : id -> Int -> Element id -> Model id -> Model id
 onWheel id clicks element model =
@@ -357,6 +371,9 @@ onWheel id clicks element model =
             model
 
         Empty ->
+            model
+
+        Lazy _ _ ->
             model
 
         Viewport data element2 ->
@@ -413,6 +430,9 @@ scrolls element =
             False
 
         Empty ->
+            False
+
+        Lazy _ _ ->
             False
 
 
@@ -711,6 +731,199 @@ map f element =
                 { id = f data.id, viewportHeight = data.viewportHeight, scrollOffset = data.scrollOffset }
                 (map f child)
 
+        Lazy data child ->
+            Lazy data (map f child)
+
+
+-- LAZY
+
+
+{-| The `lazy` elements of the last frame, by the name of the call that made them, with
+the arguments each was made from.
+-}
+type LazyCache id
+    = LazyCache (Dict String (List ( Bytes, Element id )))
+
+
+{-| Nothing remembered: every `lazy` calls its function.
+-}
+noLazyCache : LazyCache id
+noLazyCache =
+    LazyCache Dict.empty
+
+
+{-| What the next frame's `lazy` calls can reuse: every `lazy` element in these (the
+UI of every display).
+-}
+lazyCache : List (Element id) -> LazyCache id
+lazyCache elements =
+    LazyCache (List.foldl lazyEntries Dict.empty elements)
+
+
+lazyEntries : Element id -> Dict String (List ( Bytes, Element id )) -> Dict String (List ( Bytes, Element id ))
+lazyEntries element dict =
+    case element of
+        Lazy { name, args } child ->
+            lazyEntries child dict
+                |> Dict.update name (\entries -> Just (( args, child ) :: Maybe.withDefault [] entries))
+
+        Button data child ->
+            List.foldl lazyEntries (lazyEntries child dict) data.inFront
+
+        Row _ children ->
+            List.foldl lazyEntries dict children
+
+        Column _ children ->
+            List.foldl lazyEntries dict children
+
+        Single data child ->
+            List.foldl lazyEntries (lazyEntries child dict) data.inFront
+
+        Viewport _ child ->
+            lazyEntries child dict
+
+        TextInput _ ->
+            dict
+
+        TextInputMultiline _ ->
+            dict
+
+        Text _ ->
+            dict
+
+        Quads _ ->
+            dict
+
+        Empty ->
+            dict
+
+
+{-| `f a b c`, built only when `a`, `b` or `c` has changed since the last frame; like
+`Html.Lazy.lazy3`, for parts of the UI that are slow to build and seldom change, such
+as a long list of wrapped text. (`lazy`, `lazy2` and so on can join it once something
+uses them: elm-review allows no unused exports.)
+
+This is what you write. As it stands it just calls `f`: tools/wire turns each call into
+a `lazyWith`, naming the call after `f` and encoding the arguments with the codecs it
+writes for the Model. So `f` must be a function defined at the top level of a module,
+with a type annotation, and its arguments must be types tools/wire can save, except
+for function arguments (such as `idMap`), which aren't compared and must be the same
+function every frame.
+
+-}
+lazy3 : LazyCache id -> (a -> b -> c -> Element id) -> a -> b -> c -> Element id
+lazy3 _ f a b c =
+    f a b c
+
+
+{-| What tools/wire turns a `lazy` call into: the element the last frame's call `name`
+made from the same `args` (the call's arguments, encoded), or else what `build` gives.
+-}
+lazyWith : LazyCache id -> String -> Bytes -> (() -> Element id) -> Element id
+lazyWith (LazyCache cache) name args build =
+    Lazy
+        { name = name, args = args }
+        (case Dict.get name cache |> Maybe.andThen (findArgs args) of
+            Just element ->
+                element
+
+            Nothing ->
+                build ()
+        )
+
+
+findArgs : Bytes -> List ( Bytes, Element id ) -> Maybe (Element id)
+findArgs args entries =
+    case entries of
+        ( cachedArgs, element ) :: rest ->
+            if sameBytes args cachedArgs then
+                Just element
+
+            else
+                findArgs args rest
+
+        [] ->
+            Nothing
+
+
+{-| Whether two Bytes hold the same bytes. Natively (eco) `==` does this, comparing
+the memory. But in JavaScript (`make dev`), elm/core's `==` finds any two Bytes
+equal, so there they're read and compared 4 bytes at a time, which is much slower.
+-}
+sameBytes : Bytes -> Bytes -> Bool
+sameBytes a b =
+    if bytesEqualityWorks then
+        a == b
+
+    else
+        Bytes.width a
+            == Bytes.width b
+            && (BD.decode (byteWords (Bytes.width a)) a
+                    |> Maybe.andThen (\words -> BD.decode (sameWords (Bytes.width b) words) b)
+                    |> Maybe.withDefault False
+               )
+
+
+{-| False in JavaScript, where `==` finds any two Bytes equal.
+-}
+bytesEqualityWorks : Bool
+bytesEqualityWorks =
+    BE.encode (BE.unsignedInt8 0) /= BE.encode (BE.unsignedInt8 1)
+
+
+{-| The bytes as Ints, 4 bytes at a time and then the 0 to 3 left over.
+-}
+byteWords : Int -> BD.Decoder (List Int)
+byteWords width =
+    BD.loop ( width, [] )
+        (\( remaining, words ) ->
+            if remaining >= 4 then
+                BD.map (\word -> BD.Loop ( remaining - 4, word :: words )) (BD.unsignedInt32 Bytes.LE)
+
+            else if remaining > 0 then
+                BD.map (\byte -> BD.Loop ( remaining - 1, byte :: words )) BD.unsignedInt8
+
+            else
+                BD.succeed (BD.Done (List.reverse words))
+        )
+
+
+{-| Whether the bytes are `words`, as `byteWords` reads them.
+-}
+sameWords : Int -> List Int -> BD.Decoder Bool
+sameWords width words =
+    BD.loop ( width, words )
+        (\( remaining, expected ) ->
+            case expected of
+                next :: rest ->
+                    BD.map
+                        (\word ->
+                            if word == next then
+                                BD.Loop ( remaining - wordWidth remaining, rest )
+
+                            else
+                                BD.Done False
+                        )
+                        (if remaining >= 4 then
+                            BD.unsignedInt32 Bytes.LE
+
+                         else
+                            BD.unsignedInt8
+                        )
+
+                [] ->
+                    BD.succeed (BD.Done (remaining == 0))
+        )
+
+
+wordWidth : Int -> Int
+wordWidth remaining =
+    if remaining >= 4 then
+        4
+
+    else
+        1
+
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
 quads =
@@ -823,6 +1036,9 @@ size element =
 
         Viewport data child ->
             viewportSize data child
+
+        Lazy _ child ->
+            size child
 
 
 viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
@@ -992,6 +1208,9 @@ hoverHelper hovers point position element =
             else
                 hovers
 
+        Lazy _ child ->
+            hoverHelper hovers point position child
+
 
 type InputType id
     = ButtonType { data : ButtonData id, position : Coord UiPixels, size : Coord UiPixels }
@@ -1052,6 +1271,9 @@ findInputHelper id position element =
 
         Viewport data child ->
             findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
+
+        Lazy _ child ->
+            findInputHelper id position child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -1188,6 +1410,9 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         viewport3
                         (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                         child
+
+                Lazy _ child ->
+                    viewList scale showUiBorder maybeHover focus viewport3 position child
 
         Nothing ->
             []

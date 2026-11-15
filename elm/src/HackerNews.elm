@@ -717,8 +717,8 @@ toggleSpacing =
 
 {-| The window, in the top right corner of a screen this big (UI pixels).
 -}
-view : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> Model -> Element id
-view idMap uiState screenSize model =
+view : Ui.LazyCache id -> (UiId -> id) -> Ui.Model id -> Coord UiPixels -> Model -> Element id
+view lazyCache idMap uiState screenSize model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding
         , inFront = []
@@ -738,19 +738,20 @@ view idMap uiState screenSize model =
                     Loading maybe ->
                         case maybe of
                             Just data ->
-                                postsView idMap uiState screenSize data
+                                postsView lazyCache idMap uiState screenSize data
 
                             Nothing ->
                                 Ui.text Small (Sans Regular) "Loading..."
 
                     Loaded data ->
-                        postsView idMap uiState screenSize data
+                        postsView lazyCache idMap uiState screenSize data
 
                     LoadFailed httpError ->
                         Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
 
             CommentsPage id title ->
                 commentsView
+                    lazyCache
                     idMap
                     uiState
                     screenSize
@@ -760,8 +761,8 @@ view idMap uiState screenSize model =
         )
 
 
-postsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> List Post -> Element id
-postsView idMap uiState screenSize data =
+postsView : Ui.LazyCache id -> (UiId -> id) -> Ui.Model id -> Coord UiPixels -> List Post -> Element id
+postsView lazyCache idMap uiState screenSize data =
     let
         width : Int
         width =
@@ -774,11 +775,16 @@ postsView idMap uiState screenSize data =
     Ui.column
         { spacing = titleSpacing, padding = Ui.noPadding }
         [ title
-        , Ui.column
-            { spacing = 0, padding = Ui.noPadding }
-            (List.indexedMap (postView idMap width) data)
+        , Ui.lazy3 lazyCache postsColumn idMap width data
             |> scrolling idMap uiState PostsViewport screenSize (Coord.yRaw (Ui.size title))
         ]
+
+
+postsColumn : (UiId -> id) -> Int -> List Post -> Element id
+postsColumn idMap width data =
+    Ui.column
+        { spacing = 0, padding = Ui.noPadding }
+        (List.indexedMap (postView idMap width) data)
 
 
 postView : (UiId -> id) -> Int -> Int -> Post -> Element id
@@ -833,8 +839,8 @@ postView idMap width index { id, title, comments } =
             }
 
 
-commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> PostId -> String -> CommentsState -> Element id
-commentsView idMap uiState screenSize postId title comments =
+commentsView : Ui.LazyCache id -> (UiId -> id) -> Ui.Model id -> Coord UiPixels -> PostId -> String -> CommentsState -> Element id
+commentsView lazyCache idMap uiState screenSize postId title comments =
     let
         width : Int
         width =
@@ -866,7 +872,7 @@ commentsView idMap uiState screenSize postId title comments =
                 Ui.text Small (Sans Regular) "No comments yet."
 
             CommentsLoaded loaded ->
-                commentsColumn idMap uiState width loaded
+                Ui.lazy3 lazyCache commentsColumn idMap width loaded
 
             CommentsLoadFailed error ->
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
@@ -876,17 +882,17 @@ commentsView idMap uiState screenSize postId title comments =
         ]
 
 
-commentsColumn : (UiId -> id) -> Ui.Model a -> Int -> List Comment -> Element id
-commentsColumn idMap uiState width comments =
+commentsColumn : (UiId -> id) -> Int -> List Comment -> Element id
+commentsColumn idMap width comments =
     Ui.column
         { spacing = commentSpacing, padding = Ui.noPadding }
-        (List.map (commentView idMap uiState width) comments)
+        (List.map (commentView idMap width) comments)
 
 
 {-| A comment, and under it its replies if they are shown. `width` is how wide it can be.
 -}
-commentView : (UiId -> id) -> Ui.Model a -> Int -> Comment -> Element id
-commentView idMap uiState width (Comment comment) =
+commentView : (UiId -> id) -> Int -> Comment -> Element id
+commentView idMap width (Comment comment) =
     let
         textWidth : Int
         textWidth =
@@ -920,7 +926,7 @@ commentView idMap uiState width (Comment comment) =
             , Ui.row
                 { spacing = 0, padding = Ui.noPadding }
                 [ Ui.left (Units.uiPixels replyIndent) Ui.none
-                , commentsColumn idMap uiState (width - replyIndent) comment.children
+                , commentsColumn idMap (width - replyIndent) comment.children
                 ]
             ]
 
