@@ -572,9 +572,9 @@ snapshotEffect codecs app pending seq =
             Wire.toBytes
                 (BE.sequence
                     [ Wire.encodeString snapshotFormat
-                    , Wire.encodeInt codecs.version
+                    , Wire.encodeSnapshotInt codecs.version
                     , Wire.encodeString (hash codecs.modelShape)
-                    , Wire.encodeInt seq
+                    , Wire.encodeSnapshotInt seq
                     , Wire.encodeBytes (Wire.toBytes (codecs.encodeModel app))
                     , Wire.encodeList Wire.encodeString pending
                     ]
@@ -584,11 +584,13 @@ snapshotEffect codecs app pending seq =
 
 
 {-| Changes whenever this file's format does. Since elmos-persist-6 a snapshot is
-Wire3 (Wire.elm): earlier ones were JSON, and can't be read.
+Wire3 (Wire.elm): earlier ones were JSON, and can't be read. Since elmos-persist-7 its
+Ints past 32 bits are 64-bit integers rather than Lamdera's floats
+(Wire.encodeSnapshotInt).
 -}
 snapshotFormat : String
 snapshotFormat =
-    "elmos-persist-6"
+    "elmos-persist-7"
 
 
 hash : String -> String
@@ -659,9 +661,9 @@ decodeSaved =
             (\format ->
                 if format == snapshotFormat then
                     BD.map5 Saved
-                        Wire.decodeInt
+                        Wire.decodeSnapshotInt
                         Wire.decodeString
-                        Wire.decodeInt
+                        Wire.decodeSnapshotInt
                         Wire.decodeBytes
                         (Wire.decodeList Wire.decodeString)
 

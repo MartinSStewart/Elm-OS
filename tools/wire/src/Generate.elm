@@ -311,8 +311,16 @@ generateWith options modules modelKey msgKey configKey =
                                )
                     )
 
-        ( reached, reachErrors ) =
-            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots ++ stubRoots) Set.empty stubErrors
+        -- The Model's types get codecs for snapshots, and the codecs module's get
+        -- Lamdera's: a type in both gets both.
+        ( snapshotReached, snapshotErrors ) =
+            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots) Set.empty stubErrors
+
+        ( lamderaReached, reachErrors ) =
+            reach defs used stubRoots Set.empty snapshotErrors
+
+        reached =
+            Set.union snapshotReached lamderaReached
 
         clashes =
             [ options.entry ]
@@ -341,11 +349,34 @@ generateWith options modules modelKey msgKey configKey =
                             |> Dict.fromList
 
                     ctx =
-                        { defs = defs, used = used, graph = graph }
+                        { defs = defs, used = used, graph = graph, lamdera = False }
+
+                    lamderaCtx =
+                        { ctx | lamdera = True }
 
                     byModule =
                         List.foldl
-                            (\def acc -> Dict.update def.moduleName (\ds -> Just (def :: Maybe.withDefault [] ds)) acc)
+                            (\def acc ->
+                                let
+                                    key =
+                                        ( def.moduleName, def.name )
+
+                                    flavours =
+                                        (if Set.member key snapshotReached then
+                                            [ ( ctx, def ) ]
+
+                                         else
+                                            []
+                                        )
+                                            ++ (if Set.member key lamderaReached then
+                                                    [ ( lamderaCtx, def ) ]
+
+                                                else
+                                                    []
+                                               )
+                                in
+                                Dict.update def.moduleName (\ds -> Just (flavours ++ Maybe.withDefault [] ds)) acc
+                            )
                             Dict.empty
                             reachedDefs
 
@@ -355,12 +386,12 @@ generateWith options modules modelKey msgKey configKey =
                             |> List.map
                                 (\m ->
                                     if m.name == codecsModule then
-                                        { path = m.path, source = writeStubs ctx m (List.filterMap (\( sm, stub ) -> ifSame sm m stub) stubs) }
+                                        { path = m.path, source = writeStubs lamderaCtx m (List.filterMap (\( sm, stub ) -> ifSame sm m stub) stubs) }
 
                                     else
                                         case Dict.get m.name byModule of
                                             Just ds ->
-                                                { path = m.path, source = addToModule ctx m (List.sortBy .name ds) }
+                                                { path = m.path, source = addToModule m (List.sortBy (\( c, d ) -> ( d.name, codecPrefix c )) ds) }
 
                                             Nothing ->
                                                 { path = m.path, source = m.source }
@@ -1152,21 +1183,69 @@ signatureText m decl =
 -- WRITING THE CODE
 
 
+{-| `lamdera`: the codecs are for talking to a Lamdera app (WireCodecs), so their Ints
+are exactly Lamdera's, which writes one past 32 bits as a 64-bit float. Otherwise
+they are for snapshots, whose Ints past 32 bits are 64-bit integers, as eco's are
+(Wire.encodeSnapshotInt). The two only differ there, but each kind gets its own
+functions: `w3_encode_T` for snapshots and `w3l_encode_T` for Lamdera.
+-}
 type alias Ctx =
     { defs : Dict Key Def
     , used : Dict Key (List Bool)
     , graph : Dict Key (Set Key)
+    , lamdera : Bool
     }
 
 
-addToModule : Ctx -> Module -> List Def -> String
-addToModule ctx m defs =
+codecPrefix : Ctx -> String
+codecPrefix ctx =
+    if ctx.lamdera then
+        "w3l_"
+
+    else
+        "w3_"
+
+
+{-| The Wire function for a builtin type: Ints, and the types made of one (Posix, Date),
+have their own for snapshots.
+-}
+builtinCodec : Ctx -> String -> String
+builtinCodec ctx name =
+    if ctx.lamdera then
+        name
+
+    else
+        case name of
+            "Wire.encodeInt" ->
+                "Wire.encodeSnapshotInt"
+
+            "Wire.decodeInt" ->
+                "Wire.decodeSnapshotInt"
+
+            "Wire.encodePosix" ->
+                "Wire.encodeSnapshotPosix"
+
+            "Wire.decodePosix" ->
+                "Wire.decodeSnapshotPosix"
+
+            "Wire.encodeDate" ->
+                "Wire.encodeSnapshotDate"
+
+            "Wire.decodeDate" ->
+                "Wire.decodeSnapshotDate"
+
+            _ ->
+                name
+
+
+addToModule : Module -> List ( Ctx, Def ) -> String
+addToModule m defs =
     let
         names =
-            List.concatMap (\d -> [ "w3_encode_" ++ d.name, "w3_decode_" ++ d.name ]) defs
+            List.concatMap (\( c, d ) -> [ codecPrefix c ++ "encode_" ++ d.name, codecPrefix c ++ "decode_" ++ d.name ]) defs
 
         code =
-            List.concatMap (\d -> [ encoder ctx m d, decoder ctx m d ]) defs
+            List.concatMap (\( c, d ) -> [ encoder c m d, decoder c m d ]) defs
 
         lines =
             m.source |> String.lines |> exposeNames m names |> addImport m
@@ -1277,7 +1356,7 @@ encoder ctx m def =
             usedOf ctx def
 
         name =
-            "w3_encode_" ++ def.name
+            codecPrefix ctx ++ "encode_" ++ def.name
 
         signature =
             name
@@ -1324,7 +1403,7 @@ decoder ctx m def =
             usedOf ctx def
 
         name =
-            "w3_decode_" ++ def.name
+            codecPrefix ctx ++ "decode_" ++ def.name
 
         self =
             ( def.moduleName, def.name )
@@ -1433,10 +1512,10 @@ encFn ctx m depth ty =
                 ( fn, argCodecs ) =
                     case Dict.get key builtins of
                         Just b ->
-                            ( b.encode, dataArgs ctx.used key args )
+                            ( builtinCodec ctx b.encode, dataArgs ctx.used key args )
 
                         Nothing ->
-                            ( qualify m (Tuple.first key) ("w3_encode_" ++ Tuple.second key), dataArgs ctx.used key args )
+                            ( qualify m (Tuple.first key) (codecPrefix ctx ++ "encode_" ++ Tuple.second key), dataArgs ctx.used key args )
             in
             if List.isEmpty argCodecs then
                 fn
@@ -1586,10 +1665,10 @@ decFn ctx m self depth ty =
                 ( fn, argCodecs ) =
                     case Dict.get key builtins of
                         Just b ->
-                            ( b.decode, dataArgs ctx.used key args )
+                            ( builtinCodec ctx b.decode, dataArgs ctx.used key args )
 
                         Nothing ->
-                            ( qualify m (Tuple.first key) ("w3_decode_" ++ Tuple.second key), dataArgs ctx.used key args )
+                            ( qualify m (Tuple.first key) (codecPrefix ctx ++ "decode_" ++ Tuple.second key), dataArgs ctx.used key args )
 
                 call =
                     if List.isEmpty argCodecs then

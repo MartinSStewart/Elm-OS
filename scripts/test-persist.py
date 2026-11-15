@@ -241,7 +241,8 @@ def entries(data, name, torn_ok=False):
 
 
 class Wire3:
-    """Reads Lamdera's Wire3 bytes (elm/src/Wire.elm), as the snapshot holds them."""
+    """Reads Wire3 bytes as the snapshot holds them (elm/src/Wire.elm: Lamdera's, apart
+    from Ints past 32 bits)."""
 
     def __init__(self, data, at=0):
         self.data, self.at = data, at
@@ -257,9 +258,10 @@ class Wire3:
         elif n0 < 252:
             n = (n0 - 216) * 256 + self.u8() + 216
         elif n0 == 255:
-            (f,) = struct.unpack_from("<d", self.data, self.at)
+            # Past 32 bits: a big-endian 64-bit integer (Wire.encodeSnapshotInt).
+            (i,) = struct.unpack_from(">q", self.data, self.at)
             self.at += 8
-            return int(f)
+            return i
         else:
             width = n0 - 250
             n = int.from_bytes(self.data[self.at:self.at + width], "big")

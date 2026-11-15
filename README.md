@@ -336,7 +336,9 @@ Nobody writes the code that turns the Model into bytes and back: `tools/wire` wr
 from the types before each build, the way Lamdera's Wire does, and in the same format, Wire3
 (`elm/src/Wire.elm`), so the same codecs talk to Lamdera apps' servers (`elm/src/AsciiCollab.elm`
 speaks to ascii-collab.app). Functions in `elm/src/WireCodecs.elm` get codecs for other types,
-such as what a Lamdera app sends and receives: tools/wire writes each one's body from its type. It is an Elm program (elm-syntax
+such as what a Lamdera app sends and receives: tools/wire writes each one's body from its type.
+Those are exactly Lamdera's (`w3l_encode_T`); the Model's (`w3_encode_T`) differ in one way:
+an Int past 32 bits is a 64-bit integer, as eco's Ints are, where Lamdera writes a float. It is an Elm program (elm-syntax
 to read the source, eco's `eco/system` for files), compiled natively with eco.
 
 - `make` runs it on `elm/src` and compiles `build/wire` instead: a copy of `elm/` in which each

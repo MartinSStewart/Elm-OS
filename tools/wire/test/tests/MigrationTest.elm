@@ -66,10 +66,10 @@ v1Snapshot =
         (Persist.frame
             (Wire.toBytes
                 (BE.sequence
-                    [ Wire.encodeString "elmos-persist-6"
-                    , Wire.encodeInt 1
+                    [ Wire.encodeString "elmos-persist-7"
+                    , Wire.encodeSnapshotInt 1
                     , Wire.encodeString (Persist.hash (Maybe.withDefault "" (ElmOs.codecs.versionShape 1)))
-                    , Wire.encodeInt 4
+                    , Wire.encodeSnapshotInt 4
                     , Wire.encodeBytes (Wire.toBytes (Evergreen.V1.App.w3_encode_Model v1Sample))
                     , Wire.encodeList Wire.encodeString []
                     ]
@@ -135,10 +135,10 @@ suite =
                         Persist.frame
                             (Wire.toBytes
                                 (BE.sequence
-                                    [ Wire.encodeString "elmos-persist-6"
-                                    , Wire.encodeInt 3
+                                    [ Wire.encodeString "elmos-persist-7"
+                                    , Wire.encodeSnapshotInt 3
                                     , Wire.encodeString "00000000"
-                                    , Wire.encodeInt 0
+                                    , Wire.encodeSnapshotInt 0
                                     , Wire.encodeBytes (text "")
                                     , Wire.encodeList Wire.encodeString []
                                     ]

@@ -23,6 +23,9 @@ module Wire exposing
     , decodeSeqDict
     , decodeSeqSet
     , decodeSet
+    , decodeSnapshotDate
+    , decodeSnapshotInt
+    , decodeSnapshotPosix
     , decodeString
     , decodeTuple2
     , decodeTuple3
@@ -47,6 +50,9 @@ module Wire exposing
     , encodeSeqDict
     , encodeSeqSet
     , encodeSet
+    , encodeSnapshotDate
+    , encodeSnapshotInt
+    , encodeSnapshotPosix
     , encodeString
     , encodeTuple2
     , encodeTuple3
@@ -87,6 +93,12 @@ transcription of it) writes each kind of value:
     0 and its Rata Die
   - Time.Posix is its milliseconds, as an Int
 
+Snapshots (Persist.elm) differ in one way: an Int past 32 bits is 255 and the Int as
+a big-endian 64-bit integer (`encodeSnapshotInt`), since eco's Ints are 64-bit and a
+float would round those past 2^53. Every other Int is written the same either way.
+tools/wire writes snapshot codecs (`w3_encode_T`) for the Model's types, and Lamdera
+ones (`w3l_encode_T`) for WireCodecs'.
+
 Nothing says which type or field a value is, so data must only be read with the
 codecs of the types it was written with (see `shape` in tools/wire/src/Generate.elm).
 
@@ -96,7 +108,6 @@ JSON text, as a String.
 -}
 
 import Array exposing (Array)
-import Bitwise
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
@@ -135,6 +146,29 @@ fromBytes =
 
 encodeInt : Int -> Value
 encodeInt i =
+    encodeIntWith (\_ -> BE.sequence [ BE.unsignedInt8 255, BE.float64 Bytes.LE (toFloat i) ]) i
+
+
+{-| An Int in a snapshot: as `encodeInt`, apart from one past 32 bits, which is 255
+and the Int as a big-endian 64-bit integer, high half first.
+-}
+encodeSnapshotInt : Int -> Value
+encodeSnapshotInt i =
+    encodeIntWith
+        (\_ ->
+            BE.sequence
+                [ BE.unsignedInt8 255
+                , BE.signedInt32 Bytes.BE (intDiv (i - modBy 4294967296 i) 4294967296)
+                , BE.unsignedInt32 Bytes.BE (modBy 4294967296 i)
+                ]
+        )
+        i
+
+
+{-| Lamdera's Int, with `big` for one whose zigzagged value takes more than 32 bits.
+-}
+encodeIntWith : (() -> Value) -> Int -> Value
+encodeIntWith big i =
     let
         n : Int
         n =
@@ -144,7 +178,11 @@ encodeInt i =
             else
                 2 * i
     in
-    if n <= 215 then
+    -- Tested on i rather than n, which overflows for an i past 62 bits.
+    if i < -2147483648 || i >= 2147483648 then
+        big ()
+
+    else if n <= 215 then
         BE.unsignedInt8 n
 
     else if n <= 9431 then
@@ -159,20 +197,17 @@ encodeInt i =
     else if n < 16777216 then
         BE.sequence
             [ BE.unsignedInt8 253
-            , BE.unsignedInt8 (n // 65536)
-            , BE.unsignedInt16 Bytes.BE (modBy 65536 n)
-            ]
-
-    else if n < 4294967296 then
-        BE.sequence
-            [ BE.unsignedInt8 254
-            , BE.unsignedInt8 (n // 16777216)
-            , BE.unsignedInt8 (modBy 256 (n // 65536))
+            , BE.unsignedInt8 (intDiv n 65536)
             , BE.unsignedInt16 Bytes.BE (modBy 65536 n)
             ]
 
     else
-        BE.sequence [ BE.unsignedInt8 255, BE.float64 Bytes.LE (toFloat i) ]
+        BE.sequence
+            [ BE.unsignedInt8 254
+            , BE.unsignedInt8 (intDiv n 16777216)
+            , BE.unsignedInt8 (modBy 256 (intDiv n 65536))
+            , BE.unsignedInt16 Bytes.BE (modBy 65536 n)
+            ]
 
 
 encodeFloat : Float -> Value
@@ -301,6 +336,16 @@ encodePosix time =
     encodeInt (Time.posixToMillis time)
 
 
+encodeSnapshotDate : Date -> Value
+encodeSnapshotDate date =
+    BE.sequence [ BE.unsignedInt8 0, encodeSnapshotInt (Date.toRataDie date) ]
+
+
+encodeSnapshotPosix : Time.Posix -> Value
+encodeSnapshotPosix time =
+    encodeSnapshotInt (Time.posixToMillis time)
+
+
 encodeJson : E.Value -> Value
 encodeJson json =
     encodeString (E.encode 0 json)
@@ -326,6 +371,32 @@ encodeCustom tag args =
 
 decodeInt : Decoder Int
 decodeInt =
+    decodeIntWith
+        (BD.float64 Bytes.LE
+            |> BD.andThen
+                (\f ->
+                    if isNaN f || isInfinite f then
+                        fail
+
+                    else
+                        BD.succeed (floor f)
+                )
+        )
+
+
+{-| An Int in a snapshot (`encodeSnapshotInt`).
+-}
+decodeSnapshotInt : Decoder Int
+decodeSnapshotInt =
+    decodeIntWith
+        (BD.map2 (\high low -> high * 4294967296 + low)
+            (BD.signedInt32 Bytes.BE)
+            (BD.unsignedInt32 Bytes.BE)
+        )
+
+
+decodeIntWith : Decoder Int -> Decoder Int
+decodeIntWith big =
     BD.unsignedInt8
         |> BD.andThen
             (\n0 ->
@@ -345,25 +416,25 @@ decodeInt =
                     BD.map unzigzag (BD.unsignedInt32 Bytes.BE)
 
                 else
-                    BD.float64 Bytes.LE
-                        |> BD.andThen
-                            (\f ->
-                                if isNaN f || isInfinite f then
-                                    fail
-
-                                else
-                                    BD.succeed (floor f)
-                            )
+                    big
             )
+
+
+{-| `a // b` for a past 32 bits too: in JavaScript (elm-test, the dev runner) `//`
+truncates to 32 bits. Exact while `a` is a multiple of `b` or under 2^53.
+-}
+intDiv : Int -> Int -> Int
+intDiv a b =
+    floor (toFloat a / toFloat b)
 
 
 unzigzag : Int -> Int
 unzigzag n =
-    if Bitwise.and n 1 == 1 then
-        -((n + 1) // 2)
+    if modBy 2 n == 1 then
+        -(intDiv (n + 1) 2)
 
     else
-        n // 2
+        intDiv n 2
 
 
 decodeFloat : Decoder Float
@@ -543,6 +614,23 @@ decodeDate =
 decodePosix : Decoder Time.Posix
 decodePosix =
     BD.map Time.millisToPosix decodeInt
+
+
+decodeSnapshotDate : Decoder Date
+decodeSnapshotDate =
+    decodeCustom
+        (\tag ->
+            if tag == 0 then
+                BD.map Date.fromRataDie decodeSnapshotInt
+
+            else
+                fail
+        )
+
+
+decodeSnapshotPosix : Decoder Time.Posix
+decodeSnapshotPosix =
+    BD.map Time.millisToPosix decodeSnapshotInt
 
 
 decodeJson : Decoder E.Value

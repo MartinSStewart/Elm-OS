@@ -33,6 +33,16 @@ encode value =
     Wire.toBytes value |> bytesToList
 
 
+containsRun : List Int -> List Int -> Bool
+containsRun run list =
+    case list of
+        [] ->
+            List.isEmpty run
+
+        _ :: rest ->
+            List.take (List.length run) list == run || containsRun run rest
+
+
 {-| NaN isn't equal to itself, so values are compared by their encoding.
 -}
 roundTrip : (a -> Wire.Value) -> Wire.Decoder a -> a -> Expect.Expectation
@@ -96,6 +106,37 @@ suite =
                 ints
                     |> List.map (\i -> Wire.fromBytes Wire.decodeInt (Wire.toBytes (Wire.encodeInt i)))
                     |> Expect.equal (List.map Just ints)
+            )
+        , test "snapshot Ints past 32 bits are 255 and a big-endian 64-bit integer; the rest are Lamdera's"
+            (\_ ->
+                [ 0, -1, 4716, 2147483647, -2147483648, 2147483648, -2147483649, 9007199254740991 ]
+                    |> List.map (\i -> encode (Wire.encodeSnapshotInt i))
+                    |> Expect.equal
+                        [ [ 0 ]
+                        , [ 1 ]
+                        , [ 252, 36, 216 ]
+                        , [ 254, 255, 255, 255, 254 ]
+                        , [ 254, 255, 255, 255, 255 ]
+                        , [ 255, 0, 0, 0, 0, 128, 0, 0, 0 ]
+                        , [ 255, 255, 255, 255, 255, 127, 255, 255, 255 ]
+                        , [ 255, 0, 31, 255, 255, 255, 255, 255, 255 ]
+                        ]
+            )
+        , test "snapshot Ints read back (to 2^53 here, since elm-test runs in JavaScript; eco's are 64-bit)"
+            (\_ ->
+                let
+                    ints =
+                        [ 0, -1, 107, -108, 4716, 1073741824, 2147483647, -2147483648, 2147483648, -2147483649, 4294967296, 9007199254740991, -9007199254740991 ]
+                in
+                ints
+                    |> List.map (\i -> Wire.fromBytes Wire.decodeSnapshotInt (Wire.toBytes (Wire.encodeSnapshotInt i)))
+                    |> Expect.equal (List.map Just ints)
+            )
+        , test "the Model's codecs write snapshot Ints (the Posix is past 32 bits)"
+            (\_ ->
+                encode (ElmOs.codecs.encodeModel App.sample)
+                    |> containsRun [ 255, 0, 0, 1, 139, 207, 229, 104, 0 ]
+                    |> Expect.equal True
             )
         , test "Strings are their UTF-8 width, then UTF-8"
             (\_ -> encode (Wire.encodeString "é😀") |> Expect.equal [ 12, 195, 169, 240, 159, 152, 128 ])
