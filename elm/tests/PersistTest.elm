@@ -1,17 +1,19 @@
 module PersistTest exposing (suite)
 
+import Bytes exposing (Bytes)
+import Bytes.Decode as BD
+import Bytes.Encode as BE
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import ElmOs
 import Expect
 import HostMessage
-import Json.Decode as D
-import Json.Encode as E
 import Main
 import Persist
 import Test exposing (Test, describe, test)
 import Unsafe
 import Wifi
+import Wire
 
 
 {-| Host messages, as the host sends them: the screen, some frames, a click on the
@@ -56,10 +58,10 @@ hostMsg =
 with its number), the number of the last message logged, and other files by path.
 -}
 type alias Host =
-    { snapshot : Maybe String
+    { snapshot : Maybe Bytes
     , log : List ( Int, HostIn )
     , last : Int
-    , files : Dict String String
+    , files : Dict String Bytes
     }
 
 
@@ -124,11 +126,11 @@ hostEffect upto effect ( answers, host ) =
             , host
             )
 
-        Effect.WriteSnapshot { text, seq } ->
-            ( answers, { host | snapshot = Just (Persist.frame text), log = List.filter (\( n, _ ) -> n > seq) host.log } )
+        Effect.WriteSnapshot { data, seq } ->
+            ( answers, { host | snapshot = Just (Persist.frame data), log = List.filter (\( n, _ ) -> n > seq) host.log } )
 
-        Effect.WriteFile { path, text } ->
-            ( answers, { host | files = Dict.insert path text host.files } )
+        Effect.WriteFile { path, data } ->
+            ( answers, { host | files = Dict.insert path data host.files } )
 
         _ ->
             ( answers, host )
@@ -149,7 +151,7 @@ bootWith httpInFlight early later host =
             List.foldl (\message ( msgs, h ) -> logMessage message h |> Tuple.mapFirst (\m -> msgs ++ [ m ])) ( [], host ) early
 
         started =
-            run upto (Persist.DataDisk (Just "/data") httpInFlight :: earlyMsgs) ( Tuple.first Persist.init, logged )
+            run upto (Persist.DataDisk (Just "/data") httpInFlight [] :: earlyMsgs) ( Tuple.first Persist.init, logged )
     in
     List.foldl (\message ( state, h ) -> logMessage message h |> (\( m, h2 ) -> run upto [ m ] ( state, h2 ))) started later
         |> Tuple.mapFirst Persist.appModel
@@ -194,6 +196,37 @@ restartedAt15 =
     directMsgs (List.map hostMsg (List.take 15 session) ++ [ Main.persistConfig.httpInterrupted "geo" ] ++ List.map hostMsg (List.drop 15 session))
 
 
+text : String -> Bytes
+text string =
+    BE.encode (BE.string string)
+
+
+bytes : List Int -> Bytes
+bytes ints =
+    BE.encode (BE.sequence (List.map BE.unsignedInt8 ints))
+
+
+list : Bytes -> List Int
+list data =
+    BD.decode
+        (BD.loop ( Bytes.width data, [] )
+            (\( left, done ) ->
+                if left <= 0 then
+                    BD.succeed (BD.Done (List.reverse done))
+
+                else
+                    BD.map (\b -> BD.Loop ( left - 1, b :: done )) BD.unsignedInt8
+            )
+        )
+        data
+        |> Maybe.withDefault []
+
+
+join : List Bytes -> Bytes
+join parts =
+    BE.encode (BE.sequence (List.map BE.bytes parts))
+
+
 pending : Host -> List String
 pending host =
     (Persist.restore Main.persistConfig ElmOs.codecs host.snapshot).pending
@@ -203,28 +236,30 @@ suite : Test
 suite =
     describe "Persist"
         [ test "CRC-32 is zlib's"
-            (\_ -> Persist.crc32 "123456789" |> Expect.equal 0xCBF43926)
+            (\_ -> Persist.crc32 (text "123456789") |> Expect.equal 0xCBF43926)
         , test "CRC-32 of non-ASCII text is of its UTF-8 bytes"
-            (\_ -> Persist.crc32 "é€😀" |> Expect.equal 0x84D8CDA6)
+            (\_ -> Persist.crc32 (text "é€😀") |> Expect.equal 0x84D8CDA6)
+        , test "the host frames a snapshot the same way"
+            (\_ -> Persist.frame (text "[1]") |> Expect.equal (text "3 4c2f32b8 [1]\n"))
         , test "entries read back"
             (\_ ->
-                Persist.unframe (Persist.frame "[1,2]" ++ Persist.frame "\"é\"" ++ Persist.frame "")
-                    |> Expect.equal [ "[1,2]", "\"é\"", "" ]
+                Persist.unframe (join [ Persist.frame (text "[1,2]"), Persist.frame (bytes [ 10, 0, 255 ]), Persist.frame (text "") ])
+                    |> Expect.equal [ text "[1,2]", bytes [ 10, 0, 255 ], text "" ]
             )
         , test "an entry cut short is dropped"
             (\_ ->
                 let
-                    text =
-                        Persist.frame "[1,2]" ++ Persist.frame "[3,4]"
+                    both =
+                        list (join [ Persist.frame (text "[1,2]"), Persist.frame (text "[3,4]") ])
                 in
-                List.range 0 (String.length text)
-                    |> List.map (\n -> List.length (Persist.unframe (String.left n text)))
+                List.range 0 (List.length both)
+                    |> List.map (\n -> List.length (Persist.unframe (bytes (List.take n both))))
                     |> Expect.equal (List.repeat 17 0 ++ List.repeat 17 1 ++ [ 2 ])
             )
         , test "a damaged entry and everything after it are dropped"
             (\_ ->
-                Persist.unframe (Persist.frame "[1,2]" ++ String.replace "3" "5" (Persist.frame "[3,4]") ++ Persist.frame "[5,6]")
-                    |> Expect.equal [ "[1,2]" ]
+                Persist.unframe (join [ Persist.frame (text "[1,2]"), Persist.frame (text "[3,4]") |> list |> List.map (\b -> if b == 51 then 53 else b) |> bytes, Persist.frame (text "[5,6]") ])
+                    |> Expect.equal [ text "[1,2]" ]
             )
         , test "the generated codec reads back the Model it wrote"
             (\_ ->
@@ -232,9 +267,9 @@ suite =
                     model =
                         direct session
                 in
-                ElmOs.codecs.encodeModel model
-                    |> D.decodeValue ElmOs.codecs.modelDecoder
-                    |> Expect.equal (Ok model)
+                Wire.toBytes (ElmOs.codecs.encodeModel model)
+                    |> BD.decode ElmOs.codecs.modelDecoder
+                    |> Expect.equal (Just model)
             )
         , test "restoring gives the Model as it was"
             (\_ ->
@@ -310,7 +345,7 @@ suite =
                             host.log
                 in
                 -- The log replayed, then its last five messages again.
-                run host.last (Persist.DataDisk (Just "/data") [] :: again) ( Tuple.first Persist.init, { host | snapshot = Nothing } )
+                run host.last (Persist.DataDisk (Just "/data") [] [] :: again) ( Tuple.first Persist.init, { host | snapshot = Nothing } )
                     |> Tuple.first
                     |> Persist.appModel
                     |> Expect.equal (Just (afterRestart (List.take 15 session)))
@@ -349,7 +384,7 @@ suite =
                         boot emptyHost session
 
                     other =
-                        Persist.frame "[\"00000000\",0,[]]"
+                        Persist.frame (text "[\"00000000\",0,[]]")
 
                     ( model, after ) =
                         restart { host | snapshot = Just other }
@@ -357,29 +392,20 @@ suite =
                 ( model, Dict.get "/data/snapshot-unreadable" after.files )
                     |> Expect.equal ( Just Main.persistConfig.init, Just other )
             )
-        , test "a snapshot in the format before reads (its log is gone)"
+        , test "a snapshot in the JSON format before Wire3 starts afresh, and is kept"
             (\_ ->
                 let
                     ( _, host ) =
                         restart (Tuple.second (boot emptyHost session))
 
                     old =
-                        host.snapshot
-                            |> Maybe.map Persist.unframe
-                            |> Maybe.andThen List.head
-                            |> Maybe.andThen (\payload -> D.decodeString (D.list D.value) payload |> Result.toMaybe)
-                            |> Maybe.map
-                                (\fields ->
-                                    case fields of
-                                        [ _, version, modelHash, _, model, waiting ] ->
-                                            Persist.frame (E.encode 0 (E.list identity [ E.string "elmos-persist-4", version, modelHash, E.string "msgs", E.int 7, model, waiting ]))
+                        Persist.frame (text "[\"elmos-persist-5\",11,\"00000000\",7,[],[]]")
 
-                                        _ ->
-                                            ""
-                                )
+                    ( model, after ) =
+                        restart { host | snapshot = Just old }
                 in
-                Tuple.first (restart { emptyHost | snapshot = old })
-                    |> Expect.equal (Just (afterRestart session))
+                ( model, Dict.get "/data/snapshot-unreadable" after.files )
+                    |> Expect.equal ( Just Main.persistConfig.init, Just old )
             )
         , test "a request still waiting at a power cut is answered as interrupted at the next boot"
             (\_ ->

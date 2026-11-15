@@ -53,9 +53,10 @@ type ToElm
     | WifiStatus Wifi.Status
     | Wired (List Wired.Link)
     | NetConfig { geoUrl : String, weatherUrl : String }
-      -- Where the data disk is mounted, if there is one, and the HTTP requests an
-      -- earlier program made that the host is still working on (Persist.elm).
-    | DataDisk (Maybe String) (List String)
+      -- Where the data disk is mounted, if there is one, the HTTP requests an
+      -- earlier program made that the host is still working on (Persist.elm), and the
+      -- ids of the WebSockets open now (any other is closed).
+    | DataDisk (Maybe String) (List String) (List String)
       -- id, status (404 included), body (Effect.bodyToString reads text)
     | HttpResponse String Int Bytes
       -- id, what went wrong, the host's message
@@ -75,11 +76,17 @@ type ToElm
       -- Once a second, with the wall clock (the host's CLOCK_REALTIME, set from the
       -- network: host/init/src/net/ntp.rs).
     | Tick Time.Posix
-      -- The snapshot file's text (Persist.elm).
-    | Snapshot (Maybe String)
+      -- The snapshot file's bytes (Persist.elm).
+    | Snapshot (Maybe Bytes)
       -- After the logged messages Persist asked for again: the number of the last one
       -- an earlier program got.
     | ReplayDone Int
+      -- id, the server's response headers (a cookie it sets, say)
+    | WebSocketOpened String (List ( String, String ))
+      -- id, a message from the server (binary, or text as UTF-8)
+    | WebSocketMessage String Bytes
+      -- id, why: it closed, or couldn't open. The id can be used again.
+    | WebSocketClosed String String
 
 
 type HttpFailure
@@ -183,7 +190,10 @@ decoder =
                             P.decodeString
 
                     15 ->
-                        BD.map2 DataDisk (P.decodeMaybe P.decodeString) (P.decodeList P.decodeString)
+                        BD.map3 DataDisk
+                            (P.decodeMaybe P.decodeString)
+                            (P.decodeList P.decodeString)
+                            (P.decodeList P.decodeString)
 
                     16 ->
                         BD.map3 HttpResponse P.decodeString P.decodeUnsigned P.decodeBytes
@@ -215,10 +225,21 @@ decoder =
                         BD.map (\ms -> Tick (Time.millisToPosix (round ms))) P.decodeFloat64
 
                     25 ->
-                        BD.map Snapshot (P.decodeMaybe P.decodeString)
+                        BD.map Snapshot (P.decodeMaybe P.decodeBytes)
 
                     26 ->
                         BD.map ReplayDone P.decodeUnsigned
+
+                    27 ->
+                        BD.map2 WebSocketOpened
+                            P.decodeString
+                            (P.decodeList (P.decodeTuple P.decodeString P.decodeString))
+
+                    28 ->
+                        BD.map2 WebSocketMessage P.decodeString P.decodeBytes
+
+                    29 ->
+                        BD.map2 WebSocketClosed P.decodeString P.decodeString
 
                     _ ->
                         BD.fail

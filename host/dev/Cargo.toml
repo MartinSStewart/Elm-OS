@@ -19,7 +19,10 @@ libc = "0.2"
 # headers) and a way to show our pixels in it.
 winit = { version = "0.30", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
-# The same as host/init, whose HTTP, file and stats code this compiles in (main.rs).
+# The same as host/init, whose HTTP, WebSocket, file and stats code this compiles in (main.rs).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 ring = "0.17"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
 serde_json = "1"

@@ -1,11 +1,13 @@
 module HackerNewsTest exposing (suite)
 
+import Bytes exposing (Bytes)
+import Bytes.Decode
 import Bytes.Encode
 import Expect
 import HackerNews exposing (HackerNewsState(..), PostId(..), UiId(..))
-import Json.Encode as E
 import SeqDict
 import Test exposing (Test, describe, test)
+import Wire
 
 
 {-| Opens the comments of posts "1" to "n", one after another.
@@ -80,20 +82,38 @@ suite =
         , test "reads a comment's date and how faded it is"
             (\() ->
                 let
-                    json : String
-                    json =
+                    -- The Model in Wire3, a byte to a character. A comment's fields go in
+                    -- alphabetical order: ..., content, date, descendants, grey, ...
+                    saved : String
+                    saved =
                         HackerNews.init
                             |> HackerNews.onClick (NewsPostButton (PostId "5"))
                             |> Tuple.first
                             |> respond (HackerNews.GetPostRequest (PostId "5")) commentsPage
                             |> HackerNews.w3_encode_Model
-                            |> E.encode 0
+                            |> Wire.toBytes
+                            |> latin1
                 in
                 Expect.all
-                    [ \_ -> Expect.equal True (String.contains "2026-11-13 02:26" json)
-                    , \_ -> Expect.equal True (String.contains "\"ann\",[\"2026-11-13 02:26\"],174,\"faded text\"" json)
-                    , \_ -> Expect.equal True (String.contains "\"bob\",[],0,\"black text\"" json)
+                    [ \_ -> Expect.equal True (String.contains "faded text\u{0001}\u{0020}2026-11-13 02:26\u{0000}\u{00D8}\u{0084}" saved)
+                    , \_ -> Expect.equal True (String.contains "black text\u{0000}\u{0000}\u{0000}" saved)
                     ]
                     ()
             )
         ]
+
+
+latin1 : Bytes -> String
+latin1 bytes =
+    Bytes.Decode.decode
+        (Bytes.Decode.loop ( Bytes.width bytes, [] )
+            (\( left, acc ) ->
+                if left <= 0 then
+                    Bytes.Decode.succeed (Bytes.Decode.Done (String.fromList (List.reverse acc)))
+
+                else
+                    Bytes.Decode.map (\b -> Bytes.Decode.Loop ( left - 1, Char.fromCode b :: acc )) Bytes.Decode.unsignedInt8
+            )
+        )
+        bytes
+        |> Maybe.withDefault ""

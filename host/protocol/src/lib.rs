@@ -87,8 +87,12 @@ pub enum Effect {
     WriteSys { path: String, text: String },
     /// Adds `text` to the end of a file on the data disk. No answer.
     AppendFile { path: String, text: String },
-    /// Replaces a file on the data disk, atomically. No answer.
-    WriteFile { path: String, text: String },
+    /// Replaces a file on the data disk with these bytes, atomically. No answer.
+    WriteFile {
+        path: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
     /// A line for the serial console / log, from Elm.
     Log { text: String },
     /// The answer to `ToElm::Switching`: the snapshot is written (the effects before
@@ -96,13 +100,29 @@ pub enum Effect {
     SwitchReady,
     /// Answered with `ToElm::Snapshot`: the data disk's snapshot file, as it is.
     ReadSnapshot,
-    /// Replaces the snapshot with `text` (the host frames it: length and CRC-32,
+    /// Replaces the snapshot with `data` (the host frames it: length and CRC-32,
     /// elm/src/Persist.elm reads them), atomically, and then drops the messages up to
     /// number `seq` from the log, which the snapshot has in it.
-    WriteSnapshot { text: String, seq: u64 },
+    WriteSnapshot {
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+        seq: u64,
+    },
     /// Sends the logged messages numbered after `after` that went to earlier programs
     /// (each with its number), then `ToElm::ReplayDone`.
     ReplayLog { after: u64 },
+    /// Opens a WebSocket (ws:// or wss://) with these extra request headers, such as a
+    /// cookie. Answered with `ToElm::WebSocketOpened`, then a `ToElm::WebSocketMessage`
+    /// for each message, and last `ToElm::WebSocketClosed`, all with the same id.
+    WebSocketOpen { id: String, url: String, headers: Vec<(String, String)> },
+    /// A binary message on an open WebSocket.
+    WebSocketSend {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// Closes a WebSocket; `ToElm::WebSocketClosed` follows.
+    WebSocketClose { id: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -175,6 +195,9 @@ pub enum ToElm {
     DataDisk {
         path: Option<String>,
         http_in_flight: Vec<String>,
+        /// The ids of the WebSockets open now: they belong to the host and stay open
+        /// from one program to the next. Any other is closed.
+        web_sockets_open: Vec<String>,
     },
     /// Any status, 404 included. The body as it came, so not necessarily text.
     HttpResponse {
@@ -204,12 +227,25 @@ pub enum ToElm {
     /// the wall clock (CLOCK_REALTIME), in whole milliseconds since 1970 UTC: from the
     /// hardware clock at boot, then from the network (host/init/src/ntp.rs).
     Tick { time: f64 },
-    /// The answer to `Effect::ReadSnapshot`: the snapshot file's text, null if there
-    /// is none.
-    Snapshot { text: Option<String> },
+    /// The answer to `Effect::ReadSnapshot`: the snapshot file's bytes, as they are,
+    /// null if there is none.
+    Snapshot {
+        #[serde(with = "serde_bytes")]
+        data: Option<Vec<u8>>,
+    },
     /// After `Effect::ReplayLog`'s messages: the number of the last message that went
     /// to an earlier program. Messages numbered after it are new.
     ReplayDone { upto: u64 },
+    /// The WebSocket is open: the server's response headers (a cookie it sets, say).
+    WebSocketOpened { id: String, headers: Vec<(String, String)> },
+    /// A message from the server, binary or text (as UTF-8).
+    WebSocketMessage {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// The WebSocket has closed, or couldn't open, and why. Its id can be used again.
+    WebSocketClosed { id: String, reason: String },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -370,9 +406,12 @@ mod tests {
             Effect::ReadSnapshot => "readSnapshot",
             Effect::WriteSnapshot { .. } => "writeSnapshot",
             Effect::ReplayLog { .. } => "replayLog",
+            Effect::WebSocketOpen { .. } => "webSocketOpen",
+            Effect::WebSocketSend { .. } => "webSocketSend",
+            Effect::WebSocketClose { .. } => "webSocketClose",
         }
     }
-    const EFFECT_TAGS: usize = 19;
+    const EFFECT_TAGS: usize = 22;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -403,9 +442,12 @@ mod tests {
             ToElm::Tick { .. } => "tick",
             ToElm::Snapshot { .. } => "snapshot",
             ToElm::ReplayDone { .. } => "replayDone",
+            ToElm::WebSocketOpened { .. } => "webSocketOpened",
+            ToElm::WebSocketMessage { .. } => "webSocketMessage",
+            ToElm::WebSocketClosed { .. } => "webSocketClosed",
         }
     }
-    const TO_ELM_TAGS: usize = 27;
+    const TO_ELM_TAGS: usize = 30;
 
     #[test]
     fn reads_the_render_example() {

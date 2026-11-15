@@ -10,17 +10,10 @@ The source files themselves are left alone: this works on a copy (see Main.elm),
 and only ever adds to a line or replaces a blank one, so the line numbers in the
 compiler's errors are those of the original files.
 
-The JSON is compact and positional:
-
-  - a record is an array of its fields, in the order the type declares them
-  - a custom type is an array of the variant's number (from 0, in declaration
-    order) and then its arguments
-  - Maybe is `[]` or `[x]`, Result is `[0, error]` or `[1, value]`
-  - a tuple is an array, `()` is `[]`, List, Array and Set are arrays, and a Dict is
-    an array of `[key, value]` arrays
-  - Int, String and Bool are themselves, a Char is a string, a Float is a number or
-    "NaN", "+Inf" or "-Inf", a Quantity is its number, a Time.Posix is its
-    milliseconds, Bytes is a base64 string, and a Json.Encode.Value is itself
+The format is Lamdera's Wire3, the same bytes Lamdera's own generated codecs write
+(elm/src/Wire.elm describes it), so the codecs also talk to Lamdera apps: record
+fields are written in the order of their names, and a custom type's variants are
+numbered in the order of theirs, rather than in the order the type lists them.
 
 So the data doesn't say which field is which, and `shape` describes every type the
 codecs cover: data saved with a different shape mustn't be decoded with these.
@@ -128,8 +121,8 @@ builtins =
         , ( ( "Quantity", "Quantity" ), Builtin "Wire.encodeQuantity" "Wire.decodeQuantity" [ 0 ] )
         , ( ( "Date", "Date" ), Builtin "Wire.encodeDate" "Wire.decodeDate" [] )
         , ( ( "Time", "Posix" ), Builtin "Wire.encodePosix" "Wire.decodePosix" [] )
-        , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
-        , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
+        , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeJson" "Wire.decodeJson" [] )
+        , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeJson" "Wire.decodeJson" [] )
         ]
 
 
@@ -170,13 +163,13 @@ placeholder options files =
             Maybe.map Tuple.first (splitName full) |> Maybe.withDefault full
 
         imports =
-            [ modulePart options.config, modulePart options.model, modulePart options.msg, "Json.Decode", "Json.Encode", "Persist" ]
+            [ modulePart options.config, modulePart options.model, modulePart options.msg, "Bytes.Decode", "Bytes.Encode", "Persist" ]
                 |> Set.fromList
                 |> Set.toList
                 |> List.map (\i -> "import " ++ i)
 
         failing =
-            "Json.Decode.fail \"tools/wire failed: this build has placeholder codecs\""
+            "Bytes.Decode.fail"
     in
     files
         ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
@@ -199,7 +192,7 @@ placeholder options files =
                            , ""
                            , "codecs : Persist.Codecs " ++ options.model
                            , "codecs ="
-                           , "    { encodeModel = \\_ -> Json.Encode.null"
+                           , "    { encodeModel = \\_ -> Bytes.Encode.sequence []"
                            , "    , modelDecoder = " ++ failing
                            , "    , version = 0"
                            , "    , modelShape = \"\""
@@ -295,11 +288,34 @@ generateWith options modules modelKey msgKey configKey =
                                     Just (flag ++ ": " ++ keyName key ++ " can't have type variables")
                     )
 
+        stubs =
+            codecStubs modules
+
+        stubRoots =
+            stubs
+                |> List.concatMap
+                    (\( m, stub ) ->
+                        walk defs used (m.name ++ "." ++ stub.name) stub.ty ( [], [] ) |> Tuple.first
+                    )
+
+        stubErrors =
+            stubs
+                |> List.concatMap
+                    (\( m, stub ) ->
+                        (walk defs used (m.name ++ "." ++ stub.name) stub.ty ( [], [] ) |> Tuple.second)
+                            ++ (if stub.kind == Unknown then
+                                    [ m.name ++ "." ++ stub.name ++ ": a function in " ++ codecsModule ++ " must be a `T -> Wire.Value` or a `Wire.Decoder T`" ]
+
+                                else
+                                    []
+                               )
+                    )
+
         ( reached, reachErrors ) =
-            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots) Set.empty []
+            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots ++ stubRoots) Set.empty stubErrors
 
         clashes =
-            [ "Wire", options.entry ]
+            [ options.entry ]
                 |> List.filter (\name -> Dict.member name modules)
                 |> List.map (\name -> "there is already a module called " ++ name ++ ", and tools/wire writes one with that name")
     in
@@ -338,12 +354,16 @@ generateWith options modules modelKey msgKey configKey =
                             |> Dict.values
                             |> List.map
                                 (\m ->
-                                    case Dict.get m.name byModule of
-                                        Just ds ->
-                                            { path = m.path, source = addToModule ctx m (List.sortBy .name ds) }
+                                    if m.name == codecsModule then
+                                        { path = m.path, source = writeStubs ctx m (List.filterMap (\( sm, stub ) -> ifSame sm m stub) stubs) }
 
-                                        Nothing ->
-                                            { path = m.path, source = m.source }
+                                    else
+                                        case Dict.get m.name byModule of
+                                            Just ds ->
+                                                { path = m.path, source = addToModule ctx m (List.sortBy .name ds) }
+
+                                            Nothing ->
+                                                { path = m.path, source = m.source }
                                 )
 
                     modelShape =
@@ -935,6 +955,200 @@ leadsTo graph to from =
 
 
 
+-- CODECS FOR OTHER CODE
+
+
+{-| The module whose functions are codecs for types other than the Model: what a
+program sends to a server and gets back, say. In elm/src each is a placeholder that
+compiles (any body will do, such as `Wire.fail`); tools/wire writes the real codec in
+its place, from its type: a `T -> Wire.Value` encodes a `T`, and a `Wire.Decoder T`
+decodes one. So other code calls them as `WireCodecs.name` and gets Wire3.
+-}
+codecsModule : String
+codecsModule =
+    "WireCodecs"
+
+
+type StubKind
+    = Encode
+    | Decode
+    | Unknown
+
+
+type alias Stub =
+    { name : String, kind : StubKind, ty : Ty }
+
+
+codecStubs : Dict String Module -> List ( Module, Stub )
+codecStubs modules =
+    case Dict.get codecsModule modules of
+        Nothing ->
+            []
+
+        Just m ->
+            m.file.declarations
+                |> List.filterMap
+                    (\decl ->
+                        case Node.value decl of
+                            FunctionDeclaration f ->
+                                f.signature
+                                    |> Maybe.map
+                                        (\sig ->
+                                            let
+                                                name =
+                                                    Node.value (Node.value sig).name
+
+                                                annotation =
+                                                    Node.value (Node.value sig).typeAnnotation
+                                            in
+                                            ( m, stubOf m name annotation )
+                                        )
+
+                            _ ->
+                                Nothing
+                    )
+
+
+stubOf : Module -> String -> TypeAnnotation -> Stub
+stubOf m name annotation =
+    let
+        isWire typeName node =
+            case canonical m (Typed node []) of
+                TNamed ( "Wire", n ) _ ->
+                    n == typeName
+
+                _ ->
+                    False
+    in
+    case annotation of
+        FunctionTypeAnnotation arg result ->
+            case Node.value result of
+                Typed node [] ->
+                    if isWire "Value" node then
+                        { name = name, kind = Encode, ty = canonical m (Node.value arg) }
+
+                    else
+                        { name = name, kind = Unknown, ty = TUnit }
+
+                _ ->
+                    { name = name, kind = Unknown, ty = TUnit }
+
+        Typed node [ arg ] ->
+            if isWire "Decoder" node then
+                { name = name, kind = Decode, ty = canonical m (Node.value arg) }
+
+            else
+                { name = name, kind = Unknown, ty = TUnit }
+
+        _ ->
+            { name = name, kind = Unknown, ty = TUnit }
+
+
+ifSame : Module -> Module -> Stub -> Maybe Stub
+ifSame a b stub =
+    if a.name == b.name then
+        Just stub
+
+    else
+        Nothing
+
+
+{-| The codecs module with every placeholder replaced: its header and imports as
+they are, then each function, written from its type.
+-}
+writeStubs : Ctx -> Module -> List Stub -> String
+writeStubs ctx m stubs =
+    let
+        lastImportRow =
+            m.file.imports
+                |> List.map (Node.range >> .end >> .row)
+                |> List.maximum
+                |> Maybe.withDefault (Node.range m.file.moduleDefinition).end.row
+
+        header =
+            m.source |> String.lines |> List.take lastImportRow
+
+        self =
+            ( m.name, "" )
+
+        function stub =
+            case stub.kind of
+                Encode ->
+                    stub.name ++ " : " ++ renderSig stub ++ "\n" ++ stub.name ++ " =\n    " ++ unwrap (encFn ctx m 1 stub.ty)
+
+                Decode ->
+                    stub.name ++ " : " ++ renderSig stub ++ "\n" ++ stub.name ++ " =\n    " ++ unwrap (decFn ctx m self 1 stub.ty)
+
+                Unknown ->
+                    ""
+
+        renderSig stub =
+            case List.filter (\decl -> declName decl == Just stub.name) m.file.declarations |> List.head of
+                Just decl ->
+                    signatureText m decl
+
+                Nothing ->
+                    ""
+    in
+    String.join "\n" header
+        ++ "\n\n\n-- Written by tools/wire from the placeholders in elm/src.\n\n\n"
+        ++ String.join "\n\n\n" (List.map function stubs)
+        ++ "\n"
+
+
+declName : Node Declaration -> Maybe String
+declName decl =
+    case Node.value decl of
+        FunctionDeclaration f ->
+            Just (Node.value (Node.value f.declaration).name)
+
+        _ ->
+            Nothing
+
+
+{-| A function's type, as the source has it.
+-}
+signatureText : Module -> Node Declaration -> String
+signatureText m decl =
+    case Node.value decl of
+        FunctionDeclaration f ->
+            case f.signature of
+                Just sig ->
+                    let
+                        range =
+                            Node.range (Node.value sig).typeAnnotation
+
+                        lines =
+                            String.lines m.source |> List.drop (range.start.row - 1) |> List.take (range.end.row - range.start.row + 1)
+                    in
+                    case lines of
+                        [ one ] ->
+                            String.slice (range.start.column - 1) (range.end.column - 1) one
+
+                        first :: rest ->
+                            String.join "\n"
+                                (String.dropLeft (range.start.column - 1) first
+                                    :: List.reverse
+                                        (case List.reverse rest of
+                                            last :: middle ->
+                                                String.left (range.end.column - 1) last :: middle
+
+                                            [] ->
+                                                []
+                                        )
+                                )
+
+                        [] ->
+                            ""
+
+                Nothing ->
+                    ""
+
+        _ ->
+            ""
+
+
+
 -- WRITING THE CODE
 
 
@@ -1002,6 +1216,15 @@ there is one, so the lines below don't move.
 -}
 addImport : Module -> List String -> List String
 addImport m lines =
+    if List.any (\i -> Node.value (Node.value i).moduleName == [ "Wire" ]) m.file.imports then
+        lines
+
+    else
+        addImportAfter m lines
+
+
+addImportAfter : Module -> List String -> List String
+addImportAfter m lines =
     let
         afterRow =
             case List.map (Node.range >> .end >> .row) m.file.imports |> List.maximum of
@@ -1069,7 +1292,7 @@ encoder ctx m def =
         body =
             case def.body of
                 Alias (TRecord fields) ->
-                    "    " ++ layoutList 4 "Wire.encodeRecord" (List.map (\( f, t ) -> encApply ctx m 1 t ("w3_v." ++ f)) fields)
+                    "    " ++ layoutList 4 "Wire.encodeRecord" (List.map (\( f, t ) -> encApply ctx m 1 t ("w3_v." ++ f)) (byName fields))
 
                 Alias ty ->
                     "    " ++ encApply ctx m 1 ty "w3_v"
@@ -1077,8 +1300,8 @@ encoder ctx m def =
                 Custom variants ->
                     "    case w3_v of\n"
                         ++ String.join "\n\n"
-                            (List.indexedMap
-                                (\i ( ctor, tys ) ->
+                            (List.map
+                                (\( ctor, tys ) ->
                                     let
                                         vars =
                                             List.indexedMap (\j _ -> "w3_x" ++ String.fromInt j) tys
@@ -1086,7 +1309,7 @@ encoder ctx m def =
                                     "        "
                                         ++ String.join " " (ctor :: vars)
                                         ++ " ->\n            "
-                                        ++ layoutList 12 ("Wire.encodeCustom " ++ String.fromInt i) (List.map2 (encApply ctx m 1) tys vars)
+                                        ++ layoutList 12 ("Wire.encodeCustom " ++ String.fromInt (tagOf variants ctor)) (List.map2 (encApply ctx m 1) tys vars)
                                 )
                                 variants
                             )
@@ -1124,7 +1347,7 @@ decoder ctx m def =
         body =
             case def.body of
                 Alias (TRecord fields) ->
-                    "    " ++ layoutPipeline 4 (decFields ctx m self 1 def.name 0 (List.map Tuple.second fields))
+                    "    " ++ layoutPipeline 4 (decRecord ctx m self 1 fields)
 
                 Alias ty ->
                     "    " ++ unwrap (decFn ctx m self 1 ty)
@@ -1137,10 +1360,10 @@ decoder ctx m def =
                                     "                "
                                         ++ String.fromInt i
                                         ++ " ->\n                    "
-                                        ++ layoutPipeline 20 (decFields ctx m self 1 ctor 1 tys)
+                                        ++ layoutPipeline 20 (decFields ctx m self 1 ctor tys)
                                         ++ "\n\n"
                                 )
-                                variants
+                                (byName variants)
                             )
                         ++ "                _ ->\n                    Wire.fail\n        )"
     in
@@ -1231,7 +1454,7 @@ encRecord ctx m depth fields v =
         "Wire.encodeRecord []"
 
     else
-        "Wire.encodeRecord [ " ++ String.join ", " (List.map (\( f, t ) -> encApply ctx m depth t (v ++ "." ++ f)) fields) ++ " ]"
+        "Wire.encodeRecord [ " ++ String.join ", " (List.map (\( f, t ) -> encApply ctx m depth t (v ++ "." ++ f)) (byName fields)) ++ " ]"
 
 
 encApply : Ctx -> Module -> Int -> Ty -> String -> String
@@ -1252,14 +1475,57 @@ encApply ctx m depth ty value =
                 String.dropRight 1 (String.dropLeft 1 fn) ++ " " ++ value
 
 
-{-| Decodes the arguments of `ctor`, which are the array's items from `first` on.
+{-| Decodes the arguments of `ctor`, in order.
 -}
-decFields : Ctx -> Module -> Key -> Int -> String -> Int -> List Ty -> List String
-decFields ctx m self depth ctor first tys =
+decFields : Ctx -> Module -> Key -> Int -> String -> List Ty -> List String
+decFields ctx m self depth ctor tys =
     ("Wire.succeed " ++ ctor)
-        :: List.indexedMap
-            (\i t -> "|> Wire.andIndex " ++ String.fromInt (first + i) ++ " " ++ decFn ctx m self depth t)
-            tys
+        :: List.map (\t -> "|> Wire.andMap " ++ decFn ctx m self depth t) tys
+
+
+{-| Decodes a record: its fields in the order of their names, as Wire3 writes them.
+-}
+decRecord : Ctx -> Module -> Key -> Int -> List ( String, Ty ) -> List String
+decRecord ctx m self depth fields =
+    let
+        sorted =
+            byName fields
+
+        vars =
+            List.indexedMap (\i _ -> "w3_f" ++ String.fromInt depth ++ "_" ++ String.fromInt i) sorted
+
+        build =
+            if List.isEmpty fields then
+                "{}"
+
+            else
+                "(\\"
+                    ++ String.join " " vars
+                    ++ " -> { "
+                    ++ String.join ", " (List.map2 (\( f, _ ) v -> f ++ " = " ++ v) sorted vars)
+                    ++ " })"
+    in
+    decFields ctx m self (depth + 1) build (List.map Tuple.second sorted)
+
+
+{-| Wire3 orders record fields, and numbers a custom type's variants, by their names
+(Lamdera.Lexical: their bytes compared, which is how Elm compares Strings).
+-}
+byName : List ( String, a ) -> List ( String, a )
+byName =
+    List.sortBy Tuple.first
+
+
+{-| The number Wire3 gives the variant `ctor`.
+-}
+tagOf : List ( String, a ) -> String -> Int
+tagOf variants ctor =
+    byName variants
+        |> List.indexedMap (\i ( c, _ ) -> ( c, i ))
+        |> List.filter (\( c, _ ) -> c == ctor)
+        |> List.head
+        |> Maybe.map Tuple.second
+        |> Maybe.withDefault 0
 
 
 {-| `f [ a, b ]`, on one line if it's short, otherwise one item per line.
@@ -1313,22 +1579,7 @@ decFn ctx m self depth ty =
             "(Wire.decodeTuple" ++ String.fromInt (List.length items) ++ String.concat (List.map (\t -> " " ++ decFn ctx m self depth t) items) ++ ")"
 
         TRecord fields ->
-            let
-                vars =
-                    List.indexedMap (\i _ -> "w3_f" ++ String.fromInt depth ++ "_" ++ String.fromInt i) fields
-
-                build =
-                    if List.isEmpty fields then
-                        "{}"
-
-                    else
-                        "(\\"
-                            ++ String.join " " vars
-                            ++ " -> { "
-                            ++ String.join ", " (List.map2 (\( f, _ ) v -> f ++ " = " ++ v) fields vars)
-                            ++ " })"
-            in
-            "(" ++ String.join " " (decFields ctx m self (depth + 1) build 0 (List.map Tuple.second fields)) ++ ")"
+            "(" ++ String.join " " (decRecord ctx m self depth fields) ++ ")"
 
         TNamed key args ->
             let
@@ -1481,7 +1732,7 @@ entryModule options configKey modelKey msgKey shapes =
             Tuple.first (frozenKey k modelKey)
 
         imports =
-            ([ Tuple.first configKey, Tuple.first modelKey, Tuple.first msgKey, "Persist", "Json.Decode" ]
+            ([ Tuple.first configKey, Tuple.first modelKey, Tuple.first msgKey, "Persist", "Bytes", "Wire" ]
                 ++ List.map frozenModule versions
                 ++ List.map migrationModule (List.filter (\k -> k > 1) versions)
             )
@@ -1494,15 +1745,14 @@ entryModule options configKey modelKey msgKey shapes =
                 [ "        " ++ String.fromInt (k - 1) ++ " ->"
                 , "            -- A draft build: there's no migration yet, so the Model is read as it is,"
                 , "            -- and starts afresh if that fails. See the warning `make` showed."
-                , "            Just json"
+                , "            Just bytes"
                 , ""
                 ]
 
             else
                 [ "        " ++ String.fromInt (k - 1) ++ " ->"
-                , "            Json.Decode.decodeValue " ++ frozenModule (k - 1) ++ ".w3_decode_" ++ Tuple.second modelKey ++ " json"
-                , "                |> Result.toMaybe"
-                , "                |> Maybe.map (\\old -> " ++ frozenModule k ++ ".w3_encode_" ++ Tuple.second modelKey ++ " (" ++ migrationModule k ++ ".model old))"
+                , "            Wire.fromBytes " ++ frozenModule (k - 1) ++ ".w3_decode_" ++ Tuple.second modelKey ++ " bytes"
+                , "                |> Maybe.map (\\old -> Wire.toBytes (" ++ frozenModule k ++ ".w3_encode_" ++ Tuple.second modelKey ++ " (" ++ migrationModule k ++ ".model old)))"
                 , ""
                 ]
 
@@ -1564,8 +1814,8 @@ entryModule options configKey modelKey msgKey shapes =
                , ""
                , "{-| A Model saved by version `from`, as version `from + 1` would have saved it."
                , "-}"
-               , "migrate : Int -> Json.Decode.Value -> Maybe Json.Decode.Value"
-               , "migrate from json ="
+               , "migrate : Int -> Bytes.Bytes -> Maybe Bytes.Bytes"
+               , "migrate from bytes ="
                , "    case from of"
                ]
             ++ List.concatMap migrateCase (List.filter (\k -> k > 1) (List.map Tuple.first shapes.versions))

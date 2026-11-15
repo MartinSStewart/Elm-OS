@@ -1,6 +1,6 @@
 //! The link to the Elm program running now: what host/init's elm.rs is to /init, cut
-//! down. host/init's http.rs, files.rs and stats.rs, compiled into the dev runner as
-//! they are (main.rs), send through these functions.
+//! down. host/init's http.rs, websocket.rs, files.rs and stats.rs, compiled into the
+//! dev runner as they are (main.rs), send through these functions.
 
 use std::os::unix::net::UnixStream;
 use std::sync::{Mutex, MutexGuard};
@@ -15,7 +15,8 @@ struct Link {
     /// Counts the programs started; answers carry the one that asked.
     program: u64,
     pid: Option<u32>,
-    /// HTTP answers that came while no program was running, for the next one.
+    /// HTTP answers and WebSocket messages that came while no program was running, for
+    /// the next one.
     queue: Vec<ToElm>,
     /// HTTP requests started and not yet answered to a program, by id.
     http_in_flight: Vec<String>,
@@ -99,10 +100,16 @@ pub fn trim_log(upto: u64) {
     }
 }
 
-/// Sends `msg` to the program running now. An HTTP answer waits for the next program
-/// if none is.
+/// Sends `msg` to the program running now. An HTTP answer or a WebSocket's message
+/// waits for the next program if none is.
 pub fn send(msg: &ToElm) {
     let mut s = state();
+    if let ToElm::WebSocketOpened { .. } | ToElm::WebSocketMessage { .. } | ToElm::WebSocketClosed { .. } = msg {
+        if s.stream.is_none() {
+            s.queue.push(msg.clone());
+            return;
+        }
+    }
     if let ToElm::HttpResponse { id, .. } | ToElm::HttpError { id, .. } = msg {
         if s.stream.is_none() {
             s.queue.push(msg.clone());

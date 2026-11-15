@@ -30,6 +30,7 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
+use crate::websocket;
 use common::raster;
 
 use crate::{elm, error_screen, http, net, persist};
@@ -256,15 +257,18 @@ impl Host {
                 Effect::Sha256 { path, length } => files::request(self.program, Request::Sha256 { path, length }),
                 Effect::WriteSys { path, text } => files::write_sys(path, text),
                 Effect::AppendFile { path, text } => persist::append_file(path, text),
-                Effect::WriteFile { path, text } => persist::write_file(path, text),
+                Effect::WriteFile { path, data } => persist::write_file(path, data),
                 Effect::Log { text } => {
                     log!("elm", "{}", text);
                     elm::note_output(&format!("[elm] {text}"));
                 }
                 Effect::SwitchReady => elm::switch_ready(self.program),
                 Effect::ReadSnapshot => persist::read_snapshot(self.program),
-                Effect::WriteSnapshot { text, seq } => persist::write_snapshot(text, seq),
+                Effect::WriteSnapshot { data, seq } => persist::write_snapshot(data, seq),
                 Effect::ReplayLog { after } => elm::replay_log(self.program, after),
+                Effect::WebSocketOpen { id, url, headers } => websocket::open(id, url, headers),
+                Effect::WebSocketSend { id, data } => websocket::send(&id, data),
+                Effect::WebSocketClose { id } => websocket::close(&id),
             }
         }
         if cursor_dirty {

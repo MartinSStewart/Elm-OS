@@ -216,18 +216,68 @@ def replace_file(name, data):
 
 
 def entries(data, name, torn_ok=False):
-    """The payloads of a file's entries; each must have the right length and CRC-32.
-    Only the last may be cut short, and only if torn_ok."""
-    out = []
-    lines = data.split(b"\n")
-    for i, line in enumerate(lines[:-1]):
-        length, crc, payload = line.split(b" ", 2)
-        if int(length) != len(payload) or int(crc, 16) != zlib.crc32(payload):
-            fail(f"{name}: entry {i} has the wrong length or CRC-32: {line[:120]!r}")
-        out.append(json.loads(payload))
-    if lines[-1] and not torn_ok:
-        fail(f"{name} ends with part of an entry: {lines[-1][:80]!r}")
+    """The payloads of a file's entries (`LENGTH CRC32 payload\n`, the payload any
+    bytes); each must have the right length and CRC-32. Only the last may be cut
+    short, and only if torn_ok."""
+    out, at = [], 0
+    while at < len(data):
+        header_end = data.find(b" ", data.find(b" ", at) + 1)
+        try:
+            length, crc = data[at:header_end].split(b" ")
+            length, crc = int(length), int(crc, 16)
+        except ValueError:
+            length = None
+        end = header_end + 1 + (length or 0)
+        if header_end < 0 or length is None or end >= len(data):
+            if not torn_ok:
+                fail(f"{name} ends with part of an entry: {data[at:at + 80]!r}")
+            break
+        payload = data[header_end + 1:end]
+        if zlib.crc32(payload) != crc or data[end] != 10:
+            fail(f"{name}: entry {len(out)} has the wrong length or CRC-32: {data[at:at + 120]!r}")
+        out.append(payload)
+        at = end + 1
     return out
+
+
+class Wire3:
+    """Reads Lamdera's Wire3 bytes (elm/src/Wire.elm), as the snapshot holds them."""
+
+    def __init__(self, data, at=0):
+        self.data, self.at = data, at
+
+    def u8(self):
+        self.at += 1
+        return self.data[self.at - 1]
+
+    def int(self):
+        n0 = self.u8()
+        if n0 <= 215:
+            n = n0
+        elif n0 < 252:
+            n = (n0 - 216) * 256 + self.u8() + 216
+        elif n0 == 255:
+            (f,) = struct.unpack_from("<d", self.data, self.at)
+            self.at += 8
+            return int(f)
+        else:
+            width = n0 - 250
+            n = int.from_bytes(self.data[self.at:self.at + width], "big")
+            self.at += width
+        return -((n + 1) // 2) if n & 1 else n // 2
+
+    def bytes(self):
+        n = self.int()
+        if n < 0 or self.at + n > len(self.data):
+            raise ValueError("past the end")
+        self.at += n
+        return self.data[self.at - n:self.at]
+
+    def string(self):
+        return self.bytes().decode("utf-8")
+
+    def list(self, item):
+        return [item() for _ in range(self.int())]
 
 
 def log_entries(data, torn_ok=False):
@@ -259,68 +309,61 @@ def log_entries(data, torn_ok=False):
 
 
 def snapshot_text():
+    """The snapshot as [format, version, modelHash, seq, model bytes, pending] (see
+    Persist.elm's snapshotEffect)."""
     data = disk_file("snapshot")
     if data is None:
         fail("no snapshot on the disk")
-    [snap] = entries(data, "snapshot")
-    return snap
+    [payload] = entries(data, "snapshot")
+    r = Wire3(payload)
+    try:
+        return [r.string(), r.int(), r.string(), r.int(), r.bytes(), r.list(r.string)]
+    except (IndexError, ValueError) as e:
+        fail(f"the snapshot isn't as Persist.elm writes it ({e!r}): {payload[:80]!r}")
 
 
 def editor_text(snap):
-    """The text editor's text in a snapshot ([format, version, modelHash, seq, model,
-    pending], see Persist.elm). Model is a record encoded as an array, in Main.Model's field
-    order (MODEL_FIELDS). The editor's state is with the other UI elements' in `uiState`
-    (Ui.Model: [focus, uiState]), a Dict encoded as [[key, value], ...] whose key for it is
-    Main.idToString EditorInput. The value is a Ui.ElementState, a custom type encoded as
-    [variant's number, argument]: variant 1 is TextInputMultilineState, holding a
-    TextInputMultiline.Model: [input, scroll], TextInput.Model: [current, undo, redo],
-    State: [cursor, size, text]. "" if the editor has no state yet (nothing typed)."""
-    if "uiState" not in MODEL_FIELDS:
-        fail("Main.Model has no `uiState` field any more: update editor_text in this test")
-    try:
-        states = dict(snap[4][MODEL_FIELDS.index("uiState")][1])
-        if EDITOR_ID not in states:
-            return ""
-        tag, state = states[EDITOR_ID]
-        if tag != EDITOR_STATE_TAG:
-            fail(f"the editor's state in the snapshot is variant {tag} of Ui.ElementState, "
-                 f"not TextInputMultilineState ({EDITOR_STATE_TAG})")
-        text = state[0][0][2]
-    except (IndexError, TypeError, ValueError) as e:
-        fail(f"the snapshot's Model isn't shaped as editor_text in this test expects ({e!r}): "
-             f"{json.dumps(snap[4])[:300]}")
-    if not isinstance(text, str):
-        fail(f"the editor's text in the snapshot isn't a string: {text!r}")
-    return text
+    """The text editor's text in a snapshot. The Model is Wire3, which says nothing of
+    its own shape, so this looks for the editor's entry in the UI elements' states
+    (Ui.Model's `uiState`, a SeqDict): the key EditorInput (a byte, its place among
+    Main.UiId's variants in alphabetical order), then TextInputMultilineState (likewise
+    in Ui.ElementState), then a TextInputMultiline.Model, whose fields go alphabetically:
+    goalX (Maybe Int), then input (TextInput.Model), whose first is current (State:
+    cursorPosition, cursorSize, text). "" if the editor has no state yet (nothing typed)."""
+    model = snap[4]
+    found = set()
+    for i in range(len(model) - 2):
+        if model[i] != EDITOR_ID or model[i + 1] != EDITOR_STATE_TAG:
+            continue
+        r = Wire3(model, i + 2)
+        try:
+            if r.u8() == 1:
+                r.int()
+            cursor, size, text = r.int(), r.int(), r.string()
+        except (IndexError, ValueError, UnicodeDecodeError):
+            continue
+        if 0 <= cursor <= len(text) and abs(size) <= len(text) and text.isprintable():
+            found.add(text)
+    if len(found) > 1:
+        fail(f"the editor's state in the snapshot could be any of {sorted(found)!r}: update editor_text in this test")
+    return found.pop() if found else ""
 
 
 def variant_number(path, type_name, variant):
-    """Where `variant` comes in the custom type `type_name` (tools/wire numbers a type's
-    variants in the order they are written)."""
+    """The tag Wire3 gives `variant` of the custom type `type_name`: its place among the
+    type's variants in alphabetical order."""
     source = re.sub(r"--[^\n]*", "", open(path).read())
     m = re.search(rf"^type {type_name}\b[^=]*=(.*?)(?=^\S)", source, re.S | re.M)
     if not m:
         fail(f"no `type {type_name}` in {path}")
-    names = [v.split()[0] for v in m.group(1).split("|")]
+    names = sorted(v.split()[0] for v in m.group(1).split("|"))
     if variant not in names:
         fail(f"{type_name} in {path} has no variant {variant}: update editor_text in this test")
     return names.index(variant)
 
 
-EDITOR_ID = "EditorInput"  # Main.idToString EditorInput
+EDITOR_ID = variant_number(f"{ROOT}/elm/src/Main.elm", "UiId", "EditorInput")
 EDITOR_STATE_TAG = variant_number(f"{ROOT}/elm/src/Ui.elm", "ElementState", "TextInputMultilineState")
-
-
-def model_fields():
-    """Main.Model's field names, in order, from elm/src/Main.elm."""
-    source = open(f"{ROOT}/elm/src/Main.elm").read()
-    body = source[source.index("type alias Model ="):]
-    body = body[:body.index("\n    }")]
-    body = re.sub(r"--[^\n]*", "", body)
-    return re.findall(r"[{,]\s*([a-z][A-Za-z0-9_]*)\s*:", body)
-
-
-MODEL_FIELDS = model_fields()
 
 
 boot()
@@ -355,7 +398,7 @@ base, logged = log_entries(log)
 first_snap = snapshot_text()
 if not logged:
     fail("no messages in the log after typing")
-print(f"disk: snapshot {len(json.dumps(first_snap))} bytes (Model version {first_snap[1]}), log {len(logged)} messages, "
+print(f"disk: snapshot {len(disk_file('snapshot'))} bytes (Model version {first_snap[1]}), log {len(logged)} messages, "
       f"numbered {logged[0][0]}..{logged[-1][0]}")
 if base != first_snap[3]:
     fail(f"the log carries on from message {base}, but the snapshot has up to {first_snap[3]}")

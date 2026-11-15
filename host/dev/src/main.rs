@@ -47,6 +47,8 @@ macro_rules! log {
 mod files;
 #[path = "../../init/src/http.rs"]
 mod http;
+#[path = "../../init/src/websocket.rs"]
+mod websocket;
 #[path = "../../init/src/stats.rs"]
 mod stats;
 
@@ -236,7 +238,11 @@ impl Runner {
         first.extend(self.wifi_scan.clone());
         first.extend([
             fake::wired(),
-            ToElm::DataDisk { path: Some(self.data.display().to_string()), http_in_flight },
+            ToElm::DataDisk {
+                path: Some(self.data.display().to_string()),
+                http_in_flight,
+                web_sockets_open: websocket::open_ids(),
+            },
             ToElm::Mouse { x: self.mouse.0, y: self.mouse.1 },
         ]);
         for m in &first {
@@ -391,6 +397,9 @@ impl Runner {
                 self.start();
             }
             Effect::Http(req) => http::request(req),
+            Effect::WebSocketOpen { id, url, headers } => websocket::open(id, url, headers),
+            Effect::WebSocketSend { id, data } => websocket::send(&id, data),
+            Effect::WebSocketClose { id } => websocket::close(&id),
             Effect::ListDir { path } => files::request(elm::program(), files::Request::ListDir { path }),
             Effect::ReadFiles { id, paths } => files::request(elm::program(), files::Request::ReadFiles { id, paths }),
             Effect::ReadBytes { path, offset, length } => {
@@ -399,8 +408,8 @@ impl Runner {
             Effect::Sha256 { path, length } => files::request(elm::program(), files::Request::Sha256 { path, length }),
             // Elm OS only (e.g. the CPU governor); the Elm program asks often, so stay quiet.
             Effect::WriteSys { .. } => {}
-            Effect::AppendFile { path, text } => self.write_data(&path, &text, true),
-            Effect::WriteFile { path, text } => self.write_data(&path, &text, false),
+            Effect::AppendFile { path, text } => self.write_data(&path, text.as_bytes(), true),
+            Effect::WriteFile { path, data } => self.write_data(&path, &data, false),
             Effect::Log { text } => log!("elm", "{text}"),
             Effect::SwitchReady => {
                 if self.switching.is_some() {
@@ -408,12 +417,12 @@ impl Runner {
                 }
             }
             Effect::ReadSnapshot => {
-                let text = std::fs::read_to_string(self.data.join("snapshot")).ok();
-                elm::send(&ToElm::Snapshot { text });
+                let data = std::fs::read(self.data.join("snapshot")).ok();
+                elm::send(&ToElm::Snapshot { data });
             }
-            Effect::WriteSnapshot { text, seq } => {
+            Effect::WriteSnapshot { data, seq } => {
                 let path = self.data.join("snapshot");
-                if let Err(e) = common::msglog::write_atomically(&path, common::msglog::frame_snapshot(&text).as_bytes()) {
+                if let Err(e) = common::msglog::write_atomically(&path, &common::msglog::frame_snapshot(&data)) {
                     log!("dev", "writing {}: {e}", path.display());
                 } else {
                     elm::trim_log(seq);
@@ -434,7 +443,7 @@ impl Runner {
 
     /// The data disk's appendFile and writeFile (host/init/src/persist.rs), in a
     /// directory and without the fsyncs: only files directly in it.
-    fn write_data(&self, path: &str, text: &str, append: bool) {
+    fn write_data(&self, path: &str, data: &[u8], append: bool) {
         let p = Path::new(path);
         let ok = p.parent() == Some(self.data.as_path())
             && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| !n.starts_with('.') && !n.ends_with(".new"));
@@ -443,10 +452,10 @@ impl Runner {
             return;
         }
         let result = if append {
-            OpenOptions::new().append(true).create(true).open(p).and_then(|mut f| f.write_all(text.as_bytes()))
+            OpenOptions::new().append(true).create(true).open(p).and_then(|mut f| f.write_all(data))
         } else {
             let tmp = PathBuf::from(format!("{path}.new"));
-            std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, p))
+            std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, p))
         };
         if let Err(e) = result {
             log!("dev", "writing {path}: {e}");

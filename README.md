@@ -230,7 +230,8 @@ Drawing is left out of `update` (`Main.draw`), so replaying is quick.
   and `build/data-qemu.img` in QEMU. `host/init/src/persist.rs` waits up to 5 s for it at start
   (a USB stick appears a second or two after boot; `ELMOS_DATA_WAIT` on the kernel command line
   changes that), mounts it at `/data` and tells Elm. Without one, nothing is saved.
-- **Files:** `/data/snapshot` is one line: its length in bytes, its CRC-32, and JSON (see below).
+- **Files:** `/data/snapshot` is its length in bytes, its CRC-32 and then the Model in Lamdera's
+  Wire3 bytes (see below), ending in a newline.
   `/data/log` is binary (`host/common/src/msglog.rs`): each entry has its length, CRC-32 and
   number. Either way a write cut short by a power cut is recognised and ignored, along with
   anything after it. Messages the snapshot already has are skipped by their numbers.
@@ -331,8 +332,11 @@ forwards again.
 
 ### Encoders and decoders (tools/wire)
 
-Nobody writes the code that turns the Model and Msgs into JSON and back: `tools/wire` writes it
-from the types before each build, the way Lamdera's Wire does. It is an Elm program (elm-syntax
+Nobody writes the code that turns the Model into bytes and back: `tools/wire` writes it
+from the types before each build, the way Lamdera's Wire does, and in the same format, Wire3
+(`elm/src/Wire.elm`), so the same codecs talk to Lamdera apps' servers (`elm/src/AsciiCollab.elm`
+speaks to ascii-collab.app). Functions in `elm/src/WireCodecs.elm` get codecs for other types,
+such as what a Lamdera app sends and receives: tools/wire writes each one's body from its type. It is an Elm program (elm-syntax
 to read the source, eco's `eco/system` for files), compiled natively with eco.
 
 - `make` runs it on `elm/src` and compiles `build/wire` instead: a copy of `elm/` in which each
@@ -346,7 +350,8 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   goes in the snapshot), and the migrations from each earlier version.
 - It handles records, custom types, tuples, type variables, recursive types, `Int`, `Float`
   (NaN and infinities too), `String`, `Char`, `Bool`, `Order`, `List`, `Array`, `Set`, `Dict`,
-  `Maybe`, `Result`, elm-units' `Quantity`, `Time.Posix` and `Json.Encode.Value`. It stops the
+  `Maybe`, `Result`, `Bytes`, `SeqDict`, `SeqSet`, elm-units' `Quantity`, `Time.Posix` and
+  `Json.Encode.Value`. It stops the
   build, saying which field, for a function, an extensible record or another package's type.
   Type variables that are only labels (a `Quantity`'s units) don't need to be saveable.
 - `make test-wire` checks it on a program with all of those (`tools/wire/test`): the generated

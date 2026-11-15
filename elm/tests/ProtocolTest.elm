@@ -27,6 +27,11 @@ import Unsafe
 import Wifi
 
 
+byteList : List Int -> Bytes
+byteList list =
+    BE.encode (BE.sequence (List.map BE.unsignedInt8 list))
+
+
 {-| Each Effect, in the order of examples.json's toHost.
 -}
 effects : List Effect
@@ -53,12 +58,15 @@ effects =
     , Effect.Sha256 { path = "/dev/sda", length = Just 1048576 }
     , Effect.WriteSys { path = "/sys/devices/system/cpu/cpufreq/policy0/scaling_governor", text = "performance" }
     , Effect.AppendFile { path = "/data/log", text = "5 12345678 [0,1]\n" }
-    , Effect.WriteFile { path = "/data/snapshot", text = "" }
+    , Effect.WriteFile { path = "/data/snapshot-unreadable", data = byteList [ 1, 2, 255 ] }
     , Effect.Log "couldn't read a message from the host"
     , Effect.SwitchReady
     , Effect.ReadSnapshot
-    , Effect.WriteSnapshot { text = "[\"elmos-persist-5\"]", seq = 300 }
+    , Effect.WriteSnapshot { data = byteList [ 0, 1, 255 ], seq = 300 }
     , Effect.ReplayLog { after = 12 }
+    , Effect.WebSocketOpen { id = "ascii-collab", url = "wss://ascii-collab.app/_w", headers = [ ( "Cookie", "sid=abc" ) ] }
+    , Effect.WebSocketSend { id = "ascii-collab", data = byteList [ 2, 1, 0, 255 ] }
+    , Effect.WebSocketClose "ascii-collab"
     , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
     ]
 

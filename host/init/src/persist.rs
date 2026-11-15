@@ -12,7 +12,7 @@
 //! is first appended to /data/log (common::msglog has the format), numbered. Elm keeps
 //! its Model with
 //!
-//!   readSnapshot             the snapshot file's text, as ToElm::Snapshot
+//!   readSnapshot             the snapshot file's bytes, as ToElm::Snapshot
 //!   writeSnapshot(T, N)      replaces the snapshot with T (framed: length, CRC-32),
 //!                            then drops the log's messages up to number N
 //!   replayLog(N)             the logged messages after N that earlier programs got
@@ -55,9 +55,9 @@ const SYNC_DELAY: Duration = Duration::from_secs(1);
 
 enum Op {
     Append { path: PathBuf, text: String },
-    Write { path: PathBuf, text: String },
+    Write { path: PathBuf, data: Vec<u8> },
     Log { seq: u64, message: Vec<u8> },
-    WriteSnapshot { text: String, seq: u64 },
+    WriteSnapshot { data: Vec<u8>, seq: u64 },
     Flush(Sender<()>),
     Run(Box<dyn FnOnce(&mut Writer) + Send>),
 }
@@ -91,7 +91,7 @@ pub fn start() {
             }
             set_mounted(mounted);
             // elm.rs fills in the HTTP requests in flight for each program it sends this to.
-            elm::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()), http_in_flight: Vec::new() });
+            elm::send(&ToElm::DataDisk { path: mounted.then(|| MOUNT_POINT.to_owned()), http_in_flight: Vec::new(), web_sockets_open: Vec::new() });
             if let Some(rx) = rx {
                 writer.run(rx);
             }
@@ -150,11 +150,18 @@ impl Disk<'_> {
     pub fn read(&self, name: &str) -> Option<String> {
         std::fs::read_to_string(Self::path(name)).ok()
     }
+    /// For files that aren't text, such as the snapshot.
+    pub fn read_bytes(&self, name: &str) -> Option<Vec<u8>> {
+        std::fs::read(Self::path(name)).ok()
+    }
     /// Replaces the file atomically, as writeFile does. False if it failed, after which
     /// nothing more is written until the next boot.
     pub fn write(&mut self, name: &str, text: &str) -> bool {
+        self.write_bytes(name, text.as_bytes())
+    }
+    pub fn write_bytes(&mut self, name: &str, data: &[u8]) -> bool {
         if !self.0.failed {
-            self.0.write(&Self::path(name), text);
+            self.0.write(&Self::path(name), data);
         }
         !self.0.failed
     }
@@ -207,18 +214,18 @@ pub fn last_logged() -> u64 {
 }
 
 /// Effect::WriteSnapshot.
-pub fn write_snapshot(text: String, seq: u64) {
-    send(Op::WriteSnapshot { text, seq });
+pub fn write_snapshot(data: Vec<u8>, seq: u64) {
+    send(Op::WriteSnapshot { data, seq });
 }
 
 /// Effect::ReadSnapshot, for program number `program`: after the writes before it.
 pub fn read_snapshot(program: u64) {
     let sent = send(Op::Run(Box::new(move |_| {
-        let text = std::fs::read_to_string(Disk::path("snapshot")).ok();
-        elm::answer(program, &ToElm::Snapshot { text });
+        let data = std::fs::read(Disk::path("snapshot")).ok();
+        elm::answer(program, &ToElm::Snapshot { data });
     })));
     if !sent {
-        elm::answer(program, &ToElm::Snapshot { text: None });
+        elm::answer(program, &ToElm::Snapshot { data: None });
     }
 }
 
@@ -256,9 +263,9 @@ pub fn append_file(path: String, text: String) {
     }
 }
 
-pub fn write_file(path: String, text: String) {
+pub fn write_file(path: String, data: Vec<u8>) {
     if let Some(path) = checked(&path) {
-        send(Op::Write { path, text });
+        send(Op::Write { path, data });
     }
 }
 
@@ -374,10 +381,10 @@ impl Writer {
             match op {
                 Some(Op::Append { .. } | Op::Write { .. } | Op::Log { .. } | Op::WriteSnapshot { .. }) if self.failed => {}
                 Some(Op::Append { path, text }) => self.append(path, &text),
-                Some(Op::Write { path, text }) => self.write(&path, &text),
+                Some(Op::Write { path, data }) => self.write(&path, &data),
                 Some(Op::Log { seq, message }) => self.log(seq, &message),
-                Some(Op::WriteSnapshot { text, seq }) => {
-                    self.write(&Disk::path("snapshot"), &msglog::frame_snapshot(&text));
+                Some(Op::WriteSnapshot { data, seq }) => {
+                    self.write(&Disk::path("snapshot"), &msglog::frame_snapshot(&data));
                     if !self.failed {
                         if let Some(log) = &mut self.log {
                             if let Err(err) = log.trim(seq) {
@@ -435,7 +442,7 @@ impl Writer {
         }
     }
 
-    fn write(&mut self, path: &Path, text: &str) {
+    fn write(&mut self, path: &Path, data: &[u8]) {
         // A file we were appending to is about to be replaced; finish with it first.
         if let Some(f) = self.open.remove(path) {
             let _ = f.sync_data();
@@ -443,7 +450,7 @@ impl Writer {
         let tmp = PathBuf::from(format!("{}.new", path.display()));
         let result = (|| -> std::io::Result<()> {
             let mut f = File::create(&tmp)?;
-            f.write_all(text.as_bytes())?;
+            f.write_all(data)?;
             f.sync_all()?;
             std::fs::rename(&tmp, path)?;
             File::open(path.parent().unwrap_or(Path::new(MOUNT_POINT)))?.sync_all()
@@ -451,7 +458,7 @@ impl Writer {
         match result {
             Ok(()) => {
                 if crate::sys::debug() {
-                    log!("persist", "wrote {} ({} bytes)", path.display(), text.len());
+                    log!("persist", "wrote {} ({} bytes)", path.display(), data.len());
                 }
             }
             Err(err) => self.fail(format!("writing {}: {err}", path.display())),

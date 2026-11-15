@@ -4,6 +4,8 @@ module Sprite exposing
     , Segment
     , Style(..)
     , Triangle
+    , asciiChar
+    , asciiIndex
     , caretPositions
     , cursor
     , customText
@@ -11,6 +13,7 @@ module Sprite exposing
     , ellipsis
     , encoder
     , lineHeight
+    , monoChar
     , move
     , rectangle
     , text
@@ -322,6 +325,25 @@ asciiChars =
 charToInt : Dict Char Int
 charToInt =
     asciiChars |> List.indexedMap (\index char -> ( char, index )) |> Dict.fromList
+
+
+{-| A character's place in `asciiChars`, if the pixel font has it.
+-}
+asciiIndex : Char -> Maybe Int
+asciiIndex char =
+    Dict.get char charToInt
+
+
+{-| The character at a place in `asciiChars` (a space if there is none there).
+-}
+asciiChar : Int -> Char
+asciiChar index =
+    Array.get index asciiCharArray |> Maybe.withDefault ' '
+
+
+asciiCharArray : Array Char
+asciiCharArray =
+    Array.fromList asciiChars
 
 
 questionMark : Int
@@ -702,6 +724,18 @@ clippedSprite color { left, right, top, bottom } ( x, y ) ( w, h ) ( tx, ty ) ( 
             ( shownRight - shownLeft, shownBottom - shownTop )
             ( tx + (shownLeft - x) * tw // w, ty + (shownTop - y) * th // h )
             ( (shownRight - shownLeft) * tw // w, (shownBottom - shownTop) * th // h )
+
+
+{-| One character of the pixel font, 10 x 18 UI pixels, with its top left corner at the
+given point. A space draws nothing.
+-}
+monoChar : Color -> Coord units -> Char -> List (Triangle units)
+monoChar color position char =
+    if char == ' ' then
+        []
+
+    else
+        sprite color (Coord.toTuple position) charSize (charTexturePosition char) charSize
 
 
 {-| The size of text: its widest line by its lines.

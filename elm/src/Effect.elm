@@ -80,7 +80,7 @@ type Effect
       -- WriteFile replaces the file at once, atomically: after a power cut it has
       -- either its old text or the new.
     | AppendFile { path : String, text : String }
-    | WriteFile { path : String, text : String }
+    | WriteFile { path : String, data : Bytes }
       -- A line for the host's log (the serial console), such as why a message from the
       -- host couldn't be read.
     | Log String
@@ -90,12 +90,19 @@ type Effect
     | SwitchReady
       -- The Model on the data disk (Persist.elm, host/init/src/persist.rs). The host
       -- logs every message it sends; ReadSnapshot is answered with the snapshot file's
-      -- text, WriteSnapshot replaces it (the host adds its length and checksum) and
+      -- bytes, WriteSnapshot replaces it (the host adds its length and checksum) and
       -- drops the logged messages up to that number, and ReplayLog has the host send
       -- the logged messages after that number again, then ReplayDone.
     | ReadSnapshot
-    | WriteSnapshot { text : String, seq : Int }
+    | WriteSnapshot { data : Bytes, seq : Int }
     | ReplayLog { after : Int }
+      -- WebSockets (host/init/src/websocket.rs), ws:// or wss://, with extra request
+      -- headers (a cookie, say). Answered on `fromHost` with webSocketOpened, a
+      -- webSocketMessage for each message, and last webSocketClosed, with the same id.
+      -- A socket belongs to the host, so it stays open from one program to the next.
+    | WebSocketOpen { id : String, url : String, headers : List ( String, String ) }
+    | WebSocketSend { id : String, data : Bytes }
+    | WebSocketClose String
 
 
 type PowerAction
@@ -272,8 +279,8 @@ encode effect =
         AppendFile { path, text } ->
             Postcard.variant 12 [ Postcard.string path, Postcard.string text ]
 
-        WriteFile { path, text } ->
-            Postcard.variant 13 [ Postcard.string path, Postcard.string text ]
+        WriteFile { path, data } ->
+            Postcard.variant 13 [ Postcard.string path, Postcard.bytes data ]
 
         Log text ->
             Postcard.variant 14 [ Postcard.string text ]
@@ -284,8 +291,21 @@ encode effect =
         ReadSnapshot ->
             Postcard.variant 16 []
 
-        WriteSnapshot { text, seq } ->
-            Postcard.variant 17 [ Postcard.string text, Postcard.unsigned seq ]
+        WriteSnapshot { data, seq } ->
+            Postcard.variant 17 [ Postcard.bytes data, Postcard.unsigned seq ]
 
         ReplayLog { after } ->
             Postcard.variant 18 [ Postcard.unsigned after ]
+
+        WebSocketOpen { id, url, headers } ->
+            Postcard.variant 19
+                [ Postcard.string id
+                , Postcard.string url
+                , Postcard.list (\( name, value ) -> BE.sequence [ Postcard.string name, Postcard.string value ]) headers
+                ]
+
+        WebSocketSend { id, data } ->
+            Postcard.variant 20 [ Postcard.string id, Postcard.bytes data ]
+
+        WebSocketClose id ->
+            Postcard.variant 21 [ Postcard.string id ]

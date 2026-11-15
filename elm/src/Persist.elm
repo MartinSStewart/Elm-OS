@@ -35,14 +35,15 @@ by the host, as the bytes it sends, which is quick and needs nothing from the Ms
     or a virtual disk in QEMU) and says where with `HostMessage.DataDisk` (without a
     path when there's none, and then nothing is saved), with the HTTP requests it is
     still answering.
-  - Then: `Effect.ReadSnapshot`, answered with the snapshot's text
+  - Then: `Effect.ReadSnapshot`, answered with the snapshot file's bytes
     (`HostMessage.Snapshot`), then `Effect.ReplayLog { after = n }` with the number
     of the last message the snapshot has, answered with the logged messages after it
     (each carries its number) and then `HostMessage.ReplayDone upto`, the number of
     the last message an earlier program got. Every message after that is new.
   - Messages that come meanwhile wait, and are applied once the log is replayed.
-  - A snapshot is `[format, version, modelHash, n, model, pending]`, written with
-    `Effect.WriteSnapshot { text, seq = n }`; the host adds its length and CRC-32
+  - A snapshot is format, version, modelHash, n, model and pending, in Wire3
+    (Wire.elm: Lamdera's format, which the Model's codecs write too), written with
+    `Effect.WriteSnapshot { data, seq = n }`; the host adds its length and CRC-32
     (`frame`) and writes it atomically, then drops the logged messages up to `n`.
     `version` is the version of the Model's types (elm/src/Evergreen, see
     tools/wire), and `modelHash` is of their shape. A snapshot of an earlier version
@@ -72,11 +73,12 @@ replaced.
 import Array exposing (Array)
 import Bitwise
 import Bytes exposing (Bytes)
+import Bytes.Decode as BD
+import Bytes.Encode as BE
 import Effect exposing (Effect)
 import HostMessage
-import Json.Decode as D
-import Json.Encode as E
 import Time
+import Wire
 
 
 type alias Config model msg =
@@ -93,6 +95,10 @@ type alias Config model msg =
 
     -- The answer to a request that was cut off by a restart or a power cut.
     , httpInterrupted : String -> msg
+
+    -- The WebSockets open now (by id), once the Model is restored: any other the
+    -- Model thinks is open was closed by a restart or a power cut.
+    , webSocketsOpen : List String -> msg
     }
 
 
@@ -101,8 +107,8 @@ build/wire/src/ElmOs.elm) from the types themselves, along with the migrations f
 each earlier version of the Model's types.
 -}
 type alias Codecs model =
-    { encodeModel : model -> E.Value
-    , modelDecoder : D.Decoder model
+    { encodeModel : model -> Wire.Value
+    , modelDecoder : Wire.Decoder model
 
     -- The newest version of the Model's types in elm/src/Evergreen, which these
     -- codecs read and write.
@@ -113,7 +119,7 @@ type alias Codecs model =
     , versionShape : Int -> Maybe String
 
     -- A Model saved by version n, as version n + 1 would have saved it.
-    , migrate : Int -> D.Value -> Maybe D.Value
+    , migrate : Int -> Bytes -> Maybe Bytes
     }
 
 
@@ -140,7 +146,7 @@ type Model model msg
 
 
 type alias Disk =
-    { dir : String, httpInFlight : List String }
+    { dir : String, httpInFlight : List String, webSocketsOpen : List String }
 
 
 {-| A message from the host for the program: its number in the host's log (if the host
@@ -159,8 +165,9 @@ type Saving
 type Msg msg
     = -- The disk, if there is one, and the ids of the HTTP requests an earlier run of
       -- this program made that the host is still answering: those weren't cut off.
-      DataDisk (Maybe String) (List String)
-    | GotSnapshot (Maybe String)
+      -- And the ids of the WebSockets open now.
+      DataDisk (Maybe String) (List String) (List String)
+    | GotSnapshot (Maybe Bytes)
     | ReplayDone Int
       -- A message for the program: its number in the log, its length in bytes, and the Msg.
     | AppMsg (Maybe Int) Int msg
@@ -214,11 +221,11 @@ fromHost config bytes =
     case HostMessage.decodeNumbered bytes of
         Just ( seq, message ) ->
             case message of
-                HostMessage.DataDisk path httpInFlight ->
-                    DataDisk path httpInFlight
+                HostMessage.DataDisk path httpInFlight webSocketsOpen ->
+                    DataDisk path httpInFlight webSocketsOpen
 
-                HostMessage.Snapshot text ->
-                    GotSnapshot text
+                HostMessage.Snapshot data ->
+                    GotSnapshot data
 
                 HostMessage.ReplayDone upto ->
                     ReplayDone upto
@@ -252,15 +259,20 @@ update config codecs msg model =
                 Replaying disk restored early ->
                     ( Replaying disk restored (arrival :: early), [] )
 
-        DataDisk maybeDir httpInFlight ->
+        DataDisk maybeDir httpInFlight webSocketsOpen ->
             case model of
                 WaitingForDisk early ->
                     case maybeDir of
                         Just dir ->
-                            ( ReadingSnapshot { dir = dir, httpInFlight = httpInFlight } early, [ Effect.ReadSnapshot ] )
+                            ( ReadingSnapshot { dir = dir, httpInFlight = httpInFlight, webSocketsOpen = webSocketsOpen } early
+                            , [ Effect.ReadSnapshot ]
+                            )
 
                         Nothing ->
-                            runAll config codecs (List.reverse early) ( Running config.init NotSaving [], [] )
+                            runAll config
+                                codecs
+                                ({ seq = Nothing, bytes = 0, msg = config.webSocketsOpen webSocketsOpen } :: List.reverse early)
+                                ( Running config.init NotSaving [], [] )
 
                 ReadingSnapshot _ _ ->
                     ( model, [] )
@@ -271,12 +283,12 @@ update config codecs msg model =
                 Running _ _ _ ->
                     ( model, [] )
 
-        GotSnapshot text ->
+        GotSnapshot data ->
             case model of
                 ReadingSnapshot disk early ->
                     let
                         restored =
-                            restore config codecs text
+                            restore config codecs data
                     in
                     ( Replaying disk restored early
                     , [ Effect.ReplayLog { after = Maybe.withDefault 0 restored.seq } ]
@@ -381,16 +393,20 @@ resume config codecs disk restored upto arrivals =
         kept : List Effect
         kept =
             case restored.unreadable of
-                Just text ->
-                    [ Effect.WriteFile { path = disk.dir ++ "/snapshot-unreadable", text = text } ]
+                Just data ->
+                    [ Effect.WriteFile { path = disk.dir ++ "/snapshot-unreadable", data = data } ]
 
                 Nothing ->
                     []
 
+        sockets : Arrival msg
+        sockets =
+            { seq = Nothing, bytes = 0, msg = config.webSocketsOpen disk.webSocketsOpen }
+
         ( resumed, liveEffects ) =
             runAll config
                 codecs
-                (interrupted ++ new)
+                (interrupted ++ sockets :: new)
                 ( Running replayed.model (Saving { dir = disk.dir, seq = replayed.seq, logBytes = 0 }) replayed.pending, [] )
     in
     case resumed of
@@ -552,31 +568,32 @@ endsThisRun effect =
 snapshotEffect : Codecs model -> model -> List String -> Int -> Effect
 snapshotEffect codecs app pending seq =
     Effect.WriteSnapshot
-        { text =
-            E.encode 0
-                (E.list identity
-                    [ E.string snapshotFormat
-                    , E.int codecs.version
-                    , E.string (hash codecs.modelShape)
-                    , E.int seq
-                    , codecs.encodeModel app
-                    , E.list E.string pending
+        { data =
+            Wire.toBytes
+                (BE.sequence
+                    [ Wire.encodeString snapshotFormat
+                    , Wire.encodeInt codecs.version
+                    , Wire.encodeString (hash codecs.modelShape)
+                    , Wire.encodeInt seq
+                    , Wire.encodeBytes (Wire.toBytes (codecs.encodeModel app))
+                    , Wire.encodeList Wire.encodeString pending
                     ]
                 )
         , seq = seq
         }
 
 
-{-| Changes whenever this file's format does.
+{-| Changes whenever this file's format does. Since elmos-persist-6 a snapshot is
+Wire3 (Wire.elm): earlier ones were JSON, and can't be read.
 -}
 snapshotFormat : String
 snapshotFormat =
-    "elmos-persist-5"
+    "elmos-persist-6"
 
 
 hash : String -> String
 hash shape =
-    hex8 (crc32 shape)
+    hex8 (crc32 (BE.encode (BE.string shape)))
 
 
 
@@ -594,81 +611,74 @@ type alias Restored model =
     , notes : List String
 
     -- A snapshot that couldn't be read, to keep rather than write over.
-    , unreadable : Maybe String
+    , unreadable : Maybe Bytes
 
     -- The HTTP requests that were waiting for an answer.
     , pending : List String
     }
 
 
-{-| The Model in the snapshot file's text. Starts from `init` when there is no
-snapshot, or it can't be read. A snapshot saved by an earlier version of the
-Model's types is migrated to this one.
+{-| The Model in the snapshot file. Starts from `init` when there is no snapshot, or
+it can't be read. A snapshot saved by an earlier version of the Model's types is
+migrated to this one.
 -}
-restore : Config model msg -> Codecs model -> Maybe String -> Restored model
+restore : Config model msg -> Codecs model -> Maybe Bytes -> Restored model
 restore config codecs file =
     case file of
         Nothing ->
             { model = config.init, seq = Just 0, notes = [], unreadable = Nothing, pending = [] }
 
-        Just "" ->
-            { model = config.init, seq = Just 0, notes = [], unreadable = Nothing, pending = [] }
+        Just data ->
+            if Bytes.width data == 0 then
+                { model = config.init, seq = Just 0, notes = [], unreadable = Nothing, pending = [] }
 
-        Just text ->
-            case readSnapshot codecs text of
-                Ok snapshot ->
-                    snapshot
+            else
+                case readSnapshot codecs data of
+                    Ok snapshot ->
+                        snapshot
 
-                Err problem ->
-                    { model = config.init
-                    , seq = Nothing
-                    , notes = [ problem ++ "; starting afresh, and keeping it as snapshot-unreadable" ]
-                    , unreadable = Just text
-                    , pending = []
-                    }
+                    Err problem ->
+                        { model = config.init
+                        , seq = Nothing
+                        , notes = [ problem ++ "; starting afresh, and keeping it as snapshot-unreadable" ]
+                        , unreadable = Just data
+                        , pending = []
+                        }
 
 
 type alias Saved =
-    { format : String, version : Int, modelHash : String, seq : Int, json : D.Value, pending : List String }
+    { version : Int, modelHash : String, seq : Int, model : Bytes, pending : List String }
 
 
-{-| This format, or the one before it (elmos-persist-4, whose Msg log the host has
-started afresh, so its number doesn't count).
+{-| This format only: earlier ones (JSON) start afresh.
 -}
-decodeSaved : D.Decoder Saved
+decodeSaved : BD.Decoder Saved
 decodeSaved =
-    D.index 0 D.string
-        |> D.andThen
+    Wire.decodeString
+        |> BD.andThen
             (\format ->
                 if format == snapshotFormat then
-                    D.map5 (Saved format)
-                        (D.index 1 D.int)
-                        (D.index 2 D.string)
-                        (D.index 3 D.int)
-                        (D.index 4 D.value)
-                        (D.index 5 (D.list D.string))
-
-                else if format == "elmos-persist-4" then
-                    D.map4 (\version modelHash json pending -> Saved format version modelHash 0 json pending)
-                        (D.index 1 D.int)
-                        (D.index 2 D.string)
-                        (D.index 5 D.value)
-                        (D.index 6 (D.list D.string))
+                    BD.map5 Saved
+                        Wire.decodeInt
+                        Wire.decodeString
+                        Wire.decodeInt
+                        Wire.decodeBytes
+                        (Wire.decodeList Wire.decodeString)
 
                 else
-                    D.fail "another format"
+                    BD.fail
             )
 
 
-readSnapshot : Codecs model -> String -> Result String (Restored model)
-readSnapshot codecs text =
-    case unframe text of
+readSnapshot : Codecs model -> Bytes -> Result String (Restored model)
+readSnapshot codecs data =
+    case unframe data of
         [ payload ] ->
-            case D.decodeString decodeSaved payload of
-                Err _ ->
+            case BD.decode decodeSaved payload of
+                Nothing ->
                     Err "the snapshot isn't in this build's format"
 
-                Ok s ->
+                Just s ->
                     if s.version > codecs.version then
                         Err ("the snapshot is of version " ++ String.fromInt s.version ++ " of the Model, newer than this build's " ++ String.fromInt codecs.version)
 
@@ -676,7 +686,7 @@ readSnapshot codecs text =
                         Err ("the snapshot's Model isn't of the types that version " ++ String.fromInt s.version ++ " has here")
 
                     else
-                        case migrateFrom codecs s.version s.json |> Maybe.andThen (\json -> D.decodeValue codecs.modelDecoder json |> Result.toMaybe) of
+                        case migrateFrom codecs s.version s.model |> Maybe.andThen (BD.decode codecs.modelDecoder) of
                             Just model ->
                                 Ok
                                     { model = model
@@ -700,94 +710,106 @@ readSnapshot codecs text =
 
 {-| A Model saved by `version`, as this build's version would have saved it.
 -}
-migrateFrom : Codecs model -> Int -> D.Value -> Maybe D.Value
-migrateFrom codecs version json =
+migrateFrom : Codecs model -> Int -> Bytes -> Maybe Bytes
+migrateFrom codecs version model =
     if version >= codecs.version then
-        Just json
+        Just model
 
     else
-        codecs.migrate version json |> Maybe.andThen (migrateFrom codecs (version + 1))
+        codecs.migrate version model |> Maybe.andThen (migrateFrom codecs (version + 1))
 
 
 
 -- ENTRIES
 
 
-{-| One entry, as a line: `LENGTH CRC32 PAYLOAD\n`. The payload is JSON, which has no
-line breaks.
+{-| One entry: `LENGTH CRC32 PAYLOAD\n`, the payload's length in bytes and its
+CRC-32 (8 lower-case hex digits) in ASCII, then the payload's bytes. The host frames
+snapshots the same way (host/common/src/msglog.rs).
 -}
-frame : String -> String
+frame : Bytes -> Bytes
 frame payload =
-    String.fromInt (utf8Length payload) ++ " " ++ hex8 (crc32 payload) ++ " " ++ payload ++ "\n"
+    BE.encode
+        (BE.sequence
+            [ BE.string (String.fromInt (Bytes.width payload) ++ " " ++ hex8 (crc32 payload) ++ " ")
+            , BE.bytes payload
+            , BE.unsignedInt8 10
+            ]
+        )
 
 
 {-| The payloads of the entries in a file, up to the first one that is cut short or
 damaged.
 -}
-unframe : String -> List String
-unframe text =
-    unframeLines (String.split "\n" text) []
+unframe : Bytes -> List Bytes
+unframe data =
+    BD.decode (BD.loop ( Bytes.width data, [] ) unframeStep) data
+        |> Maybe.withDefault []
 
 
-unframeLines : List String -> List String -> List String
-unframeLines lines payloads =
-    case lines of
-        -- The last piece is what follows the last line break: empty unless the
-        -- last entry was cut short.
-        [] ->
-            List.reverse payloads
-
-        [ _ ] ->
-            List.reverse payloads
-
-        line :: rest ->
-            case readLine line of
-                Just payload ->
-                    unframeLines rest (payload :: payloads)
-
-                Nothing ->
-                    List.reverse payloads
-
-
-readLine : String -> Maybe String
-readLine line =
-    case String.indexes " " (String.left 30 line) of
-        a :: b :: _ ->
-            let
-                payload =
-                    String.dropLeft (b + 1) line
-            in
-            if
-                (String.toInt (String.left a line) == Just (utf8Length payload))
-                    && (String.slice (a + 1) b line == hex8 (crc32 payload))
-            then
-                Just payload
-
-            else
-                Nothing
-
-        _ ->
-            Nothing
-
-
-utf8Length : String -> Int
-utf8Length text =
-    String.foldl (\char n -> n + utf8Bytes (Char.toCode char)) 0 text
-
-
-utf8Bytes : Int -> Int
-utf8Bytes code =
-    if code < 0x80 then
-        1
-
-    else if code < 0x0800 then
-        2
-
-    else if code < 0x00010000 then
-        3
+unframeStep : ( Int, List Bytes ) -> BD.Decoder (BD.Step ( Int, List Bytes ) (List Bytes))
+unframeStep ( left, payloads ) =
+    let
+        done =
+            BD.succeed (BD.Done (List.reverse payloads))
+    in
+    if left <= 0 then
+        done
 
     else
-        4
+        -- The header is at most "4294967295 ffffffff ", read a byte at a time.
+        BD.loop ( 0, [] ) (headerStep left)
+            |> BD.andThen
+                (\header ->
+                    case header of
+                        Just ( headerLength, ( length, crc ) ) ->
+                            if headerLength + length + 1 > left then
+                                done
+
+                            else
+                                BD.map2
+                                    (\payload newline ->
+                                        if newline == 10 && hex8 (crc32 payload) == crc then
+                                            BD.Loop ( left - headerLength - length - 1, payload :: payloads )
+
+                                        else
+                                            BD.Done (List.reverse payloads)
+                                    )
+                                    (BD.bytes length)
+                                    BD.unsignedInt8
+
+                        Nothing ->
+                            done
+                )
+
+
+{-| `LENGTH CRC32 `: how many bytes it took, the length and the CRC-32's hex digits.
+Nothing if it isn't one, or is cut short (there are only `left` bytes).
+-}
+headerStep : Int -> ( Int, List Char ) -> BD.Decoder (BD.Step ( Int, List Char ) (Maybe ( Int, ( Int, String ) )))
+headerStep left ( count, chars ) =
+    if count > 30 || count >= left then
+        BD.succeed (BD.Done Nothing)
+
+    else
+        BD.map
+            (\byte ->
+                let
+                    read =
+                        String.fromList (List.reverse chars)
+                in
+                if byte == 32 && String.contains " " read then
+                    case String.split " " read of
+                        [ length, crc ] ->
+                            BD.Done (Maybe.map (\n -> ( count + 1, ( n, crc ) )) (String.toInt length))
+
+                        _ ->
+                            BD.Done Nothing
+
+                else
+                    BD.Loop ( count + 1, Char.fromCode byte :: chars )
+            )
+            BD.unsignedInt8
 
 
 hex8 : Int -> String
@@ -808,39 +830,37 @@ hexDigit d =
 -- CRC-32
 
 
-{-| The CRC-32 (as zlib and PNG use) of the text's UTF-8 bytes, from 0 to 2^32 - 1.
+{-| The CRC-32 (as zlib and PNG use) of the bytes, from 0 to 2^32 - 1.
 -}
-crc32 : String -> Int
-crc32 text =
-    Bitwise.xor (String.foldl crcChar 0xFFFFFFFF text) 0xFFFFFFFF |> Bitwise.shiftRightZfBy 0
+crc32 : Bytes -> Int
+crc32 data =
+    BD.decode (BD.loop ( Bytes.width data, 0xFFFFFFFF ) crcStep) data
+        |> Maybe.withDefault 0
+        |> Bitwise.xor 0xFFFFFFFF
+        |> Bitwise.shiftRightZfBy 0
 
 
-crcChar : Char -> Int -> Int
-crcChar char crc =
-    let
-        code =
-            Char.toCode char
-    in
-    if code < 0x80 then
-        crcByte code crc
+crcStep : ( Int, Int ) -> BD.Decoder (BD.Step ( Int, Int ) Int)
+crcStep ( left, crc ) =
+    if left >= 4 then
+        BD.map
+            (\word ->
+                BD.Loop
+                    ( left - 4
+                    , crc
+                        |> crcByte (Bitwise.and 0xFF (Bitwise.shiftRightZfBy 24 word))
+                        |> crcByte (Bitwise.and 0xFF (Bitwise.shiftRightZfBy 16 word))
+                        |> crcByte (Bitwise.and 0xFF (Bitwise.shiftRightZfBy 8 word))
+                        |> crcByte (Bitwise.and 0xFF word)
+                    )
+            )
+            (BD.unsignedInt32 Bytes.BE)
 
-    else if code < 0x0800 then
-        crc
-            |> crcByte (0xC0 + Bitwise.shiftRightZfBy 6 code)
-            |> crcByte (0x80 + Bitwise.and 0x3F code)
-
-    else if code < 0x00010000 then
-        crc
-            |> crcByte (0xE0 + Bitwise.shiftRightZfBy 12 code)
-            |> crcByte (0x80 + Bitwise.and 0x3F (Bitwise.shiftRightZfBy 6 code))
-            |> crcByte (0x80 + Bitwise.and 0x3F code)
+    else if left > 0 then
+        BD.map (\byte -> BD.Loop ( left - 1, crcByte byte crc )) BD.unsignedInt8
 
     else
-        crc
-            |> crcByte (0xF0 + Bitwise.shiftRightZfBy 18 code)
-            |> crcByte (0x80 + Bitwise.and 0x3F (Bitwise.shiftRightZfBy 12 code))
-            |> crcByte (0x80 + Bitwise.and 0x3F (Bitwise.shiftRightZfBy 6 code))
-            |> crcByte (0x80 + Bitwise.and 0x3F code)
+        BD.succeed (BD.Done crc)
 
 
 crcByte : Int -> Int -> Int

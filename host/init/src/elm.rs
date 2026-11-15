@@ -113,7 +113,10 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::ReflashNeeded { .. }
         | ToElm::Tick { .. }
         | ToElm::Snapshot { .. }
-        | ToElm::ReplayDone { .. } => return None,
+        | ToElm::ReplayDone { .. }
+        | ToElm::WebSocketOpened { .. }
+        | ToElm::WebSocketMessage { .. }
+        | ToElm::WebSocketClosed { .. } => return None,
     })
 }
 
@@ -278,6 +281,7 @@ fn encode(s: &State, msg: &ToElm) -> Vec<u8> {
         ToElm::DataDisk { path, .. } => ToElm::DataDisk {
             path: path.clone(),
             http_in_flight: s.http_in_flight.clone(),
+            web_sockets_open: crate::websocket::open_ids(),
         }
         .to_bytes(),
         msg => msg.to_bytes(),

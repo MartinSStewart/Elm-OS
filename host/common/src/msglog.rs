@@ -193,10 +193,14 @@ pub fn write_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
     File::open(path.parent().unwrap_or(Path::new("/")))?.sync_all()
 }
 
-/// The snapshot file's text for this snapshot: `LENGTH CRC32 TEXT\n`, the length in
-/// bytes and the CRC-32 as 8 lower-case hex digits (Persist.elm's `unframe` reads it).
-pub fn frame_snapshot(text: &str) -> String {
-    format!("{} {:08x} {}\n", text.len(), crc32(text.as_bytes()), text)
+/// The snapshot file for this snapshot: `LENGTH CRC32 DATA\n`, the length (of DATA, in
+/// bytes) and the CRC-32 in ASCII, as decimal and 8 lower-case hex digits
+/// (Persist.elm's `unframe` reads it).
+pub fn frame_snapshot(data: &[u8]) -> Vec<u8> {
+    let mut out = format!("{} {:08x} ", data.len(), crc32(data)).into_bytes();
+    out.extend_from_slice(data);
+    out.push(b'\n');
+    out
 }
 
 /// CRC-32 as zlib and PNG have it.
@@ -230,7 +234,7 @@ mod tests {
     #[test]
     fn crc32_is_zlibs() {
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
-        assert_eq!(frame_snapshot("[1]"), "3 4c2f32b8 [1]\n");
+        assert_eq!(frame_snapshot(b"[1]"), b"3 4c2f32b8 [1]\n");
     }
 
     #[test]

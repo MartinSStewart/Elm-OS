@@ -261,10 +261,10 @@ $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/k
 $(BUILD)/elm.o: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
 	cd $(BUILD)/wire && $(ECO) make src/ElmOs.elm --output=$(abspath $@)
 
-WIRE_FLAGS := --runtime tools/wire/Wire.elm --entry ElmOs \
+WIRE_FLAGS := --runtime elm/src/Wire.elm --entry ElmOs \
               --config Main.persistConfig --model Main.Model --msg Main.Msg
 
-$(BUILD)/wire/.done: $(BUILD)/wire-tool tools/wire/Wire.elm elm/elm.json $(shell find elm/src -name "*.elm")
+$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm")
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
 	$(call WIRE,$(BUILD)/wire,--src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes)
@@ -319,7 +319,7 @@ test-wire: $(BUILD)/wire-tool | check-deps
 	cp -r elm/src/. $(BUILD)/wire-test/in/ && rm -r $(BUILD)/wire-test/in/Main.elm $(BUILD)/wire-test/in/Evergreen
 	cp -r tools/wire/test/src/. $(BUILD)/wire-test/in/
 	cp -r elm/elm.json tools/wire/test/tests $(BUILD)/wire-test/
-	$(BUILD)/wire-tool --src $(BUILD)/wire-test/in --out $(BUILD)/wire-test/src --runtime tools/wire/Wire.elm \
+	$(BUILD)/wire-tool --src $(BUILD)/wire-test/in --out $(BUILD)/wire-test/src --runtime elm/src/Wire.elm \
 	  --entry ElmOs --config App.config --model App.Model --msg App.Msg
 	cd $(BUILD)/wire-test && $(ECO) make src/ElmOs.elm --output=/dev/null && \
 	  npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)

@@ -120,4 +120,5 @@ config =
     , fromHost = \_ -> NoOp
     , httpAnswered = \_ -> Nothing
     , httpInterrupted = \_ -> NoOp
+    , webSocketsOpen = \_ -> NoOp
     }

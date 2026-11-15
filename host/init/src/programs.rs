@@ -94,8 +94,8 @@ pub fn take_next() -> Option<String> {
 /// Before starting a new build: keeps a copy of the snapshot the old one wrote,
 /// for `roll_back`.
 pub fn keep_snapshot() -> bool {
-    persist::on_disk(|d| match d.read("snapshot") {
-        Some(text) => d.write("snapshot-before-switch", &text),
+    persist::on_disk(|d| match d.read_bytes("snapshot") {
+        Some(data) => d.write_bytes("snapshot-before-switch", &data),
         None => {
             d.remove("snapshot-before-switch");
             true
@@ -109,8 +109,8 @@ pub fn keep_snapshot() -> bool {
 /// only the new build got.
 pub fn roll_back() -> bool {
     persist::on_disk(|d| {
-        let ok = match d.read("snapshot-before-switch") {
-            Some(text) => d.write("snapshot", &text),
+        let ok = match d.read_bytes("snapshot-before-switch") {
+            Some(data) => d.write_bytes("snapshot", &data),
             None => {
                 d.remove("snapshot");
                 true

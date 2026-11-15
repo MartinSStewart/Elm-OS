@@ -13,6 +13,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 
 import BootInfo
 import Bytes exposing (Bytes)
+import AsciiCollab
 import Calculator
 import Clock
 import Color exposing (Color)
@@ -68,6 +69,15 @@ type Input
     | Switching String
       -- The newest deployed build needs the USB stick flashed again (host/init/src/update.rs).
     | ReflashNeeded String
+      -- WebSockets (Effect.WebSocketOpen): the ids of the ones open now, after a
+      -- restart (Persist.elm); one has opened, with the server's headers; a message
+      -- on one; one has closed, and why.
+    | WebSocketsOpen (List String)
+    | WebSocketOpened String (List ( String, String ))
+    | WebSocketMessage String Bytes
+    | WebSocketClosed String String
+      -- Random bytes in hex, for AsciiCollab's client id.
+    | RandomBytes (Maybe String)
 
 
 type alias SystemInfo =
@@ -164,7 +174,7 @@ toInput message =
         HostMessage.NetConfig urls ->
             Ok (NetConfig urls)
 
-        HostMessage.DataDisk _ _ ->
+        HostMessage.DataDisk _ _ _ ->
             Err "the data disk message is Persist's"
 
         HostMessage.HttpResponse id status body ->
@@ -194,7 +204,11 @@ toInput message =
             Ok (BootInfo (BootInfo.Files id files))
 
         HostMessage.Bytes path offset hex ->
-            Ok (BootInfo (BootInfo.Bytes path offset hex))
+            if path == AsciiCollab.randomBytesPath then
+                Ok (RandomBytes hex)
+
+            else
+                Ok (BootInfo (BootInfo.Bytes path offset hex))
 
         HostMessage.Sha256 path hex ->
             Ok (BootInfo (BootInfo.Sha256 path hex))
@@ -213,6 +227,15 @@ toInput message =
 
         HostMessage.ReplayDone _ ->
             Err "ReplayDone is for Persist.elm"
+
+        HostMessage.WebSocketOpened id headers ->
+            Ok (WebSocketOpened id headers)
+
+        HostMessage.WebSocketMessage id data ->
+            Ok (WebSocketMessage id data)
+
+        HostMessage.WebSocketClosed id reason ->
+            Ok (WebSocketClosed id reason)
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -264,6 +287,7 @@ type alias Model =
     , newsOpen : Bool
     , news : NewsState
     , hackerNews : HackerNews.Model
+    , asciiCollab : AsciiCollab.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
     , confirmPower : Maybe PowerAction
@@ -321,6 +345,7 @@ type UiId
     | CloseEditorButton
     | NewsUiId News.UiId
     | HackerNewsUiId HackerNews.UiId
+    | AsciiCollabUiId AsciiCollab.UiId
 
 
 init : Model
@@ -357,6 +382,7 @@ init =
     , newsOpen = False
     , news = NewsNotRequested
     , hackerNews = HackerNews.init
+    , asciiCollab = AsciiCollab.init
     , calculator = Calculator.init
     , calculatorOpen = False
     , confirmPower = Nothing
@@ -381,7 +407,14 @@ update : Msg -> Model -> ( Model, List Effect )
 update msg model =
     case msg of
         Tick time ->
-            BootInfo.tick model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info, time = Just time })
+            let
+                ( bootInfo, bootEffects ) =
+                    BootInfo.tick model.bootInfo
+
+                ( asciiCollab, asciiEffects ) =
+                    AsciiCollab.tick time model.asciiCollab
+            in
+            ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab }, bootEffects ++ asciiEffects )
 
         GotInput value ->
             case value of
@@ -558,6 +591,14 @@ step event model =
                     uiMouse model
             in
             case Ui.hover cursor (screenUi model) of
+                ( AsciiCollabUiId AsciiCollab.GridArea, { relativePositionToUi } ) :: _ ->
+                    ( { model
+                        | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
+                        , uiState = Ui.setFocus (Just (AsciiCollabUiId AsciiCollab.GridArea)) model.uiState
+                      }
+                    , []
+                    )
+
                 ( id, { relativePositionToUi, ui } ) :: _ ->
                     let
                         ( uiState, maybeModelAndEffects ) =
@@ -580,12 +621,18 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (Ui.hover (uiMouse model) (screenUi model)) of
-                ( id, { ui } ) :: _ ->
-                    ( { model | uiState = Ui.onWheel id clicks ui model.uiState }, [] )
+            case List.filter (\( id, _ ) -> id == AsciiCollabUiId AsciiCollab.GridArea) (Ui.hover (uiMouse model) (screenUi model)) of
+                _ :: _ ->
+                    AsciiCollab.wheel (uiSize model) model.shift clicks model.asciiCollab
+                        |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
-                _ ->
-                    ( model, [] )
+                [] ->
+                    case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (Ui.hover (uiMouse model) (screenUi model)) of
+                        ( id, { ui } ) :: _ ->
+                            ( { model | uiState = Ui.onWheel id clicks ui model.uiState }, [] )
+
+                        _ ->
+                            ( model, [] )
 
         Key code down repeat ->
             let
@@ -613,6 +660,10 @@ step event model =
 
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
+
+            else if model.uiState.focus == Just (AsciiCollabUiId AsciiCollab.GridArea) && model.asciiCollab.isOpen then
+                AsciiCollab.key (uiSize model) model.ctrl key model.asciiCollab
+                    |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
             else if calculatorFocused model then
                 case ( model.ctrl, Calculator.fromKeyboard key ) of
@@ -660,6 +711,21 @@ step event model =
 
         ReflashNeeded build ->
             ( { model | reflashNeeded = Just build }, [] )
+
+        WebSocketsOpen ids ->
+            webSocketInput (WebSocketsOpen ids) model
+
+        WebSocketOpened id headers ->
+            webSocketInput (WebSocketOpened id headers) model
+
+        WebSocketMessage id data ->
+            webSocketInput (WebSocketMessage id data) model
+
+        WebSocketClosed id reason ->
+            webSocketInput (WebSocketClosed id reason) model
+
+        RandomBytes hex ->
+            AsciiCollab.gotRandomBytes hex model.asciiCollab |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
         NetConfig urls ->
             ( { model
@@ -932,6 +998,23 @@ click model id uiState =
 
         NewsUiId _ ->
             ( model, [] )
+
+        AsciiCollabUiId uiId ->
+            let
+                ( asciiCollab, effects ) =
+                    AsciiCollab.onClick uiId model.asciiCollab
+            in
+            ( { model
+                | asciiCollab = asciiCollab
+                , uiState =
+                    if asciiCollab.isOpen then
+                        Ui.setFocus (Just (AsciiCollabUiId AsciiCollab.GridArea)) uiState
+
+                    else
+                        uiState
+              }
+            , effects
+            )
 
         HackerNewsUiId uiId ->
             let
@@ -1239,6 +1322,9 @@ dragSelect focus position model =
         HackerNewsUiId _ ->
             model
 
+        AsciiCollabUiId _ ->
+            model
+
 
 {-| A key for the text editor. Its copies go in the same clipboard as the password box's.
 -}
@@ -1442,6 +1528,17 @@ screenUi model =
                         [ Ui.topRight
                             { size = uiSize model }
                             (News.view NewsUiId model.uiState model.news)
+                        ]
+
+                    else
+                        []
+                   )
+                ++ (if model.asciiCollab.isOpen then
+                        [ AsciiCollab.view
+                            (uiSize model)
+                            (model.uiState.focus == Just (AsciiCollabUiId AsciiCollab.GridArea))
+                            model.asciiCollab
+                            |> Ui.map AsciiCollabUiId
                         ]
 
                     else
@@ -1705,6 +1802,7 @@ persistConfig =
     , fromHost = fromHost
     , httpAnswered = httpAnswered
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
+    , webSocketsOpen = \ids -> GotInput (Ok (WebSocketsOpen ids))
     }
 
 
@@ -1739,6 +1837,45 @@ httpAnswered msg =
 
         Tick _ ->
             Nothing
+
+
+
+{-| What the host says about the WebSockets: they belong to the ascii-collab app
+(AsciiCollab.elm), the only thing that opens one.
+-}
+webSocketInput : Input -> Model -> ( Model, List Effect )
+webSocketInput input model =
+    let
+        withAsciiCollab ( asciiCollab, effects ) =
+            ( { model | asciiCollab = asciiCollab }, effects )
+    in
+    case input of
+        WebSocketsOpen ids ->
+            AsciiCollab.webSocketsOpen ids model.asciiCollab |> withAsciiCollab
+
+        WebSocketOpened id headers ->
+            if id == AsciiCollab.socketId then
+                AsciiCollab.webSocketOpened (uiSize model) headers model.asciiCollab |> withAsciiCollab
+
+            else
+                ( model, [] )
+
+        WebSocketMessage id data ->
+            if id == AsciiCollab.socketId then
+                AsciiCollab.webSocketMessage (uiSize model) data model.asciiCollab |> withAsciiCollab
+
+            else
+                ( model, [] )
+
+        WebSocketClosed id reason ->
+            if id == AsciiCollab.socketId then
+                AsciiCollab.webSocketClosed reason model.asciiCollab |> withAsciiCollab
+
+            else
+                ( model, [] )
+
+        _ ->
+            ( model, [] )
 
 
 
@@ -2387,6 +2524,7 @@ toolbar model =
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "Wikipedia")
                     , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } model.hackerNews.isOpen (t "Hacker news")
+                    , Ui.selectableButton { id = AsciiCollabUiId AsciiCollab.OpenButton, padding = small } model.asciiCollab.isOpen (t "ASCII collab")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")

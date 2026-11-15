@@ -3,7 +3,7 @@ module Main exposing (main)
 {-| tools/wire: writes encoders and decoders for Elm OS's Model and Msg (see
 Generate.elm), so Persist.elm can save them without hand-written codecs.
 
-    wire --src elm/src --out build/wire/src --runtime tools/wire/Wire.elm \
+    wire --src elm/src --out build/wire/src --runtime elm/src/Wire.elm \
         --entry ElmOs --config Main.persistConfig --model Main.Model --msg Main.Msg
 
 It copies every .elm file under --src to --out, adding the encoders and decoders to

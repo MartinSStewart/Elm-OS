@@ -45,6 +45,7 @@ mod programs;
 mod update;
 mod stats;
 mod sys;
+mod websocket;
 
 /// When /init started, in seconds on the monotonic clock (f64 bits).
 static INIT_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
