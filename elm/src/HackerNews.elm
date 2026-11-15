@@ -4,6 +4,7 @@ module HackerNews exposing
     , Effect(..)
     , HackerNewsState(..)
     , HttpRequestId(..)
+    , LazyKey
     , Model
     , Page
     , Post
@@ -50,6 +51,15 @@ type UiId
     | CommentsViewport PostId
     | BackButton
     | CommentToggle Int
+    | Lazy LazyKey
+
+
+{-| The keys of this module's `Ui.lazy` elements. The code generator replaces this
+with a variant for each `Ui.lazy` call, holding its arguments; nothing else matches
+on it, and it is never saved.
+-}
+type LazyKey
+    = LazyKey Never
 
 
 type Effect
@@ -305,6 +315,10 @@ onClick uiId model =
 
         BackButton ->
             ( { model | page = PostsPage }, [] )
+
+        Lazy _ ->
+            -- Never clicked: a lazy element's key is never a button's id.
+            ( model, [] )
 
         CommentToggle index ->
             case model.page of
@@ -775,16 +789,11 @@ postsView lazyCache idMap uiState screenSize data =
     Ui.column
         { spacing = titleSpacing, padding = Ui.noPadding }
         [ title
-        , Ui.lazy3 lazyCache postsColumn idMap width data
+        , Ui.column
+            { spacing = 0, padding = Ui.noPadding }
+            (List.indexedMap (\index post -> Ui.lazy4 lazyCache postView idMap width index post) data)
             |> scrolling idMap uiState PostsViewport screenSize (Coord.yRaw (Ui.size title))
         ]
-
-
-postsColumn : (UiId -> id) -> Int -> List Post -> Element id
-postsColumn idMap width data =
-    Ui.column
-        { spacing = 0, padding = Ui.noPadding }
-        (List.indexedMap (postView idMap width) data)
 
 
 postView : (UiId -> id) -> Int -> Int -> Post -> Element id
@@ -872,7 +881,7 @@ commentsView lazyCache idMap uiState screenSize postId title comments =
                 Ui.text Small (Sans Regular) "No comments yet."
 
             CommentsLoaded loaded ->
-                Ui.lazy3 lazyCache commentsColumn idMap width loaded
+                Ui.lazy4 lazyCache commentsColumn lazyCache idMap width loaded
 
             CommentsLoadFailed error ->
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
@@ -882,17 +891,17 @@ commentsView lazyCache idMap uiState screenSize postId title comments =
         ]
 
 
-commentsColumn : (UiId -> id) -> Int -> List Comment -> Element id
-commentsColumn idMap width comments =
+commentsColumn : Ui.LazyCache id -> (UiId -> id) -> Int -> List Comment -> Element id
+commentsColumn lazyCache idMap width comments =
     Ui.column
         { spacing = commentSpacing, padding = Ui.noPadding }
-        (List.map (commentView idMap width) comments)
+        (List.map (\comment -> Ui.lazy4 lazyCache commentView lazyCache idMap width comment) comments)
 
 
 {-| A comment, and under it its replies if they are shown. `width` is how wide it can be.
 -}
-commentView : (UiId -> id) -> Int -> Comment -> Element id
-commentView idMap width (Comment comment) =
+commentView : Ui.LazyCache id -> (UiId -> id) -> Int -> Comment -> Element id
+commentView lazyCache idMap width (Comment comment) =
     let
         textWidth : Int
         textWidth =
@@ -926,7 +935,7 @@ commentView idMap width (Comment comment) =
             , Ui.row
                 { spacing = 0, padding = Ui.noPadding }
                 [ Ui.left (Units.uiPixels replyIndent) Ui.none
-                , commentsColumn idMap (width - replyIndent) comment.children
+                , commentsColumn lazyCache idMap (width - replyIndent) comment.children
                 ]
             ]
 

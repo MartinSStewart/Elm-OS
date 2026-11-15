@@ -29,9 +29,9 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
-    , lazy3
+    , lazy4
     , lazyCache
-    , lazyWith
+    , lazyKeyed
     , left
     , leftAndRight
     , map
@@ -79,12 +79,8 @@ for now: underlined text and sprites from town-collab's texture.
 -}
 
 import Bounds exposing (Bounds)
-import Bytes exposing (Bytes)
-import Bytes.Decode as BD
-import Bytes.Encode as BE
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Dict exposing (Dict)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
 import SeqDict exposing (SeqDict)
@@ -149,8 +145,9 @@ type Element id
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
     | Viewport (ViewportData id) (Element id)
-      -- What `lazyWith` made: which call it was, and the arguments it was made from.
-    | Lazy { name : String, args : Bytes } (Element id)
+      -- What `lazyKeyed` made: its key (which call it was, with the arguments), and
+      -- every `Lazy` inside it by key, so that reusing it reuses them too.
+    | Lazy id (SeqDict id (Element id)) (Element id)
 
 
 type alias ViewportData id =
@@ -325,7 +322,7 @@ onMouseDown onClick relativePositionToUi cursor id element model =
         Viewport _ _ ->
             ( { model | focus = Nothing }, Nothing )
 
-        Lazy _ _ ->
+        Lazy _ _ _ ->
             ( { model | focus = Nothing }, Nothing )
 
 
@@ -373,7 +370,7 @@ onWheel id clicks element model =
         Empty ->
             model
 
-        Lazy _ _ ->
+        Lazy _ _ _ ->
             model
 
         Viewport data element2 ->
@@ -432,7 +429,7 @@ scrolls element =
         Empty ->
             False
 
-        Lazy _ _ ->
+        Lazy _ _ _ ->
             False
 
 
@@ -731,25 +728,24 @@ map f element =
                 { id = f data.id, viewportHeight = data.viewportHeight, scrollOffset = data.scrollOffset }
                 (map f child)
 
-        Lazy data child ->
-            Lazy data (map f child)
+        Lazy key inner child ->
+            Lazy (f key) (SeqDict.foldl (\innerKey innerElement -> SeqDict.insert (f innerKey) (map f innerElement)) SeqDict.empty inner) (map f child)
 
 
 -- LAZY
 
 
-{-| The `lazy` elements of the last frame, by the name of the call that made them, with
-the arguments each was made from.
+{-| The `lazy` elements of the last frame, by their keys.
 -}
 type LazyCache id
-    = LazyCache (Dict String (List ( Bytes, Element id )))
+    = LazyCache (SeqDict id (Element id))
 
 
 {-| Nothing remembered: every `lazy` calls its function.
 -}
 noLazyCache : LazyCache id
 noLazyCache =
-    LazyCache Dict.empty
+    LazyCache SeqDict.empty
 
 
 {-| What the next frame's `lazy` calls can reuse: every `lazy` element in these (the
@@ -757,172 +753,101 @@ UI of every display).
 -}
 lazyCache : List (Element id) -> LazyCache id
 lazyCache elements =
-    LazyCache (List.foldl lazyEntries Dict.empty elements)
+    LazyCache (lazyElements elements)
 
 
-lazyEntries : Element id -> Dict String (List ( Bytes, Element id )) -> Dict String (List ( Bytes, Element id ))
-lazyEntries element dict =
+{-| Every `Lazy` in these elements, by key. Each `Lazy` already holds the ones inside
+it, so the walk stops there, and the biggest of those is added to rather than copied:
+a frame that reuses a big lazy part costs little here.
+-}
+lazyElements : List (Element id) -> SeqDict id (Element id)
+lazyElements elements =
+    let
+        found : List (SeqDict id (Element id))
+        found =
+            List.foldl lazyParts [] elements
+    in
+    case List.sortBy (\dict -> negate (SeqDict.size dict)) found of
+        biggest :: rest ->
+            List.foldl (\dict acc -> SeqDict.foldl SeqDict.insert acc dict) biggest rest
+
+        [] ->
+            SeqDict.empty
+
+
+lazyParts : Element id -> List (SeqDict id (Element id)) -> List (SeqDict id (Element id))
+lazyParts element found =
     case element of
-        Lazy { name, args } child ->
-            lazyEntries child dict
-                |> Dict.update name (\entries -> Just (( args, child ) :: Maybe.withDefault [] entries))
+        Lazy key inner _ ->
+            SeqDict.insert key element inner :: found
 
         Button data child ->
-            List.foldl lazyEntries (lazyEntries child dict) data.inFront
+            List.foldl lazyParts (lazyParts child found) data.inFront
 
         Row _ children ->
-            List.foldl lazyEntries dict children
+            List.foldl lazyParts found children
 
         Column _ children ->
-            List.foldl lazyEntries dict children
+            List.foldl lazyParts found children
 
         Single data child ->
-            List.foldl lazyEntries (lazyEntries child dict) data.inFront
+            List.foldl lazyParts (lazyParts child found) data.inFront
 
         Viewport _ child ->
-            lazyEntries child dict
+            lazyParts child found
 
         TextInput _ ->
-            dict
+            found
 
         TextInputMultiline _ ->
-            dict
+            found
 
         Text _ ->
-            dict
+            found
 
         Quads _ ->
-            dict
+            found
 
         Empty ->
-            dict
+            found
 
 
-{-| `f a b c`, built only when `a`, `b` or `c` has changed since the last frame; like
-`Html.Lazy.lazy3`, for parts of the UI that are slow to build and seldom change, such
+{-| `f a b c d`, built only when `a`, `b`, `c` or `d` has changed since the last frame;
+like `Html.Lazy.lazy4`, for parts of the UI that are slow to build and seldom change, such
 as a long list of wrapped text. (`lazy`, `lazy2` and so on can join it once something
 uses them: elm-review allows no unused exports.)
 
-This is what you write. As it stands it just calls `f`: tools/wire turns each call into
-a `lazyWith`, naming the call after `f` and encoding the arguments with the codecs it
-writes for the Model. So `f` must be a function defined at the top level of a module,
-with a type annotation, and its arguments must be types tools/wire can save, except
-for function arguments (such as `idMap`), which aren't compared and must be the same
-function every frame.
+This is what you write. As it stands it just calls `f`. The code generator (not
+written yet) turns each call into a `lazyKeyed` whose key is a variant it adds to
+the module's `LazyKey` type, holding the arguments; the module's `UiId` has one
+variant `Lazy LazyKey` for them, written by hand. So `f` must be a function defined
+at the top level of a module, with a type annotation. An argument of type
+`UiId -> id` (an `idMap`) wraps the key instead of going in it; the `LazyCache` and
+any other function arguments are left out, and must be the same every frame.
 
 -}
-lazy3 : LazyCache id -> (a -> b -> c -> Element id) -> a -> b -> c -> Element id
-lazy3 _ f a b c =
-    f a b c
+lazy4 : LazyCache id -> (a -> b -> c -> d -> Element id) -> a -> b -> c -> d -> Element id
+lazy4 _ f a b c d =
+    f a b c d
 
 
-{-| What tools/wire turns a `lazy` call into: the element the last frame's call `name`
-made from the same `args` (the call's arguments, encoded), or else what `build` gives.
+{-| What the code generator turns a `lazy` call into: the element that last frame's
+`lazy` with an equal (`==`) key made, or else what `build` gives. `==` is quick
+when nothing changed, as it first checks whether the two are the very same value.
 -}
-lazyWith : LazyCache id -> String -> Bytes -> (() -> Element id) -> Element id
-lazyWith (LazyCache cache) name args build =
-    Lazy
-        { name = name, args = args }
-        (case Dict.get name cache |> Maybe.andThen (findArgs args) of
-            Just element ->
-                element
+lazyKeyed : LazyCache id -> id -> (() -> Element id) -> Element id
+lazyKeyed (LazyCache cache) key build =
+    case SeqDict.get key cache of
+        Just element ->
+            element
 
-            Nothing ->
-                build ()
-        )
-
-
-findArgs : Bytes -> List ( Bytes, Element id ) -> Maybe (Element id)
-findArgs args entries =
-    case entries of
-        ( cachedArgs, element ) :: rest ->
-            if sameBytes args cachedArgs then
-                Just element
-
-            else
-                findArgs args rest
-
-        [] ->
-            Nothing
-
-
-{-| Whether two Bytes hold the same bytes. Natively (eco) `==` does this, comparing
-the memory. But in JavaScript (`make dev`), elm/core's `==` finds any two Bytes
-equal, so there they're read and compared 4 bytes at a time, which is much slower.
--}
-sameBytes : Bytes -> Bytes -> Bool
-sameBytes a b =
-    if bytesEqualityWorks then
-        a == b
-
-    else
-        Bytes.width a
-            == Bytes.width b
-            && (BD.decode (byteWords (Bytes.width a)) a
-                    |> Maybe.andThen (\words -> BD.decode (sameWords (Bytes.width b) words) b)
-                    |> Maybe.withDefault False
-               )
-
-
-{-| False in JavaScript, where `==` finds any two Bytes equal.
--}
-bytesEqualityWorks : Bool
-bytesEqualityWorks =
-    BE.encode (BE.unsignedInt8 0) /= BE.encode (BE.unsignedInt8 1)
-
-
-{-| The bytes as Ints, 4 bytes at a time and then the 0 to 3 left over.
--}
-byteWords : Int -> BD.Decoder (List Int)
-byteWords width =
-    BD.loop ( width, [] )
-        (\( remaining, words ) ->
-            if remaining >= 4 then
-                BD.map (\word -> BD.Loop ( remaining - 4, word :: words )) (BD.unsignedInt32 Bytes.LE)
-
-            else if remaining > 0 then
-                BD.map (\byte -> BD.Loop ( remaining - 1, byte :: words )) BD.unsignedInt8
-
-            else
-                BD.succeed (BD.Done (List.reverse words))
-        )
-
-
-{-| Whether the bytes are `words`, as `byteWords` reads them.
--}
-sameWords : Int -> List Int -> BD.Decoder Bool
-sameWords width words =
-    BD.loop ( width, words )
-        (\( remaining, expected ) ->
-            case expected of
-                next :: rest ->
-                    BD.map
-                        (\word ->
-                            if word == next then
-                                BD.Loop ( remaining - wordWidth remaining, rest )
-
-                            else
-                                BD.Done False
-                        )
-                        (if remaining >= 4 then
-                            BD.unsignedInt32 Bytes.LE
-
-                         else
-                            BD.unsignedInt8
-                        )
-
-                [] ->
-                    BD.succeed (BD.Done (remaining == 0))
-        )
-
-
-wordWidth : Int -> Int
-wordWidth remaining =
-    if remaining >= 4 then
-        4
-
-    else
-        1
+        Nothing ->
+            let
+                child : Element id
+                child =
+                    build ()
+            in
+            Lazy key (lazyElements [ child ]) child
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
@@ -1037,7 +962,7 @@ size element =
         Viewport data child ->
             viewportSize data child
 
-        Lazy _ child ->
+        Lazy _ _ child ->
             size child
 
 
@@ -1208,7 +1133,7 @@ hoverHelper hovers point position element =
             else
                 hovers
 
-        Lazy _ child ->
+        Lazy _ _ child ->
             hoverHelper hovers point position child
 
 
@@ -1272,7 +1197,7 @@ findInputHelper id position element =
         Viewport data child ->
             findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
 
-        Lazy _ child ->
+        Lazy _ _ child ->
             findInputHelper id position child
 
 
@@ -1411,7 +1336,7 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                         child
 
-                Lazy _ child ->
+                Lazy _ _ child ->
                     viewList scale showUiBorder maybeHover focus viewport3 position child
 
         Nothing ->

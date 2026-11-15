@@ -137,7 +137,25 @@ frame screen model =
             String.fromInt (Units.scaleInt scale) ++ "x " ++ label
     in
     timed (named "view (build the Element)") (\() -> element ())
-        |> Task.andThen (\ui -> timed (named "view again, nothing changed (Ui.lazy, only if tools/wire turned it into lazyWith)") (elementAgain ui) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "view again, nothing changed (Ui.lazy)") (elementAgain ui) |> Task.map (\_ -> ui))
+        |> Task.andThen
+            (\ui ->
+                let
+                    collapsed : HackerNews.Model
+                    collapsed =
+                        HackerNews.onClick (HackerNews.CommentToggle 0) model |> Tuple.first
+                in
+                let
+                    _ =
+                        Debug.log (named "after collapsing, Ui.lazy draws the same triangles")
+                            (Ui.view scale False Nothing Nothing screen (HackerNews.view (Ui.lazyCache [ ui ]) identity Ui.init (Coord.toUi scale screen) collapsed)
+                                == Ui.view scale False Nothing Nothing screen (HackerNews.view Ui.noLazyCache identity Ui.init (Coord.toUi scale screen) collapsed)
+                            )
+                in
+                timed (named "view after collapsing the first comment (Ui.lazy)")
+                    (\() -> HackerNews.view (Ui.lazyCache [ ui ]) identity Ui.init (Coord.toUi scale screen) collapsed)
+                    |> Task.map (\_ -> ui)
+            )
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
         |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
         |> Task.andThen

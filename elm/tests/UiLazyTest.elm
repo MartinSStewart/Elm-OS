@@ -1,7 +1,5 @@
 module UiLazyTest exposing (suite)
 
-import Bytes exposing (Bytes)
-import Bytes.Encode as BE
 import Coord
 import Expect
 import Sprite exposing (Font(..), FontSize(..), Style(..))
@@ -10,30 +8,38 @@ import Ui
 import Units
 
 
-label : String -> Ui.Element Int
+type Id
+    = OkButton
+    | Lazy LazyKey
+
+
+{-| As the code generator would write it for the `Ui.lazy` calls in `window`.
+-}
+type LazyKey
+    = Label String
+    | Labels Int (List String)
+
+
+label : String -> Ui.Element Id
 label text =
     Ui.text Small (Sans Regular) text
 
 
-labels : Int -> List String -> Ui.Element Int
+labels : Int -> List String -> Ui.Element Id
 labels spacing texts =
     Ui.column { spacing = spacing, padding = Ui.noPadding } (List.map label texts)
 
 
-strings : List String -> Bytes
-strings texts =
-    BE.encode (BE.sequence (List.map (\text -> BE.sequence [ BE.unsignedInt32 Bytes.LE (BE.getStringWidth text), BE.string text ]) texts))
-
-
-{-| A window with two lazy parts, written as tools/wire would write the `Ui.lazy` calls.
+{-| A window with lazy parts, written as the code generator would write the `Ui.lazy`
+calls in it.
 -}
-window : Ui.LazyCache Int -> List String -> String -> Ui.Element Int
+window : Ui.LazyCache Id -> List String -> String -> Ui.Element Id
 window lazyCache texts title =
     Ui.column
         { spacing = 4, padding = Ui.noPadding }
-        [ Ui.lazyWith lazyCache "UiLazyTest.label" (strings [ title ]) (\() -> label title)
-        , Ui.lazyWith lazyCache "UiLazyTest.labels" (strings texts) (\() -> labels 2 texts)
-        , Ui.button { id = 1, padding = Ui.paddingXY 2 2 } (Ui.lazyWith lazyCache "UiLazyTest.label" (strings [ "OK" ]) (\() -> label "OK"))
+        [ Ui.lazyKeyed lazyCache (Lazy (Label title)) (\() -> label title)
+        , Ui.lazyKeyed lazyCache (Lazy (Labels 2 texts)) (\() -> labels 2 texts)
+        , Ui.button { id = OkButton, padding = Ui.paddingXY 2 2 } (Ui.lazyKeyed lazyCache (Lazy (Label "OK")) (\() -> label "OK"))
         ]
 
 
@@ -42,7 +48,7 @@ screen =
     Coord.xy 1280 800
 
 
-draw : Ui.Element Int -> List (Sprite.Triangle Units.DevicePixels)
+draw : Ui.Element Id -> List (Sprite.Triangle Units.DevicePixels)
 draw =
     Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen
 
@@ -54,7 +60,7 @@ nextFrame ( lastTexts, lastTitle ) ( texts, title ) =
 
 suite : Test
 suite =
-    describe "Ui.lazyWith"
+    describe "Ui.lazyKeyed"
         [ test "draws the same as without it when nothing changed"
             (\() ->
                 nextFrame ( [ "a", "b" ], "T" ) ( [ "a", "b" ], "T" )
@@ -65,11 +71,6 @@ suite =
                 nextFrame ( [ "a", "b" ], "T" ) ( [ "a", "c" ], "Title" )
                     |> Expect.equal (draw (window Ui.noLazyCache [ "a", "c" ] "Title"))
             )
-        , test "tells apart arguments of the same length"
-            (\() ->
-                nextFrame ( [ "abcd" ], "T" ) ( [ "abce" ], "T" )
-                    |> Expect.equal (draw (window Ui.noLazyCache [ "abce" ] "T"))
-            )
         , test "keeps the sizes"
             (\() ->
                 Ui.size (window (Ui.lazyCache [ window Ui.noLazyCache [ "a", "bbbbbb" ] "T" ]) [ "a", "bbbbbb" ] "T")
@@ -77,8 +78,14 @@ suite =
             )
         , test "finds buttons inside lazy elements"
             (\() ->
-                Ui.findInput 1 (window (Ui.lazyCache [ window Ui.noLazyCache [] "T" ]) [] "T")
+                Ui.findInput OkButton (window (Ui.lazyCache [ window Ui.noLazyCache [] "T" ]) [] "T")
                     |> Maybe.map (\_ -> True)
                     |> Expect.equal (Just True)
+            )
+        , test "a lazy element's key isn't hovered"
+            (\() ->
+                Ui.hover (Coord.xy 1 1) (window Ui.noLazyCache [ "a" ] "T")
+                    |> List.map Tuple.first
+                    |> Expect.equal []
             )
         ]
