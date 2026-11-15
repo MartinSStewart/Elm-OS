@@ -22,6 +22,7 @@ type Key
     | End
     | PageUp
     | PageDown
+    | PrintScreen
     | Other
 
 
@@ -56,6 +57,9 @@ fromCode shift code =
 
         57 ->
             Spacebar
+
+        70 ->
+            PrintScreen
 
         102 ->
             Home

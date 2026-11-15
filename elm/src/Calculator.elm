@@ -595,6 +595,9 @@ fromKeyboard key =
         Keyboard.Other ->
             Nothing
 
+        Keyboard.PrintScreen ->
+            Nothing
+
 
 
 -- VIEW

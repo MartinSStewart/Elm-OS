@@ -269,6 +269,7 @@ type alias Model =
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
+    , takingScreenshot : Maybe { mouse : Coord DevicePixels }
     }
 
 
@@ -358,6 +359,7 @@ init =
     , reflashNeeded = Nothing
     , uiState = Ui.init
     , showUiBorders = False
+    , takingScreenshot = Nothing
     }
 
 
@@ -575,7 +577,10 @@ step event model =
                 key =
                     Keyboard.fromCode model.shift code
             in
-            if model.ctrl && model.shift && key == Character "Q" && down then
+            if key == PrintScreen then
+                ( { model | takingScreenshot = Just { mouse = model.mouse } }, [] )
+
+            else if model.ctrl && model.shift && key == Character "Q" && down then
                 ( { model | showUiBorders = not model.showUiBorders }, [] )
 
             else if Keyboard.isShift code then
