@@ -11,9 +11,9 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 
 -}
 
+import AsciiCollab
 import BootInfo
 import Bytes exposing (Bytes)
-import AsciiCollab
 import Calculator
 import Clock
 import Color exposing (Color)
@@ -1760,7 +1760,26 @@ displayUi model display =
                 ++ on EditorApp (\() -> editorWindow model)
                 ++ on CalculatorApp (\() -> calculatorWindow model)
                 ++ on AboutApp (\() -> aboutPage model)
-                ++ on NewsApp (\() -> Ui.topRight { size = size } (News.view NewsUiId model.uiState model.news))
+                ++ on NewsApp
+                    (\() ->
+                        Ui.topRight
+                            { size = size }
+                            (News.view
+                                (Ui.mapModel
+                                    (\id ->
+                                        case id of
+                                            NewsUiId id2 ->
+                                                Just id2
+
+                                            _ ->
+                                                Nothing
+                                    )
+                                    model.uiState
+                                )
+                                model.news
+                                |> Ui.map NewsUiId
+                            )
+                    )
                 ++ on AsciiCollabApp
                     (\() ->
                         AsciiCollab.view
@@ -1773,7 +1792,22 @@ displayUi model display =
                     (\() ->
                         Ui.topRight
                             { size = size }
-                            (HackerNews.view HackerNewsUiId model.uiState size model.hackerNews)
+                            (HackerNews.view
+                                (Ui.mapModel
+                                    (\id ->
+                                        case id of
+                                            HackerNewsUiId id2 ->
+                                                Just id2
+
+                                            _ ->
+                                                Nothing
+                                    )
+                                    model.uiState
+                                )
+                                size
+                                model.hackerNews
+                            )
+                            |> Ui.map HackerNewsUiId
                     )
                 ++ (if isMain then
                         case model.upgradingTo of
@@ -2076,7 +2110,6 @@ httpAnswered msg =
 
         Tick _ ->
             Nothing
-
 
 
 {-| What the host says about the WebSockets: they belong to the ascii-collab app

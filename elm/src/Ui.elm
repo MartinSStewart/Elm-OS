@@ -31,6 +31,7 @@ module Ui exposing
     , left
     , leftAndRight
     , map
+    , mapModel
     , noPadding
     , none
     , onAnimationFrame
@@ -155,6 +156,30 @@ type ElementState
 type alias Model id =
     { focus : Maybe id
     , uiState : SeqDict id ElementState
+    }
+
+
+mapModel : (id -> Maybe id2) -> Model id -> Model id2
+mapModel idMap model =
+    { focus =
+        case model.focus of
+            Just focus ->
+                idMap focus
+
+            Nothing ->
+                Nothing
+    , uiState =
+        SeqDict.toList model.uiState
+            |> List.filterMap
+                (\( k, v ) ->
+                    case idMap k of
+                        Just k2 ->
+                            Just ( k2, v )
+
+                        Nothing ->
+                            Nothing
+                )
+            |> SeqDict.fromList
     }
 
 

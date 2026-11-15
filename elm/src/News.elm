@@ -81,8 +81,8 @@ type UiId
     = NewsViewport
 
 
-view : (UiId -> id) -> Ui.Model id -> NewsState -> Element id
-view idMap uiState news =
+view : Ui.Model UiId -> NewsState -> Element UiId
+view uiState news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -98,13 +98,13 @@ view idMap uiState news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            daysView idMap uiState days
+                            daysView uiState days
 
                         Nothing ->
                             Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
 
                 LoadedNews days ->
-                    daysView idMap uiState days
+                    daysView uiState days
 
                 NewsFailed string ->
                     Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
@@ -112,8 +112,8 @@ view idMap uiState news =
         )
 
 
-daysView : (UiId -> id) -> Ui.Model id -> List Day -> Element id
-daysView idMap uiState days =
+daysView : Ui.Model UiId -> List Day -> Element UiId
+daysView uiState days =
     List.map
         (\{ date, topics } ->
             let
@@ -159,10 +159,10 @@ daysView idMap uiState days =
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
         |> Ui.viewport
-            { id = idMap NewsViewport
+            { id = NewsViewport
             , viewportHeight = Quantity.unsafe 1000
             , model =
-                case SeqDict.get (idMap NewsViewport) uiState.uiState of
+                case SeqDict.get NewsViewport uiState.uiState of
                     Just (ViewportState viewport) ->
                         viewport
 
