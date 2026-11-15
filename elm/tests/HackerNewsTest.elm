@@ -3,10 +3,14 @@ module HackerNewsTest exposing (suite)
 import Bytes exposing (Bytes)
 import Bytes.Decode
 import Bytes.Encode
+import Coord exposing (Coord)
 import Expect
 import HackerNews exposing (HackerNewsState(..), PostId(..), UiId(..))
 import SeqDict
+import Sprite
 import Test exposing (Test, describe, test)
+import Ui
+import Units exposing (DevicePixels)
 import Wire
 
 
@@ -100,7 +104,56 @@ suite =
                     ]
                     ()
             )
+        , test "Ui.lazy (as tools/wire generates it) draws what building it all again draws"
+            (\() ->
+                let
+                    collapsed =
+                        HackerNews.onClick (CommentToggle 0) commentsModel |> Tuple.first
+                in
+                draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) Ui.init uiScreen collapsed)
+                    |> Expect.equal (draw (view Ui.noLazyCache collapsed))
+            )
+        , test "an Element with Ui.lazy in it can be saved, and draws the same when loaded"
+            (\() ->
+                let
+                    element =
+                        view Ui.noLazyCache commentsModel
+                in
+                Ui.w3_encode_Element HackerNews.w3_encode_UiId element
+                    |> Wire.toBytes
+                    |> Wire.fromBytes (Ui.w3_decode_Element HackerNews.w3_decode_UiId)
+                    |> Maybe.map draw
+                    |> Expect.equal (Just (draw element))
+            )
         ]
+
+
+commentsModel : HackerNews.Model
+commentsModel =
+    HackerNews.init
+        |> HackerNews.onClick (NewsPostButton (PostId "5"))
+        |> Tuple.first
+        |> respond (HackerNews.GetPostRequest (PostId "5")) commentsPage
+
+
+screen : Coord DevicePixels
+screen =
+    Coord.xy 1920 1080
+
+
+uiScreen : Coord Units.UiPixels
+uiScreen =
+    Coord.toUi (Units.scaleFor (Coord.x screen)) screen
+
+
+view : Ui.LazyCache UiId -> HackerNews.Model -> Ui.Element UiId
+view lazyCache model =
+    HackerNews.view lazyCache Ui.init uiScreen model
+
+
+draw : Ui.Element UiId -> List (Sprite.Triangle DevicePixels)
+draw element =
+    Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen element
 
 
 latin1 : Bytes -> String

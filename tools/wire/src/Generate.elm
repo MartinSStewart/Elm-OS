@@ -30,6 +30,7 @@ import Elm.Syntax.Import exposing (Import)
 import Elm.Syntax.Module as Module
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
+import Lazy
 import Set exposing (Set)
 
 
@@ -210,7 +211,21 @@ placeholder options files =
 config's names.
 -}
 withModules : Options -> List SourceFile -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
-withModules options files next =
+withModules options sourceFiles next =
+    case Lazy.rewrite sourceFiles of
+        Err problems ->
+            Err problems
+
+        Ok files ->
+            withRewritten options files next
+
+
+{-| `withModules`, once `Ui.lazy`'s calls are rewritten (Lazy.elm). Each `LazyKey` it
+wrote is checked for what can't be compared, then seen by the rest of wire as just
+`type LazyKey = Restored` (see `isLazyKey`).
+-}
+withRewritten : Options -> List SourceFile -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
+withRewritten options files next =
     let
         parsedFiles =
             List.map parseFile files
@@ -243,15 +258,42 @@ withModules options files next =
 
     else
         let
-            modules =
+            written =
                 parsed
                     |> List.filterMap Result.toMaybe
                     |> List.map (\m -> ( m.name, m ))
                     |> Dict.fromList
+
+            lazyKeys =
+                Dict.values written |> List.filter (\m -> isLazyKey m "LazyKey")
+
+            lazyErrors =
+                let
+                    defs =
+                        allDefs written
+                in
+                List.concatMap
+                    (\m ->
+                        reach defs (usedParams defs) [ ( ( m.name, "LazyKey" ), "the arguments of a Ui.lazy call in " ++ m.name ) ] Set.empty []
+                            |> Tuple.second
+                            |> List.reverse
+                            |> List.map (String.replace "can't be saved" "can't be compared, so it can't be a Ui.lazy argument (put the function's result in it instead)")
+                    )
+                    lazyKeys
+
+            modules =
+                List.foldl
+                    (\m acc -> Dict.insert m.name { m | types = Dict.insert "LazyKey" ( [], Custom [ ( "Restored", [] ) ] ) m.types } acc)
+                    written
+                    lazyKeys
         in
         case ( splitName options.model, splitName options.msg, splitName options.config ) of
             ( Just modelKey, Just msgKey, Just configKey ) ->
-                next options modules modelKey msgKey configKey
+                if List.isEmpty lazyErrors then
+                    next options modules modelKey msgKey configKey
+
+                else
+                    Err lazyErrors
 
             _ ->
                 Err [ "--model, --msg and --config must each be Module.name" ]
@@ -454,6 +496,15 @@ splitName full =
 keyName : Key -> String
 keyName ( m, n ) =
     m ++ "." ++ n
+
+
+{-| Whether `name` is a `LazyKey` that Lazy.elm wrote for `Ui.lazy`. Its arguments
+are never saved: it is saved as `Restored`, the only variant the rest of wire sees, so
+changing a `Ui.lazy` call never changes the Model's shape or needs a migration.
+-}
+isLazyKey : Module -> String -> Bool
+isLazyKey m name =
+    name == "LazyKey" && String.contains "type LazyKey = Restored" m.source
 
 
 
@@ -1370,28 +1421,33 @@ encoder ctx m def =
 
         body =
             case def.body of
+                Custom variants ->
+                    if isLazyKey m def.name then
+                        -- What `Restored` is written as: what every key comes back as.
+                        "    Wire.encodeCustom 0 []"
+
+                    else
+                        "    case w3_v of\n"
+                            ++ String.join "\n\n"
+                                (List.map
+                                    (\( ctor, tys ) ->
+                                        let
+                                            vars =
+                                                List.indexedMap (\j _ -> "w3_x" ++ String.fromInt j) tys
+                                        in
+                                        "        "
+                                            ++ String.join " " (ctor :: vars)
+                                            ++ " ->\n            "
+                                            ++ layoutList 12 ("Wire.encodeCustom " ++ String.fromInt (tagOf variants ctor)) (List.map2 (encApply ctx m 1) tys vars)
+                                    )
+                                    variants
+                                )
+
                 Alias (TRecord fields) ->
                     "    " ++ layoutList 4 "Wire.encodeRecord" (List.map (\( f, t ) -> encApply ctx m 1 t ("w3_v." ++ f)) (byName fields))
 
                 Alias ty ->
                     "    " ++ encApply ctx m 1 ty "w3_v"
-
-                Custom variants ->
-                    "    case w3_v of\n"
-                        ++ String.join "\n\n"
-                            (List.map
-                                (\( ctor, tys ) ->
-                                    let
-                                        vars =
-                                            List.indexedMap (\j _ -> "w3_x" ++ String.fromInt j) tys
-                                    in
-                                    "        "
-                                        ++ String.join " " (ctor :: vars)
-                                        ++ " ->\n            "
-                                        ++ layoutList 12 ("Wire.encodeCustom " ++ String.fromInt (tagOf variants ctor)) (List.map2 (encApply ctx m 1) tys vars)
-                                )
-                                variants
-                            )
     in
     signature ++ "\n" ++ name ++ args ++ " w3_v =\n" ++ body
 

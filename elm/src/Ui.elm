@@ -4,6 +4,7 @@ module Ui exposing
     , Element(..)
     , ElementState(..)
     , InputType(..)
+    , LazyCache
     , Model
     , RowColumn
     , TextInputData
@@ -28,11 +29,15 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , lazy3
+    , lazyCache
+    , lazyKeyed
     , left
     , leftAndRight
     , map
     , mapModel
     , noPadding
+    , noLazyCache
     , none
     , onAnimationFrame
     , onMouseDown
@@ -141,6 +146,9 @@ type Element id
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
     | Viewport (ViewportData id) (Element id)
+      -- What `lazyKeyed` made: its key (which call it was, with the arguments), and
+      -- every `Lazy` inside it by key, so that reusing it reuses them too.
+    | Lazy id (SeqDict id (Element id)) (Element id)
 
 
 type alias ViewportData id =
@@ -339,6 +347,9 @@ onMouseDown onClick relativePositionToUi cursor id element model =
         Viewport _ _ ->
             ( { model | focus = Nothing }, Nothing )
 
+        Lazy _ _ _ ->
+            ( { model | focus = Nothing }, Nothing )
+
 
 onWheel : id -> Int -> Element id -> Model id -> Model id
 onWheel id clicks element model =
@@ -382,6 +393,9 @@ onWheel id clicks element model =
             model
 
         Empty ->
+            model
+
+        Lazy _ _ _ ->
             model
 
         Viewport data element2 ->
@@ -438,6 +452,9 @@ scrolls element =
             False
 
         Empty ->
+            False
+
+        Lazy _ _ _ ->
             False
 
 
@@ -736,6 +753,139 @@ map f element =
                 { id = f data.id, viewportHeight = data.viewportHeight, scrollOffset = data.scrollOffset }
                 (map f child)
 
+        Lazy key _ child ->
+            let
+                mapped =
+                    map f child
+            in
+            -- Without the Lazy elements inside: mapping them again, or finding them in
+            -- the mapped child, would take as long as the rest of `map` many times over.
+            -- So a `lazyCache` of a mapped element is slow to make: make it from the
+            -- element before it was mapped.
+            Lazy (f key) SeqDict.empty mapped
+
+
+-- LAZY
+
+
+{-| The `lazy` elements of the last frame, by their keys.
+-}
+type LazyCache id
+    = LazyCache (SeqDict id (Element id))
+
+
+{-| Nothing remembered: every `lazy` calls its function.
+-}
+noLazyCache : LazyCache id
+noLazyCache =
+    LazyCache SeqDict.empty
+
+
+{-| What the next frame's `lazy` calls can reuse: every `lazy` element in these (the
+UI of every display).
+-}
+lazyCache : List (Element id) -> LazyCache id
+lazyCache elements =
+    LazyCache (lazyElements elements)
+
+
+{-| Every `Lazy` in these elements, by key. Each `Lazy` already holds the ones inside
+it, so the walk stops there, and the biggest of those is added to rather than copied:
+a frame that reuses a big lazy part costs little here.
+-}
+lazyElements : List (Element id) -> SeqDict id (Element id)
+lazyElements elements =
+    let
+        found : List (SeqDict id (Element id))
+        found =
+            List.foldl lazyParts [] elements
+    in
+    case List.sortBy (\dict -> negate (SeqDict.size dict)) found of
+        biggest :: rest ->
+            List.foldl (\dict acc -> SeqDict.foldl SeqDict.insert acc dict) biggest rest
+
+        [] ->
+            SeqDict.empty
+
+
+lazyParts : Element id -> List (SeqDict id (Element id)) -> List (SeqDict id (Element id))
+lazyParts element found =
+    case element of
+        Lazy key inner child ->
+            if SeqDict.isEmpty inner then
+                -- No Lazy inside, or `map` left them out: look.
+                lazyParts child (SeqDict.singleton key element :: found)
+
+            else
+                SeqDict.insert key element inner :: found
+
+        Button data child ->
+            List.foldl lazyParts (lazyParts child found) data.inFront
+
+        Row _ children ->
+            List.foldl lazyParts found children
+
+        Column _ children ->
+            List.foldl lazyParts found children
+
+        Single data child ->
+            List.foldl lazyParts (lazyParts child found) data.inFront
+
+        Viewport _ child ->
+            lazyParts child found
+
+        TextInput _ ->
+            found
+
+        TextInputMultiline _ ->
+            found
+
+        Text _ ->
+            found
+
+        Quads _ ->
+            found
+
+        Empty ->
+            found
+
+
+{-| `f a b c`, built only when `a`, `b` or `c` has changed since the last frame; like
+`Html.Lazy.lazy3`, for parts of the UI that are slow to build and seldom change, such
+as a long list of wrapped text. (`lazy`, `lazy2`, `lazy4` and so on can join it once something
+uses them: elm-review allows no unused exports.)
+
+This is what you write; as it stands it just calls `f`. At build time tools/wire
+(tools/wire/src/Lazy.elm) turns each call into a `lazyKeyed` whose key is a variant
+it adds to the module's `LazyKey` type, holding the arguments; the module's `UiId`
+has one variant `Lazy LazyKey` for them, written by hand. So `f` must be a function
+defined at the top level of the same module, with a type annotation. The `LazyCache`
+arguments are left out of the key, and the other arguments can't hold functions.
+
+-}
+lazy3 : LazyCache id -> (a -> b -> c -> Element id) -> a -> b -> c -> Element id
+lazy3 _ f a b c =
+    f a b c
+
+
+{-| What the code generator turns a `lazy` call into: the element that last frame's
+`lazy` with an equal (`==`) key made, or else what `build` gives. `==` is quick
+when nothing changed, as it first checks whether the two are the very same value.
+-}
+lazyKeyed : LazyCache id -> id -> (() -> Element id) -> Element id
+lazyKeyed (LazyCache cache) key build =
+    case SeqDict.get key cache of
+        Just element ->
+            element
+
+        Nothing ->
+            let
+                child : Element id
+                child =
+                    build ()
+            in
+            Lazy key (lazyElements [ child ]) child
+
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
 quads =
@@ -848,6 +998,9 @@ size element =
 
         Viewport data child ->
             viewportSize data child
+
+        Lazy _ _ child ->
+            size child
 
 
 viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
@@ -1017,6 +1170,9 @@ hoverHelper hovers point position element =
             else
                 hovers
 
+        Lazy _ _ child ->
+            hoverHelper hovers point position child
+
 
 type InputType id
     = ButtonType { data : ButtonData id, position : Coord UiPixels, size : Coord UiPixels }
@@ -1077,6 +1233,9 @@ findInputHelper id position element =
 
         Viewport data child ->
             findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
+
+        Lazy _ _ child ->
+            findInputHelper id position child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -1213,6 +1372,9 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         viewport3
                         (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                         child
+
+                Lazy _ _ child ->
+                    viewList scale showUiBorder maybeHover focus viewport3 position child
 
         Nothing ->
             []

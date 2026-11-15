@@ -713,12 +713,28 @@ dev-native: $(BUILD)/elm $(BUILD)/elmos-dev
 # the item page (elm/bench/fixtures/hn-item-<id>.html.gz).
 BENCH_ITEM ?= elm/bench/fixtures/hn-item-50467087.html.gz
 
+# Links an eco-compiled object ($(2)) into a static executable ($(1)) with eco's runtime, the way
+# eco's own `--output=<exe>` would (which fails to link with the patched eco).
+LINK_ECO_EXE = $(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $(1) \
+	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
+	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
+	  $(2) \
+	  --start-group \
+	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
+	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
+	    $(PROJECT_LIBS_REST) \
+	  --end-group \
+	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libzip.a $(RT)/libz.a \
+	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a $(RT)/libcurl.a $(RT)/libssl.a $(RT)/libcrypto.a \
+	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
+
 bench: $(BUILD)/wire/.done
 	@mkdir -p $(BUILD)/bench/gen
 	python3 -I elm/bench/make-fixture.py $(BUILD)/bench/gen/Fixture.elm elm/bench/fixtures/hn-top.html.gz $(BENCH_ITEM)
 	python3 -I -c 'import json,sys; d=json.load(open("elm/elm.json")); d["source-directories"]=[sys.argv[1],sys.argv[2],"gen"]; json.dump(d,open(sys.argv[3],"w"),indent=4)' \
 	  $(abspath $(BUILD)/wire/src) $(abspath elm/bench/src) $(BUILD)/bench/elm.json
-	cd $(BUILD)/bench && $(ECO) make $(abspath elm/bench/src/Bench.elm) --optimize --output=bench
+	cd $(BUILD)/bench && $(ECO) make $(abspath elm/bench/src/Bench.elm) --optimize --output=bench.o
+	$(call LINK_ECO_EXE,$(BUILD)/bench/bench,$(BUILD)/bench/bench.o)
 	$(BUILD)/bench/bench
 
 # ---- eco/containers (eco-containers/README.md): its tests, natively and in Node, with the
@@ -728,18 +744,7 @@ test-containers: | check-deps
 	@mkdir -p $(BUILD)/containers
 	cd eco-containers/tests && $(ECO) make src/Main.elm \
 	  --output=$(abspath $(BUILD)/containers/tests.o)
-	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $(BUILD)/containers/tests \
-	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
-	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
-	  $(BUILD)/containers/tests.o \
-	  --start-group \
-	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
-	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
-	    $(PROJECT_LIBS_REST) \
-	  --end-group \
-	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libzip.a $(RT)/libz.a \
-	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a $(RT)/libcurl.a $(RT)/libssl.a $(RT)/libcrypto.a \
-	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
+	$(call LINK_ECO_EXE,$(BUILD)/containers/tests,$(BUILD)/containers/tests.o)
 	$(BUILD)/containers/tests 2>&1 | tee $(BUILD)/containers/native.txt; grep -q PASS $(BUILD)/containers/native.txt
 	cd eco-containers/tests && $(ECO) make src/MainJs.elm --optimize \
 	  --output=$(abspath $(BUILD)/containers/tests.js)

@@ -1793,6 +1793,7 @@ displayUi model display =
                         Ui.topRight
                             { size = size }
                             (HackerNews.view
+                                Ui.noLazyCache
                                 (Ui.mapModel
                                     (\id ->
                                         case id of

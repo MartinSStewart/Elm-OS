@@ -56,7 +56,7 @@ rules =
     -- Sprite's font styles (Bold, Italic, BoldItalic) are kept for when the UI uses them.
     -- AsciiCollab/Types.elm copies ascii-collab's types whole: a custom type's tags in
     -- Wire3 depend on all of its constructors, used here or not.
-    , NoUnused.CustomTypeConstructors.rule [] |> Review.Rule.ignoreErrorsForFiles [ "src/Sprite.elm", "src/AsciiCollab/Types.elm" ]
+    , NoUnused.CustomTypeConstructors.rule [] |> Review.Rule.ignoreErrorsForFiles [ "src/Sprite.elm", "src/AsciiCollab/Types.elm", "src/HackerNews.elm" ]
     , NoUnused.Patterns.rule
     , Docs.ReviewAtDocs.rule
     , NoConfusingPrefixOperator.rule
