@@ -270,6 +270,7 @@ type alias Model =
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
     , takingScreenshot : Maybe { mouse : Coord DevicePixels }
+    , screenshots : List (Ui.Element UiId)
     }
 
 
@@ -360,6 +361,7 @@ init =
     , uiState = Ui.init
     , showUiBorders = False
     , takingScreenshot = Nothing
+    , screenshots = []
     }
 
 
