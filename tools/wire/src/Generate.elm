@@ -2261,13 +2261,86 @@ bareModules =
 
 
 {-| The modules in `candidates` that `body` refers to (`Module.name`).
+
+Only a module that `body` names in full counts: `Evergreen.V12.AsciiCollab.LocalGrid.T`
+refers to `Evergreen.V12.AsciiCollab.LocalGrid`, not to `Evergreen.V12.AsciiCollab`.
+Matching the text `Evergreen.V12.AsciiCollab.` instead once had the frozen
+`AsciiCollab.LocalGrid` import its parent `AsciiCollab`, which imports it: a cycle.
+
 -}
 importsIn : String -> List String -> List String
 importsIn body candidates =
+    let
+        referred =
+            referredModules body
+    in
     candidates
-        |> List.filter (\m -> String.contains (m ++ ".") body)
+        |> List.filter (\m -> Set.member m referred)
         |> Set.fromList
         |> Set.toList
+
+
+{-| Every module that `body` qualifies a name with: the capitalized words before the
+name in `A.B.Name` or `A.B.name` (and `A.B.name.field`).
+-}
+referredModules : String -> Set String
+referredModules body =
+    body
+        |> String.map
+            (\c ->
+                if Char.isAlphaNum c || c == '_' || c == '.' then
+                    c
+
+                else
+                    ' '
+            )
+        |> String.words
+        |> List.filterMap qualifyingModule
+        |> Set.fromList
+
+
+{-| The module that a dotted word like `A.B.Name` or `A.B.name.field` is qualified with.
+-}
+qualifyingModule : String -> Maybe String
+qualifyingModule word =
+    let
+        parts =
+            String.split "." word
+
+        isUpper part =
+            String.left 1 part |> String.any Char.isUpper
+
+        capitalized =
+            takeWhile isUpper parts
+
+        moduleParts =
+            if List.length capitalized == List.length parts then
+                -- `A.B.Name`: the last one is the name.
+                List.take (List.length parts - 1) capitalized
+
+            else
+                -- `A.B.name`: everything before the name.
+                capitalized
+    in
+    if List.isEmpty moduleParts then
+        Nothing
+
+    else
+        Just (String.join "." moduleParts)
+
+
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile ok list =
+    case list of
+        x :: rest ->
+            if ok x then
+                x :: takeWhile ok rest
+
+            else
+                []
+
+        [] ->
+            []
 
 
 {-| How the frozen module of `self` (in `version`) writes a type: its own types bare,

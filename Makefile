@@ -323,6 +323,12 @@ test-wire: $(BUILD)/wire-tool | check-deps
 	  --entry ElmOs --config App.config --model App.Model --msg App.Msg
 	cd $(BUILD)/wire-test && $(ECO) make src/ElmOs.elm --output=/dev/null && \
 	  npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+	# Freezing a parent module and its child modules (tools/wire/test/freeze) must give
+	# frozen modules that import only what they use, or they can import each other.
+	rm -rf $(BUILD)/wire-freeze-test && cp -r tools/wire/test/freeze $(BUILD)/wire-freeze-test
+	$(BUILD)/wire-tool --src $(BUILD)/wire-freeze-test/src --out $(BUILD)/wire-freeze-test/out --runtime elm/src/Wire.elm \
+	  --entry ElmOs --config Nest.config --model Nest.Model --msg Nest.Msg --freeze yes
+	cd $(BUILD)/wire-freeze-test && $(ECO) make src/Evergreen/V1/Nest.elm --output=/dev/null
 
 $(BUILD)/wire-tool: $(BUILD)/wire-tool.o
 	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
