@@ -200,8 +200,10 @@ pub enum ToElm {
     /// computer can't switch to it: its USB stick needs flashing again. Sent again to
     /// each program the host starts.
     ReflashNeeded { build: String },
-    /// Once a second, so the program's clock-driven work is in the log too.
-    Tick,
+    /// Once a second, so the program's clock-driven work is in the log too. `time` is
+    /// the wall clock (CLOCK_REALTIME), in whole milliseconds since 1970 UTC: from the
+    /// hardware clock at boot, then from the network (host/init/src/ntp.rs).
+    Tick { time: f64 },
     /// The answer to `Effect::ReadSnapshot`: the snapshot file's text, null if there
     /// is none.
     Snapshot { text: Option<String> },
@@ -287,6 +289,12 @@ pub enum HttpFailure {
 }
 
 impl ToElm {
+    /// A `Tick` with the wall clock now.
+    pub fn tick_now() -> ToElm {
+        let since_1970 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        ToElm::Tick { time: since_1970.map_or(0, |d| d.as_millis()) as f64 }
+    }
+
     /// What goes on the socket to the Elm program.
     pub fn to_bytes(&self) -> Vec<u8> {
         postcard::to_allocvec(self).expect("a ToElm always encodes")
@@ -392,7 +400,7 @@ mod tests {
             ToElm::Sha256 { .. } => "sha256",
             ToElm::Switching { .. } => "switching",
             ToElm::ReflashNeeded { .. } => "reflashNeeded",
-            ToElm::Tick => "tick",
+            ToElm::Tick { .. } => "tick",
             ToElm::Snapshot { .. } => "snapshot",
             ToElm::ReplayDone { .. } => "replayDone",
         }
@@ -457,7 +465,7 @@ mod tests {
 
     #[test]
     fn messages_carry_their_number() {
-        let tick = ToElm::Tick.to_bytes();
+        let tick = ToElm::Tick { time: 0.0 }.to_bytes();
         assert_eq!(from_host_payload(None, &tick), [vec![0], tick.clone()].concat());
         assert_eq!(from_host_payload(Some(300), &tick), [vec![1, 0xac, 0x02], tick.clone()].concat());
         assert_eq!(read_from_host_payload(&from_host_payload(Some(300), &tick)), Some((Some(300), &tick[..])));

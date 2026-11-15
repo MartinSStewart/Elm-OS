@@ -433,10 +433,11 @@ pub fn run() -> ! {
             host.stats.send(host.gpu_pid());
             last_stats = t;
         }
-        // The Elm program's clock (BootInfo's checks): from here rather than a
-        // Time.every in Elm, so it is in the message log like everything else.
+        // The Elm program's clock (BootInfo's checks, and the wall clock it shows,
+        // net/ntp.rs): from here rather than a Time.every or Time.now in Elm, so it is
+        // in the message log like everything else.
         if t - last_tick >= 1.0 {
-            elm::send(&ToElm::Tick);
+            elm::send(&ToElm::tick_now());
             last_tick = t;
         }
         if fds[0].revents != 0 {

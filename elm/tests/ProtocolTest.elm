@@ -21,6 +21,7 @@ import ProtocolExamples
 import Quantity
 import Sprite
 import Test exposing (Test, describe, test)
+import Time
 import Units
 import Unsafe
 import Wifi
@@ -198,10 +199,10 @@ suite =
             (List.map (\( json, bytes ) -> test json (\_ -> readsHostMessage bytes)) ProtocolExamples.fromHost)
         , test "a message from the host carries its number in the host's log"
             (\_ ->
-                -- Some(300), then Tick.
-                fromHex "01ac0218"
+                -- Some(300), then Tick at 0.0 (an f64).
+                fromHex "01ac02180000000000000000"
                     |> Maybe.map (Persist.fromHost Main.persistConfig)
-                    |> Expect.equal (Just (Persist.AppMsg (Just 300) 4 (Main.persistConfig.fromHost (Ok HostMessage.Tick))))
+                    |> Expect.equal (Just (Persist.AppMsg (Just 300) 12 (Main.persistConfig.fromHost (Ok (HostMessage.Tick (Time.millisToPosix 0))))))
             )
         , test "a message from the host that can't be read is logged, and nothing else happens"
             (\_ ->

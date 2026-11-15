@@ -111,7 +111,7 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Sha256 { .. }
         | ToElm::Switching { .. }
         | ToElm::ReflashNeeded { .. }
-        | ToElm::Tick
+        | ToElm::Tick { .. }
         | ToElm::Snapshot { .. }
         | ToElm::ReplayDone { .. } => return None,
     })
@@ -119,7 +119,7 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
 
 /// Only worth sending to the program running now.
 fn only_now(msg: &ToElm) -> bool {
-    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::Tick)
+    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::Tick { .. })
 }
 
 fn http_answer(msg: &ToElm) -> Option<&str> {

@@ -10,6 +10,8 @@
 //!   - once joined, gets an address with DHCP (dhcp.rs, our own small client) and
 //!     writes /etc/resolv.conf, so HTTP requests (http.rs) reach the internet.
 //!
+//! Each new DHCP lease (wired or wifi) also has ntp.rs set the clock from the network.
+//!
 //! Nothing here listens for incoming connections.
 //!
 //! wpa_supplicant is built from source with its own crypto instead of OpenSSL (see
@@ -33,6 +35,7 @@
 
 mod dhcp;
 mod iface;
+mod ntp;
 mod wired;
 mod wpa;
 
@@ -535,6 +538,7 @@ fn run() {
 
 pub fn start() {
     inbox();
+    ntp::start();
     std::thread::Builder::new()
         .name("net".into())
         .spawn(run)

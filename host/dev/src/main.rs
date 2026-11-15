@@ -556,7 +556,7 @@ impl Runner {
         if self.tick_at.elapsed() >= Duration::from_secs(1) {
             self.tick_at = Instant::now();
             if self.running.is_some() {
-                elm::send(&ToElm::Tick);
+                elm::send(&ToElm::tick_now());
             }
         }
         let mut next = (self.watched_at + WATCH_EVERY).min(self.tick_at + Duration::from_secs(1));

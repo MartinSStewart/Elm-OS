@@ -14,6 +14,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 import BootInfo
 import Bytes exposing (Bytes)
 import Calculator
+import Clock
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
@@ -204,7 +205,7 @@ toInput message =
         HostMessage.ReflashNeeded build ->
             Ok (ReflashNeeded build)
 
-        HostMessage.Tick ->
+        HostMessage.Tick _ ->
             Err "Tick is a Msg of its own (fromHost)"
 
         HostMessage.Snapshot _ ->
@@ -253,6 +254,8 @@ type alias Model =
       savedWifiPasswords : SeqDict Ssid Wpa2Password
     , showPassword : Bool
     , weather : WeatherState
+    , time : Maybe Time.Posix -- the wall clock, from the host's Tick each second
+    , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
     , geoUrl : String
     , weatherUrl : String
     , system : Maybe SystemInfo
@@ -292,7 +295,7 @@ saved and sent elsewhere later.
 -}
 type Msg
     = GotInput (Result String Input)
-    | Tick
+    | Tick Time.Posix
 
 
 type UiId
@@ -344,6 +347,8 @@ init =
     , savedWifiPasswords = SeqDict.empty
     , showPassword = False
     , weather = NoWeather
+    , time = Nothing
+    , utcOffsetMinutes = Nothing
     , geoUrl = Weather.defaultGeoUrl
     , weatherUrl = Weather.defaultWeatherUrl
     , system = Nothing
@@ -375,8 +380,8 @@ frameWindow =
 update : Msg -> Model -> ( Model, List Effect )
 update msg model =
     case msg of
-        Tick ->
-            BootInfo.tick model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })
+        Tick time ->
+            BootInfo.tick model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info, time = Just time })
 
         GotInput value ->
             case value of
@@ -490,7 +495,16 @@ step event model =
                                 LoadingForecast place ->
                                     case decoded Weather.decodeForecast of
                                         Ok forecast ->
-                                            { model | weather = GotWeather place forecast }
+                                            { model
+                                                | weather = GotWeather place forecast
+                                                , utcOffsetMinutes =
+                                                    case forecast.utcOffsetSeconds of
+                                                        Just seconds ->
+                                                            Just (seconds // 60)
+
+                                                        Nothing ->
+                                                            model.utcOffsetMinutes
+                                            }
 
                                         Err error ->
                                             { model | weather = WeatherFailed error }
@@ -1695,13 +1709,13 @@ persistConfig =
 
 
 {-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
-checks and USB stick search.
+checks and USB stick search, and carries the wall clock.
 -}
 fromHost : Result String HostMessage.ToElm -> Msg
 fromHost message =
     case message of
-        Ok HostMessage.Tick ->
-            Tick
+        Ok (HostMessage.Tick time) ->
+            Tick time
 
         Ok other ->
             GotInput (toInput other)
@@ -1723,7 +1737,7 @@ httpAnswered msg =
         GotInput (Err _) ->
             Nothing
 
-        Tick ->
+        Tick _ ->
             Nothing
 
 
@@ -1924,7 +1938,8 @@ networkPanel model =
                 , borderAndFill = Ui.defaultElBorderAndFill
                 }
                 (Ui.column { spacing = 4, padding = Ui.noPadding }
-                    (wiredRows model
+                    (clockRows model
+                        ++ wiredRows model
                         ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
                                 []
 
@@ -1939,6 +1954,19 @@ networkPanel model =
                 )
             )
         )
+
+
+{-| The date and time, once the host has said (each second). In UTC until the weather
+says where this computer is.
+-}
+clockRows : Model -> List (Ui.Element UiId)
+clockRows model =
+    case model.time of
+        Just time ->
+            [ Ui.text bodySize sans (Clock.toString model.utcOffsetMinutes time) ]
+
+        Nothing ->
+            []
 
 
 {-| Two lines for each wired card: its name, and whether it has a cable and an address.

@@ -48,7 +48,7 @@
     {"dataDisk": {"path": null, "httpInFlight": []}},
     {"switching": {"to": "3f2a9c1"}},
     {"reflashNeeded": {"build": "eca6a3aa4c51"}},
-    "tick",
+    {"tick": {"time": 1794701441123}},
     {"snapshot": {"text": "5 12345678 [1]\n"}},
     {"snapshot": {"text": null}},
     {"replayDone": {"upto": 300}},

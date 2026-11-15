@@ -14,6 +14,7 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Ipv4 exposing (Ipv4)
 import Postcard as P
+import Time
 import Wifi
 import Wired
 
@@ -71,8 +72,9 @@ type ToElm
     | Switching String
       -- The newest deployed build, which needs the USB stick flashed again (Main.elm).
     | ReflashNeeded String
-      -- Once a second.
-    | Tick
+      -- Once a second, with the wall clock (the host's CLOCK_REALTIME, set from the
+      -- network: host/init/src/net/ntp.rs).
+    | Tick Time.Posix
       -- The snapshot file's text (Persist.elm).
     | Snapshot (Maybe String)
       -- After the logged messages Persist asked for again: the number of the last one
@@ -210,7 +212,7 @@ decoder =
                         BD.map ReflashNeeded P.decodeString
 
                     24 ->
-                        BD.succeed Tick
+                        BD.map (\ms -> Tick (Time.millisToPosix (round ms))) P.decodeFloat64
 
                     25 ->
                         BD.map Snapshot (P.decodeMaybe P.decodeString)
