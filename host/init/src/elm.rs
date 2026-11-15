@@ -82,12 +82,12 @@ fn hang_after() -> Duration {
 }
 
 /// The messages that describe how things are, of which only the newest matters, in
-/// the order a new program gets them: the screen first, as Elm expects.
+/// the order a new program gets them: the displays first, as Elm expects.
 const LATEST_KINDS: usize = 11;
 
 fn latest_slot(msg: &ToElm) -> Option<usize> {
     Some(match msg {
-        ToElm::Screen { .. } => 0,
+        ToElm::Displays { .. } => 0,
         ToElm::Renderer { .. } => 1,
         ToElm::System { .. } => 2,
         ToElm::Boot { .. } => 3,

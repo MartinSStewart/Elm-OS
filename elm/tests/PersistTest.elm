@@ -3,6 +3,7 @@ module PersistTest exposing (suite)
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
+import Coord
 import Dict exposing (Dict)
 import Effect exposing (Effect)
 import ElmOs
@@ -21,7 +22,10 @@ toolbar's text editor button, typing, and the clock ticking.
 -}
 session : List HostIn
 session =
-    [ Ok (HostMessage.Screen 1280 800)
+    [ Ok
+        (HostMessage.Displays
+            [ { id = 33, name = "eDP-1", position = Coord.xy 0 0, size = Coord.xy 1280 800, sizeMm = ( 0, 0 ) } ]
+        )
     , Ok (HostMessage.Renderer { gpu = False, name = "rasteriser in /init", hardwareCursor = False })
     , Ok (HostMessage.Frame 1000.5)
     , Ok (HostMessage.Frame 1017.25)

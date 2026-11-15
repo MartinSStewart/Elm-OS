@@ -51,7 +51,8 @@ port fromHost : (Bytes -> msg) -> Sub msg
 
 
 type Effect
-    = Render (() -> List (Triangle DevicePixels))
+    = -- What each display shows (by Display.id), in its own pixels.
+      Render (() -> List { display : Int, triangles : List (Triangle DevicePixels) })
       -- The mouse cursor's fill colour and the UI scale. The host draws the cursor on
       -- the display's cursor plane and moves it as the mouse moves, without waiting
       -- for a frame. The scale sets the cursor's size and how fast the mouse moves it,
@@ -215,8 +216,14 @@ renderBytes triangles =
 encode : Effect -> BE.Encoder
 encode effect =
     case effect of
-        Render triangles ->
-            Postcard.variant 0 [ Postcard.bytes (renderBytes (triangles ())) ]
+        Render scenes ->
+            Postcard.variant 0
+                [ Postcard.list
+                    (\{ display, triangles } ->
+                        BE.sequence [ Postcard.unsigned display, Postcard.bytes (renderBytes triangles) ]
+                    )
+                    (scenes ())
+                ]
 
         SetCursor { color, scale } ->
             Postcard.variant 1 [ Postcard.unsigned (Color.toInt color), Postcard.unsigned (Units.scaleInt scale) ]

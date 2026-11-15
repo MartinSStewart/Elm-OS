@@ -195,6 +195,54 @@ fn send_button(b: i32, down: bool) {
     elm::send(&ToElm::Button { b, down });
 }
 
+/// Where the pointer can go: the displays' rectangles (x, y, w, h), side by side in
+/// one space (protocol::Display).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Area {
+    pub rects: Vec<(i32, i32, u32, u32)>,
+}
+
+impl Area {
+    /// One w x h display.
+    pub fn single(w: u32, h: u32) -> Area {
+        Area { rects: vec![(0, 0, w.max(1), h.max(1))] }
+    }
+
+    /// The smallest rectangle around every display.
+    pub fn bounds(&self) -> (i32, i32, u32, u32) {
+        let x0 = self.rects.iter().map(|r| r.0).min().unwrap_or(0);
+        let y0 = self.rects.iter().map(|r| r.1).min().unwrap_or(0);
+        let x1 = self.rects.iter().map(|r| r.0 + r.2 as i32).max().unwrap_or(1);
+        let y1 = self.rects.iter().map(|r| r.1 + r.3 as i32).max().unwrap_or(1);
+        (x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32)
+    }
+
+    /// The display (an index into `rects`) the point is on, if any.
+    pub fn find(&self, x: i32, y: i32) -> Option<usize> {
+        self.rects
+            .iter()
+            .position(|&(rx, ry, w, h)| x >= rx && y >= ry && x < rx + w as i32 && y < ry + h as i32)
+    }
+
+    /// The point on a display nearest to (x, y): the pointer can't leave the
+    /// displays, and slides along an edge that has no display past it.
+    pub fn clamp(&self, x: i32, y: i32) -> (i32, i32) {
+        if self.find(x, y).is_some() {
+            return (x, y);
+        }
+        self.rects
+            .iter()
+            .map(|&(rx, ry, w, h)| (x.clamp(rx, rx + w as i32 - 1), y.clamp(ry, ry + h as i32 - 1)))
+            .min_by_key(|&(cx, cy)| (cx - x) as i64 * (cx - x) as i64 + (cy - y) as i64 * (cy - y) as i64)
+            .unwrap_or((x, y))
+    }
+
+    /// The width of the display the point is on (or the first display).
+    fn width_at(&self, x: i32, y: i32) -> u32 {
+        self.find(x, y).or(if self.rects.is_empty() { None } else { Some(0) }).map_or(1, |i| self.rects[i].2)
+    }
+}
+
 pub struct Inputs {
     devices: Vec<Device>,
     pub mouse_x: i32,
@@ -226,13 +274,14 @@ pub fn acceleration(velocity: f64) -> f64 {
 }
 
 impl Inputs {
-    /// No devices yet: the pointer starts in the middle of a w x h screen, and the
+    /// No devices yet: the pointer starts in the middle of the first display, and the
     /// first scan() opens the devices.
-    pub fn new(w: u32, h: u32) -> Inputs {
+    pub fn new(area: &Area) -> Inputs {
+        let (x, y, w, h) = area.rects.first().copied().unwrap_or((0, 0, 1, 1));
         Inputs {
             devices: Vec::new(),
-            mouse_x: w as i32 / 2,
-            mouse_y: h as i32 / 2,
+            mouse_x: x + w as i32 / 2,
+            mouse_y: y + h as i32 / 2,
             tap_release_at: None,
             tap_button: 0,
             scale: 1.0,
@@ -271,16 +320,15 @@ impl Inputs {
     /// button pressed in the same read must come after the motion before it, or the
     /// click lands where the pointer was. This happens when the system is slow to read
     /// its input, as in QEMU without KVM, and on a quick move-and-click.
-    fn send_motion_first(&mut self, moved: bool, w: u32, h: u32) {
+    fn send_motion_first(&mut self, moved: bool, area: &Area) {
         if moved {
-            self.mouse_x = self.mouse_x.clamp(0, w as i32 - 1);
-            self.mouse_y = self.mouse_y.clamp(0, h as i32 - 1);
+            (self.mouse_x, self.mouse_y) = area.clamp(self.mouse_x, self.mouse_y);
             elm::send(&ToElm::Mouse { x: self.mouse_x, y: self.mouse_y });
         }
     }
 
     /// Reads device `i` (index into fds()). Returns whether the pointer moved.
-    pub fn read(&mut self, i: usize, w: u32, h: u32) -> bool {
+    pub fn read(&mut self, i: usize, area: &Area) -> bool {
         let mut moved = false;
         let mut buf = [0u8; std::mem::size_of::<InputEvent>() * 64];
         loop {
@@ -290,7 +338,7 @@ impl Inputs {
                     for chunk in buf[..n].chunks_exact(std::mem::size_of::<InputEvent>()) {
                         // SAFETY: the kernel writes whole input_event structs.
                         let ev: InputEvent = unsafe { std::ptr::read_unaligned(chunk.as_ptr() as *const InputEvent) };
-                        self.handle(i, &ev, w, h, &mut moved);
+                        self.handle(i, &ev, area, &mut moved);
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => {
@@ -308,8 +356,10 @@ impl Inputs {
     }
 
     /// Touchpad finger motion: move the pointer by the finger's movement. A full
-    /// swipe across the pad moves the pointer about one and a half screen widths.
-    fn touchpad_axis(&mut self, i: usize, code: u16, value: i32, w: u32, moved: &mut bool) {
+    /// swipe across the pad moves the pointer about one and a half screen widths (of
+    /// the display it is on).
+    fn touchpad_axis(&mut self, i: usize, code: u16, value: i32, area: &Area, moved: &mut bool) {
+        let w = area.width_at(self.mouse_x, self.mouse_y);
         let dev = &mut self.devices[i];
         if !dev.touching {
             return;
@@ -371,7 +421,7 @@ impl Inputs {
         *moved = true;
     }
 
-    fn handle(&mut self, i: usize, ev: &InputEvent, w: u32, h: u32, moved: &mut bool) {
+    fn handle(&mut self, i: usize, ev: &InputEvent, area: &Area, moved: &mut bool) {
         let event_time = ev.sec as f64 + ev.usec as f64 / 1e6;
         let (touchpad, has_abs) = (self.devices[i].touchpad, self.devices[i].has_abs);
         match ev.type_ {
@@ -417,19 +467,21 @@ impl Inputs {
             }
             EV_ABS if touchpad => {
                 if ev.code == ABS_X || ev.code == ABS_Y {
-                    self.touchpad_axis(i, ev.code, ev.value, w, moved);
+                    self.touchpad_axis(i, ev.code, ev.value, area, moved);
                 }
             }
             EV_ABS if has_abs => {
+                // A tablet (QEMU's) spans every display.
                 let d = &self.devices[i];
+                let (x0, y0, w, h) = area.bounds();
                 if ev.code == ABS_X {
-                    self.mouse_x =
-                        ((ev.value - d.ax.minimum) as i64 * w as i64 / (d.ax.maximum - d.ax.minimum + 1) as i64) as i32;
+                    self.mouse_x = x0
+                        + ((ev.value - d.ax.minimum) as i64 * w as i64 / (d.ax.maximum - d.ax.minimum + 1) as i64) as i32;
                     *moved = true;
                 }
                 if ev.code == ABS_Y {
-                    self.mouse_y =
-                        ((ev.value - d.ay.minimum) as i64 * h as i64 / (d.ay.maximum - d.ay.minimum + 1) as i64) as i32;
+                    self.mouse_y = y0
+                        + ((ev.value - d.ay.minimum) as i64 * h as i64 / (d.ay.maximum - d.ay.minimum + 1) as i64) as i32;
                     *moved = true;
                 }
             }
@@ -465,7 +517,7 @@ impl Inputs {
                             && event_time - dev.touch_start < 0.25
                         {
                             self.tap_button = if dev.fingers >= 2 { 1 } else { 0 }; // two-finger tap: right click
-                            self.send_motion_first(*moved, w, h);
+                            self.send_motion_first(*moved, area);
                             send_button(self.tap_button, true);
                             self.tap_release_at = Some(sys::now() + 0.15);
                         }
@@ -489,7 +541,7 @@ impl Inputs {
                     if touchpad {
                         dev.tap_clicked = true;
                     }
-                    self.send_motion_first(*moved, w, h);
+                    self.send_motion_first(*moved, area);
                     send_button(
                         match ev.code {
                             BTN_LEFT => 0,
@@ -509,8 +561,7 @@ impl Inputs {
             }
             _ => {}
         }
-        self.mouse_x = self.mouse_x.clamp(0, w as i32 - 1);
-        self.mouse_y = self.mouse_y.clamp(0, h as i32 - 1);
+        (self.mouse_x, self.mouse_y) = area.clamp(self.mouse_x, self.mouse_y);
     }
 }
 
@@ -526,7 +577,7 @@ mod tests {
             resolution: 10,
             ..AbsInfo::default()
         };
-        let mut inputs = Inputs::new(1000, 600);
+        let mut inputs = Inputs::new(&Area::single(1000, 600));
         let null = File::open("/dev/null").unwrap();
         inputs
             .devices
@@ -543,7 +594,7 @@ mod tests {
                 value,
                 ..InputEvent::default()
             };
-            inputs.handle(0, &ev, 1000, 600, &mut moved);
+            inputs.handle(0, &ev, &Area::single(1000, 600), &mut moved);
         }
         elm::take_queued()
             .into_iter()
@@ -555,6 +606,21 @@ mod tests {
         msgs.iter()
             .map(|m| if let ToElm::Wheel { dy } = m { *dy } else { 0 })
             .sum()
+    }
+
+    #[test]
+    fn the_pointer_stays_on_the_displays() {
+        // A 2560 x 1600 panel with a 1920 x 1080 screen to its right, tops lined up.
+        let area = Area { rects: vec![(0, 0, 2560, 1600), (2560, 0, 1920, 1080)] };
+        assert_eq!(area.clamp(3000, 500), (3000, 500));
+        assert_eq!(area.find(3000, 500), Some(1));
+        // Below the smaller screen: back up onto it, or left onto the panel.
+        assert_eq!(area.clamp(3000, 1100), (3000, 1079));
+        assert_eq!(area.clamp(2600, 1500), (2559, 1500));
+        assert_eq!(area.clamp(-5, -5), (0, 0));
+        assert_eq!(area.clamp(5000, 10), (4479, 10));
+        assert_eq!(area.bounds(), (0, 0, 4480, 1600));
+        assert_eq!(Inputs::new(&area).mouse_x, 1280);
     }
 
     // One test, as the queue it reads is shared by every test thread.

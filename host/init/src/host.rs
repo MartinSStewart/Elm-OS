@@ -1,7 +1,8 @@
 //! The host thread: the display, input devices, frames and stats.
 //!
 //!   - starts the GPU renderer (gpu.rs) and, if there is no usable GPU, opens the
-//!     first DRM card itself and draws on the CPU into a dumb buffer instead,
+//!     first DRM card itself and draws on the CPU into dumb buffers instead, one for
+//!     each connected display,
 //!   - reads every input device (input.rs) and sends events to Elm; a touchpad works
 //!     like a mouse, and the power button powers the machine off,
 //!   - asks Elm for a frame ({"t":"frame","time":MS}) whenever the screen can show a
@@ -15,18 +16,18 @@
 //! ELMOS_RENDERER=gpu to use Mesa even when it only has a software driver.
 //!
 //! Also sends Elm:
-//!   {"t":"screen","w":W,"h":H}                     first, to each Elm program (elm.rs)
+//!   {"t":"displays","displays":[...]}             first, to each Elm program (elm.rs)
 //!   {"t":"renderer","gpu":true,"name":"...","hardwareCursor":true}   which renderer draws
 //!   {"t":"system","kernel":K,"cpu":C,"commit":G}   for the about page
 //!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
 use common::atlas::{self, Tri};
-use protocol::{PowerAction, ToElm};
+use protocol::{Display, PowerAction, ToElm};
 
 use crate::display::CpuDisplay;
 use crate::effects::{self, Effect, FromElm};
 use crate::gpu::Gpu;
-use crate::input::Inputs;
+use crate::input::{Area, Inputs};
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
@@ -55,10 +56,13 @@ enum Renderer {
     Nothing,
 }
 
+/// Each display's triangles, by display id.
+type Scenes = Vec<(u32, Vec<Tri>)>;
+
 struct Host {
     renderer: Renderer,
-    w: u32,
-    h: u32,
+    /// Side by side in the space the mouse moves through.
+    displays: Vec<Display>,
     software_cursor: bool,
     hw_cursor: bool,
     cursor_scale: usize,
@@ -96,8 +100,11 @@ impl Host {
             );
             on_plane
         };
-        self.w = d.w;
-        self.h = d.h;
+        self.displays = d
+            .outputs
+            .iter()
+            .map(|o| display(&o.out))
+            .collect();
         self.renderer = Renderer::Cpu(d, atlas::build());
         true
     }
@@ -117,14 +124,24 @@ impl Host {
         }
     }
 
+    fn area(&self) -> Area {
+        if self.displays.is_empty() {
+            return Area::single(640, 480);
+        }
+        Area { rects: self.displays.iter().map(|d| (d.x, d.y, d.w, d.h)).collect() }
+    }
+
     fn cursor_move(&mut self) {
         if !self.hw_cursor {
             return;
         }
         let (x, y) = (self.inputs.mouse_x, self.inputs.mouse_y);
+        let Some(i) = self.area().find(x, y) else { return };
+        let d = &self.displays[i];
+        let (id, lx, ly) = (d.id, x - d.x, y - d.y);
         match &mut self.renderer {
-            Renderer::Gpu(g) => g.cursor_move(x, y),
-            Renderer::Cpu(d, _) => d.cursor_move(x, y),
+            Renderer::Gpu(g) => g.cursor_move(id, lx, ly),
+            Renderer::Cpu(d, _) => d.cursor_move(i, lx, ly),
             Renderer::Nothing => {}
         }
     }
@@ -153,25 +170,50 @@ impl Host {
         self.cpu_next_at = None;
     }
 
-    fn draw(&mut self, tris: &[Tri]) {
+    fn draw(&mut self, scenes: &Scenes) {
         if let Renderer::Gpu(g) = &mut self.renderer {
-            if g.send_frame(tris) {
+            if g.send_frame(scenes) {
                 return;
             }
             log!("host", "GPU renderer stopped; drawing on the CPU");
             self.renderer = Renderer::Nothing; // stops it, so we can take the display
+            let before = self.displays.clone();
             if !self.open_cpu() {
                 return;
             }
             self.send_renderer();
+            if self.displays != before {
+                self.send_displays();
+            }
         }
         if let Renderer::Cpu(d, atlas) = &mut self.renderer {
-            d.back.fill(0);
-            for t in tris {
-                raster::fill_triangle(&mut d.back, d.stride, d.w, d.h, atlas, t);
+            for i in 0..d.outputs.len() {
+                let o = &mut d.outputs[i];
+                o.back.fill(0);
+                let (w, h) = (o.out.w(), o.out.h());
+                for (_, tris) in scenes.iter().filter(|(id, _)| *id == o.out.connector) {
+                    for t in tris {
+                        raster::fill_triangle(&mut o.back, o.stride, w, h, atlas, t);
+                    }
+                }
+                d.present(i);
             }
-            d.present();
         }
+    }
+
+    /// An error screen (error_screen.rs) on every display, if one is up.
+    fn error_scenes(&self) -> Option<Scenes> {
+        self.displays
+            .iter()
+            .map(|d| Some((d.id, error_screen::current(d.w, d.h)?)))
+            .collect()
+    }
+
+    /// Tells Elm the displays, and keeps the pointer on them.
+    fn send_displays(&mut self) {
+        elm::send(&ToElm::Displays { displays: self.displays.clone() });
+        let area = self.area();
+        (self.inputs.mouse_x, self.inputs.mouse_y) = area.clamp(self.inputs.mouse_x, self.inputs.mouse_y);
     }
 
     /// For the boot time: call when a frame is on screen.
@@ -274,19 +316,33 @@ impl Host {
         if cursor_dirty {
             self.cursor_redraw();
         }
-        if let Some(mut tris) = scene {
+        if let Some(mut scenes) = scene {
             // An error screen (error_screen.rs) is drawn in place of Elm's frames.
-            if let Some(error) = error_screen::current(self.w, self.h) {
-                tris = error;
+            if let Some(error) = self.error_scenes() {
+                scenes = error;
             }
             let start = now();
             if self.awaiting_render {
                 self.stats.elm.push(start - self.asked_at);
             }
-            self.draw(&tris);
+            self.draw(&scenes);
             self.stats.draw.push(now() - start);
             self.scene_drawn();
         }
+    }
+}
+
+/// What Elm is told about a display the CPU renderer drives.
+fn display(o: &common::drm::Output) -> Display {
+    Display {
+        id: o.connector,
+        name: o.name.clone(),
+        x: o.x,
+        y: o.y,
+        w: o.w(),
+        h: o.h(),
+        width_mm: o.mm_width,
+        height_mm: o.mm_height,
     }
 }
 
@@ -340,8 +396,7 @@ pub fn run() -> ! {
     let software_cursor = std::env::var("ELMOS_CURSOR").as_deref() == Ok("software");
     let mut host = Host {
         renderer: Renderer::Nothing,
-        w: 640,
-        h: 480,
+        displays: Vec::new(),
         software_cursor,
         hw_cursor: false,
         cursor_scale: 1,
@@ -362,27 +417,39 @@ pub fn run() -> ! {
         cpu_next_at: None,
         gpu_progress_at: 0.0,
         stats: Stats::default(),
-        inputs: Inputs::new(0, 0),
+        inputs: Inputs::new(&Area::single(640, 480)),
         elm_started_at: None,
         program: 0,
     };
     // The cursor's size depends on the screen's, which we only know once a renderer is
     // up; both renderers draw the cursor themselves at start, so fix it up after.
     if let Some(g) = Gpu::start(software_cursor) {
-        host.w = g.w;
-        host.h = g.h;
+        host.displays = g.displays.clone();
         host.hw_cursor = g.cursor_plane;
         host.renderer = Renderer::Gpu(g);
     } else if !host.open_cpu() {
         log!("host", "no display; input only");
     }
+    if host.displays.is_empty() {
+        // Input only: Elm still lays out for a screen.
+        host.displays.push(Display {
+            id: 0,
+            name: "none".into(),
+            x: 0,
+            y: 0,
+            w: 640,
+            h: 480,
+            width_mm: 0,
+            height_mm: 0,
+        });
+    }
     // A guess until Elm sends its UI scale (Units.scaleFor) with the cursor colour.
-    host.cursor_scale = if host.w >= 2000 { 2 } else { 1 };
+    host.cursor_scale = if host.displays[0].w >= 2000 { 2 } else { 1 };
     host.cursor_redraw();
 
-    // Each Elm program gets the screen first (elm.rs keeps it for the next one).
-    elm::send(&ToElm::Screen { w: host.w, h: host.h });
-    host.inputs = Inputs::new(host.w, host.h);
+    // Each Elm program gets the displays first (elm.rs keeps them for the next one).
+    host.inputs = Inputs::new(&host.area());
+    host.send_displays();
     host.inputs.scale = host.cursor_scale as f64;
     host.inputs.scan();
     host.cursor_move();
@@ -454,9 +521,9 @@ pub fn run() -> ! {
         }
         // An error screen shown or changed since the last turn (one hidden is replaced
         // by Elm's next frame).
-        if let Some(tris) = error_screen::changed(host.w, host.h) {
-            if !tris.is_empty() {
-                host.draw(&tris);
+        if error_screen::changed() == Some(true) {
+            if let Some(scenes) = host.error_scenes() {
+                host.draw(&scenes);
             }
         }
         if fds[1].revents != 0 {
@@ -485,9 +552,10 @@ pub fn run() -> ! {
         }
         // Backwards, because reading a device that has gone removes it from the list.
         let mut moved = false;
+        let area = host.area();
         for i in (0..input_fds.len()).rev() {
             if fds[2 + i].revents != 0 {
-                moved |= host.inputs.read(i, host.w, host.h);
+                moved |= host.inputs.read(i, &area);
             }
         }
         if moved {

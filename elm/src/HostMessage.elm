@@ -12,6 +12,7 @@ program (Main.persistConfig.fromHost).
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
+import Display exposing (Display)
 import Ipv4 exposing (Ipv4)
 import Postcard as P
 import Time
@@ -20,8 +21,9 @@ import Wired
 
 
 type ToElm
-    = -- First, once: the screen's size in pixels.
-      Screen Int Int
+    = -- First: the connected displays, the built-in one (if any) first. Sent again
+      -- whenever they change.
+      Displays (List Display)
       -- Draw a frame now: the host's monotonic clock, in milliseconds.
     | Frame Float
     | Mouse Int Int
@@ -117,7 +119,7 @@ decoder =
             (\index ->
                 case index of
                     0 ->
-                        BD.map2 Screen P.decodeUnsigned P.decodeUnsigned
+                        BD.map Displays (P.decodeList Display.decoder)
 
                     1 ->
                         BD.map Frame P.decodeFloat64

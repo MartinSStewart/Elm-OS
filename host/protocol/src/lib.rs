@@ -59,13 +59,43 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
     )
 }
 
+/// What one display shows: triangles as `read_render` reads them, in that display's
+/// own pixels (0, 0 is its top left corner). The triangles are a byte string, so eco
+/// and the host copy them rather than look at each number.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Scene {
+    /// `Display::id`.
+    pub display: u32,
+    #[serde(with = "serde_bytes")]
+    pub triangles: Vec<u8>,
+}
+
+/// A screen the host draws on. Displays sit side by side in one space that the mouse
+/// moves through (`ToElm::Mouse` is in it): `x`, `y` is where the display's top left
+/// corner is in that space, in pixels.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Display {
+    /// The DRM connector's id: the same for the same socket from one boot to the next.
+    pub id: u32,
+    /// The connector's name as Linux gives it, such as "eDP-1" or "HDMI-A-1".
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    /// Its physical size in millimetres, 0 if the screen didn't say.
+    pub width_mm: u32,
+    pub height_mm: u32,
+}
+
 /// What Elm asks the host to do.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum Effect {
-    /// The scene to draw, once a frame: triangles as `read_render` reads them. A byte
-    /// string, so eco and the host copy it rather than look at each number.
-    Render(#[serde(with = "serde_bytes")] Vec<u8>),
+    /// The scene to draw on each display, once a frame (see `Scene`).
+    Render(Vec<Scene>),
     /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
     /// sets the cursor's size and how far mouse motion moves it.
     Cursor { rgba: u32, scale: u32 },
@@ -151,8 +181,9 @@ pub struct HttpRequest {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ToElm {
-    /// First, once: the screen's size in pixels.
-    Screen { w: u32, h: u32 },
+    /// First: the connected displays, the built-in one (if any) first. Sent again
+    /// whenever they change.
+    Displays { displays: Vec<Display> },
     /// Draw a frame now. The host's monotonic clock, in milliseconds.
     Frame { time: f64 },
     Mouse { x: i32, y: i32 },
@@ -415,7 +446,7 @@ mod tests {
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
-            ToElm::Screen { .. } => "screen",
+            ToElm::Displays { .. } => "displays",
             ToElm::Frame { .. } => "frame",
             ToElm::Mouse { .. } => "mouse",
             ToElm::Button { .. } => "button",
@@ -452,10 +483,13 @@ mod tests {
     #[test]
     fn reads_the_render_example() {
         let render = examples("toHost").into_iter().find(|e| tag(e) == "render").unwrap();
-        let Effect::Render(bytes) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
+        let Effect::Render(scenes) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
+        assert_eq!(scenes.iter().map(|s| s.display).collect::<Vec<_>>(), vec![33, 34]);
+        assert_eq!(read_render(&scenes[1].triangles), Some(vec![]));
+        let bytes = &scenes[0].triangles;
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
-            read_render(&bytes),
+            read_render(bytes),
             Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff }])
         );
         assert_eq!(read_render(&bytes[1..]), None);

@@ -2,12 +2,16 @@
 //! binary, and Mesa's drivers are shared libraries that can't be loaded into it, so
 //! the renderer is its own dynamically linked program that owns the display.
 //!
-//!   its stdin  <- frames: u32 count, then that many Tri (common/src/atlas.rs)
-//!   its stdout -> "ok W H CURSOR RENDERER" once the display is up; then "f GPU_NS"
-//!                 for each frame shown, or "d" for one skipped
-//!   its fd 3   <- cursor commands: "m X Y" moves it, "c RGBA S" redraws it
+//!   its stdin  <- frames: u32 number of scenes, then for each the display's connector
+//!                 id, a u32 count and that many Tri (common/src/atlas.rs)
+//!   its stdout -> "out CONNECTOR X Y W H MM_W MM_H NAME" for each display, then
+//!                 "ok CURSOR RENDERER" once they are up; then "f GPU_NS" for each
+//!                 frame shown, or "d" for one skipped
+//!   its fd 3   <- cursor commands: "m CONNECTOR X Y" shows it at X, Y on that display
+//!                 (and on no other), "c RGBA S" redraws it
 
 use common::atlas::Tri;
+use protocol::Display;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -21,8 +25,8 @@ pub struct Gpu {
     frames: File,
     acks: Option<File>,
     cursor: File,
-    pub w: u32,
-    pub h: u32,
+    /// The displays it drives, as it arranged them.
+    pub displays: Vec<Display>,
     /// The renderer drew the cursor on a cursor plane.
     pub cursor_plane: bool,
     pub name: String,
@@ -39,6 +43,26 @@ fn pipe() -> Option<(File, File)> {
     Some(unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) })
 }
 
+/// "out CONNECTOR X Y W H MM_W MM_H NAME"
+fn parse_display(line: &str) -> Option<Display> {
+    let mut f = line.splitn(9, ' ');
+    if f.next()? != "out" {
+        return None;
+    }
+    let mut num = || f.next()?.parse::<i64>().ok();
+    let (id, x, y, w, h, mm_w, mm_h) = (num()?, num()?, num()?, num()?, num()?, num()?, num()?);
+    Some(Display {
+        id: id as u32,
+        x: x as i32,
+        y: y as i32,
+        w: w as u32,
+        h: h as u32,
+        width_mm: mm_w as u32,
+        height_mm: mm_h as u32,
+        name: f.next().unwrap_or("").to_owned(),
+    })
+}
+
 fn set_nonblocking(f: &File) {
     // SAFETY: fcntl on a descriptor we own.
     unsafe {
@@ -48,7 +72,7 @@ fn set_nonblocking(f: &File) {
 }
 
 impl Gpu {
-    /// Starts the renderer and waits for it to report "ok W H CURSOR RENDERER".
+    /// Starts the renderer and waits for it to report its displays and "ok".
     pub fn start(software_cursor: bool) -> Option<Gpu> {
         if std::env::var("ELMOS_RENDERER").as_deref() == Ok("cpu") {
             return None;
@@ -85,31 +109,38 @@ impl Gpu {
         let mut out = unsafe { File::from_raw_fd(std::os::fd::IntoRawFd::into_raw_fd(child.stdout.take()?)) };
 
         // Loading Mesa can take a while under emulation.
-        let mut line = Vec::new();
-        let mut byte = [0u8; 1];
-        loop {
-            let mut pfd = [crate::sys::pollfd(out.as_raw_fd())];
-            crate::sys::poll(&mut pfd, std::time::Duration::from_secs(60));
-            if pfd[0].revents == 0 || line.len() >= 255 {
-                break;
+        let mut displays = Vec::new();
+        let mut answer = None;
+        while answer.is_none() {
+            let mut line = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                let mut pfd = [crate::sys::pollfd(out.as_raw_fd())];
+                crate::sys::poll(&mut pfd, std::time::Duration::from_secs(60));
+                if pfd[0].revents == 0 || line.len() >= 255 {
+                    break;
+                }
+                match out.read(&mut byte) {
+                    Ok(1) if byte[0] != b'\n' => line.push(byte[0]),
+                    _ => break,
+                }
             }
-            match out.read(&mut byte) {
-                Ok(1) if byte[0] != b'\n' => line.push(byte[0]),
-                _ => break,
+            let line = String::from_utf8_lossy(&line).into_owned();
+            match parse_display(&line) {
+                Some(d) => displays.push(d),
+                None => answer = Some(line),
             }
         }
-        let line = String::from_utf8_lossy(&line).into_owned();
-        let mut parts = line.splitn(5, ' ');
+        let line = answer.unwrap_or_default();
+        let mut parts = line.splitn(3, ' ');
         let parsed = (|| {
-            if parts.next()? != "ok" {
+            if parts.next()? != "ok" || displays.is_empty() {
                 return None;
             }
-            let w = parts.next()?.parse().ok()?;
-            let h = parts.next()?.parse().ok()?;
             let hw: i32 = parts.next()?.parse().ok()?;
-            Some((w, h, hw != 0, parts.next().unwrap_or("").to_string()))
+            Some((hw != 0, parts.next().unwrap_or("").to_string()))
         })();
-        let Some((w, h, plane, name)) = parsed else {
+        let Some((plane, name)) = parsed else {
             log!(
                 "host",
                 "GPU renderer unavailable ({}); drawing on the CPU",
@@ -124,15 +155,16 @@ impl Gpu {
             frames,
             acks: None,
             cursor: cursor_write,
-            w,
-            h,
+            displays,
             cursor_plane: plane && !software_cursor,
             name,
             ack_buf: Vec::new(),
         };
         set_nonblocking(&gpu.cursor);
         if plane && software_cursor {
-            gpu.cursor_command("m -100 -100\n"); // hide it off screen
+            for d in &gpu.displays.clone() {
+                gpu.cursor_command(&format!("m {} -200 0\n", d.id)); // hide it off screen
+            }
         }
         log!(
             "host",
@@ -143,7 +175,9 @@ impl Gpu {
                 "no cursor plane; Elm draws the cursor"
             }
         );
-        log!("host", "display {}x{} on the GPU ({})", w, h, gpu.name);
+        for d in &gpu.displays {
+            log!("host", "display {} {}x{} at {},{} on the GPU ({})", d.name, d.w, d.h, d.x, d.y, gpu.name);
+        }
         set_nonblocking(&out);
         gpu.acks = Some(out);
         Some(gpu)
@@ -158,10 +192,18 @@ impl Gpu {
         self.acks.as_ref().map_or(-1, |f| f.as_raw_fd())
     }
 
-    /// Hands a frame over. False if the renderer is gone.
-    pub fn send_frame(&mut self, tris: &[Tri]) -> bool {
-        let n = tris.len() as u32;
-        self.frames.write_all(&n.to_ne_bytes()).is_ok() && self.frames.write_all(Tri::as_bytes(tris)).is_ok()
+    /// Hands a frame over: each display's triangles. False if the renderer is gone.
+    pub fn send_frame(&mut self, scenes: &[(u32, Vec<Tri>)]) -> bool {
+        let mut head = (scenes.len() as u32).to_ne_bytes().to_vec();
+        for (display, tris) in scenes {
+            head.extend_from_slice(&display.to_ne_bytes());
+            head.extend_from_slice(&(tris.len() as u32).to_ne_bytes());
+            if self.frames.write_all(&head).is_err() || self.frames.write_all(Tri::as_bytes(tris)).is_err() {
+                return false;
+            }
+            head.clear();
+        }
+        head.is_empty() || self.frames.write_all(&head).is_ok()
     }
 
     /// Non-blocking: if the pipe is backed up, skip it (the next move fixes the position).
@@ -169,8 +211,9 @@ impl Gpu {
         let _ = self.cursor.write(line.as_bytes());
     }
 
-    pub fn cursor_move(&mut self, x: i32, y: i32) {
-        self.cursor_command(&format!("m {x} {y}\n"));
+    /// Shows the cursor at x, y on display `id` (in its own pixels).
+    pub fn cursor_move(&mut self, id: u32, x: i32, y: i32) {
+        self.cursor_command(&format!("m {id} {x} {y}\n"));
     }
 
     pub fn cursor_redraw(&mut self, fill: u32, scale: usize) {

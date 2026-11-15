@@ -25,7 +25,8 @@ enum Sent {
 /// What Elm sent, in order.
 pub enum FromElm {
     Effect(Effect),
-    Render(Vec<Tri>),
+    /// Each display's triangles, by display id (protocol::Display).
+    Render(Vec<(u32, Vec<Tri>)>),
     /// A new Elm program (this number, see elm::answer) has started: what follows is
     /// from it.
     Connected(u64),
@@ -106,12 +107,19 @@ pub fn take() -> Vec<FromElm> {
             Sent::Effects(list) => {
                 for effect in list {
                     match effect {
-                        Effect::Render(bytes) => match protocol::read_render(&bytes) {
-                            Some(tris) => effects.push(FromElm::Render(
-                                tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect(),
-                            )),
-                            None => log!("host", "couldn't read Elm's scene: {} bytes", bytes.len()),
-                        },
+                        Effect::Render(scenes) => {
+                            let read: Option<Vec<(u32, Vec<Tri>)>> = scenes
+                                .iter()
+                                .map(|s| {
+                                    let tris = protocol::read_render(&s.triangles)?;
+                                    Some((s.display, tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect()))
+                                })
+                                .collect();
+                            match read {
+                                Some(scenes) => effects.push(FromElm::Render(scenes)),
+                                None => log!("host", "couldn't read Elm's scene"),
+                            }
+                        }
                         effect => effects.push(FromElm::Effect(effect)),
                     }
                 }

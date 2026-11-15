@@ -10,9 +10,10 @@
 //!
 //! What is real and what is made up:
 //!
-//!   - The screen is the window, drawn by the same CPU rasteriser /init uses without a
-//!     GPU (common::raster), with the same atlas. Resizing the window sends Elm the new
-//!     screen size.
+//!   - Each display is a window (--size 1920x1080,1280x800 opens two, as if side by
+//!     side), drawn by the same CPU rasteriser /init uses without a GPU
+//!     (common::raster), with the same atlas. Resizing a window sends Elm the new
+//!     display sizes.
 //!   - Keys, the mouse and the wheel come from the window. Keys go to Elm as the same
 //!     Linux key codes a keyboard sends Elm OS. The cursor is your desktop's, as if it
 //!     were on a cursor plane, so Elm draws its orange "frame lag" copy.
@@ -68,7 +69,7 @@ use std::time::{Duration, Instant};
 
 use common::atlas::{self, Tri};
 use common::raster;
-use protocol::{Effect, PowerAction, ToElm, WifiState};
+use protocol::{Display, Effect, PowerAction, Scene, ToElm, WifiState};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -92,8 +93,8 @@ const PIXELS_PER_CLICK: f64 = 40.0;
 
 struct Options {
     program: PathBuf,
-    w: u32,
-    h: u32,
+    /// Each display's size: a window each.
+    sizes: Vec<(u32, u32)>,
     data: PathBuf,
     rebuild: Option<String>,
     watch: Vec<PathBuf>,
@@ -102,7 +103,7 @@ struct Options {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: elmos-dev [--size WxH] [--data DIR] [--rebuild COMMAND --watch PATH...] [--commit TEXT] PROGRAM\n\
+        "usage: elmos-dev [--size WxH[,WxH...]] [--data DIR] [--rebuild COMMAND --watch PATH...] [--commit TEXT] PROGRAM\n\
          \n\
          Runs PROGRAM (an Elm OS Elm program, build/elm) in a window. `make dev` runs it\n\
          with the right arguments; see host/dev/src/main.rs."
@@ -113,8 +114,7 @@ fn usage() -> ! {
 fn options() -> Options {
     let mut o = Options {
         program: PathBuf::new(),
-        w: 1280,
-        h: 800,
+        sizes: vec![(1280, 800)],
         data: PathBuf::from("dev-data"),
         rebuild: None,
         watch: Vec::new(),
@@ -125,10 +125,13 @@ fn options() -> Options {
         let mut value = || args.next().unwrap_or_else(|| usage());
         match a.as_str() {
             "--size" => {
-                let v = value();
-                let (w, h) = v.split_once('x').unwrap_or_else(|| usage());
-                o.w = w.parse().unwrap_or_else(|_| usage());
-                o.h = h.parse().unwrap_or_else(|_| usage());
+                o.sizes = value()
+                    .split(',')
+                    .map(|size| {
+                        let (w, h) = size.split_once('x').unwrap_or_else(|| usage());
+                        (w.parse().unwrap_or_else(|_| usage()), h.parse().unwrap_or_else(|_| usage()))
+                    })
+                    .collect();
             }
             "--data" => o.data = PathBuf::from(value()),
             "--rebuild" => o.rebuild = Some(value()),
@@ -139,7 +142,7 @@ fn options() -> Options {
             _ => o.program = PathBuf::from(a),
         }
     }
-    if o.program.as_os_str().is_empty() || o.w == 0 || o.h == 0 {
+    if o.program.as_os_str().is_empty() || o.sizes.iter().any(|&(w, h)| w == 0 || h == 0) {
         usage();
     }
     o
@@ -151,16 +154,21 @@ struct Running {
     started: Instant,
 }
 
-/// The window, and what shows our pixels in it.
+/// A display's window, what shows our pixels in it, and what it shows.
 struct Screen {
     window: Rc<Window>,
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
+    w: u32,
+    h: u32,
+    pixels: Vec<u32>,
+    /// The newest scene for it, if not drawn yet.
+    scene: Option<Vec<Tri>>,
 }
 
 struct Runner {
     o: Options,
-    screen: Option<Screen>,
-    pixels: Vec<u32>,
+    /// A window for each display, in the order of `o.sizes`; display i + 1 is screens[i].
+    screens: Vec<Screen>,
     atlas: Vec<u8>,
     data: PathBuf,
     run_dir: PathBuf,
@@ -175,9 +183,8 @@ struct Runner {
     switching: Option<Instant>,
     asked_at: Instant,
     awaiting_frame: bool,
-    scene: Option<Vec<Tri>>,
-    /// The scene in the window, as Elm sent it.
-    shown: Vec<u8>,
+    /// The scenes in the windows, as Elm sent them.
+    shown: Vec<Scene>,
     stats: stats::Stats,
     stats_at: Instant,
     tick_at: Instant,
@@ -199,13 +206,34 @@ struct Runner {
 
 impl Runner {
     fn set_status(&mut self, status: &str) {
-        if let Some(s) = &self.screen {
-            s.window.set_title(&if status.is_empty() {
-                "Elm OS (dev)".to_owned()
-            } else {
-                format!("Elm OS (dev): {status}")
-            });
+        let many = self.screens.len() > 1;
+        for (i, s) in self.screens.iter().enumerate() {
+            let name = if many { format!("Elm OS (dev, display {})", i + 1) } else { "Elm OS (dev)".to_owned() };
+            s.window.set_title(&if status.is_empty() { name } else { format!("{name}: {status}") });
         }
+    }
+
+    /// The windows as displays, side by side in the order given.
+    fn displays(&self) -> Vec<Display> {
+        let mut x = 0;
+        self.screens
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let d = Display {
+                    id: i as u32 + 1,
+                    name: format!("Window-{}", i + 1),
+                    x,
+                    y: 0,
+                    w: s.w,
+                    h: s.h,
+                    width_mm: 0,
+                    height_mm: 0,
+                };
+                x += s.w as i32;
+                d
+            })
+            .collect()
     }
 
     fn start(&mut self) {
@@ -227,9 +255,9 @@ impl Runner {
                 let _ = wake.send_event(());
             }))
             .expect("start the thread that reads from the Elm program");
-        // What /init sends each new program first, the screen first.
+        // What /init sends each new program first, the displays first.
         let mut first = vec![
-            ToElm::Screen { w: self.o.w, h: self.o.h },
+            ToElm::Displays { displays: self.displays() },
             ToElm::Renderer { gpu: false, name: "dev runner (CPU)".into(), hardware_cursor: true },
             system(&self.o.commit),
         ];
@@ -358,23 +386,31 @@ impl Runner {
 
     fn effect(&mut self, effect: Effect) {
         match effect {
-            Effect::Render(bytes) => {
+            Effect::Render(scenes) => {
                 if self.awaiting_frame {
                     self.stats.elm.push(self.asked_at.elapsed().as_secs_f64());
                 }
                 self.awaiting_frame = false;
                 // Elm draws every frame; most are the same as the last. (Unlike /init,
                 // which draws them all, so the debug overlay's raster time is lower here.)
-                if bytes == self.shown {
+                if scenes == self.shown {
                     return;
                 }
-                match protocol::read_render(&bytes) {
-                    Some(tris) => {
-                        self.scene = Some(tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect());
-                        self.shown = bytes;
+                for (i, screen) in self.screens.iter_mut().enumerate() {
+                    let id = i as u32 + 1;
+                    let bytes = scenes.iter().find(|s| s.display == id).map_or(&[][..], |s| &s.triangles[..]);
+                    let before = self.shown.iter().find(|s| s.display == id).map(|s| &s.triangles[..]);
+                    if before == Some(bytes) {
+                        continue;
                     }
-                    None => log!("dev", "couldn't read Elm's scene: {} bytes", bytes.len()),
+                    match protocol::read_render(bytes) {
+                        Some(tris) => {
+                            screen.scene = Some(tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect())
+                        }
+                        None => log!("dev", "couldn't read Elm's scene: {} bytes", bytes.len()),
+                    }
                 }
+                self.shown = scenes;
             }
             // The cursor is the desktop's.
             Effect::Cursor { .. } => {}
@@ -491,42 +527,33 @@ impl Runner {
         self.awaiting_frame = true;
     }
 
-    /// Shows what was last drawn in the window.
-    fn present(&mut self) {
-        let Some(s) = &mut self.screen else { return };
-        let (Some(w), Some(h)) = (NonZeroU32::new(self.o.w), NonZeroU32::new(self.o.h)) else { return };
-        let shown = s.surface.resize(w, h).and_then(|_| {
-            let mut buffer = s.surface.buffer_mut()?;
-            buffer.copy_from_slice(&self.pixels);
-            buffer.present()
-        });
-        if let Err(e) = shown {
-            log!("dev", "drawing the window: {e}");
-        }
-    }
-
-    /// Draws the newest scene, if there is one we haven't.
+    /// Draws the newest scene of each window that has one we haven't.
     fn draw(&mut self) {
-        let Some(tris) = self.scene.take() else { return };
+        if self.screens.iter().all(|s| s.scene.is_none()) {
+            return;
+        }
         let start = Instant::now();
-        // In bands, a thread each: one thread is too slow for a big window.
-        let (w, h) = (self.o.w, self.o.h);
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) as u32;
-        let rows = h.div_ceil(threads).max(1);
         let atlas = &self.atlas;
-        std::thread::scope(|scope| {
-            for (i, band) in self.pixels.chunks_mut((rows * w) as usize).enumerate() {
-                let tris = &tris;
-                scope.spawn(move || {
-                    band.fill(0);
-                    let y0 = i as u32 * rows;
-                    for t in tris {
-                        raster::fill_triangle_rows(band, w as usize, w, y0, (y0 + rows).min(h), atlas, t);
-                    }
-                });
-            }
-        });
-        self.present();
+        for screen in &mut self.screens {
+            let Some(tris) = screen.scene.take() else { continue };
+            // In bands, a thread each: one thread is too slow for a big window.
+            let (w, h) = (screen.w, screen.h);
+            let rows = h.div_ceil(threads).max(1);
+            std::thread::scope(|scope| {
+                for (i, band) in screen.pixels.chunks_mut((rows * w) as usize).enumerate() {
+                    let tris = &tris;
+                    scope.spawn(move || {
+                        band.fill(0);
+                        let y0 = i as u32 * rows;
+                        for t in tris {
+                            raster::fill_triangle_rows(band, w as usize, w, y0, (y0 + rows).min(h), atlas, t);
+                        }
+                    });
+                }
+            });
+            screen.present();
+        }
         self.stats.draw.push(start.elapsed().as_secs_f64());
         if self.boot.is_none() {
             // Since the dev runner started, for the debug overlay's boot time.
@@ -578,26 +605,28 @@ impl Runner {
         next
     }
 
-    fn window_event(&mut self, event: WindowEvent) {
+    fn window_event(&mut self, window: WindowId, event: WindowEvent) {
+        let Some(i) = self.screens.iter().position(|s| s.window.id() == window) else { return };
         match event {
             WindowEvent::CloseRequested => self.quit = true,
             // The window was uncovered, say.
-            WindowEvent::RedrawRequested => self.present(),
+            WindowEvent::RedrawRequested => self.screens[i].present(),
             WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0 && (size.width, size.height) != (self.o.w, self.o.h) {
-                    // Elm takes a new screen size as it does a new program's first
-                    // message, so this also clears its notices.
-                    self.o.w = size.width;
-                    self.o.h = size.height;
-                    self.pixels = vec![0; size.width as usize * size.height as usize];
+                let s = &mut self.screens[i];
+                if size.width > 0 && size.height > 0 && (size.width, size.height) != (s.w, s.h) {
+                    s.w = size.width;
+                    s.h = size.height;
+                    s.pixels = vec![0; size.width as usize * size.height as usize];
                     self.shown.clear();
-                    elm::send(&ToElm::Screen { w: size.width, h: size.height });
+                    elm::send(&ToElm::Displays { displays: self.displays() });
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 // Sent once per turn of the loop (send_mouse), not for each of the
                 // many events a move makes: each is a Msg for Elm, logged to disk.
-                let pos = (position.x.round() as i32, position.y.round() as i32);
+                // In the space the displays share: this window is displays()[i].
+                let x0 = self.displays()[i].x;
+                let pos = (x0 + position.x.round() as i32, position.y.round() as i32);
                 if pos != self.mouse {
                     self.mouse = pos;
                     self.mouse_moved = true;
@@ -644,45 +673,58 @@ impl Runner {
     }
 }
 
+impl Screen {
+    /// Shows what was last drawn in the window.
+    fn present(&mut self) {
+        let (Some(w), Some(h)) = (NonZeroU32::new(self.w), NonZeroU32::new(self.h)) else { return };
+        let shown = self.surface.resize(w, h).and_then(|_| {
+            let mut buffer = self.surface.buffer_mut()?;
+            buffer.copy_from_slice(&self.pixels);
+            buffer.present()
+        });
+        if let Err(e) = shown {
+            log!("dev", "drawing the window: {e}");
+        }
+    }
+}
+
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.screen.is_some() {
+        if !self.screens.is_empty() {
             return;
         }
-        let attributes = Window::default_attributes()
-            .with_title("Elm OS (dev)")
-            .with_inner_size(PhysicalSize::new(self.o.w, self.o.h));
-        let made = event_loop.create_window(attributes).map_err(|e| e.to_string()).and_then(|window| {
-            let window = Rc::new(window);
-            let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
-            let surface = softbuffer::Surface::new(&context, window.clone()).map_err(|e| e.to_string())?;
-            Ok(Screen { window, surface })
-        });
-        match made {
-            Ok(screen) => {
+        for &(w, h) in &self.o.sizes.clone() {
+            let attributes = Window::default_attributes()
+                .with_title("Elm OS (dev)")
+                .with_inner_size(PhysicalSize::new(w, h));
+            let made = event_loop.create_window(attributes).map_err(|e| e.to_string()).and_then(|window| {
+                let window = Rc::new(window);
+                let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
+                let surface = softbuffer::Surface::new(&context, window.clone()).map_err(|e| e.to_string())?;
                 // The window manager may have made it another size.
-                let size = screen.window.inner_size();
-                if size.width > 0 && size.height > 0 {
-                    self.o.w = size.width;
-                    self.o.h = size.height;
+                let size = window.inner_size();
+                let (w, h) = if size.width > 0 && size.height > 0 { (size.width, size.height) } else { (w, h) };
+                Ok(Screen { window, surface, w, h, pixels: vec![0; w as usize * h as usize], scene: None })
+            });
+            match made {
+                Ok(screen) => self.screens.push(screen),
+                Err(e) => {
+                    log!("dev", "can't open a window: {e}");
+                    event_loop.exit();
+                    return;
                 }
-                self.pixels = vec![0; self.o.w as usize * self.o.h as usize];
-                self.screen = Some(screen);
-                self.start();
-            }
-            Err(e) => {
-                log!("dev", "can't open a window: {e}");
-                event_loop.exit();
             }
         }
+        self.set_status("");
+        self.start();
     }
 
     fn user_event(&mut self, _: &ActiveEventLoop, _: ()) {
         // The Elm program sent something: about_to_wait runs next.
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        self.window_event(event);
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window: WindowId, event: WindowEvent) {
+        self.window_event(window, event);
         if self.quit {
             event_loop.exit();
         }
@@ -740,9 +782,8 @@ fn main() {
     );
     elm::open_log(&data.join("log"));
     let mut runner = Runner {
-        pixels: Vec::new(),
         o,
-        screen: None,
+        screens: Vec::new(),
         atlas: atlas::build(),
         data,
         run_dir,
@@ -755,7 +796,6 @@ fn main() {
         switching: None,
         asked_at: Instant::now(),
         awaiting_frame: false,
-        scene: None,
         shown: Vec::new(),
         stats: stats::Stats::new(),
         stats_at: Instant::now(),

@@ -46,13 +46,16 @@ fn die(what: &str) -> ! {
     std::process::exit(1);
 }
 
-/// The first card with a connected display.
-fn open_card() -> Option<(File, drm::Output)> {
+/// The first card with a connected display, and its displays.
+fn open_card() -> Option<(File, Vec<drm::Output>)> {
     for i in 0..8 {
         let Some(card) = drm::open_card(i) else { continue };
-        if let Some(out) = drm::find_output(&card) {
-            eprintln!("[gpu] /dev/dri/card{}: {}x{}", i, out.mode.hdisplay, out.mode.vdisplay);
-            return Some((card, out));
+        let outputs = drm::find_outputs(&card);
+        if !outputs.is_empty() {
+            for o in &outputs {
+                eprintln!("[gpu] /dev/dri/card{}: {} {}x{}", i, o.name, o.w(), o.h());
+            }
+            return Some((card, outputs));
         }
     }
     None
@@ -205,18 +208,26 @@ impl Timer {
     }
 }
 
-/// The cursor plane: a 64 x 64 GBM buffer we write the cursor image into.
+/// A display's cursor plane: a 64 x 64 GBM buffer we write the cursor image into.
 struct CursorPlane {
-    card: Arc<File>,
+    connector: u32,
     crtc: u32,
     bo: *mut gbm_bo,
 }
 
-// SAFETY: after setup, only the cursor thread uses the buffer.
-unsafe impl Send for CursorPlane {}
+/// The cursor planes of every display; the cursor shows on one at a time.
+struct Cursors {
+    card: Arc<File>,
+    planes: Vec<CursorPlane>,
+    /// The connector the cursor is on now.
+    on: u32,
+}
+
+// SAFETY: after setup, only the cursor thread uses the buffers.
+unsafe impl Send for Cursors {}
 
 impl CursorPlane {
-    unsafe fn new(gbm: *mut gbm_device, card: Arc<File>, crtc: u32, scale: usize) -> Option<CursorPlane> {
+    unsafe fn new(gbm: *mut gbm_device, card: &File, out: &drm::Output, scale: usize) -> Option<CursorPlane> {
         let bo = gbm_bo_create(
             gbm,
             CURSOR_PLANE as u32,
@@ -224,15 +235,15 @@ impl CursorPlane {
             GBM_FORMAT_ARGB8888,
             GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE,
         );
-        let c = CursorPlane { card, crtc, bo };
-        if bo.is_null() || !c.draw(0xffff_ffff, scale) {
-            eprintln!("[gpu] no cursor plane");
+        let c = CursorPlane { connector: out.connector, crtc: out.crtc, bo };
+        if bo.is_null() || !c.draw(card, 0xffff_ffff, scale) {
+            eprintln!("[gpu] no cursor plane on {}", out.name);
             return None;
         }
         Some(c)
     }
 
-    fn draw(&self, fill: u32, scale: usize) -> bool {
+    fn draw(&self, card: &File, fill: u32, scale: usize) -> bool {
         let img = atlas::cursor_image(scale, fill);
         // SAFETY: the buffer is 64 x 64 ARGB, the size of img.
         unsafe {
@@ -241,28 +252,35 @@ impl CursorPlane {
             }
         }
         // Setting the cursor again makes drivers that copy it (virtio-gpu) take the new image.
-        drm::set_cursor(
-            &self.card,
-            self.crtc,
-            unsafe { gbm_bo_get_handle(self.bo) } as u32,
-            CURSOR_PLANE as u32,
-        )
+        drm::set_cursor(card, self.crtc, unsafe { gbm_bo_get_handle(self.bo) } as u32, CURSOR_PLANE as u32)
     }
+}
 
-    fn run(self) {
+impl Cursors {
+    fn run(mut self) {
         // SAFETY: /init gives us fd 3 for this.
         let input = BufReader::new(unsafe { File::from_raw_fd(3) });
         for line in input.lines() {
             let Ok(line) = line else { break };
-            let mut f = line.split(' ');
-            match (
-                f.next(),
-                f.next().and_then(|v| v.parse::<i64>().ok()),
-                f.next().and_then(|v| v.parse::<i64>().ok()),
-            ) {
-                (Some("m"), Some(x), Some(y)) => drm::move_cursor(&self.card, self.crtc, x as i32, y as i32),
-                (Some("c"), Some(fill), Some(scale)) => {
-                    self.draw(fill as u32, scale.max(1) as usize);
+            let f: Vec<i64> = line.split(' ').skip(1).filter_map(|v| v.parse::<i64>().ok()).collect();
+            match (line.split(' ').next(), f.as_slice()) {
+                (Some("m"), &[connector, x, y]) => {
+                    let connector = connector as u32;
+                    if connector != self.on {
+                        // Off screen on the display it leaves.
+                        for p in self.planes.iter().filter(|p| p.connector == self.on) {
+                            drm::move_cursor(&self.card, p.crtc, -2 * CURSOR_PLANE as i32, 0);
+                        }
+                        self.on = connector;
+                    }
+                    for p in self.planes.iter().filter(|p| p.connector == connector) {
+                        drm::move_cursor(&self.card, p.crtc, x as i32, y as i32);
+                    }
+                }
+                (Some("c"), &[fill, scale]) => {
+                    for p in &self.planes {
+                        p.draw(&self.card, fill as u32, scale.max(1) as usize);
+                    }
                 }
                 _ => {}
             }
@@ -281,18 +299,32 @@ struct Vertex {
     rgba: [u8; 4],
 }
 
-/// Reads one frame from /init: a count, then that many triangles. None when /init is gone.
-fn read_frame(input: &mut File, tris: &mut Vec<Tri>) -> Option<()> {
+fn read_u32(input: &mut File) -> Option<u32> {
     let mut n = [0u8; 4];
     input.read_exact(&mut n).ok()?;
-    let n = u32::from_ne_bytes(n) as usize;
-    if n > 1_000_000 {
-        die("absurd triangle count");
+    Some(u32::from_ne_bytes(n))
+}
+
+/// Reads one frame from /init: the number of scenes, then for each the display's
+/// connector id, a count, and that many triangles. None when /init is gone.
+fn read_frame(input: &mut File, scenes: &mut Vec<(u32, Vec<Tri>)>) -> Option<()> {
+    let count = read_u32(input)? as usize;
+    if count > 64 {
+        die("absurd display count");
     }
-    tris.resize(n, Tri::default());
-    // SAFETY: Tri is plain data; we fill exactly n of them.
-    let bytes = unsafe { std::slice::from_raw_parts_mut(tris.as_mut_ptr() as *mut u8, n * Tri::SIZE) };
-    input.read_exact(bytes).ok()
+    scenes.resize_with(count, || (0, Vec::new()));
+    for (display, tris) in scenes.iter_mut() {
+        *display = read_u32(input)?;
+        let n = read_u32(input)? as usize;
+        if n > 1_000_000 {
+            die("absurd triangle count");
+        }
+        tris.resize(n, Tri::default());
+        // SAFETY: Tri is plain data; we fill exactly n of them.
+        let bytes = unsafe { std::slice::from_raw_parts_mut(tris.as_mut_ptr() as *mut u8, n * Tri::SIZE) };
+        input.read_exact(bytes).ok()?;
+    }
+    Some(())
 }
 
 fn has_more(input: &File) -> bool {
@@ -305,10 +337,10 @@ fn has_more(input: &File) -> bool {
     unsafe { libc::poll(p.as_mut_ptr(), 1, 0) > 0 && p[0].revents & libc::POLLIN != 0 }
 }
 
-/// Waits for the page flip we asked for to finish, reading DRM's event stream.
-fn wait_for_flip(card: &File) {
+/// Waits for `pending` page flips we asked for to finish, reading DRM's event stream.
+fn wait_for_flips(card: &File, mut pending: usize) {
     let mut buf = [0u8; 1024];
-    loop {
+    while pending > 0 {
         let n = match (&*card).read(&mut buf) {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -319,7 +351,7 @@ fn wait_for_flip(card: &File) {
             let kind = u32::from_ne_bytes(buf[at..at + 4].try_into().unwrap());
             let len = u32::from_ne_bytes(buf[at + 4..at + 8].try_into().unwrap()) as usize;
             if kind == drm::EVENT_FLIP_COMPLETE {
-                return;
+                pending = pending.saturating_sub(1);
             }
             if len < 8 {
                 break;
@@ -327,6 +359,17 @@ fn wait_for_flip(card: &File) {
             at += len;
         }
     }
+}
+
+/// One display: the GBM surface and EGL window surface we draw it into, and the buffer
+/// on the screen now.
+struct Head {
+    out: drm::Output,
+    gs: *mut gbm_surface,
+    surf: EGLSurface,
+    shown: *mut gbm_bo,
+    /// The CRTC as we found it, to put back when we exit.
+    saved: Option<drm::Crtc>,
 }
 
 fn main() {
@@ -338,26 +381,15 @@ fn main() {
             std::env::set_var(k, v);
         }
     }
-    let Some((card, out)) = open_card() else {
+    let Some((card, outputs)) = open_card() else {
         die("no connected display")
     };
     let card = Arc::new(card);
-    let (w, h) = (out.mode.hdisplay as u32, out.mode.vdisplay as u32);
 
     unsafe {
         let gbm = gbm_create_device(card.as_raw_fd());
         if gbm.is_null() {
             die("gbm_create_device failed");
-        }
-        let gs = gbm_surface_create(
-            gbm,
-            w,
-            h,
-            GBM_FORMAT_XRGB8888,
-            GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING,
-        );
-        if gs.is_null() {
-            die("gbm_surface_create failed");
         }
         let dpy = match proc_address::<GetPlatformDisplay>("eglGetPlatformDisplayEXT") {
             Some(get) => get(EGL_PLATFORM_GBM_KHR, gbm as *mut c_void, std::ptr::null()),
@@ -404,11 +436,39 @@ fn main() {
         if ctx.is_null() {
             die("eglCreateContext failed");
         }
-        let surf = eglCreateWindowSurface(dpy, config, gs as *mut c_void, std::ptr::null());
-        if surf.is_null() {
-            die("eglCreateWindowSurface failed");
+
+        // A surface for each display. One context draws them all, so the program, the
+        // atlas and the vertex buffer are shared.
+        let mut heads: Vec<Head> = Vec::new();
+        for out in outputs {
+            let gs = gbm_surface_create(
+                gbm,
+                out.w(),
+                out.h(),
+                GBM_FORMAT_XRGB8888,
+                GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING,
+            );
+            if gs.is_null() {
+                eprintln!("[gpu] gbm_surface_create failed for {}", out.name);
+                continue;
+            }
+            let surf = eglCreateWindowSurface(dpy, config, gs as *mut c_void, std::ptr::null());
+            if surf.is_null() {
+                eprintln!("[gpu] eglCreateWindowSurface failed for {}", out.name);
+                continue;
+            }
+            heads.push(Head {
+                out,
+                gs,
+                surf,
+                shown: std::ptr::null_mut(),
+                saved: None,
+            });
         }
-        eglMakeCurrent(dpy, surf, surf, ctx);
+        if heads.is_empty() {
+            die("no display surface");
+        }
+        eglMakeCurrent(dpy, heads[0].surf, heads[0].surf, ctx);
 
         let renderer = gl_string(GL_RENDERER);
         eprintln!("[gpu] EGL {}.{}, {}, {}", major, minor, gl_string(GL_VERSION), renderer);
@@ -425,9 +485,8 @@ fn main() {
         }
         glLinkProgram(prog);
         glUseProgram(prog);
-        glUniform2f(glGetUniformLocation(prog, c"screen".as_ptr()), w as f32, h as f32);
+        let screen_uniform = glGetUniformLocation(prog, c"screen".as_ptr());
         glUniform1i(glGetUniformLocation(prog, c"atlas".as_ptr()), 0);
-        glViewport(0, 0, w as i32, h as i32);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         for i in 0..3 {
@@ -506,35 +565,76 @@ fn main() {
             })
         };
 
-        // First frame: black, and set the mode so the display shows our buffers.
+        // First frame: black, and set each display's mode so it shows our buffers. A
+        // display whose mode can't be set is left out.
         glClearColor(0.0, 0.0, 0.0, 1.0);
-        glClear(GL_COLOR_BUFFER_BIT);
-        eglSwapBuffers(dpy, surf);
-        let mut shown = gbm_surface_lock_front_buffer(gs);
-        let mut saved = drm::Crtc {
-            crtc_id: out.crtc,
-            ..Default::default()
-        };
-        let have_saved = drm::ioctl(&card, drm::IOCTL_MODE_GETCRTC, &mut saved);
-        if !drm::set_crtc(&card, &out, fb_for(shown)) {
+        heads.retain_mut(|head| {
+            eglMakeCurrent(dpy, head.surf, head.surf, ctx);
+            glClear(GL_COLOR_BUFFER_BIT);
+            eglSwapBuffers(dpy, head.surf);
+            head.shown = gbm_surface_lock_front_buffer(head.gs);
+            let mut saved = drm::Crtc {
+                crtc_id: head.out.crtc,
+                ..Default::default()
+            };
+            if drm::ioctl(&card, drm::IOCTL_MODE_GETCRTC, &mut saved) {
+                head.saved = Some(saved);
+            }
+            if !drm::set_crtc(&card, &head.out, fb_for(head.shown)) {
+                eprintln!("[gpu] setting the mode of {} failed", head.out.name);
+                return false;
+            }
+            true
+        });
+        if heads.is_empty() {
             die("setting the display mode failed");
         }
-
-        let cursor = CursorPlane::new(gbm, card.clone(), out.crtc, if w >= 2000 { 2 } else { 1 }); // until Elm sends its UI scale
-        let hw_cursor = cursor.is_some();
-        if let Some(c) = cursor {
-            std::thread::spawn(move || c.run());
+        // Close the gaps left by any display that failed.
+        let mut outs: Vec<drm::Output> = heads.iter().map(|h| h.out.clone()).collect();
+        drm::arrange(&mut outs);
+        for (head, out) in heads.iter_mut().zip(outs) {
+            head.out = out;
         }
-        println!("ok {} {} {} {}", w, h, hw_cursor as i32, renderer);
+
+        // The cursor until Elm sends its UI scale.
+        let first_w = heads[0].out.w();
+        let planes: Vec<CursorPlane> = heads
+            .iter()
+            .filter_map(|h| CursorPlane::new(gbm, &card, &h.out, if first_w >= 2000 { 2 } else { 1 }))
+            .collect();
+        let hw_cursor = planes.len() == heads.len();
+        if hw_cursor {
+            for p in &planes[1..] {
+                drm::move_cursor(&card, p.crtc, -2 * CURSOR_PLANE as i32, 0);
+            }
+            let cursors = Cursors {
+                card: card.clone(),
+                on: heads[0].out.connector,
+                planes,
+            };
+            std::thread::spawn(move || cursors.run());
+        } else {
+            for p in &planes {
+                drm::move_cursor(&card, p.crtc, -2 * CURSOR_PLANE as i32, 0);
+            }
+        }
+        for h in &heads {
+            let o = &h.out;
+            println!(
+                "out {} {} {} {} {} {} {} {}",
+                o.connector, o.x, o.y, o.w(), o.h(), o.mm_width, o.mm_height, o.name
+            );
+        }
+        println!("ok {} {}", hw_cursor as i32, renderer);
         let _ = std::io::stdout().flush();
 
         // SAFETY: /init's pipe is our stdin.
         let mut input = File::from_raw_fd(0);
-        let mut tris: Vec<Tri> = Vec::new();
+        let mut scenes: Vec<(u32, Vec<Tri>)> = Vec::new();
         let mut verts: Vec<Vertex> = Vec::new();
         let mut stdout = std::io::stdout();
         'frames: loop {
-            if read_frame(&mut input, &mut tris).is_none() {
+            if read_frame(&mut input, &mut scenes).is_none() {
                 break; // /init went away
             }
             // Frames can arrive faster than the screen refreshes (a touchpad reports
@@ -542,60 +642,79 @@ fn main() {
             // Draw only the newest, or the backlog in the pipe makes the screen lag.
             // Each frame skipped is reported as "d", so /init knows it is done with it.
             while has_more(&input) {
-                if read_frame(&mut input, &mut tris).is_none() {
+                if read_frame(&mut input, &mut scenes).is_none() {
                     break 'frames;
                 }
                 let _ = writeln!(stdout, "d");
             }
-            verts.clear();
-            for t in &tris {
-                let rgba = t.rgba.to_be_bytes();
-                for p in &t.p {
-                    verts.push(Vertex {
-                        x: p[0],
-                        y: p[1],
-                        u: p[2],
-                        v: p[3],
-                        rgba,
-                    });
-                }
-            }
+            // Each display in turn; a display with no scene is drawn black. The flips
+            // all go in before we wait for any, so the displays change together.
             timer.begin();
-            glClear(GL_COLOR_BUFFER_BIT);
-            glBufferData(
-                GL_ARRAY_BUFFER,
-                (verts.len() * std::mem::size_of::<Vertex>()) as isize,
-                verts.as_ptr() as *const c_void,
-                GL_STREAM_DRAW,
-            );
-            glDrawArrays(GL_TRIANGLES, 0, verts.len() as i32);
-            let gpu_ns = timer.end();
-            eglSwapBuffers(dpy, surf);
-
-            let next = gbm_surface_lock_front_buffer(gs);
-            let mut flip = drm::PageFlip {
-                crtc_id: out.crtc,
-                fb_id: fb_for(next),
-                flags: drm::PAGE_FLIP_EVENT,
-                ..Default::default()
-            };
-            if drm::ioctl(&card, drm::IOCTL_MODE_PAGE_FLIP, &mut flip) {
-                wait_for_flip(&card);
-            } else {
-                drm::set_crtc(&card, &out, fb_for(next));
+            let mut gpu_ns = -1;
+            let mut pending = 0;
+            let mut next_bos = Vec::with_capacity(heads.len());
+            for (i, head) in heads.iter().enumerate() {
+                verts.clear();
+                for (_, tris) in scenes.iter().filter(|(d, _)| *d == head.out.connector) {
+                    for t in tris {
+                        let rgba = t.rgba.to_be_bytes();
+                        for p in &t.p {
+                            verts.push(Vertex {
+                                x: p[0],
+                                y: p[1],
+                                u: p[2],
+                                v: p[3],
+                                rgba,
+                            });
+                        }
+                    }
+                }
+                eglMakeCurrent(dpy, head.surf, head.surf, ctx);
+                glViewport(0, 0, head.out.w() as i32, head.out.h() as i32);
+                glUniform2f(screen_uniform, head.out.w() as f32, head.out.h() as f32);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glBufferData(
+                    GL_ARRAY_BUFFER,
+                    (verts.len() * std::mem::size_of::<Vertex>()) as isize,
+                    verts.as_ptr() as *const c_void,
+                    GL_STREAM_DRAW,
+                );
+                glDrawArrays(GL_TRIANGLES, 0, verts.len() as i32);
+                if i + 1 == heads.len() {
+                    gpu_ns = timer.end();
+                }
+                eglSwapBuffers(dpy, head.surf);
+                let next = gbm_surface_lock_front_buffer(head.gs);
+                let mut flip = drm::PageFlip {
+                    crtc_id: head.out.crtc,
+                    fb_id: fb_for(next),
+                    flags: drm::PAGE_FLIP_EVENT,
+                    ..Default::default()
+                };
+                if drm::ioctl(&card, drm::IOCTL_MODE_PAGE_FLIP, &mut flip) {
+                    pending += 1;
+                } else {
+                    drm::set_crtc(&card, &head.out, fb_for(next));
+                }
+                next_bos.push(next);
             }
-            gbm_surface_release_buffer(gs, shown);
-            shown = next;
+            wait_for_flips(&card, pending);
+            for (head, next) in heads.iter_mut().zip(next_bos) {
+                gbm_surface_release_buffer(head.gs, head.shown);
+                head.shown = next;
+            }
             let _ = writeln!(stdout, "f {gpu_ns}");
             let _ = stdout.flush();
         }
-        if have_saved && saved.mode_valid != 0 {
-            let back = drm::Output {
-                connector: out.connector,
-                crtc: saved.crtc_id,
-                mode: saved.mode,
-            };
-            drm::set_crtc(&card, &back, saved.fb_id);
+        for head in &heads {
+            if let Some(saved) = head.saved.filter(|s| s.mode_valid != 0) {
+                let back = drm::Output {
+                    crtc: saved.crtc_id,
+                    mode: saved.mode,
+                    ..head.out.clone()
+                };
+                drm::set_crtc(&card, &back, saved.fb_id);
+            }
         }
     }
 }

@@ -67,7 +67,12 @@ effects =
     , Effect.WebSocketOpen { id = "ascii-collab", url = "wss://ascii-collab.app/_w", headers = [ ( "Cookie", "sid=abc" ) ] }
     , Effect.WebSocketSend { id = "ascii-collab", data = byteList [ 2, 1, 0, 255 ] }
     , Effect.WebSocketClose "ascii-collab"
-    , Effect.Render (\() -> [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ])
+    , Effect.Render
+        (\() ->
+            [ { display = 33, triangles = [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ] }
+            , { display = 34, triangles = [] }
+            ]
+        )
     ]
 
 

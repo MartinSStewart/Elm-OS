@@ -7,7 +7,11 @@
 # and Elm OS falls back to drawing on the CPU.
 #
 # The screen is 1920 x 1080, like a typical laptop; QEMU_RES=1280x800 (or any
-# WIDTHxHEIGHT) changes it. `make run QEMU_RES=...` works too.
+# WIDTHxHEIGHT) changes it. `make run QEMU_RES=...` works too. QEMU_HEADS=2 gives the
+# virtio GPU two displays (QEMU shows the second in a window or tab of its own), which
+# Elm OS puts side by side, the first on the left. The mouse is QEMU's tablet, which
+# Elm OS spreads across both displays, so in QEMU's windows it lands in the wrong place;
+# use the toolbar of the display the pointer is on.
 #
 # The guest gets two simulated wifi radios (mac80211_hwsim) and QEMU's user-mode
 # network; Elm OS runs a test access point on one radio, bridged to that network
@@ -46,7 +50,7 @@ if [ "$1" = --usb ]; then
     -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot "$@"
 fi
 RES="${QEMU_RES:-1920x1080}"
-XRES="xres=${RES%x*},yres=${RES#*x}"
+XRES="xres=${RES%x*},yres=${RES#*x},max_outputs=${QEMU_HEADS:-1}"
 if [ "${QEMU_GPU:-1}" = 1 ]; then
   GPU="-device virtio-gpu-gl-pci,$XRES"
   # SDL rather than GTK: QEMU's GTK window stays black with virgl on NVIDIA's driver.

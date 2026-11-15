@@ -1,11 +1,14 @@
 # Elm OS build.
 #
 #   make            build build/bzImage and build/initramfs.cpio
-#   make run        boot it in QEMU in a window, 1920 x 1080 (QEMU_RES=WxH to change)
+#   make run        boot it in QEMU in a window, 1920 x 1080 (QEMU_RES=WxH to change,
+#                   QEMU_HEADS=2 for two displays)
 #   make dev        run the Elm program in a window on this computer, without the OS,
 #                   rebuilding it in seconds as elm/src changes (see "the dev runner" below)
 #   make test       boot headless, inject input, check a screenshot (CPU fallback)
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
+#   make test-displays  two displays side by side, each with its own frame (needs an X
+#                   server, e.g. xvfb-run; TEST_DISPLAYS_GPU=1 draws on virgl)
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make test-persist  boot twice with a power cut between: the Model must come back
 #   make test-switch   switch to another build of the Elm program without restarting
@@ -115,7 +118,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas test-containers migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas test-containers migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -621,6 +624,9 @@ test: all $(BUILD)/data-empty.img | check-run-deps
 test-gpu: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-qemu.py --gpu
 
+test-displays: all $(BUILD)/data-empty.img | check-run-deps
+	python3 scripts/test-displays.py $(if $(filter 1,$(TEST_DISPLAYS_GPU)),--gpu)
+
 test-persist: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-persist.py
 
@@ -657,7 +663,8 @@ measure-frames: all $(BUILD)/data-empty.img | check-run-deps
 #   make dev-native  the native build/elm that goes into Elm OS: the same bytes, but
 #                    eco takes a minute or more to compile it.
 #
-# DEV_SIZE sets the window's size (it can be resized too). To start afresh, remove the
+# DEV_SIZE sets the window's size (it can be resized too); a list such as 1920x1080,1280x800
+# opens a window per display, side by side as Elm sees them. To start afresh, remove the
 # DEV_DATA directory.
 DEV_SIZE ?= 1920x1080
 DEV_DATA ?= $(BUILD)/dev-data

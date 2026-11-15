@@ -1,4 +1,4 @@
-module Main exposing (Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
@@ -19,6 +19,7 @@ import Clock
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
+import Display exposing (Display)
 import Duration exposing (Duration)
 import Effect exposing (Effect, HttpError(..))
 import HackerNews
@@ -47,7 +48,7 @@ import Wpa2Password exposing (Wpa2Password)
 
 
 type Input
-    = Screen Int Int
+    = Displays (List Display)
       -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
     | Frame Float
     | HttpResponse String (Result HttpError { status : Int, body : Bytes })
@@ -107,8 +108,8 @@ type alias SystemStats =
 toInput : HostMessage.ToElm -> Result String Input
 toInput message =
     case message of
-        HostMessage.Screen w h ->
-            Ok (Screen w h)
+        HostMessage.Displays displays ->
+            Ok (Displays displays)
 
         HostMessage.Frame time ->
             Ok (Frame time)
@@ -254,7 +255,10 @@ milliseconds ms =
 
 
 type alias Model =
-    { screenSize : Coord DevicePixels
+    { -- Side by side; the first is the main one, with the panels on it.
+      displays : List Display
+    , -- Which display each app shows on, by Display.name; the main one if it isn't connected.
+      appDisplays : SeqDict App String
     , mouse : Coord DevicePixels
     , colorIndex : Int
     , pressed : Bool
@@ -306,6 +310,18 @@ type PowerAction
     | Restart
 
 
+{-| The apps the toolbar opens. Each shows on one display: the one whose toolbar opened
+it, or moved it there.
+-}
+type App
+    = AboutApp
+    | NewsApp
+    | HackerNewsApp
+    | AsciiCollabApp
+    | CalculatorApp
+    | EditorApp
+
+
 type WeatherState
     = NoWeather
     | FindingPlace
@@ -350,7 +366,8 @@ type UiId
 
 init : Model
 init =
-    { screenSize = Coord.xy 640 480
+    { displays = []
+    , appDisplays = SeqDict.empty
     , mouse = Coord.xy 320 240
     , colorIndex = 0
     , pressed = False
@@ -438,14 +455,20 @@ update msg model =
 step : Input -> Model -> ( Model, List Effect )
 step event model =
     case event of
-        Screen w h ->
+        Displays displays ->
             -- The host's first message to each program it starts: it is listening for
             -- effects now. The notices are about the program before this one (the
             -- Model is the one it saved); the host sends ReflashNeeded again if it
             -- still applies.
-            ( { model
-                | screenSize = Coord.xy w h
-                , mouse = Coord.xy (w // 2) (h // 2)
+            let
+                next =
+                    { model | displays = displays }
+
+                main_ =
+                    mainDisplay next
+            in
+            ( { next
+                | mouse = Coord.plus main_.position (Coord.xy (Coord.xRaw main_.size // 2) (Coord.yRaw main_.size // 2))
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
               }
@@ -480,7 +503,11 @@ step event model =
                         , uiState = Ui.onAnimationFrame elapsedTime model.uiState
                     }
             in
-            ( next, [ Effect.Render (\() -> view model) ] )
+            ( next
+            , [ Effect.Render
+                    (\() -> List.map (\display -> { display = display.id, triangles = view model display }) model.displays)
+              ]
+            )
 
         HttpResponse id result ->
             case stringToHttpRequestId id of
@@ -572,11 +599,12 @@ step event model =
             in
             case ( model.selectingText, model.uiState.focus ) of
                 ( True, Just focus ) ->
-                    case Ui.findInput focus (screenUi model) of
-                        Just (Ui.TextInputType { position }) ->
-                            ( dragSelect focus position moved, [] )
+                    case findInput focus model of
+                        Just ( display, Ui.TextInputType { position } ) ->
+                            -- The mouse in that display's UI pixels, even once it has left it.
+                            ( dragSelect focus (uiMouseOn display moved.mouse) position moved, [] )
 
-                        Just (Ui.ButtonType _) ->
+                        Just ( _, Ui.ButtonType _ ) ->
                             ( moved, [] )
 
                         Nothing ->
@@ -590,7 +618,7 @@ step event model =
                 cursor =
                     uiMouse model
             in
-            case Ui.hover cursor (screenUi model) of
+            case hover model of
                 ( AsciiCollabUiId AsciiCollab.GridArea, { relativePositionToUi } ) :: _ ->
                     ( { model
                         | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
@@ -621,13 +649,13 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case List.filter (\( id, _ ) -> id == AsciiCollabUiId AsciiCollab.GridArea) (Ui.hover (uiMouse model) (screenUi model)) of
+            case List.filter (\( id, _ ) -> id == AsciiCollabUiId AsciiCollab.GridArea) (hover model) of
                 _ :: _ ->
-                    AsciiCollab.wheel (uiSize model) model.shift clicks model.asciiCollab
+                    AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
                         |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
                 [] ->
-                    case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (Ui.hover (uiMouse model) (screenUi model)) of
+                    case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (hover model) of
                         ( id, { ui } ) :: _ ->
                             ( { model | uiState = Ui.onWheel id clicks ui model.uiState }, [] )
 
@@ -662,7 +690,7 @@ step event model =
                 ( editorKey key model, [] )
 
             else if model.uiState.focus == Just (AsciiCollabUiId AsciiCollab.GridArea) && model.asciiCollab.isOpen then
-                AsciiCollab.key (uiSize model) model.ctrl key model.asciiCollab
+                AsciiCollab.key (appUiSize AsciiCollabApp model) model.ctrl key model.asciiCollab
                     |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
             else if calculatorFocused model then
@@ -840,8 +868,135 @@ fetchWeather model =
     ( { model | weather = FindingPlace }, [ httpGet GeoRequest model.geoUrl ] )
 
 
+{-| A click on a toolbar's app button opens the app on that toolbar's display, or moves
+it there if it is open on another one.
+-}
 click : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
 click model id uiState =
+    case appButton id of
+        Just app ->
+            let
+                here =
+                    mouseDisplay model
+
+                moved =
+                    { model | appDisplays = SeqDict.insert app here.name model.appDisplays }
+            in
+            if appIsOpen app model && (displayOf app model).id /= here.id then
+                ( { moved | uiState = uiState }, [] )
+
+            else
+                clickElement moved id uiState
+
+        Nothing ->
+            clickElement model id uiState
+
+
+{-| The app a toolbar button opens.
+-}
+appButton : UiId -> Maybe App
+appButton id =
+    case id of
+        AboutButton ->
+            Just AboutApp
+
+        NewsButton ->
+            Just NewsApp
+
+        HackerNewsUiId HackerNews.OpenButton ->
+            Just HackerNewsApp
+
+        AsciiCollabUiId AsciiCollab.OpenButton ->
+            Just AsciiCollabApp
+
+        CalculatorButton ->
+            Just CalculatorApp
+
+        EditorButton ->
+            Just EditorApp
+
+        HackerNewsUiId _ ->
+            Nothing
+
+        AsciiCollabUiId _ ->
+            Nothing
+
+        RefreshButton ->
+            Nothing
+
+        NetworkButton _ ->
+            Nothing
+
+        PasswordInput ->
+            Nothing
+
+        ShowPasswordButton ->
+            Nothing
+
+        ConnectButton ->
+            Nothing
+
+        DisconnectButton ->
+            Nothing
+
+        WeatherButton ->
+            Nothing
+
+        CloseAboutButton ->
+            Nothing
+
+        PowerOffButton ->
+            Nothing
+
+        RestartButton ->
+            Nothing
+
+        ConfirmPowerButton ->
+            Nothing
+
+        CancelPowerButton ->
+            Nothing
+
+        CalculatorUiId _ ->
+            Nothing
+
+        EditorInput ->
+            Nothing
+
+        EditorWindow ->
+            Nothing
+
+        CloseEditorButton ->
+            Nothing
+
+        NewsUiId _ ->
+            Nothing
+
+
+appIsOpen : App -> Model -> Bool
+appIsOpen app model =
+    case app of
+        AboutApp ->
+            model.aboutOpen
+
+        NewsApp ->
+            model.newsOpen
+
+        HackerNewsApp ->
+            model.hackerNews.isOpen
+
+        AsciiCollabApp ->
+            model.asciiCollab.isOpen
+
+        CalculatorApp ->
+            model.calculatorOpen
+
+        EditorApp ->
+            model.editorOpen
+
+
+clickElement : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
+clickElement model id uiState =
     case id of
         RefreshButton ->
             ( { model | scanning = True }, [ Effect.WifiScan ] )
@@ -1210,10 +1365,11 @@ typeKey key model =
 
 
 {-| The mouse moved with its button down after going down in the text box `focus`, at
-`position` on the screen: select from there to the mouse.
+`position` on its display: select from there to the mouse (`mouse`, in that display's
+UI pixels).
 -}
-dragSelect : UiId -> Coord UiPixels -> Model -> Model
-dragSelect focus position model =
+dragSelect : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelect focus mouse position model =
     case focus of
         PasswordInput ->
             { model
@@ -1223,7 +1379,7 @@ dragSelect focus position model =
                         (\maybe ->
                             TextInput.mouseDownMove
                                 (passwordStyle model)
-                                (uiMouse model)
+                                mouse
                                 position
                                 (case maybe of
                                     Just (TextInputState password) ->
@@ -1247,7 +1403,7 @@ dragSelect focus position model =
                         (\maybe ->
                             TextInputMultiline.mouseDownMove
                                 (editorStyle model)
-                                (uiMouse model)
+                                mouse
                                 position
                                 (case maybe of
                                     Just (TextInputMultilineState editor) ->
@@ -1426,48 +1582,122 @@ cursorColor model =
 -- VIEW
 
 
-view : Model -> List (Triangle DevicePixels)
-view model =
+{-| What one display shows: its part of the UI, and the cursor if the mouse is on it.
+-}
+view : Model -> Display -> List (Triangle DevicePixels)
+view model display =
     let
         ui =
-            screenUi model
+            displayUi model display
 
         hovered =
-            Ui.hover (uiMouse model) ui |> List.head |> Maybe.map Tuple.first
+            if (mouseDisplay model).id == display.id then
+                Ui.hover (uiMouseOn display model.mouse) ui |> List.head |> Maybe.map Tuple.first
+
+            else
+                Nothing
     in
-    Ui.view (uiScale model) model.showUiBorders hovered model.uiState.focus model.screenSize ui
-        ++ Sprite.cursor
-            (if Maybe.map .hardwareCursor model.renderer == Just True then
-                -- The host moves the real cursor; this orange one trails it by however
-                -- long a frame takes to get from the mouse to the screen.
-                Color.rgb255 255 150 40
+    Ui.view (Display.uiScale display) model.showUiBorders hovered model.uiState.focus display.size ui
+        ++ (if Display.contains model.mouse display then
+                Sprite.cursor
+                    (if Maybe.map .hardwareCursor model.renderer == Just True then
+                        -- The host moves the real cursor; this orange one trails it by however
+                        -- long a frame takes to get from the mouse to the screen.
+                        Color.rgb255 255 150 40
 
-             else
-                cursorColor model
-            )
-            (uiScale model)
-            model.mouse
+                     else
+                        cursorColor model
+                    )
+                    (Display.uiScale display)
+                    (Display.local display model.mouse)
+
+            else
+                []
+           )
 
 
-{-| Device pixels per UI pixel: 2 on screens at least 2000 pixels wide, otherwise 1.
+{-| The main display: the first, with the debug overlay, the network panel and the
+notices on it. A stand-in until the host says which displays there are.
+-}
+mainDisplay : Model -> Display
+mainDisplay model =
+    case model.displays of
+        first :: _ ->
+            first
+
+        [] ->
+            { id = 0, name = "", position = Coord.origin, size = Coord.xy 640 480, sizeMm = ( 0, 0 ) }
+
+
+{-| The display the mouse is on.
+-}
+mouseDisplay : Model -> Display
+mouseDisplay model =
+    Display.at model.mouse model.displays |> Maybe.withDefault (mainDisplay model)
+
+
+{-| The display an app shows on.
+-}
+displayOf : App -> Model -> Display
+displayOf app model =
+    case SeqDict.get app model.appDisplays of
+        Just name ->
+            List.filter (\display -> display.name == name) model.displays
+                |> List.head
+                |> Maybe.withDefault (mainDisplay model)
+
+        Nothing ->
+            mainDisplay model
+
+
+{-| The size, in UI pixels, of the display an app shows on.
+-}
+appUiSize : App -> Model -> Coord UiPixels
+appUiSize app model =
+    Display.uiSize (displayOf app model)
+
+
+{-| Device pixels per UI pixel where the mouse is: the cursor's size, and how far the
+mouse moves it.
 -}
 uiScale : Model -> UiScale
 uiScale model =
-    Units.scaleFor (Coord.x model.screenSize)
+    Display.uiScale (mouseDisplay model)
 
 
-{-| The screen's size in UI pixels.
--}
-uiSize : Model -> Coord UiPixels
-uiSize model =
-    Coord.toUi (uiScale model) model.screenSize
-
-
-{-| The UI pixel the mouse is over.
+{-| The UI pixel the mouse is over, on the display it is on.
 -}
 uiMouse : Model -> Coord UiPixels
 uiMouse model =
-    Coord.toUi (uiScale model) model.mouse
+    uiMouseOn (mouseDisplay model) model.mouse
+
+
+{-| A point in the displays' space, in a display's UI pixels.
+-}
+uiMouseOn : Display -> Coord DevicePixels -> Coord UiPixels
+uiMouseOn display point =
+    Coord.toUi (Display.uiScale display) (Display.local display point)
+
+
+{-| What is under the mouse, innermost first.
+-}
+hover : Model -> List ( UiId, { relativePositionToUi : Coord UiPixels, ui : Ui.Element UiId } )
+hover model =
+    let
+        display =
+            mouseDisplay model
+    in
+    Ui.hover (uiMouseOn display model.mouse) (displayUi model display)
+
+
+{-| The text box or button `id`, and the display it is on.
+-}
+findInput : UiId -> Model -> Maybe ( Display, Ui.InputType UiId )
+findInput id model =
+    List.filterMap
+        (\display -> Ui.findInput id (displayUi model display) |> Maybe.map (Tuple.pair display))
+        model.displays
+        |> List.head
 
 
 {-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
@@ -1496,74 +1726,70 @@ headingSize =
     Sprite.Big
 
 
-{-| Everything the UI framework draws: the debug panel in the bottom left corner, the
-wifi panel in the top right, the toolbar in the top left with the calculator under it
-when it is open, and the text editor or the about page in the middle when one is open.
+{-| Everything the UI framework draws on a display. On each, a toolbar in the top left;
+on the main display the debug panel in the bottom left corner and the wifi panel in the
+top right; and each open app on its display: the calculator under the toolbar, the text
+editor or the about page in the middle.
 -}
-screenUi : Model -> Ui.Element UiId
-screenUi model =
+displayUi : Model -> Display -> Ui.Element UiId
+displayUi model display =
+    let
+        isMain =
+            display.id == (mainDisplay model).id
+
+        on app element =
+            if appIsOpen app model && (displayOf app model).id == display.id then
+                [ element () ]
+
+            else
+                []
+
+        size =
+            Display.uiSize display
+    in
     Ui.el
-        { padding = { topLeft = Coord.origin, bottomRight = uiSize model }
+        { padding = { topLeft = Coord.origin, bottomRight = size }
         , inFront =
-            [ overlay model, networkPanel model, toolbar model ]
-                ++ (if model.editorOpen then
-                        [ editorWindow model ]
+            (if isMain then
+                [ overlay model, networkPanel model ]
 
-                    else
-                        []
-                   )
-                ++ (if model.calculatorOpen then
-                        [ calculatorWindow model ]
-
-                    else
-                        []
-                   )
-                ++ (if model.aboutOpen then
-                        [ aboutPage model ]
-
-                    else
-                        []
-                   )
-                ++ (if model.newsOpen then
-                        [ Ui.topRight
-                            { size = uiSize model }
-                            (News.view NewsUiId model.uiState model.news)
-                        ]
-
-                    else
-                        []
-                   )
-                ++ (if model.asciiCollab.isOpen then
-                        [ AsciiCollab.view
-                            (uiSize model)
+             else
+                []
+            )
+                ++ [ toolbar model display ]
+                ++ on EditorApp (\() -> editorWindow model)
+                ++ on CalculatorApp (\() -> calculatorWindow model)
+                ++ on AboutApp (\() -> aboutPage model)
+                ++ on NewsApp (\() -> Ui.topRight { size = size } (News.view NewsUiId model.uiState model.news))
+                ++ on AsciiCollabApp
+                    (\() ->
+                        AsciiCollab.view
+                            size
                             (model.uiState.focus == Just (AsciiCollabUiId AsciiCollab.GridArea))
                             model.asciiCollab
                             |> Ui.map AsciiCollabUiId
-                        ]
+                    )
+                ++ on HackerNewsApp
+                    (\() ->
+                        Ui.topRight
+                            { size = size }
+                            (HackerNews.view HackerNewsUiId model.uiState size model.hackerNews)
+                    )
+                ++ (if isMain then
+                        case model.upgradingTo of
+                            Just build ->
+                                [ notice model ("Upgrade to " ++ build ++ " in progress") ]
+
+                            Nothing ->
+                                case model.reflashNeeded of
+                                    Just build ->
+                                        [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
+
+                                    Nothing ->
+                                        []
 
                     else
                         []
-                   )
-                ++ (if model.hackerNews.isOpen then
-                        [ Ui.topRight
-                            { size = uiSize model }
-                            (HackerNews.view HackerNewsUiId model.uiState (uiSize model) model.hackerNews)
-                        ]
-
-                    else
-                        []
-                   )
-                ++ (case model.upgradingTo of
-                        Just build ->
-                            [ notice model ("Upgrade to " ++ build ++ " in progress") ]
-
-                        Nothing ->
-                            case model.reflashNeeded of
-                                Just build ->
-                                    [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
-
-                                Nothing ->
-                                    []
                    )
         , borderAndFill = Ui.NoBorderOrFill
         }
@@ -1669,7 +1895,7 @@ overlay model =
         seconds ms =
             fixed 2 (ms / 1000) ++ " s"
     in
-    Ui.bottomLeft { size = uiSize model }
+    Ui.bottomLeft { size = Display.uiSize (mainDisplay model) }
         (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
                 { padding = Ui.paddingXY 6 6
@@ -1679,19 +1905,32 @@ overlay model =
                 (Ui.column { spacing = 3, padding = Ui.noPadding }
                     ([ Ui.text Sprite.Small mono "Elm OS debug"
                      , line "Build" (BootInfo.buildText model.bootInfo)
-                     , line "Screen"
-                        (String.fromInt (Coord.xRaw model.screenSize)
-                            ++ " x "
-                            ++ String.fromInt (Coord.yRaw model.screenSize)
-                            ++ ", UI scale "
-                            ++ String.fromInt (Units.scaleInt (uiScale model))
-                            ++ "x"
-                        )
-                     , line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
-                     , rendererLine
-                     , cursorLine
-                     , line "Frame" (frameText model)
                      ]
+                        ++ List.indexedMap
+                            (\i display ->
+                                line
+                                    (if i == 0 then
+                                        "Screen"
+
+                                     else
+                                        ""
+                                    )
+                                    (display.name
+                                        ++ " "
+                                        ++ String.fromInt (Coord.xRaw display.size)
+                                        ++ " x "
+                                        ++ String.fromInt (Coord.yRaw display.size)
+                                        ++ ", UI scale "
+                                        ++ String.fromInt (Units.scaleInt (Display.uiScale display))
+                                        ++ "x"
+                                    )
+                            )
+                            model.displays
+                        ++ [ line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
+                           , rendererLine
+                           , cursorLine
+                           , line "Frame" (frameText model)
+                           ]
                         ++ statsLines
                         ++ (line "Clock" (BootInfo.clockText model.bootInfo)
                                 :: line "Battery" (BootInfo.batteryText model.bootInfo)
@@ -1855,14 +2094,14 @@ webSocketInput input model =
 
         WebSocketOpened id headers ->
             if id == AsciiCollab.socketId then
-                AsciiCollab.webSocketOpened (uiSize model) headers model.asciiCollab |> withAsciiCollab
+                AsciiCollab.webSocketOpened (appUiSize AsciiCollabApp model) headers model.asciiCollab |> withAsciiCollab
 
             else
                 ( model, [] )
 
         WebSocketMessage id data ->
             if id == AsciiCollab.socketId then
-                AsciiCollab.webSocketMessage (uiSize model) data model.asciiCollab |> withAsciiCollab
+                AsciiCollab.webSocketMessage (appUiSize AsciiCollabApp model) data model.asciiCollab |> withAsciiCollab
 
             else
                 ( model, [] )
@@ -2067,7 +2306,7 @@ networkPanel model =
             else
                 []
     in
-    Ui.topRight { size = uiSize model }
+    Ui.topRight { size = Display.uiSize (mainDisplay model) }
         (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
                 { padding = Ui.paddingXY 6 6
@@ -2481,9 +2720,15 @@ weatherIcon unit code =
 -- TOOLBAR AND ABOUT PAGE
 
 
-toolbar : Model -> Ui.Element UiId
-toolbar model =
+{-| The toolbar on a display. An app's button looks pressed where the app is open; on
+another display it moves the app there.
+-}
+toolbar : Model -> Display -> Ui.Element UiId
+toolbar model display =
     let
+        openHere app =
+            appIsOpen app model && (displayOf app model).id == display.id
+
         t =
             Ui.text bodySize sans
 
@@ -2521,17 +2766,17 @@ toolbar model =
                     ]
 
                 Nothing ->
-                    [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
-                    , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "Wikipedia")
-                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } model.hackerNews.isOpen (t "Hacker news")
-                    , Ui.selectableButton { id = AsciiCollabUiId AsciiCollab.OpenButton, padding = small } model.asciiCollab.isOpen (t "ASCII collab")
-                    , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
-                    , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
+                    [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (t "About")
+                    , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (t "Wikipedia")
+                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } (openHere HackerNewsApp) (t "Hacker news")
+                    , Ui.selectableButton { id = AsciiCollabUiId AsciiCollab.OpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
+                    , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
+                    , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
                     ]
     in
-    Ui.topLeft { size = uiSize model }
+    Ui.topLeft { size = Display.uiSize display }
         (Ui.row { spacing = 6, padding = Ui.paddingXY 8 8 } buttons)
 
 
@@ -2539,7 +2784,7 @@ toolbar model =
 -}
 calculatorWindow : Model -> Ui.Element UiId
 calculatorWindow model =
-    Ui.topLeft { size = uiSize model }
+    Ui.topLeft { size = appUiSize CalculatorApp model }
         (Ui.el
             { padding = { topLeft = Coord.xy 8 (toolbarHeight + 8), bottomRight = Coord.origin }
             , inFront = []
@@ -2558,11 +2803,11 @@ toolbarHeight =
 
 {-| In the bottom right corner: while the host switches to a newer build, or when the
 newest build needs the USB stick flashed again. The next program starts without it
-(`Screen`).
+(`Displays`).
 -}
 notice : Model -> String -> Ui.Element UiId
 notice model text =
-    Ui.bottomRight { size = uiSize model }
+    Ui.bottomRight { size = Display.uiSize (mainDisplay model) }
         (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             (Ui.el
                 { padding = Ui.paddingXY 10 6
@@ -2596,7 +2841,7 @@ aboutPage model =
         field f =
             Maybe.map f system |> Maybe.withDefault "?"
     in
-    Ui.center { size = uiSize model }
+    Ui.center { size = appUiSize AboutApp model }
         (Ui.el
             { padding = Ui.paddingXY 12 10
             , inFront = []
@@ -2653,7 +2898,7 @@ editorStyle : Model -> TextInputMultiline.Style
 editorStyle model =
     let
         ( screenWidth, screenHeight ) =
-            Coord.toTuple (uiSize model)
+            Coord.toTuple (appUiSize EditorApp model)
     in
     { font = sans
     , fontSize = bodySize
@@ -2706,7 +2951,7 @@ editorWindow model =
                         ", " ++ String.fromInt (abs state.cursorSize) ++ " selected"
                    )
     in
-    Ui.center { size = uiSize model }
+    Ui.center { size = appUiSize EditorApp model }
         (Ui.elWithId EditorWindow
             { padding = Ui.paddingXY 8 8
             , inFront = []
