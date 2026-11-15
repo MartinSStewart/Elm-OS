@@ -1,6 +1,8 @@
 # Elm OS build.
 #
 #   make            build build/bzImage and build/initramfs.cpio
+#   make V=1 ...    any of these, printing every command and all its output (normally
+#                   only errors, warnings and the result are: see "Quiet output" at the end)
 #   make run        boot it in QEMU in a window, 1920 x 1080 (QEMU_RES=WxH to change,
 #                   QEMU_HEADS=2 for two displays)
 #   make dev        run the Elm program in a window on this computer, without the OS,
@@ -96,7 +98,11 @@ RT         ?= $(or $(ECO_RUNTIME_DIR),$(abspath $(dir $(ECO_BIN))/../lib/eco-run
 KERNEL_SRC ?= linux
 # Linux's stable releases (6.12.1 onwards) are only in the stable tree, not Linus's.
 KERNEL_GIT ?= https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-JOBS       ?= $(shell nproc)
+# (`:=`, not `?=`, for the $(shell)s that would otherwise run with recipes' shell:
+# see "Quiet output" at the end.)
+ifeq ($(origin JOBS),undefined)
+JOBS       := $(shell nproc)
+endif
 # Build in parallel unless told otherwise (make -j1), so the Rust and the Elm compile at
 # the same time. The kernel's make and wpa_supplicant's share these jobs.
 ifeq ($(filter -j%,$(MAKEFLAGS)),)
@@ -107,7 +113,9 @@ GPU        ?= 1
 ALPINE     := $(BUILD)/alpine
 # Reproducible builds: every timestamp that ends up in the output is the last commit's
 # time, so two builds of the same commit give the same bytes (see README).
-SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+ifeq ($(origin SOURCE_DATE_EPOCH),undefined)
+SOURCE_DATE_EPOCH := $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+endif
 export SOURCE_DATE_EPOCH
 
 
@@ -123,6 +131,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
         dev dev-native dev-check bench
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
+	@echo "Built $(BUILD)/bzImage and $(BUILD)/initramfs.cpio" $(SAY)
 
 # Moves the kernel, wpa_supplicant, Alpine packages and Rust crates to their newest
 # releases (see the script). The build warns when that was over 30 days ago.
@@ -130,7 +139,7 @@ refresh:
 	tools/refresh.sh $(BUILD) $(KERNEL_GIT)
 
 check-fresh:
-	@tools/check-fresh.sh $(REFRESHED) 30
+	@tools/check-fresh.sh $(REFRESHED) 30 $(SAY) 2>&1
 
 # Reproducible builds: any build of a commit is the same bytes on one machine (fixed
 # timestamps and IDs, pinned downloads). Across machines the compilers must match too,
@@ -176,8 +185,11 @@ KOUT_USB := $(BUILD)/kernel-usb
 # a new timestamp recompiles a good part of the kernel (about 30 s), and every commit
 # would otherwise bring one. It is still the same for every build of a commit.
 KERNEL_EPOCH := $(REFRESHED)
+# Lines that run $(KMAKE) start with +, so the kernel's make shares this make's jobs:
+# make only sees that a line runs make when $(MAKE) itself is in it.
+KERNEL_TIMESTAMP := $(shell date -u -d @$(KERNEL_EPOCH) '+%a %b %e %H:%M:%S UTC %Y')
 KMAKE     = SOURCE_DATE_EPOCH=$(KERNEL_EPOCH) $(MAKE) -C $(KERNEL_SRC) KBUILD_BUILD_USER=elmos KBUILD_BUILD_HOST=elmos \
-            KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP='$(shell date -u -d @$(KERNEL_EPOCH) '+%a %b %e %H:%M:%S UTC %Y')'
+            KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP='$(KERNEL_TIMESTAMP)'
 # The kernel command line on the USB stick: messages on the screen (the last console=),
 # quiet unless something is wrong. ttyS0 is for QEMU (make test-usb); a laptop has none.
 # mac80211_hwsim.radios=0: no simulated wifi radios on real hardware (they are for QEMU).
@@ -200,11 +212,11 @@ $(BUILD)/kernel-version: versions.mk | $(KERNEL_SRC)/Makefile
 	@have=$$(git -C $(KERNEL_SRC) describe --tags --exact-match 2>/dev/null || echo unknown); \
 	if [ "$$have" != "$(KERNEL_VER)" ]; then \
 	  if [ "$(origin KERNEL_SRC)" = file ]; then \
-	    echo "Moving $(KERNEL_SRC) from $$have to $(KERNEL_VER)"; \
+	    echo "Moving $(KERNEL_SRC) from $$have to $(KERNEL_VER)" $(SAY); \
 	    git -C $(KERNEL_SRC) fetch --depth 1 $(KERNEL_GIT) tag $(KERNEL_VER) && \
 	    git -C $(KERNEL_SRC) -c advice.detachedHead=false checkout -q $(KERNEL_VER) || exit 1; \
 	  else \
-	    echo "warning: $(KERNEL_SRC) is $$have, but this build expects $(KERNEL_VER)"; \
+	    echo "warning: $(KERNEL_SRC) is $$have, but this build expects $(KERNEL_VER)" $(SAY); \
 	  fi; \
 	fi
 	@echo $(KERNEL_VER) | cmp -s - $@ || echo $(KERNEL_VER) > $@
@@ -213,24 +225,24 @@ $(BUILD)/kernel-version: versions.mk | $(KERNEL_SRC)/Makefile
 # inside it, so clean that up once (it only removes build output).
 $(KERNEL_SRC)/.elmos-clean: | $(KERNEL_SRC)/Makefile
 	if [ -e $(KERNEL_SRC)/.config ] || [ -d $(KERNEL_SRC)/include/config ]; then \
-	  echo "Cleaning the old in-tree kernel build in $(KERNEL_SRC) (make mrproper)"; \
+	  echo "Cleaning the old in-tree kernel build in $(KERNEL_SRC) (make mrproper)" $(SAY); \
 	  $(MAKE) -C $(KERNEL_SRC) mrproper; fi
 	touch $@
 
 $(KOUT)/.config: kernel/elmos.config $(BUILD)/kernel-version | $(KERNEL_SRC)/.elmos-clean check-deps
 	@mkdir -p $(KOUT)
-	$(KMAKE) O=$(abspath $(KOUT)) tinyconfig
+	+$(KMAKE) O=$(abspath $(KOUT)) tinyconfig
 	cd $(KOUT) && $(abspath $(KERNEL_SRC))/scripts/kconfig/merge_config.sh -m -O . .config $(abspath kernel/elmos.config)
-	$(KMAKE) O=$(abspath $(KOUT)) olddefconfig
+	+$(KMAKE) O=$(abspath $(KOUT)) olddefconfig
 	tools/check-kernel-config.sh $@ kernel/elmos.config || { mv $@ $@.rejected; exit 1; }
 
 $(BUILD)/bzImage: $(KOUT)/.config $(BUILD)/kernel-date
-	$(KMAKE) O=$(abspath $(KOUT)) bzImage
+	+$(KMAKE) O=$(abspath $(KOUT)) bzImage
 	cp $(KOUT)/arch/x86/boot/bzImage $@
 
 # After bzImage, not beside it: two makes at once in one kernel output directory collide.
 $(BUILD)/kheaders/include/linux/input.h: $(KOUT)/.config | $(BUILD)/bzImage
-	$(KMAKE) O=$(abspath $(KOUT)) headers_install INSTALL_HDR_PATH=$(abspath $(BUILD)/kheaders)
+	+$(KMAKE) O=$(abspath $(KOUT)) headers_install INSTALL_HDR_PATH=$(abspath $(BUILD)/kheaders)
 
 # The USB kernel: the same config plus the built-in initramfs and command line.
 # Rewritten only when it changes (like gpu-setting), so the USB kernel isn't reconfigured for nothing.
@@ -245,14 +257,14 @@ $(BUILD)/usb.config: FORCE
 
 $(KOUT_USB)/.config: kernel/elmos.config $(BUILD)/usb.config $(BUILD)/kernel-version | $(KERNEL_SRC)/.elmos-clean check-deps
 	@mkdir -p $(KOUT_USB)
-	$(KMAKE) O=$(abspath $(KOUT_USB)) tinyconfig
+	+$(KMAKE) O=$(abspath $(KOUT_USB)) tinyconfig
 	cd $(KOUT_USB) && $(abspath $(KERNEL_SRC))/scripts/kconfig/merge_config.sh -m -O . .config \
 	  $(abspath kernel/elmos.config) $(abspath $(BUILD)/usb.config)
-	$(KMAKE) O=$(abspath $(KOUT_USB)) olddefconfig
+	+$(KMAKE) O=$(abspath $(KOUT_USB)) olddefconfig
 	tools/check-kernel-config.sh $@ kernel/elmos.config $(BUILD)/usb.config || { mv $@ $@.rejected; exit 1; }
 
 $(BUILD)/BOOTX64.EFI: $(KOUT_USB)/.config $(BUILD)/initramfs-usb.cpio $(BUILD)/kernel-date
-	$(KMAKE) O=$(abspath $(KOUT_USB)) bzImage
+	+$(KMAKE) O=$(abspath $(KOUT_USB)) bzImage
 	cp $(KOUT_USB)/arch/x86/boot/bzImage $@
 
 # ---- the /init binary: the host (Rust, host/init) + Elm program, one static executable
@@ -279,7 +291,7 @@ $(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name 
 # the file and line), so its errors come first, then wire's.
 define WIRE
 	@echo "$(BUILD)/wire-tool $(2)"
-	@if $(BUILD)/wire-tool $(2) 2> $(1)/wire-errors; then cat $(1)/wire-errors >&2; else \
+	@if $(BUILD)/wire-tool $(2) 2> $(1)/wire-errors; then cat $(1)/wire-errors $(SAY); else \
 	  echo "wire failed: compiling with placeholder codecs to see what eco says" >&2; \
 	  if (cd $(1) && $(ECO) make src/ElmOs.elm --output=/dev/null > eco-output 2>&1); then \
 	    echo "eco is happy with the code, so it's something only tools/wire can't handle:" >&2; \
@@ -332,6 +344,7 @@ test-wire: $(BUILD)/wire-tool | check-deps
 	$(BUILD)/wire-tool --src $(BUILD)/wire-freeze-test/src --out $(BUILD)/wire-freeze-test/out --runtime elm/src/Wire.elm \
 	  --entry ElmOs --config Nest.config --model Nest.Model --msg Nest.Msg --freeze yes
 	cd $(BUILD)/wire-freeze-test && $(ECO) make src/Evergreen/V1/Nest.elm --output=/dev/null
+	@echo "passed: test-wire" $(SAY)
 
 $(BUILD)/wire-tool: $(BUILD)/wire-tool.o
 	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
@@ -374,7 +387,9 @@ $(BUILD)/model-version: FORCE
 
 # What CI publishes for each commit on main (tools/release.sh): the Elm program and
 # its manifest, in build/release.
-release: $(BUILD)/elm $(BUILD)/host-version | check-migration
+# check-migration first, alone, so that when it fails it's the one thing said.
+release: check-migration
+	+$(MAKE) $(BUILD)/elm $(BUILD)/host-version
 	tools/release.sh
 
 # The host is Rust (host/): /init, and elmos-gpu.
@@ -576,7 +591,11 @@ $(BUILD)/console.cpio: $(BUILD)/source-date | $(KERNEL_SRC)/Makefile
 $(BUILD)/initramfs-usb.cpio: $(BUILD)/console.cpio $(BUILD)/initramfs.cpio $(BUILD)/firmware.cpio
 	cat $^ > $@
 
-usb: $(BUILD)/elmos-usb.img
+# check-migration first, alone, so that when it fails it stops the build at once and is
+# the one thing said, rather than being lost among a kernel build's output.
+usb: check-migration
+	+$(MAKE) $(BUILD)/elmos-usb.img
+	@echo "Built $(BUILD)/elmos-usb.img" $(SAY)
 
 $(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
 	scripts/make-usb-image.sh $< $@
@@ -585,14 +604,14 @@ check-usb-deps:
 	@scripts/check-deps.sh usb
 
 # Writes the image to a USB stick, after checking it is one and asking you.
-usb-write: $(BUILD)/elmos-usb.img
+usb-write: usb
 	scripts/write-usb.sh $(BUILD)/elmos-usb.img $(DEV)
 
 # Boots the USB image in QEMU on UEFI firmware (OVMF), with USB keyboard and mouse.
-run-usb: $(BUILD)/elmos-usb.img | check-run-deps
+run-usb: usb | check-run-deps
 	scripts/run-qemu.sh --usb
 
-test-usb: $(BUILD)/elmos-usb.img | check-run-deps
+test-usb: usb | check-run-deps
 	python3 scripts/test-qemu.py --usb
 
 # ---- running
@@ -726,17 +745,20 @@ test-containers: | check-deps
 	  --output=$(abspath $(BUILD)/containers/tests.js)
 	node -e "require('$(abspath $(BUILD)/containers/tests.js)').Elm.MainJs.init().ports.result.subscribe(e => \
 	  { console.log(e.length ? 'eco/containers in JS FAIL: ' + e.join('; ') : 'eco/containers in JS: PASS'); process.exitCode = e.length ? 1 : 0 })"
+	@echo "passed: test-containers" $(SAY)
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
 review:
 	cd elm && npx --yes elm-review --compiler $(ECO_BIN)
+	@echo "passed: review" $(SAY)
 
 review-fix:
 	cd elm && npx --yes elm-review --compiler $(ECO_BIN) --fix-all
 
 review-tests:
 	cd elm/review && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+	@echo "passed: review-tests" $(SAY)
 
 # Unit tests of the Elm program's pure logic (elm/tests), run in node with elm-test.
 # They run on the build/wire copy, so they can use the generated encoders and decoders.
@@ -745,25 +767,30 @@ elm-tests: $(BUILD)/wire/.done
 	$(CARGO) run -q --locked --manifest-path host/Cargo.toml -p protocol --bin protocol-examples --target-dir $(abspath $(BUILD)/cargo-tools) > $(BUILD)/protocol-examples.json
 	python3 -I tools/protocol-examples.py host/protocol/examples.json $(BUILD)/protocol-examples.json $(BUILD)/wire/tests/ProtocolExamples.elm
 	cd $(BUILD)/wire && npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
+	@echo "passed: elm-tests" $(SAY)
 
 # The host's side of the messages between Elm and the host, against the examples in
 # host/protocol/examples.json (elm/tests/ProtocolTest.elm checks the Elm side). Runs on
 # the build machine, not musl: the protocol crate has nothing of eco's.
 protocol-tests:
 	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p protocol --target-dir $(abspath $(BUILD)/cargo-tools)
+	@echo "passed: protocol-tests" $(SAY)
 
 # /init's unit tests, on the build machine (they need nothing of eco's or musl's).
 host-tests:
 	$(CARGO) test -q --locked --manifest-path host/Cargo.toml -p elmos-host --target-dir $(abspath $(BUILD)/cargo-tools)
+	@echo "passed: host-tests" $(SAY)
 
 # One after the other: they share npx's and eco's caches.
 # That the dev runner (host/dev) still compiles: it stands in for /init, so a new
 # message in host/protocol must be handled there too.
 dev-check:
 	$(CARGO) check -q --locked --manifest-path host/Cargo.toml -p elmos-dev --target-dir $(abspath $(BUILD)/cargo-tools)
+	@echo "passed: dev-check" $(SAY)
 
 check:
-	$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
+	+$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
+	@echo "make check: all passed" $(SAY)
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
 # so it is never in build/ otherwise.
@@ -771,6 +798,35 @@ atlas:
 	@mkdir -p $(BUILD)
 	$(CARGO) run -q --manifest-path host/Cargo.toml -p common --example atlas-png \
 	  --target-dir $(abspath $(BUILD)/cargo-tools) -- $(abspath $(BUILD)/atlas.png)
+	@echo "Wrote $(BUILD)/atlas.png" $(SAY)
 
 clean:
 	rm -rf $(BUILD)
+
+# ---- Quiet output
+#
+# make prints only what needs you: the whole output of a step that failed (after the
+# step's command), warnings, and what was built or passed. tools/quiet-sh does that: it
+# is the shell recipes run with, and it keeps a step's output to itself unless the step
+# fails. What a recipe has to say even when it works goes to $(SAY).
+#
+# `make V=1 ...` prints everything, as make normally does: every command, and all that
+# it prints (V=1 is the kernel's own switch for this, and it passes to the kernel's make).
+#
+# The targets that are about what they print (QEMU's console, the tests' progress, the
+# questions usb-write asks) print it as they go, without their commands. Their
+# prerequisites are still quiet: `private` keeps the setting to the target itself.
+#
+# This is set last, after the makefile's own $(shell)s have run with the normal shell;
+# a variable that runs $(shell) later, while recipes run, must be `:=` (it would run
+# with this shell, which would keep its output to itself).
+V ?= 0
+ifeq ($(V),1)
+SAY := >&2
+else
+MAKEFLAGS += -s --no-print-directory
+SAY = >>"$$ELMOS_SAY"
+SHELL := $(CURDIR)/tools/quiet-sh
+eco migration refresh docker run run-cpu run-usb test test-gpu test-usb test-displays test-persist \
+test-switch test-errors test-update measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
+endif

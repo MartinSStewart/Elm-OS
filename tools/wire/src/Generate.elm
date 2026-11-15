@@ -2051,13 +2051,15 @@ changeErrors defs used modelKey latest =
     else
         [ "the Model's types have changed since version "
             ++ String.fromInt latest
-            ++ " ("
+            ++ ", and there's no migration for that yet.\n    ("
             ++ describeChanges frozen current
-            ++ "). Run `make migration` to freeze them as version "
+            ++ ")\n  To add one:\n    1. make migration\n       (freezes the types as version "
             ++ String.fromInt (latest + 1)
-            ++ ", then fill in the migration it writes (elm/src/Evergreen/Migrate/V"
+            ++ " and writes elm/src/Evergreen/Migrate/V"
             ++ String.fromInt (latest + 1)
-            ++ ".elm) wherever it says Unimplemented."
+            ++ ".elm)\n    2. fill in elm/src/Evergreen/Migrate/V"
+            ++ String.fromInt (latest + 1)
+            ++ ".elm wherever it says Unimplemented"
         ]
 
 

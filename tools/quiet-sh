@@ -1,0 +1,34 @@
+#!/bin/sh
+# make's shell unless V=1 (see "Quiet output" in the Makefile): runs one recipe line
+# with sh, keeping what it prints to itself. When the line fails, all of that is
+# printed, after the line itself; when it works, nothing is.
+#
+#   usage (by make): tools/quiet-sh -c 'recipe line'
+#
+# A recipe line that has something to say even when it works (a warning, what was
+# built) writes it to "$ELMOS_SAY", this script's own stderr: the Makefile's $(SAY).
+# Nested runs (a recipe that runs make, which runs this again) keep the outermost one.
+
+if [ -z "$ELMOS_SAY" ]; then
+    ELMOS_SAY=/proc/$$/fd/2
+    export ELMOS_SAY
+fi
+
+log=$(mktemp "${TMPDIR:-/tmp}/elmos-make.XXXXXX") || exit 1
+# In a subshell: dash would otherwise point its own stderr at the log while the line
+# runs, and so "$ELMOS_SAY" too.
+(/bin/sh "$@") > "$log" 2>&1
+status=$?
+if [ "$status" -ne 0 ]; then
+    # "$@" is -c and the line; show the line's start (link lines run to pages).
+    eval "line=\${$#}"
+    line=$(printf '%s\n' "$line" | head -c 400)
+    if [ -t 2 ]; then red=$(printf '\033[1;31m') plain=$(printf '\033[0m'); else red= plain=; fi
+    {
+        printf '\n%sFAILED:%s %s\n' "$red" "$plain" "$line"
+        cat "$log"
+        printf '\n'
+    } >&2
+fi
+rm -f "$log"
+exit "$status"

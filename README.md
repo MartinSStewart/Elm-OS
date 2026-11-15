@@ -42,6 +42,9 @@ make bench        # times the Hacker News app on a saved 3,236-comment page, nat
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 
+make is quiet: it prints errors (with all the output of the step that failed), warnings,
+and what was built or passed. `make V=1 ...` prints every command and all its output.
+
 CI (`.github/workflows/boot-test.yml`) runs `make`, `make check`, `make test` and
 `make test-persist` on every push.
 
