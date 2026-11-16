@@ -15,8 +15,10 @@
 //!     (common::raster), with the same atlas. Resizing a window sends Elm the new
 //!     display sizes.
 //!   - Keys, the mouse and the wheel come from the window. Keys go to Elm as the same
-//!     Linux key codes a keyboard sends Elm OS. The cursor is your desktop's, as if it
-//!     were on a cursor plane, so Elm draws its orange "frame lag" copy.
+//!     Linux key codes a keyboard sends Elm OS. On Wayland, the desktop is asked to
+//!     keep its shortcuts (PrintScreen, say) to itself while a window has the focus,
+//!     as QEMU does (shortcuts.rs). The cursor is your desktop's, as if it were on a
+//!     cursor plane, so Elm draws its orange "frame lag" copy.
 //!   - HTTP is real: host/init's http.rs, compiled in as it is.
 //!   - Reading files is real too (host/init's files.rs): the debug overlay shows your
 //!     computer's battery, for instance. Writing kernel settings (writeSys) is ignored.
@@ -56,6 +58,7 @@ mod stats;
 mod elm;
 mod fake;
 mod program;
+mod shortcuts;
 mod sys;
 
 use std::fs::OpenOptions;
@@ -154,6 +157,9 @@ struct Running {
 
 /// A display's window, what shows our pixels in it, and what it shows.
 struct Screen {
+    /// Keeps the desktop's shortcuts (PrintScreen, say) from taking keys while the
+    /// window has the focus (shortcuts.rs). Before the window, so it goes first.
+    _shortcuts: Option<shortcuts::Inhibit>,
     window: Rc<Window>,
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     w: u32,
@@ -709,7 +715,7 @@ impl ApplicationHandler for Runner {
                 // The window manager may have made it another size.
                 let size = window.inner_size();
                 let (w, h) = if size.width > 0 && size.height > 0 { (size.width, size.height) } else { (w, h) };
-                Ok(Screen { window, surface, w, h, pixels: vec![0; w as usize * h as usize], scene: None })
+                Ok(Screen { _shortcuts: shortcuts::inhibit(&window), window, surface, w, h, pixels: vec![0; w as usize * h as usize], scene: None })
             });
             match made {
                 Ok(screen) => self.screens.push(screen),

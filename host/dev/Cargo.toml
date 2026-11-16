@@ -18,6 +18,11 @@ libc = "0.2"
 # A window (X11 or Wayland, their libraries loaded at run time, so building needs no
 # headers) and a way to show our pixels in it.
 winit = { version = "0.30", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
+# Asking a Wayland desktop to leave its shortcuts alone (src/shortcuts.rs), on winit's
+# own connection; the versions winit already uses.
+wayland-client = { version = "0.31", default-features = false }
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
+wayland-protocols = { version = "0.32", default-features = false, features = ["client", "unstable"] }
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
 # The same as host/init, whose HTTP, WebSocket, file and stats code this compiles in (main.rs).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
