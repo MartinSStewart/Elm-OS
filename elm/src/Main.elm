@@ -700,7 +700,7 @@ step event model =
         Wheel clicks ->
             case model.takingScreenshot of
                 Just data ->
-                    updateScreenshotPreview { data | depth = Debug.log "depth" (data.depth + clicks) } model
+                    updateScreenshotPreview { data | depth = data.depth + clicks } model
 
                 Nothing ->
                     scrollUnderMouse (Ui.WheelClicks clicks) model
@@ -1784,7 +1784,7 @@ view model display ui =
                 Nothing ->
                     []
            )
-        ++ (if Display.contains (mousePosition model) display then
+        ++ (if Display.contains model.mouse display then
                 Sprite.cursor
                     (if Maybe.map .hardwareCursor model.renderer == Just True then
                         -- The host moves the real cursor; this orange one trails it by however
@@ -1795,7 +1795,7 @@ view model display ui =
                         cursorColor model
                     )
                     (Display.uiScale display)
-                    (Display.local display (mousePosition model))
+                    (Display.local display model.mouse)
 
             else
                 []
