@@ -13,6 +13,7 @@ pub struct CpuOutput {
     pub stride: usize,
     fb_id: u32,
     scanout: *mut u32,
+    scanout_len: usize,
     /// Drawn here, then copied to the screen: reading back the scanout buffer is slow.
     pub back: Vec<u32>,
     cursor_handle: u32,
@@ -27,6 +28,17 @@ pub struct CpuDisplay {
 
 // SAFETY: the mappings are only touched by the thread that owns the display.
 unsafe impl Send for CpuDisplay {}
+
+impl Drop for CpuDisplay {
+    /// The mappings keep the card open, and with it the right to set modes, which the
+    /// next renderer needs (after a display is plugged in or out).
+    fn drop(&mut self) {
+        for o in &self.outputs {
+            // SAFETY: unmaps what open_output mapped; nothing uses it after this.
+            unsafe { libc::munmap(o.scanout as *mut libc::c_void, o.scanout_len) };
+        }
+    }
+}
 
 impl CpuDisplay {
     /// The first card with a connected screen. On a PC that is usually card0, but the
@@ -91,7 +103,8 @@ impl CpuDisplay {
             log!("host", "addfb: {}", std::io::Error::last_os_error());
             return None;
         }
-        let scanout = drm::map_dumb(card, dumb.handle, dumb.size as usize)?;
+        let scanout_len = dumb.size as usize;
+        let scanout = drm::map_dumb(card, dumb.handle, scanout_len)?;
         if !drm::set_crtc(card, &out, fb.fb_id) {
             log!("host", "setcrtc {}: {}", out.name, std::io::Error::last_os_error());
             return None;
@@ -102,6 +115,7 @@ impl CpuDisplay {
             stride,
             fb_id: fb.fb_id,
             scanout,
+            scanout_len,
             back: vec![0; stride * h as usize],
             cursor_handle: 0,
         })

@@ -21,8 +21,7 @@ import Wired
 
 
 type ToElm
-    = -- First: the connected displays, the built-in one (if any) first. Sent again
-      -- whenever they change.
+    = -- First, to each program: the connected displays, the built-in one (if any) first.
       Displays (List Display)
       -- Draw a frame now: the host's monotonic clock, in milliseconds.
     | Frame Float
@@ -89,6 +88,9 @@ type ToElm
     | WebSocketMessage String Bytes
       -- id, why: it closed, or couldn't open. The id can be used again.
     | WebSocketClosed String String
+      -- A display was plugged in or out: the displays now. Unlike Displays, not the
+      -- start of a program.
+    | DisplaysChanged (List Display)
 
 
 type HttpFailure
@@ -242,6 +244,9 @@ decoder =
 
                     29 ->
                         BD.map2 WebSocketClosed P.decodeString P.decodeString
+
+                    30 ->
+                        BD.map DisplaysChanged (P.decodeList Display.decoder)
 
                     _ ->
                         BD.fail

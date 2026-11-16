@@ -181,8 +181,8 @@ pub struct HttpRequest {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ToElm {
-    /// First: the connected displays, the built-in one (if any) first. Sent again
-    /// whenever they change.
+    /// First, to each program: the connected displays, the built-in one (if any)
+    /// first. When they change later, `DisplaysChanged` says so.
     Displays { displays: Vec<Display> },
     /// Draw a frame now. The host's monotonic clock, in milliseconds.
     Frame { time: f64 },
@@ -277,6 +277,9 @@ pub enum ToElm {
     },
     /// The WebSocket has closed, or couldn't open, and why. Its id can be used again.
     WebSocketClosed { id: String, reason: String },
+    /// A display was plugged in or out (or a window resized, in the dev runner): the
+    /// displays now, as in `Displays`. Unlike `Displays`, not the start of a program.
+    DisplaysChanged { displays: Vec<Display> },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -476,9 +479,10 @@ mod tests {
             ToElm::WebSocketOpened { .. } => "webSocketOpened",
             ToElm::WebSocketMessage { .. } => "webSocketMessage",
             ToElm::WebSocketClosed { .. } => "webSocketClosed",
+            ToElm::DisplaysChanged { .. } => "displaysChanged",
         }
     }
-    const TO_ELM_TAGS: usize = 30;
+    const TO_ELM_TAGS: usize = 31;
 
     #[test]
     fn reads_the_render_example() {

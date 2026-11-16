@@ -27,6 +27,8 @@ use protocol::{Display, PowerAction, ToElm};
 use crate::display::CpuDisplay;
 use crate::effects::{self, Effect, FromElm};
 use crate::gpu::Gpu;
+use crate::hotplug::Hotplug;
+use common::drm;
 use crate::input::{Area, Inputs};
 use crate::stats::Stats;
 use crate::sys::{self, now};
@@ -214,6 +216,69 @@ impl Host {
         elm::send(&ToElm::Displays { displays: self.displays.clone() });
         let area = self.area();
         (self.inputs.mouse_x, self.inputs.mouse_y) = area.clamp(self.inputs.mouse_x, self.inputs.mouse_y);
+    }
+
+    /// Starts the GPU renderer on the connected displays, or draws on the CPU if it
+    /// can't. Without any display, Elm still lays out for a 640 x 480 one.
+    fn open_renderer(&mut self) {
+        self.displays.clear();
+        if let Some(g) = Gpu::start(self.software_cursor) {
+            self.displays = g.displays.clone();
+            self.hw_cursor = g.cursor_plane;
+            self.renderer = Renderer::Gpu(g);
+        } else if !self.open_cpu() {
+            log!("host", "no display; input only");
+            self.hw_cursor = false;
+        }
+        if self.displays.is_empty() {
+            self.displays.push(Display {
+                id: 0,
+                name: "none".into(),
+                x: 0,
+                y: 0,
+                w: 640,
+                h: 480,
+                width_mm: 0,
+                height_mm: 0,
+            });
+        }
+    }
+
+    /// After a hotplug uevent: if the connected displays (or their modes) aren't the
+    /// ones we drive, start the renderer again on the new ones and tell Elm. Elm's
+    /// frames wait meanwhile; the GPU renderer takes a moment to load.
+    fn check_displays(&mut self) {
+        let now: Vec<(u32, u32, u32)> = (0..8)
+            .filter_map(drm::open_card)
+            .map(|card| drm::find_outputs(&card))
+            .find(|outs| !outs.is_empty())
+            .unwrap_or_default()
+            .iter()
+            .map(|o| (o.connector, o.w(), o.h()))
+            .collect();
+        let driving: Vec<(u32, u32, u32)> =
+            self.displays.iter().filter(|d| d.id != 0).map(|d| (d.id, d.w, d.h)).collect();
+        let (mut a, mut b) = (now.clone(), driving);
+        a.sort();
+        b.sort();
+        if a == b {
+            log!("host", "a display hotplug event; the displays are the same");
+            return;
+        }
+        log!("host", "the displays changed: starting the renderer again");
+        self.renderer = Renderer::Nothing; // stops the GPU renderer, or lets go of the CPU's buffers
+        self.open_renderer();
+        self.send_renderer();
+        elm::send(&ToElm::DisplaysChanged { displays: self.displays.clone() });
+        let area = self.area();
+        (self.inputs.mouse_x, self.inputs.mouse_y) = area.clamp(self.inputs.mouse_x, self.inputs.mouse_y);
+        elm::send(&ToElm::Mouse { x: self.inputs.mouse_x, y: self.inputs.mouse_y });
+        self.cursor_redraw();
+        self.cursor_move();
+        // Whatever was in flight went with the old renderer.
+        self.in_flight = 0;
+        self.cpu_next_at = None;
+        self.ask_for_frame();
     }
 
     /// For the boot time: call when a frame is on screen.
@@ -423,26 +488,10 @@ pub fn run() -> ! {
     };
     // The cursor's size depends on the screen's, which we only know once a renderer is
     // up; both renderers draw the cursor themselves at start, so fix it up after.
-    if let Some(g) = Gpu::start(software_cursor) {
-        host.displays = g.displays.clone();
-        host.hw_cursor = g.cursor_plane;
-        host.renderer = Renderer::Gpu(g);
-    } else if !host.open_cpu() {
-        log!("host", "no display; input only");
-    }
-    if host.displays.is_empty() {
-        // Input only: Elm still lays out for a screen.
-        host.displays.push(Display {
-            id: 0,
-            name: "none".into(),
-            x: 0,
-            y: 0,
-            w: 640,
-            h: 480,
-            width_mm: 0,
-            height_mm: 0,
-        });
-    }
+    host.open_renderer();
+    let hotplug = Hotplug::open();
+    // When to look at the connectors again: hotplug events come in bursts.
+    let mut check_displays_at: Option<f64> = None;
     // A guess until Elm sends its UI scale (Units.scaleFor) with the cursor colour.
     host.cursor_scale = if host.displays[0].w >= 2000 { 2 } else { 1 };
     host.cursor_redraw();
@@ -469,13 +518,17 @@ pub fn run() -> ! {
             _ => -1,
         };
         let input_fds = host.inputs.fds();
-        let mut fds = vec![sys::pollfd(effects::wake_fd()), sys::pollfd(gpu_fd)];
+        let hotplug_fd = hotplug.as_ref().map_or(-1, |h| h.fd());
+        let mut fds = vec![sys::pollfd(effects::wake_fd()), sys::pollfd(gpu_fd), sys::pollfd(hotplug_fd)];
         fds.extend(input_fds.iter().map(|&fd| sys::pollfd(fd)));
 
         // Sleep until the next thing that is due: an input device scan (about once a
         // second), stats, a tick, a tap's release, the CPU renderer's next frame, or the frame
         // timeout.
         let mut due = (last_scan + 1.0).min(last_stats + 0.5).min(last_tick + 1.0);
+        if let Some(t) = check_displays_at {
+            due = due.min(t);
+        }
         if let Some(t) = host.inputs.tap_release_at {
             due = due.min(t);
         }
@@ -526,6 +579,13 @@ pub fn run() -> ! {
                 host.draw(&scenes);
             }
         }
+        if fds[2].revents != 0 && hotplug.as_ref().is_some_and(|h| h.read()) {
+            check_displays_at = Some(now() + 0.3);
+        }
+        if check_displays_at.is_some_and(|t| now() >= t) {
+            check_displays_at = None;
+            host.check_displays();
+        }
         if fds[1].revents != 0 {
             let done = match &mut host.renderer {
                 Renderer::Gpu(g) => g.read_acks(&mut host.stats.gpu_ns),
@@ -554,7 +614,7 @@ pub fn run() -> ! {
         let mut moved = false;
         let area = host.area();
         for i in (0..input_fds.len()).rev() {
-            if fds[2 + i].revents != 0 {
+            if fds[3 + i].revents != 0 {
                 moved |= host.inputs.read(i, &area);
             }
         }

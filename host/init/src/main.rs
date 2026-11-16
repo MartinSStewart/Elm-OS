@@ -37,6 +37,7 @@ mod error_screen;
 mod files;
 mod gpu;
 mod host;
+mod hotplug;
 mod http;
 mod input;
 mod net;
@@ -68,6 +69,7 @@ fn test_panic() {
         Ok("main") => host::panic_at(init_started_at() + 10.0),
         _ => {}
     }
+    hotplug::test_hotplug();
 }
 
 fn main() {

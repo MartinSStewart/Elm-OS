@@ -87,7 +87,7 @@ const LATEST_KINDS: usize = 11;
 
 fn latest_slot(msg: &ToElm) -> Option<usize> {
     Some(match msg {
-        ToElm::Displays { .. } => 0,
+        ToElm::Displays { .. } | ToElm::DisplaysChanged { .. } => 0,
         ToElm::Renderer { .. } => 1,
         ToElm::System { .. } => 2,
         ToElm::Boot { .. } => 3,
@@ -207,7 +207,11 @@ pub fn send(msg: &ToElm) {
     }
     let mut s = state();
     if let Some(slot) = latest_slot(msg) {
-        s.latest[slot] = Some(msg.clone());
+        s.latest[slot] = Some(match msg {
+            // A new program starts from the displays as they are now.
+            ToElm::DisplaysChanged { displays } => ToElm::Displays { displays: displays.clone() },
+            _ => msg.clone(),
+        });
         if s.to_elm.is_none() {
             return; // the next program gets it when it starts
         }

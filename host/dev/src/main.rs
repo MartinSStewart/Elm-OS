@@ -618,7 +618,7 @@ impl Runner {
                     s.h = size.height;
                     s.pixels = vec![0; size.width as usize * size.height as usize];
                     self.shown.clear();
-                    elm::send(&ToElm::Displays { displays: self.displays() });
+                    elm::send(&ToElm::DisplaysChanged { displays: self.displays() });
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {

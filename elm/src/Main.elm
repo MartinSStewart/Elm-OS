@@ -53,6 +53,9 @@ import Wpa2Password exposing (Wpa2Password)
 
 type Input
     = Displays (List Display)
+      -- A display was plugged in or out (an app on a display that has gone shows on
+      -- the main one, and goes back when the display does).
+    | DisplaysChanged (List Display)
       -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
     | Frame Float
     | HttpResponse String (Result HttpError { status : Int, body : Bytes })
@@ -114,6 +117,9 @@ toInput message =
     case message of
         HostMessage.Displays displays ->
             Ok (Displays displays)
+
+        HostMessage.DisplaysChanged displays ->
+            Ok (DisplaysChanged displays)
 
         HostMessage.Frame time ->
             Ok (Frame time)
@@ -455,6 +461,10 @@ step event model =
               }
             , BootInfo.start
             )
+
+        DisplaysChanged displays ->
+            -- The host sends where the mouse is next.
+            ( { model | displays = displays }, [] )
 
         Frame time ->
             let

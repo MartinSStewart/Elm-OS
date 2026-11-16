@@ -58,6 +58,7 @@
     {"webSocketOpened": {"id": "ascii-collab", "headers": [["set-cookie", "sid=abc; Path=/"]]}},
     {"webSocketMessage": {"id": "ascii-collab", "data": [4, 0, 0, 0, 1, 1]}},
     {"webSocketClosed": {"id": "ascii-collab", "reason": "closed by the server"}},
+    {"displaysChanged": {"displays": [{"id": 33, "name": "eDP-1", "x": 0, "y": 0, "w": 2560, "h": 1600, "widthMm": 300, "heightMm": 190}]}},
     {"httpResponse": {"id": "weather", "status": 200, "body": [123, 125, 0, 255]}},
     {"httpError": {"id": "weather", "error": "timeout", "message": "the server took too long"}},
     {"httpError": {"id": "weather", "error": "badUrl", "message": "no host"}},
