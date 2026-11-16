@@ -19,6 +19,8 @@ import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
 import Clock
+import TicTacToe
+import TicTacToe.Types
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
@@ -316,6 +318,8 @@ type alias Model =
     , asciiCollab : AsciiCollab.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
+    , ticTacToe : TicTacToe.Model
+    , ticTacToeOpen : Bool
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
@@ -345,6 +349,7 @@ type App
     | HackerNewsApp
     | AsciiCollabApp
     | CalculatorApp
+    | TicTacToeApp
     | EditorApp
 
 
@@ -403,6 +408,8 @@ init =
     , asciiCollab = AsciiCollab.init
     , calculator = Calculator.init
     , calculatorOpen = False
+    , ticTacToe = TicTacToe.init
+    , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
     , upgradingTo = Nothing
@@ -1020,6 +1027,9 @@ appButton id =
         CalculatorButton ->
             Just CalculatorApp
 
+        TicTacToeButton ->
+            Just TicTacToeApp
+
         EditorButton ->
             Just EditorApp
 
@@ -1084,6 +1094,9 @@ appButton id =
         Calculator _ ->
             Nothing
 
+        TicTacToe _ ->
+            Nothing
+
         EditorInput ->
             Nothing
 
@@ -1114,6 +1127,9 @@ appIsOpen app model =
 
         CalculatorApp ->
             model.calculatorOpen
+
+        TicTacToeApp ->
+            model.ticTacToeOpen
 
         EditorApp ->
             model.editorOpen
@@ -1236,6 +1252,18 @@ clickElement model id uiState =
                 , []
                 )
 
+        TicTacToeButton ->
+            if model.ticTacToeOpen then
+                ( { model | ticTacToeOpen = False }, [] )
+
+            else
+                ( { model
+                    | ticTacToeOpen = True
+                    , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState
+                  }
+                , []
+                )
+
         PowerOffButton ->
             ( { model | confirmPower = Just PowerOff }, [] )
 
@@ -1276,6 +1304,25 @@ clickElement model id uiState =
 
                 Calculator.Types.Panel ->
                     ( { model | uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState }, [] )
+
+        TicTacToe ticTacToeId ->
+            case ticTacToeId of
+                TicTacToe.Types.CloseButton ->
+                    ( { model | ticTacToeOpen = False }, [] )
+
+                TicTacToe.Types.NewGameButton ->
+                    ( { model | ticTacToe = TicTacToe.init, uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState }, [] )
+
+                TicTacToe.Types.Square i ->
+                    ( { model
+                        | ticTacToe = TicTacToe.press i model.ticTacToe
+                        , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState
+                      }
+                    , []
+                    )
+
+                TicTacToe.Types.Panel ->
+                    ( { model | uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState }, [] )
 
         News _ ->
             ( model, [] )
@@ -1591,6 +1638,9 @@ dragSelect focus mouse position model =
         CalculatorButton ->
             model
 
+        TicTacToeButton ->
+            model
+
         PowerOffButton ->
             model
 
@@ -1604,6 +1654,9 @@ dragSelect focus mouse position model =
             model
 
         Calculator _ ->
+            model
+
+        TicTacToe _ ->
             model
 
         EditorButton ->
@@ -1974,6 +2027,7 @@ displayUi model display =
                 ++ [ toolbar model display ]
                 ++ on EditorApp (\() -> editorWindow model)
                 ++ on CalculatorApp (\() -> calculatorWindow model)
+                ++ on TicTacToeApp (\() -> ticTacToeWindow model)
                 ++ on AboutApp (\() -> aboutPage model)
                 ++ on NewsApp (\() -> Ui.topRight { size = size } (News.view model.uiState model.news))
                 ++ on AsciiCollabApp
@@ -3007,6 +3061,7 @@ toolbar model display =
                         (t "Hacker news")
                     , Ui.selectableButton { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
+                    , Ui.selectableButton { id = TicTacToeButton, padding = small } (openHere TicTacToeApp) (t "Noughts")
                     , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
@@ -3027,6 +3082,20 @@ calculatorWindow model =
             , borderAndFill = Ui.NoBorderOrFill
             }
             (Calculator.view (calculatorFocused model) model.calculator)
+        )
+
+
+{-| The noughts and crosses window, under the toolbar.
+-}
+ticTacToeWindow : Model -> Ui.Element UiId
+ticTacToeWindow model =
+    Ui.topLeft { size = appUiSize TicTacToeApp model }
+        (Ui.el
+            { padding = { topLeft = Coord.xy 8 (toolbarHeight + 8), bottomRight = Coord.origin }
+            , inFront = []
+            , borderAndFill = Ui.NoBorderOrFill
+            }
+            (TicTacToe.view model.ticTacToe)
         )
 
 

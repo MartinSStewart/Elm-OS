@@ -15,6 +15,7 @@ import AsciiCollab.Types
 import Calculator.Types
 import HackerNews.Types
 import News.Types
+import TicTacToe.Types
 import Wifi exposing (Ssid)
 
 
@@ -30,6 +31,7 @@ type UiId
     | NewsButton
     | CloseAboutButton
     | CalculatorButton
+    | TicTacToeButton
     | PowerOffButton
     | RestartButton
     | ConfirmPowerButton
@@ -39,6 +41,7 @@ type UiId
     | EditorWindow
     | CloseEditorButton
     | Calculator Calculator.Types.UiId
+    | TicTacToe TicTacToe.Types.UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId
