@@ -1,6 +1,6 @@
-module Calculator.Types exposing (Key(..), Operator(..))
+module Calculator.Types exposing (Key(..), Operator(..), UiId(..))
 
-{-| The calculator's keys: here rather than in Calculator.elm, as UiId.elm can't import
+{-| The calculator's keys and the ids of its elements: here rather than in Calculator.elm, as UiId.elm can't import
 a module that imports it.
 -}
 
@@ -20,3 +20,9 @@ type Key
     | Negate
     | Backspace
     | Clear
+
+
+type UiId
+    = KeyButton Key
+    | CloseButton
+    | Panel

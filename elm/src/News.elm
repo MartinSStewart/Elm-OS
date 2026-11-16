@@ -40,6 +40,7 @@ import SeqDict
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
+import News.Types
 import UiId exposing (UiId(..))
 
 
@@ -155,10 +156,10 @@ daysView uiState days =
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
         |> Ui.viewport
-            { id = NewsViewport
+            { id = News News.Types.Viewport
             , viewportHeight = Quantity.unsafe 1000
             , model =
-                case SeqDict.get NewsViewport uiState.uiState of
+                case SeqDict.get (News News.Types.Viewport) uiState.uiState of
                     Just (ViewportState viewport) ->
                         viewport
 

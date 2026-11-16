@@ -11,7 +11,7 @@ import SeqDict
 import Sprite
 import Test exposing (Test, describe, test)
 import Ui
-import UiId exposing (UiId(..))
+import UiId exposing (UiId)
 import Units exposing (DevicePixels)
 import Wire
 
@@ -21,7 +21,7 @@ import Wire
 openPosts : Int -> HackerNews.Model -> HackerNews.Model
 openPosts n model =
     List.range 1 n
-        |> List.foldl (\i acc -> HackerNews.onClick (HackerNewsNewsPostButton (PostId (String.fromInt i))) acc |> Tuple.first) model
+        |> List.foldl (\i acc -> HackerNews.onClick (HackerNews.Types.PostButton (PostId (String.fromInt i))) acc |> Tuple.first) model
 
 
 respond : HackerNews.HttpRequestId -> String -> HackerNews.Model -> HackerNews.Model
@@ -67,9 +67,9 @@ suite =
         , test "opening a post again keeps it"
             (\() ->
                 openPosts 10 HackerNews.init
-                    |> HackerNews.onClick (HackerNewsNewsPostButton (PostId "1"))
+                    |> HackerNews.onClick (HackerNews.Types.PostButton (PostId "1"))
                     |> Tuple.first
-                    |> HackerNews.onClick (HackerNewsNewsPostButton (PostId "11"))
+                    |> HackerNews.onClick (HackerNews.Types.PostButton (PostId "11"))
                     |> Tuple.first
                     |> .comments
                     |> SeqDict.member (PostId "1")
@@ -93,7 +93,7 @@ suite =
                     saved : String
                     saved =
                         HackerNews.init
-                            |> HackerNews.onClick (HackerNewsNewsPostButton (PostId "5"))
+                            |> HackerNews.onClick (HackerNews.Types.PostButton (PostId "5"))
                             |> Tuple.first
                             |> respond (HackerNews.GetPostRequest (PostId "5")) commentsPage
                             |> HackerNews.w3_encode_Model
@@ -110,7 +110,7 @@ suite =
             (\() ->
                 let
                     collapsed =
-                        HackerNews.onClick (HackerNewsCommentToggle 0) commentsModel |> Tuple.first
+                        HackerNews.onClick (HackerNews.Types.CommentToggle 0) commentsModel |> Tuple.first
                 in
                 draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) Ui.init uiScreen collapsed)
                     |> Expect.equal (draw (view Ui.noLazyCache collapsed))
@@ -133,7 +133,7 @@ suite =
 commentsModel : HackerNews.Model
 commentsModel =
     HackerNews.init
-        |> HackerNews.onClick (HackerNewsNewsPostButton (PostId "5"))
+        |> HackerNews.onClick (HackerNews.Types.PostButton (PostId "5"))
         |> Tuple.first
         |> respond (HackerNews.GetPostRequest (PostId "5")) commentsPage
 

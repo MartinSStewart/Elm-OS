@@ -19,6 +19,7 @@ module AsciiCollab.Types exposing
     , ServerChange(..)
     , ToBackend(..)
     , ToFrontend(..)
+    , UiId(..)
     , UnsubscribeEmailKey(..)
     , UserId(..)
     , Validated
@@ -184,3 +185,11 @@ type alias LoadingData_ =
     , undoCurrent : Dict ( Int, Int ) Int
     , viewBounds : Bounds CellUnit
     }
+
+
+{-| The ids of the app's elements (not one of ascii-collab's types).
+-}
+type UiId
+    = OpenButton
+    | CloseButton
+    | GridArea

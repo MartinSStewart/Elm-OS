@@ -153,24 +153,20 @@ randomBytesPath =
 -- OPENING AND CLOSING
 
 
-onClick : UiId -> Model -> ( Model, List Effect )
+onClick : AsciiCollab.Types.UiId -> Model -> ( Model, List Effect )
 onClick uiId model =
     case uiId of
-        AsciiCollabOpenButton ->
+        AsciiCollab.Types.OpenButton ->
             if model.isOpen then
                 close model
 
             else
                 connect { model | isOpen = True }
 
-        AsciiCollabCloseButton ->
+        AsciiCollab.Types.CloseButton ->
             close model
 
-        AsciiCollabGridArea ->
-            ( model, [] )
-
-        _ ->
-            -- Another app's id: Main only sends ASCII collab's ids here.
+        AsciiCollab.Types.GridArea ->
             ( model, [] )
 
 
@@ -848,8 +844,8 @@ view screen focused model =
                 (Ui.column { spacing = 6, padding = Ui.noPadding }
                     [ Ui.leftAndRight (Quantity.Quantity (cols * charWidth))
                         (t ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
-                        (Ui.button { id = AsciiCollabCloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-                    , Ui.elWithId AsciiCollabGridArea
+                        (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+                    , Ui.elWithId (AsciiCollab AsciiCollab.Types.GridArea)
                         { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
                         (gridView focused cols rows model)
                     ]

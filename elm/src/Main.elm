@@ -12,6 +12,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 -}
 
 import AsciiCollab
+import AsciiCollab.Types
 import BootInfo
 import Bytes exposing (Bytes)
 import Calculator
@@ -596,10 +597,10 @@ step event model =
                     uiMouse model
             in
             case hover model of
-                ( AsciiCollabGridArea, { relativePositionToUi } ) :: _ ->
+                ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
                     ( { model
                         | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
-                        , uiState = Ui.setFocus (Just AsciiCollabGridArea) model.uiState
+                        , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
                       }
                     , []
                     )
@@ -626,7 +627,7 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case List.filter (\( id, _ ) -> id == AsciiCollabGridArea) (hover model) of
+            case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
                 _ :: _ ->
                     AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
                         |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
@@ -666,7 +667,7 @@ step event model =
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
 
-            else if model.uiState.focus == Just AsciiCollabGridArea && model.asciiCollab.isOpen then
+            else if model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea) && model.asciiCollab.isOpen then
                 AsciiCollab.key (appUiSize AsciiCollabApp model) model.ctrl key model.asciiCollab
                     |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
@@ -880,9 +881,6 @@ appButton id =
         NewsButton ->
             Just NewsApp
 
-        AsciiCollabOpenButton ->
-            Just AsciiCollabApp
-
         CalculatorButton ->
             Just CalculatorApp
 
@@ -897,11 +895,16 @@ appButton id =
                 _ ->
                     Nothing
 
-        AsciiCollabCloseButton ->
-            Nothing
+        AsciiCollab id2 ->
+            case id2 of
+                AsciiCollab.Types.OpenButton ->
+                    Just AsciiCollabApp
 
-        AsciiCollabGridArea ->
-            Nothing
+                AsciiCollab.Types.CloseButton ->
+                    Nothing
+
+                AsciiCollab.Types.GridArea ->
+                    Nothing
 
         Lazy _ ->
             Nothing
@@ -942,13 +945,7 @@ appButton id =
         CancelPowerButton ->
             Nothing
 
-        CalculatorKeyButton _ ->
-            Nothing
-
-        CalculatorCloseButton ->
-            Nothing
-
-        CalculatorPanel ->
+        Calculator _ ->
             Nothing
 
         EditorInput ->
@@ -960,7 +957,7 @@ appButton id =
         CloseEditorButton ->
             Nothing
 
-        NewsViewport ->
+        News _ ->
             Nothing
 
 
@@ -1098,7 +1095,7 @@ clickElement model id uiState =
             else
                 ( { model
                     | calculatorOpen = True
-                    , uiState = Ui.setFocus (Just CalculatorPanel) uiState
+                    , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState
                   }
                 , []
                 )
@@ -1128,34 +1125,30 @@ clickElement model id uiState =
               ]
             )
 
-        CalculatorCloseButton ->
-            ( closeCalculator model, [] )
+        Calculator calculatorId ->
+            case calculatorId of
+                Calculator.Types.CloseButton ->
+                    ( closeCalculator model, [] )
 
-        CalculatorKeyButton key ->
-            ( { model
-                | calculator = Calculator.press key model.calculator
-                , uiState = Ui.setFocus (Just CalculatorPanel) uiState
-              }
-            , []
-            )
+                Calculator.Types.KeyButton key ->
+                    ( { model
+                        | calculator = Calculator.press key model.calculator
+                        , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState
+                      }
+                    , []
+                    )
 
-        CalculatorPanel ->
-            ( { model | uiState = Ui.setFocus (Just CalculatorPanel) uiState }, [] )
+                Calculator.Types.Panel ->
+                    ( { model | uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState }, [] )
 
-        NewsViewport ->
+        News _ ->
             ( model, [] )
 
         Lazy _ ->
             ( model, [] )
 
-        AsciiCollabOpenButton as uiId ->
-            asciiCollabClick uiId model uiState
-
-        AsciiCollabCloseButton as uiId ->
-            asciiCollabClick uiId model uiState
-
-        AsciiCollabGridArea as uiId ->
-            asciiCollabClick uiId model uiState
+        AsciiCollab asciiCollabId ->
+            asciiCollabClick asciiCollabId model uiState
 
         HackerNews uiId2 ->
             hackerNewsClick uiId2 model
@@ -1163,7 +1156,7 @@ clickElement model id uiState =
 
 {-| A click on one of the ASCII collab app's elements.
 -}
-asciiCollabClick : UiId -> Model -> Ui.Model UiId -> ( Model, List Effect )
+asciiCollabClick : AsciiCollab.Types.UiId -> Model -> Ui.Model UiId -> ( Model, List Effect )
 asciiCollabClick uiId model uiState =
     let
         ( asciiCollab, effects ) =
@@ -1173,7 +1166,7 @@ asciiCollabClick uiId model uiState =
         | asciiCollab = asciiCollab
         , uiState =
             if asciiCollab.isOpen then
-                Ui.setFocus (Just AsciiCollabGridArea) uiState
+                Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) uiState
 
             else
                 uiState
@@ -1253,13 +1246,7 @@ stringToHttpRequestId string =
 calculatorFocused : Model -> Bool
 calculatorFocused model =
     case model.uiState.focus of
-        Just (CalculatorKeyButton _) ->
-            model.calculatorOpen
-
-        Just CalculatorCloseButton ->
-            model.calculatorOpen
-
-        Just CalculatorPanel ->
+        Just (Calculator _) ->
             model.calculatorOpen
 
         _ ->
@@ -1480,13 +1467,7 @@ dragSelect focus mouse position model =
         CancelPowerButton ->
             model
 
-        CalculatorKeyButton _ ->
-            model
-
-        CalculatorCloseButton ->
-            model
-
-        CalculatorPanel ->
+        Calculator _ ->
             model
 
         EditorButton ->
@@ -1498,19 +1479,13 @@ dragSelect focus mouse position model =
         CloseEditorButton ->
             model
 
-        NewsViewport ->
+        News _ ->
             model
 
         HackerNews _ ->
             model
 
-        AsciiCollabOpenButton ->
-            model
-
-        AsciiCollabCloseButton ->
-            model
-
-        AsciiCollabGridArea ->
+        AsciiCollab _ ->
             model
 
         Lazy _ ->
@@ -1797,7 +1772,7 @@ displayUi model display =
                     (\() ->
                         AsciiCollab.view
                             size
-                            (model.uiState.focus == Just AsciiCollabGridArea)
+                            (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea))
                             model.asciiCollab
                     )
                 ++ on HackerNewsApp
@@ -2822,7 +2797,7 @@ toolbar model display =
                         { id = HackerNews HackerNews.Types.OpenButton, padding = small }
                         (openHere HackerNewsApp)
                         (t "Hacker news")
-                    , Ui.selectableButton { id = AsciiCollabOpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
+                    , Ui.selectableButton { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")

@@ -89,7 +89,7 @@ steps =
         withTop : HackerNews.Model
         withTop =
             HackerNews.gotHttpRequest HackerNews.TopPostsRequest (response Fixture.top) HackerNews.init
-                |> HackerNews.onClick (UiId.HackerNewsNewsPostButton (HackerNews.Types.PostId Fixture.itemId))
+                |> HackerNews.onClick (HackerNews.Types.PostButton (HackerNews.Types.PostId Fixture.itemId))
                 |> Tuple.first
     in
     case HackerNews.stringToHttpRequestId [ "GetPostRequest", Fixture.itemId ] of
@@ -145,7 +145,7 @@ frame screen model =
                 let
                     collapsed : HackerNews.Model
                     collapsed =
-                        HackerNews.onClick (UiId.HackerNewsCommentToggle 0) model |> Tuple.first
+                        HackerNews.onClick (HackerNews.Types.CommentToggle 0) model |> Tuple.first
                 in
                 let
                     _ =

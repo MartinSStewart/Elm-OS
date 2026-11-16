@@ -1,8 +1,9 @@
 module UiId exposing (LazyKey, UiId(..))
 
-{-| Every id the UI's elements have, for every app: one flat type, so that an app's
-Element is a Main Element as it is, with no `Ui.map`, and one `Ui.LazyCache` serves
-every app however its parts are nested. An app's ids start with its name.
+{-| Every id the UI's elements have, for every app: one type, so that an app's Element
+is a Main Element as it is, with no `Ui.map`, and one `Ui.LazyCache` serves every app
+however its parts are nested. Each app's own ids are a type in its `<App>/Types.elm`,
+in a variant named after the app.
 
 So this module imports the modules of the types the ids hold, and of the arguments of
 every `Ui.lazy` call (see `LazyKey`), and those modules mustn't import this one: an
@@ -10,8 +11,10 @@ app keeps such types in `<App>/Types.elm`, not in `<App>.elm`.
 
 -}
 
+import AsciiCollab.Types
 import Calculator.Types
-import HackerNews.Types exposing (PostId)
+import HackerNews.Types
+import News.Types
 import Wifi exposing (Ssid)
 
 
@@ -35,18 +38,10 @@ type UiId
     | EditorInput
     | EditorWindow
     | CloseEditorButton
-      -- Calculator.elm
-    | CalculatorKeyButton Calculator.Types.Key
-    | CalculatorCloseButton
-    | CalculatorPanel
-      -- News.elm
-    | NewsViewport
-      -- HackerNews.elm
+    | Calculator Calculator.Types.UiId
+    | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
-      -- AsciiCollab.elm
-    | AsciiCollabOpenButton
-    | AsciiCollabCloseButton
-    | AsciiCollabGridArea
+    | AsciiCollab AsciiCollab.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
 

@@ -656,9 +656,9 @@ view focused model =
         title =
             Ui.leftAndRight (Units.uiPixels width)
                 (Ui.text Small sans "Calculator")
-                (Ui.button { id = CalculatorCloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
+                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
     in
-    Ui.elWithId CalculatorPanel
+    Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
@@ -702,7 +702,7 @@ keyRow model row =
                             Big
                 in
                 Ui.selectableButton
-                    { id = CalculatorKeyButton key, padding = Ui.noPadding }
+                    { id = Calculator (Calculator.Types.KeyButton key), padding = Ui.noPadding }
                     (isPendingOperator model key)
                     (Ui.center { size = size } (Ui.text fontSize sans label))
             )
