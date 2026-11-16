@@ -1,4 +1,4 @@
-module HackerNews.Types exposing (Comment(..), Post, PostId(..))
+module HackerNews.Types exposing (Comment(..), Post, PostId(..), UiId(..))
 
 {-| The Hacker News app's data that its `Ui.lazy` views take, and its ids need: here
 rather than in HackerNews.elm, as UiId.elm can't import a module that imports it.
@@ -34,3 +34,12 @@ type Comment
         , descendants : Int
         , isExpanded : Bool
         }
+
+
+type UiId
+    = PostButton PostId
+    | OpenButton
+    | PostsViewport
+    | CommentsViewport PostId
+    | BackButton
+    | CommentToggle Int

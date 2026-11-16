@@ -42,12 +42,7 @@ type UiId
       -- News.elm
     | NewsViewport
       -- HackerNews.elm
-    | HackerNewsNewsPostButton PostId
-    | HackerNewsOpenButton
-    | HackerNewsPostsViewport
-    | HackerNewsCommentsViewport PostId
-    | HackerNewsBackButton
-    | HackerNewsCommentToggle Int
+    | HackerNews HackerNews.Types.UiId
       -- AsciiCollab.elm
     | AsciiCollabOpenButton
     | AsciiCollabCloseButton

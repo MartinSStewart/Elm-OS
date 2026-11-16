@@ -24,6 +24,7 @@ import Display exposing (Display)
 import Duration exposing (Duration)
 import Effect exposing (Effect, HttpError(..))
 import HackerNews
+import HackerNews.Types
 import HostMessage
 import Ipv4
 import Json.Decode as D
@@ -879,9 +880,6 @@ appButton id =
         NewsButton ->
             Just NewsApp
 
-        HackerNewsOpenButton ->
-            Just HackerNewsApp
-
         AsciiCollabOpenButton ->
             Just AsciiCollabApp
 
@@ -891,20 +889,13 @@ appButton id =
         EditorButton ->
             Just EditorApp
 
-        HackerNewsNewsPostButton _ ->
-            Nothing
+        HackerNews id2 ->
+            case id2 of
+                HackerNews.Types.OpenButton ->
+                    Just HackerNewsApp
 
-        HackerNewsPostsViewport ->
-            Nothing
-
-        HackerNewsCommentsViewport _ ->
-            Nothing
-
-        HackerNewsBackButton ->
-            Nothing
-
-        HackerNewsCommentToggle _ ->
-            Nothing
+                _ ->
+                    Nothing
 
         AsciiCollabCloseButton ->
             Nothing
@@ -1166,23 +1157,8 @@ clickElement model id uiState =
         AsciiCollabGridArea as uiId ->
             asciiCollabClick uiId model uiState
 
-        (HackerNewsNewsPostButton _) as uiId ->
-            hackerNewsClick uiId model
-
-        HackerNewsOpenButton as uiId ->
-            hackerNewsClick uiId model
-
-        HackerNewsPostsViewport as uiId ->
-            hackerNewsClick uiId model
-
-        (HackerNewsCommentsViewport _) as uiId ->
-            hackerNewsClick uiId model
-
-        HackerNewsBackButton as uiId ->
-            hackerNewsClick uiId model
-
-        (HackerNewsCommentToggle _) as uiId ->
-            hackerNewsClick uiId model
+        HackerNews uiId2 ->
+            hackerNewsClick uiId2 model
 
 
 {-| A click on one of the ASCII collab app's elements.
@@ -1208,7 +1184,7 @@ asciiCollabClick uiId model uiState =
 
 {-| A click on one of the Hacker News app's elements.
 -}
-hackerNewsClick : UiId -> Model -> ( Model, List Effect )
+hackerNewsClick : HackerNews.Types.UiId -> Model -> ( Model, List Effect )
 hackerNewsClick uiId model =
     let
         ( hackerNews, effects ) =
@@ -1223,7 +1199,6 @@ hackerNewsClick uiId model =
         ( { model | hackerNews = hackerNews }, [] )
         effects
         |> Tuple.mapSecond List.reverse
-
 
 
 httpGet : HttpRequestId -> String -> Effect
@@ -1526,22 +1501,7 @@ dragSelect focus mouse position model =
         NewsViewport ->
             model
 
-        HackerNewsNewsPostButton _ ->
-            model
-
-        HackerNewsOpenButton ->
-            model
-
-        HackerNewsPostsViewport ->
-            model
-
-        HackerNewsCommentsViewport _ ->
-            model
-
-        HackerNewsBackButton ->
-            model
-
-        HackerNewsCommentToggle _ ->
+        HackerNews _ ->
             model
 
         AsciiCollabOpenButton ->
@@ -2858,7 +2818,10 @@ toolbar model display =
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (t "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (t "Wikipedia")
-                    , Ui.selectableButton { id = HackerNewsOpenButton, padding = small } (openHere HackerNewsApp) (t "Hacker news")
+                    , Ui.selectableButton
+                        { id = HackerNews HackerNews.Types.OpenButton, padding = small }
+                        (openHere HackerNewsApp)
+                        (t "Hacker news")
                     , Ui.selectableButton { id = AsciiCollabOpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")

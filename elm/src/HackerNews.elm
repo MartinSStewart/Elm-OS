@@ -171,10 +171,10 @@ stringToHttpRequestId list =
             Nothing
 
 
-onClick : UiId -> Model -> ( Model, List Effect )
+onClick : HackerNews.Types.UiId -> Model -> ( Model, List Effect )
 onClick uiId model =
     case uiId of
-        HackerNewsOpenButton ->
+        HackerNews.Types.OpenButton ->
             let
                 isOpen =
                     not model.isOpen
@@ -200,13 +200,13 @@ onClick uiId model =
                 ( False, _ ) ->
                     ( { model | isOpen = isOpen }, [] )
 
-        HackerNewsPostsViewport ->
+        HackerNews.Types.PostsViewport ->
             ( model, [] )
 
-        HackerNewsCommentsViewport _ ->
+        HackerNews.Types.CommentsViewport _ ->
             ( model, [] )
 
-        HackerNewsNewsPostButton postId ->
+        HackerNews.Types.PostButton postId ->
             let
                 cached : Maybe CommentsState
                 cached =
@@ -261,10 +261,10 @@ onClick uiId model =
                     load
             )
 
-        HackerNewsBackButton ->
+        HackerNews.Types.BackButton ->
             ( { model | page = PostsPage }, [] )
 
-        HackerNewsCommentToggle index ->
+        HackerNews.Types.CommentToggle index ->
             case model.page of
                 CommentsPage id _ ->
                     ( { model
@@ -289,11 +289,6 @@ onClick uiId model =
 
                 PostsPage ->
                     ( model, [] )
-
-        _ ->
-            -- Another app's id, or a Ui.lazy key (never clicked): Main only sends Hacker
-            -- News's ids here.
-            ( model, [] )
 
 
 {-| Drops the comments opened longest ago while more than `maxKeptComments` are kept.
@@ -740,7 +735,7 @@ postsView lazyCache uiState screenSize data =
         , Ui.column
             { spacing = 0, padding = Ui.noPadding }
             (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling uiState HackerNewsPostsViewport screenSize (Coord.yRaw (Ui.size title))
+            |> scrolling uiState (HackerNews HackerNews.Types.PostsViewport) screenSize (Coord.yRaw (Ui.size title))
         ]
 
 
@@ -788,7 +783,7 @@ postView width index { id, title, comments } =
         ]
         |> Ui.left (Units.uiPixels width)
         |> Ui.customButton
-            { id = HackerNewsNewsPostButton id
+            { id = HackerNews (HackerNews.Types.PostButton id)
             , padding = Ui.paddingXY 0 postPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
@@ -805,7 +800,11 @@ commentsView lazyCache uiState screenSize postId title comments =
 
         backButton : Element UiId
         backButton =
-            Ui.button { id = HackerNewsBackButton, padding = Ui.paddingXY 6 0 } (Ui.text Small (Sans Regular) "< Posts")
+            Ui.button
+                { id = HackerNews HackerNews.Types.BackButton
+                , padding = Ui.paddingXY 6 0
+                }
+                (Ui.text Small (Sans Regular) "< Posts")
 
         headerSpacing : Int
         headerSpacing =
@@ -835,7 +834,7 @@ commentsView lazyCache uiState screenSize postId title comments =
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
-            |> scrolling uiState (HackerNewsCommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
@@ -932,7 +931,7 @@ toggleButton : Int -> String -> Element UiId
 toggleButton index label =
     Ui.colorText Color.lightFont Small Mono label
         |> Ui.customButton
-            { id = HackerNewsCommentToggle index
+            { id = HackerNews (HackerNews.Types.CommentToggle index)
             , padding = Ui.noPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
