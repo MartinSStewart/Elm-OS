@@ -20,6 +20,7 @@
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
 //!   {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
 //!   {"t":"wheel","dy":N}                 scroll wheel clicks, positive away from you (up)
+//!   {"t":"scroll","dy":F}                two-finger scrolling, UI pixels, positive down
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
 
@@ -41,10 +42,6 @@ const REL_X: u16 = 0;
 const REL_Y: u16 = 1;
 const REL_WHEEL: u16 = 8;
 const ABS_X: u16 = 0;
-/// Viewports scroll 150 UI pixels a wheel click (Ui.scroll), so a two-finger scroll
-/// sends a click per 150 UI pixels the pointer would have moved: the content keeps up
-/// with the fingers.
-const UI_PIXELS_PER_CLICK: f64 = 150.0;
 const ABS_Y: u16 = 1;
 const KEY_POWER: u16 = 116;
 const BTN_MISC: u16 = 0x100;
@@ -105,7 +102,7 @@ struct Device {
     tap_clicked: bool,
     fingers: i32, // most fingers down during this touch
     tools: u8,    // bit n: the BTN_TOOL_* for n + 1 fingers is down
-    scroll: f64,  // two-finger scrolling, in device pixels, not yet a whole click
+    scroll: f64,  // two-finger scrolling since the last SYN_REPORT, in device pixels
     touch_start: f64,
     frac_x: f64,
     frac_y: f64,
@@ -397,14 +394,10 @@ impl Inputs {
             if is_x {
                 return; // nothing scrolls sideways yet
             }
-            // Fingers moving down (y growing) pull the content down: the wheel turning up.
+            // Fingers moving down (y growing) pull the content down by as many pixels
+            // as the pointer would have moved (sent at the SYN_REPORT), so the content
+            // stays under the fingers from the first pixel.
             dev.scroll += delta;
-            let per_click = UI_PIXELS_PER_CLICK * self.scale;
-            let clicks = (dev.scroll / per_click).trunc();
-            if clicks != 0.0 {
-                dev.scroll -= clicks * per_click;
-                elm::send(&ToElm::Wheel { dy: clicks as i32 });
-            }
             return;
         }
         let whole = delta as i32;
@@ -427,6 +420,10 @@ impl Inputs {
         match ev.type_ {
             EV_SYN if ev.code == SYN_REPORT => {
                 let dev = &mut self.devices[i];
+                if dev.scroll != 0.0 {
+                    elm::send(&ToElm::Scroll { dy: dev.scroll / self.scale });
+                    dev.scroll = 0.0;
+                }
                 if dev.rel_x != 0 || dev.rel_y != 0 {
                     let (dx, dy) = (dev.rel_x as f64, dev.rel_y as f64);
                     dev.rel_x = 0;
@@ -602,9 +599,10 @@ mod tests {
             .collect()
     }
 
-    fn wheel(msgs: &[ToElm]) -> i32 {
+    /// How far the content scrolled, in UI pixels.
+    fn scrolled(msgs: &[ToElm]) -> f64 {
         msgs.iter()
-            .map(|m| if let ToElm::Wheel { dy } = m { *dy } else { 0 })
+            .map(|m| if let ToElm::Scroll { dy } = m { *dy } else { 0.0 })
             .sum()
     }
 
@@ -641,10 +639,11 @@ mod tests {
             ],
         );
         let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 340), syn]);
-        assert_eq!(wheel(&msgs), 0);
+        assert_eq!(scrolled(&msgs), 0.0);
         assert_eq!((t.mouse_x, t.mouse_y), (x0, y0 + 60));
-        // A second finger lands: moving down 200 units (300 pixels) is two clicks up,
-        // and the pointer stays put.
+        // A second finger lands: moving down 200 units scrolls the content down the
+        // 300 pixels the pointer would have moved, a message per report, and the
+        // pointer stays put.
         send(
             &mut t,
             &[
@@ -661,18 +660,22 @@ mod tests {
                 &[(EV_ABS, ABS_X, 500 + y % 3), (EV_ABS, ABS_Y, y), syn],
             ));
         }
-        assert_eq!(wheel(&msgs), 2);
+        assert_eq!(scrolled(&msgs), 300.0);
+        assert_eq!(msgs.len(), 20);
         assert_eq!((t.mouse_x, t.mouse_y), (x0, y0 + 60));
-        // Moving back up 100 units scrolls one click down.
+        // Even a small movement scrolls straight away: 1 unit is 1.5 pixels.
+        let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 299), syn]);
+        assert_eq!(scrolled(&msgs), -1.5);
+        // Moving back up 99 units scrolls up.
         let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 200), syn]);
-        assert_eq!(wheel(&msgs), -1);
+        assert_eq!(scrolled(&msgs), -148.5);
         // Lifting the fingers after scrolling isn't a tap.
         let msgs = send(
             &mut t,
             &[(EV_KEY, BTN_TOOL_DOUBLETAP, 0), (EV_KEY, BTN_TOUCH, 0), syn],
         );
         assert!(msgs.is_empty(), "{:?}", msgs.len());
-        // At a UI scale of 2, the same scroll is half the clicks.
+        // At a UI scale of 2, the same movement is half as many UI pixels.
         t.scale = 2.0;
         send(
             &mut t,
@@ -685,6 +688,6 @@ mod tests {
             ],
         );
         let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 300), syn]);
-        assert_eq!(wheel(&msgs), 1);
+        assert_eq!(scrolled(&msgs), 150.0);
     }
 }

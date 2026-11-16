@@ -91,6 +91,9 @@ type ToElm
       -- A display was plugged in or out: the displays now. Unlike Displays, not the
       -- start of a program.
     | DisplaysChanged (List Display)
+      -- Two fingers on a touchpad moved: UI pixels the content under the pointer
+      -- follows them, positive is down (as for a Wheel click up).
+    | Scroll Float
 
 
 type HttpFailure
@@ -247,6 +250,9 @@ decoder =
 
                     30 ->
                         BD.map DisplaysChanged (P.decodeList Display.decoder)
+
+                    31 ->
+                        BD.map Scroll P.decodeFloat64
 
                     _ ->
                         BD.fail

@@ -101,6 +101,7 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         ToElm::Frame { .. }
         | ToElm::Button { .. }
         | ToElm::Wheel { .. }
+        | ToElm::Scroll { .. }
         | ToElm::Key { .. }
         | ToElm::Stats { .. }
         | ToElm::HttpResponse { .. }

@@ -2,6 +2,7 @@ module TextInputMultilineTest exposing (suite)
 
 import Expect
 import Keyboard
+import Quantity
 import Sprite
 import Test exposing (Test, describe, test)
 import TextInput
@@ -44,7 +45,26 @@ cursor model =
 suite : Test
 suite =
     describe "TextInputMultiline"
-        [ test "Up and Down keep the column through a shorter line"
+        [ test "touchpad scrolling goes a line per line height, saving up the rest"
+            (\_ ->
+                let
+                    lineHeight =
+                        Sprite.lineHeight style.fontSize |> Quantity.unwrap |> toFloat
+
+                    atBottom =
+                        after (String.repeat 30 "a\n") []
+
+                    once =
+                        TextInputMultiline.scrollPixels style (2.5 * lineHeight) atBottom
+
+                    twice =
+                        TextInputMultiline.scrollPixels style (0.5 * lineHeight) once
+                in
+                Expect.equal
+                    [ atBottom.scroll - 2, atBottom.scroll - 3, 0 ]
+                    [ once.scroll, twice.scroll, (TextInputMultiline.scrollPixels style (100 * lineHeight) twice).scroll ]
+            )
+        , test "Up and Down keep the column through a shorter line"
             (\_ ->
                 after "abcdefgh\nab\nabcdefgh" [ Keyboard.ArrowUp, Keyboard.ArrowUp ]
                     |> cursor

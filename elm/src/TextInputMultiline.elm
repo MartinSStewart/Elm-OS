@@ -9,6 +9,7 @@ module TextInputMultiline exposing
     , paste
     , size
     , view
+    , scrollPixels
     , wheel
     )
 
@@ -42,6 +43,9 @@ the first of them, so passing through a shorter line doesn't lose the column.
 type alias Model =
     { input : TextInput.Model
     , scroll : Int
+
+    -- Touchpad scrolling (scrollPixels) not yet a whole line, in UI pixels.
+    , scrollRemainder : Float
     , goalX : Maybe Int
     }
 
@@ -54,7 +58,7 @@ type alias Style =
 
 init : Model
 init =
-    { input = TextInput.init, scroll = 0, goalX = Nothing }
+    { input = TextInput.init, scroll = 0, scrollRemainder = 0, goalX = Nothing }
 
 
 {-| How many undo steps are kept. Every key that changes the text is one, and each holds
@@ -404,7 +408,37 @@ clampScroll style state scroll =
 -}
 wheel : Style -> Int -> Model -> Model
 wheel style clicks model =
-    { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks) }
+    { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks), scrollRemainder = 0 }
+
+
+{-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down, the text
+following them): scroll a line for each line height they moved.
+-}
+scrollPixels : Style -> Float -> Model -> Model
+scrollPixels style pixels model =
+    let
+        total : Float
+        total =
+            model.scrollRemainder + pixels
+
+        lineCount : Int
+        lineCount =
+            truncate (total / toFloat (lineHeight style))
+
+        scroll : Int
+        scroll =
+            clampScroll style model.input.current (model.scroll - lineCount)
+    in
+    { model
+        | scroll = scroll
+        , scrollRemainder =
+            if scroll == model.scroll - lineCount then
+                total - toFloat (lineCount * lineHeight style)
+
+            else
+                -- at the top or bottom: don't save up scrolling past it
+                0
+    }
 
 
 

@@ -62,6 +62,7 @@ type Input
     | Mouse Int Int
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
+    | Scroll Float -- touchpad scrolling, UI pixels, positive is down
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
@@ -132,6 +133,9 @@ toInput message =
 
         HostMessage.Wheel dy ->
             Ok (Wheel dy)
+
+        HostMessage.Scroll dy ->
+            Ok (Scroll dy)
 
         HostMessage.Key code down repeat ->
             Ok (Key code down repeat)
@@ -637,18 +641,10 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
-                _ :: _ ->
-                    AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
-                        |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
+            scrollUnderMouse (Ui.WheelClicks clicks) model
 
-                [] ->
-                    case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (hover model) of
-                        ( id, { ui } ) :: _ ->
-                            ( { model | uiState = Ui.onWheel id clicks ui model.uiState }, [] )
-
-                        _ ->
-                            ( model, [] )
+        Scroll pixels ->
+            scrollUnderMouse (Ui.ScrollPixels (Units.uiPixels pixels)) model
 
         Key code down repeat ->
             let
@@ -1694,6 +1690,31 @@ uiMouse model =
 uiMouseOn : Display -> Coord DevicePixels -> Coord UiPixels
 uiMouseOn display point =
     Coord.toUi (Display.uiScale display) (Display.local display point)
+
+
+{-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
+the mouse scrolls.
+-}
+scrollUnderMouse : Ui.ScrollBy -> Model -> ( Model, List Effect )
+scrollUnderMouse scrollBy model =
+    case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
+        _ :: _ ->
+            (case scrollBy of
+                Ui.WheelClicks clicks ->
+                    AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
+
+                Ui.ScrollPixels pixels ->
+                    AsciiCollab.scrollPixels (appUiSize AsciiCollabApp model) (Quantity.unwrap pixels) model.asciiCollab
+            )
+                |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
+
+        [] ->
+            case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (hover model) of
+                ( id, { ui } ) :: _ ->
+                    ( { model | uiState = Ui.onWheel id scrollBy ui model.uiState }, [] )
+
+                _ ->
+                    ( model, [] )
 
 
 {-| What is under the mouse, innermost first.

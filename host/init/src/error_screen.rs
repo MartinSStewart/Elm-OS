@@ -106,7 +106,7 @@ pub fn intercept(msg: &protocol::ToElm) -> bool {
             None => {}
         }
     }
-    panicked() || matches!(msg, ToElm::Key { .. } | ToElm::Button { .. } | ToElm::Wheel { .. })
+    panicked() || matches!(msg, ToElm::Key { .. } | ToElm::Button { .. } | ToElm::Wheel { .. } | ToElm::Scroll { .. })
 }
 
 /// For the host thread: whether a screen is up now, if that or the screen changed

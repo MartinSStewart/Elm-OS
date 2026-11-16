@@ -280,6 +280,10 @@ pub enum ToElm {
     /// A display was plugged in or out (or a window resized, in the dev runner): the
     /// displays now, as in `Displays`. Unlike `Displays`, not the start of a program.
     DisplaysChanged { displays: Vec<Display> },
+    /// Smooth scrolling (two fingers on a touchpad), in UI pixels: how far the content
+    /// under the pointer follows the fingers. Positive is down, the way the content
+    /// goes for a `Wheel` click up. A mouse wheel still sends `Wheel`.
+    Scroll { dy: f64 },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -454,6 +458,7 @@ mod tests {
             ToElm::Mouse { .. } => "mouse",
             ToElm::Button { .. } => "button",
             ToElm::Wheel { .. } => "wheel",
+            ToElm::Scroll { .. } => "scroll",
             ToElm::Key { .. } => "key",
             ToElm::Renderer { .. } => "renderer",
             ToElm::System { .. } => "system",
@@ -482,7 +487,7 @@ mod tests {
             ToElm::DisplaysChanged { .. } => "displaysChanged",
         }
     }
-    const TO_ELM_TAGS: usize = 31;
+    const TO_ELM_TAGS: usize = 32;
 
     #[test]
     fn reads_the_render_example() {

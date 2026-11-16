@@ -40,6 +40,7 @@ module Ui exposing
     , onAnimationFrame
     , onMouseDown
     , onWheel
+    , ScrollBy(..)
     , paddingXY
     , quads
     , right
@@ -172,8 +173,17 @@ init =
 
 type alias ViewportModel =
     { offset : Quantity Float UiPixels
-    , target : Quantity Int UiPixels
+    , target : Quantity Float UiPixels
     }
+
+
+{-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
+UI pixels two fingers moved on a touchpad (positive is down, the content following
+them), which move the content at once.
+-}
+type ScrollBy
+    = WheelClicks Int
+    | ScrollPixels (Quantity Float UiPixels)
 
 
 setFocus : Maybe id -> Model id -> Model id
@@ -207,7 +217,7 @@ onAnimationFrame timeElapsed model =
 
                                 target : Quantity Float UiPixels
                                 target =
-                                    Quantity.toFloatQuantity viewport2.target
+                                    viewport2.target
 
                                 diff : Quantity Float UiPixels
                                 diff =
@@ -325,8 +335,8 @@ onMouseDown onClick relativePositionToUi cursor id element model =
             ( { model | focus = Nothing }, Nothing )
 
 
-onWheel : id -> Int -> Element id -> Model id -> Model id
-onWheel id clicks element model =
+onWheel : id -> ScrollBy -> Element id -> Model id -> Model id
+onWheel id scrollBy element model =
     case element of
         TextInput _ ->
             model
@@ -334,9 +344,13 @@ onWheel id clicks element model =
         TextInputMultiline textInput2 ->
             let
                 state3 =
-                    TextInputMultiline.wheel
-                        textInput2.style
-                        clicks
+                    (case scrollBy of
+                        WheelClicks clicks ->
+                            TextInputMultiline.wheel textInput2.style clicks
+
+                        ScrollPixels pixels ->
+                            TextInputMultiline.scrollPixels textInput2.style (Quantity.unwrap pixels)
+                    )
                         (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
@@ -377,7 +391,7 @@ onWheel id clicks element model =
                 state3 : ViewportModel
                 state3 =
                     scroll
-                        clicks
+                        scrollBy
                         (size element2)
                         data
                         (case SeqDict.get id model.uiState of
@@ -437,13 +451,24 @@ initViewportModel =
     { offset = Quantity.zero, target = Quantity.zero }
 
 
-scroll : Int -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
-scroll clicks size2 data model =
-    { model
-        | target =
-            Quantity.plus (Units.uiPixels (clicks * 150)) model.target
-                |> Quantity.clamp (Coord.y size2 |> Quantity.minus data.viewportHeight |> Quantity.negate) Quantity.zero
-    }
+scroll : ScrollBy -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
+scroll scrollBy size2 data model =
+    let
+        clampOffset : Quantity Float UiPixels -> Quantity Float UiPixels
+        clampOffset =
+            Quantity.clamp
+                (Coord.y size2 |> Quantity.minus data.viewportHeight |> Quantity.negate |> Quantity.toFloatQuantity)
+                Quantity.zero
+    in
+    case scrollBy of
+        WheelClicks clicks ->
+            { model | target = Quantity.plus (Units.uiPixels (toFloat (clicks * 150))) model.target |> clampOffset }
+
+        ScrollPixels pixels ->
+            -- No gliding: the content stays under the fingers.
+            { offset = Quantity.plus pixels model.offset |> clampOffset
+            , target = Quantity.plus pixels model.target |> clampOffset
+            }
 
 
 scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)

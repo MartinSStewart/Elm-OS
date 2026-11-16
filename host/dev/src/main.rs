@@ -88,8 +88,6 @@ const RAN_WELL: Duration = Duration::from_secs(30);
 const CRASH_LOOP: u32 = 5;
 const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
 const WATCH_EVERY: Duration = Duration::from_millis(300);
-/// A touchpad's scrolling, in pixels, that counts as one wheel click.
-const PIXELS_PER_CLICK: f64 = 40.0;
 
 struct Options {
     program: PathBuf,
@@ -196,8 +194,10 @@ struct Runner {
     mouse: (i32, i32),
     /// Whether the mouse has moved since it was last sent.
     mouse_moved: bool,
-    /// Touchpad scrolling not yet a whole wheel click.
+    /// Wheel turning not yet a whole click (some mice report fractions).
     wheel: f64,
+    /// The UI scale, from Elm's Effect::Cursor: touchpad scrolling goes to Elm in UI pixels.
+    ui_scale: f64,
     watch: Option<Watch>,
     watched_at: Instant,
     started: Instant,
@@ -413,7 +413,7 @@ impl Runner {
                 self.shown = scenes;
             }
             // The cursor is the desktop's.
-            Effect::Cursor { .. } => {}
+            Effect::Cursor { scale, .. } => self.ui_scale = scale.max(1) as f64,
             Effect::WifiScan => fake::scan(&mut self.timers),
             Effect::WifiConnect { ssid, password } => {
                 let m = fake::connect(&mut self.timers, &ssid, &password);
@@ -647,7 +647,12 @@ impl Runner {
                 // Positive is up (away from you), as Elm OS's.
                 self.wheel += match delta {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
-                    MouseScrollDelta::PixelDelta(p) => p.y / PIXELS_PER_CLICK,
+                    MouseScrollDelta::PixelDelta(p) => {
+                        // A touchpad: smooth scrolling, as /init sends it.
+                        self.send_mouse();
+                        elm::send(&ToElm::Scroll { dy: p.y / self.ui_scale });
+                        return;
+                    }
                 };
                 let clicks = self.wheel.trunc();
                 if clicks != 0.0 {
@@ -807,6 +812,7 @@ fn main() {
         mouse: (0, 0),
         mouse_moved: false,
         wheel: 0.0,
+        ui_scale: 1.0,
         watch,
         watched_at: Instant::now(),
         started: Instant::now(),

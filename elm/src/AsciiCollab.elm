@@ -8,6 +8,7 @@ module AsciiCollab exposing
     , key
     , onClick
     , randomBytesPath
+    , scrollPixels
     , socketId
     , tick
     , view
@@ -88,6 +89,9 @@ type alias Model =
 
     -- The character in the top left corner of the grid.
     , viewPoint : Coord AsciiUnit
+
+    -- Touchpad scrolling (scrollPixels) not yet a whole row, in UI pixels.
+    , scrollRemainder : Float
     , pendingChanges : List LocalChange
     , now : Int
     , lastUndoPoint : Int
@@ -120,6 +124,7 @@ init =
     , cursor = startPoint
     , lineStart = Coord.xRaw startPoint
     , viewPoint = startPoint
+    , scrollRemainder = 0
     , pendingChanges = []
     , now = 0
     , lastUndoPoint = 0
@@ -659,7 +664,29 @@ wheel screen shift clicks model =
             else
                 Coord.xy 0 (-3 * clicks)
     in
-    updateViewBounds screen { model | viewPoint = Coord.plus offset model.viewPoint }
+    updateViewBounds screen { model | viewPoint = Coord.plus offset model.viewPoint, scrollRemainder = 0 }
+
+
+{-| Two fingers on a touchpad moved `pixels` UI pixels over the grid (positive is down,
+the grid following them): scroll a row for each row height they moved.
+-}
+scrollPixels : Coord UiPixels -> Float -> Model -> ( Model, List Effect )
+scrollPixels screen pixels model =
+    let
+        total : Float
+        total =
+            model.scrollRemainder + pixels
+
+        rows : Int
+        rows =
+            truncate (total / toFloat charHeight)
+    in
+    updateViewBounds
+        screen
+        { model
+            | viewPoint = Coord.plus (Coord.xy 0 -rows) model.viewPoint
+            , scrollRemainder = total - toFloat (rows * charHeight)
+        }
 
 
 key : Coord UiPixels -> Bool -> Key -> Model -> ( Model, List Effect )

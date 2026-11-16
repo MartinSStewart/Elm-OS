@@ -33,6 +33,7 @@
     {"mouse": {"x": 300, "y": 20}},
     {"button": {"b": 0, "down": true}},
     {"wheel": {"dy": -1}},
+    {"scroll": {"dy": -12.75}},
     {"key": {"code": 30, "down": true, "repeat": false}},
     {"key": {"code": 30, "down": true, "repeat": true}},
     {"renderer": {"gpu": true, "name": "virgl", "hardwareCursor": true}},
