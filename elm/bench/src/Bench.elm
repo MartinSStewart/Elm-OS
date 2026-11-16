@@ -13,12 +13,14 @@ import Coord
 import Effect
 import Fixture
 import HackerNews
+import HackerNews.Types
 import Html.Parser
 import Wire
 import Sprite
 import Task exposing (Task)
 import Time
 import Ui
+import UiId
 import Units
 
 
@@ -87,7 +89,7 @@ steps =
         withTop : HackerNews.Model
         withTop =
             HackerNews.gotHttpRequest HackerNews.TopPostsRequest (response Fixture.top) HackerNews.init
-                |> HackerNews.onClick (HackerNews.NewsPostButton (HackerNews.PostId Fixture.itemId))
+                |> HackerNews.onClick (UiId.HackerNewsNewsPostButton (HackerNews.Types.PostId Fixture.itemId))
                 |> Tuple.first
     in
     case HackerNews.stringToHttpRequestId [ "GetPostRequest", Fixture.itemId ] of
@@ -143,7 +145,7 @@ frame screen model =
                 let
                     collapsed : HackerNews.Model
                     collapsed =
-                        HackerNews.onClick (HackerNews.CommentToggle 0) model |> Tuple.first
+                        HackerNews.onClick (UiId.HackerNewsCommentToggle 0) model |> Tuple.first
                 in
                 let
                     _ =
@@ -156,7 +158,6 @@ frame screen model =
                     (\() -> HackerNews.view (Ui.lazyCache [ ui ]) Ui.init (Coord.toUi scale screen) collapsed)
                     |> Task.map (\_ -> ui)
             )
-        |> Task.andThen (\ui -> timed (named "Ui.map (as Main does to each app's Element)") (\() -> Ui.map Just ui) |> Task.map (\_ -> ui))
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
         |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
         |> Task.andThen

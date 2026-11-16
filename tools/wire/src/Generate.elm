@@ -211,21 +211,33 @@ placeholder options files =
 config's names.
 -}
 withModules : Options -> List SourceFile -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
-withModules options sourceFiles next =
-    case Lazy.rewrite sourceFiles of
+withModules options files next =
+    case parseModules files of
         Err problems ->
             Err problems
 
-        Ok files ->
-            withRewritten options files next
+        Ok parsed ->
+            -- `Ui.lazy`'s calls rewritten (Lazy.elm), and the files it changed parsed again.
+            case Lazy.rewrite (lazyTypeText parsed.modules) parsed.files of
+                Err problems ->
+                    Err problems
+
+                Ok [] ->
+                    withLazyKeys options parsed.modules next
+
+                Ok changed ->
+                    case parseModules changed of
+                        Err problems ->
+                            Err problems
+
+                        Ok reparsed ->
+                            withLazyKeys options (Dict.union reparsed.modules parsed.modules) next
 
 
-{-| `withModules`, once `Ui.lazy`'s calls are rewritten (Lazy.elm). Each `LazyKey` it
-wrote is checked for what can't be compared, then seen by the rest of wire as just
-`type LazyKey = Restored` (see `isLazyKey`).
+{-| The files parsed, and their modules by name.
 -}
-withRewritten : Options -> List SourceFile -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
-withRewritten options files next =
+parseModules : List SourceFile -> Result (List String) { files : List ( SourceFile, File ), modules : Dict String Module }
+parseModules files =
     let
         parsedFiles =
             List.map parseFile files
@@ -238,9 +250,6 @@ withRewritten options files next =
                 |> List.map (\( _, file ) -> moduleExposes file)
                 |> Dict.fromList
 
-        parsed =
-            List.map (Result.map (toModule exposures)) parsedFiles
-
         parseErrors =
             List.filterMap
                 (\r ->
@@ -251,52 +260,162 @@ withRewritten options files next =
                         Ok _ ->
                             Nothing
                 )
-                parsed
+                parsedFiles
     in
     if not (List.isEmpty parseErrors) then
         Err parseErrors
 
     else
         let
-            written =
-                parsed
-                    |> List.filterMap Result.toMaybe
-                    |> List.map (\m -> ( m.name, m ))
-                    |> Dict.fromList
-
-            lazyKeys =
-                Dict.values written |> List.filter (\m -> isLazyKey m "LazyKey")
-
-            lazyErrors =
-                let
-                    defs =
-                        allDefs written
-                in
-                List.concatMap
-                    (\m ->
-                        reach defs (usedParams defs) [ ( ( m.name, "LazyKey" ), "the arguments of a Ui.lazy call in " ++ m.name ) ] Set.empty []
-                            |> Tuple.second
-                            |> List.reverse
-                            |> List.map (String.replace "can't be saved" "can't be compared, so it can't be a Ui.lazy argument (put the function's result in it instead)")
-                    )
-                    lazyKeys
-
-            modules =
-                List.foldl
-                    (\m acc -> Dict.insert m.name { m | types = Dict.insert "LazyKey" ( [], Custom [ ( "Restored", [] ) ] ) m.types } acc)
-                    written
-                    lazyKeys
+            ok =
+                List.filterMap Result.toMaybe parsedFiles
         in
-        case ( splitName options.model, splitName options.msg, splitName options.config ) of
-            ( Just modelKey, Just msgKey, Just configKey ) ->
-                if List.isEmpty lazyErrors then
-                    next options modules modelKey msgKey configKey
+        Ok
+            { files = ok
+            , modules =
+                ok
+                    |> List.map (toModule exposures >> (\m -> ( m.name, m )))
+                    |> Dict.fromList
+            }
 
-                else
-                    Err lazyErrors
 
-            _ ->
-                Err [ "--model, --msg and --config must each be Module.name" ]
+{-| How the module with `LazyKey` writes a type that the module `caller` writes as
+`annotation` (Lazy.elm): every name qualified, apart from the ones every module sees.
+-}
+lazyTypeText : Dict String Module -> Lazy.TypeText
+lazyTypeText modules { caller, qualifier } annotation =
+    case Dict.get caller modules of
+        Nothing ->
+            Err ("there is no module " ++ caller)
+
+        Just m ->
+            let
+                ty =
+                    canonical m (Node.value annotation)
+
+                named t =
+                    case t of
+                        TNamed key args ->
+                            key :: List.concatMap named args
+
+                        TTuple items ->
+                            List.concatMap named items
+
+                        TRecord fields ->
+                            List.concatMap (Tuple.second >> named) fields
+
+                        _ ->
+                            []
+
+                problems t =
+                    case t of
+                        TVar v ->
+                            [ "it has a type variable (" ++ v ++ ")" ]
+
+                        TFunction ->
+                            [ "a function can't be compared (put its result in the argument instead)" ]
+
+                        TExtensibleRecord ->
+                            [ "an extensible record ({ r | ... }) can't be written in the key; use a plain record" ]
+
+                        TUnknown name ->
+                            [ "can't tell which type " ++ name ++ " is" ]
+
+                        TNamed ( moduleName, name ) args ->
+                            (case Dict.get moduleName m.exposures of
+                                Just exposed ->
+                                    if Set.member name exposed then
+                                        []
+
+                                    else
+                                        [ moduleName ++ " doesn't expose " ++ name ]
+
+                                Nothing ->
+                                    []
+                            )
+                                ++ List.concatMap problems args
+
+                        TTuple items ->
+                            List.concatMap problems items
+
+                        TRecord fields ->
+                            List.concatMap (Tuple.second >> problems) fields
+
+                        TUnit ->
+                            []
+
+                ref ( moduleName, name ) =
+                    if List.member moduleName bareModules then
+                        name
+
+                    else
+                        qualifier moduleName ++ "." ++ name
+            in
+            case problems ty of
+                problem :: _ ->
+                    Err problem
+
+                [] ->
+                    Ok
+                        { text = renderTy ref False ty
+                        , modules =
+                            named ty
+                                |> List.map Tuple.first
+                                |> List.filter (\moduleName -> not (List.member moduleName bareModules))
+                        }
+
+
+{-| Each `LazyKey` that Lazy.elm wrote is checked for what can't be compared, then
+seen by the rest of wire as just `type LazyKey = Restored` (see `isLazyKey`).
+-}
+withLazyKeys : Options -> Dict String Module -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
+withLazyKeys options written next =
+    let
+        lazyKeys =
+            Dict.values written |> List.filter (\m -> isLazyKey m "LazyKey")
+
+        lazyErrors =
+            let
+                defs =
+                    allDefs written
+            in
+            List.concatMap
+                (\m ->
+                    reach defs (usedParams defs) [ ( ( m.name, "LazyKey" ), "the arguments of a Ui.lazy call (" ++ m.name ++ ".LazyKey)" ) ] Set.empty []
+                        |> Tuple.second
+                        |> List.reverse
+                        |> List.map (String.replace "can't be saved" "can't be compared, so it can't be a Ui.lazy argument (put the function's result in it instead)")
+                )
+                lazyKeys
+
+        modules =
+            Dict.map
+                (\_ m ->
+                    { m
+                        | types =
+                            Dict.map
+                                (\name ( generics, body ) ->
+                                    if unsavedValue m name /= Nothing then
+                                        ( generics, unsavedBody name )
+
+                                    else
+                                        ( generics, body )
+                                )
+                                m.types
+                    }
+                )
+                written
+    in
+    case ( splitName options.model, splitName options.msg, splitName options.config ) of
+        ( Just modelKey, Just msgKey, Just configKey ) ->
+            if List.isEmpty lazyErrors then
+                next options modules modelKey msgKey configKey
+
+            else
+                Err lazyErrors
+
+        _ ->
+            Err [ "--model, --msg and --config must each be Module.name" ]
 
 
 generateWith : Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) { files : List SourceFile, warnings : List String }
@@ -505,6 +624,32 @@ changing a `Ui.lazy` call never changes the Model's shape or needs a migration.
 isLazyKey : Module -> String -> Bool
 isLazyKey m name =
     name == "LazyKey" && String.contains "type LazyKey = Restored" m.source
+
+
+{-| Types that are never saved, and what they come back as: `Ui.lazy`'s keys (see
+`isLazyKey`), and Ui's `LazyCache`, last frame's lazy elements, which would be big and
+are only a cache. The rest of wire sees each as a type with one variant and nothing in
+it (`unsavedBody`), so it has a fixed shape.
+-}
+unsavedValue : Module -> String -> Maybe String
+unsavedValue m name =
+    if isLazyKey m name then
+        Just "Restored"
+
+    else if m.name == "Ui" && name == "LazyCache" then
+        Just "noLazyCache"
+
+    else
+        Nothing
+
+
+unsavedBody : String -> Body
+unsavedBody name =
+    if name == "LazyCache" then
+        Custom [ ( "Empty", [] ) ]
+
+    else
+        Custom [ ( "Restored", [] ) ]
 
 
 
@@ -1422,8 +1567,7 @@ encoder ctx m def =
         body =
             case def.body of
                 Custom variants ->
-                    if isLazyKey m def.name then
-                        -- What `Restored` is written as: what every key comes back as.
+                    if unsavedValue m def.name /= Nothing then
                         "    Wire.encodeCustom 0 []"
 
                     else
@@ -1488,19 +1632,29 @@ decoder ctx m def =
                     "    " ++ unwrap (decFn ctx m self 1 ty)
 
                 Custom variants ->
-                    "    Wire.decodeCustom\n        (\\w3_tag ->\n            case w3_tag of\n"
-                        ++ String.concat
-                            (List.indexedMap
-                                (\i ( ctor, tys ) ->
-                                    "                "
-                                        ++ String.fromInt i
-                                        ++ " ->\n                    "
-                                        ++ layoutPipeline 20 (decFields ctx m self 1 ctor tys)
-                                        ++ "\n\n"
-                                )
-                                (byName variants)
-                            )
-                        ++ "                _ ->\n                    Wire.fail\n        )"
+                    case unsavedValue m def.name of
+                        Just value ->
+                            "    Wire.decodeCustom\n        (\\w3_tag ->\n            case w3_tag of\n                0 ->\n                    Wire.succeed "
+                                ++ value
+                                ++ "\n\n                _ ->\n                    Wire.fail\n        )"
+
+                        Nothing ->
+                            customDecoder variants
+
+        customDecoder variants =
+            "    Wire.decodeCustom\n        (\\w3_tag ->\n            case w3_tag of\n"
+                ++ String.concat
+                    (List.indexedMap
+                        (\i ( ctor, tys ) ->
+                            "                "
+                                ++ String.fromInt i
+                                ++ " ->\n                    "
+                                ++ layoutPipeline 20 (decFields ctx m self 1 ctor tys)
+                                ++ "\n\n"
+                        )
+                        (byName variants)
+                    )
+                ++ "                _ ->\n                    Wire.fail\n        )"
     in
     signature ++ "\n" ++ name ++ args ++ " =\n" ++ body
 

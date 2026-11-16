@@ -1,15 +1,10 @@
 module HackerNews exposing
-    ( Comment
-    , CommentsState
+    ( CommentsState
     , Effect(..)
     , HackerNewsState(..)
     , HttpRequestId(..)
-    , LazyKey
     , Model
     , Page
-    , Post
-    , PostId(..)
-    , UiId(..)
     , gotHttpRequest
     , httpRequestIdToString
     , init
@@ -31,35 +26,15 @@ import Color
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect
+import HackerNews.Types exposing (Comment(..), Post, PostId(..))
 import Hex
 import Html.Parser
 import Quantity exposing (Quantity)
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
+import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
-
-
-type PostId
-    = PostId String
-
-
-type UiId
-    = NewsPostButton PostId
-    | OpenButton
-    | PostsViewport
-    | CommentsViewport PostId
-    | BackButton
-    | CommentToggle Int
-    | Lazy LazyKey
-
-
-{-| The keys of this module's `Ui.lazy` elements. The code generator replaces this
-with a variant for each `Ui.lazy` call, holding its arguments; nothing else matches
-on it, and it is never saved.
--}
-type LazyKey
-    = LazyKey Never
 
 
 type Effect
@@ -85,15 +60,6 @@ type HackerNewsState
     | LoadFailed Effect.HttpError
 
 
-{-| A post on the front page, with how many comments it has.
--}
-type alias Post =
-    { id : PostId
-    , title : String
-    , comments : Int
-    }
-
-
 postIdToString : PostId -> String
 postIdToString (PostId postId) =
     postId
@@ -110,24 +76,6 @@ type CommentsState
     = CommentsLoading
     | CommentsLoaded (List Comment)
     | CommentsLoadFailed Effect.HttpError
-
-
-{-| A comment and its replies. `index` is its place in the page (from 0), which tells
-the buttons apart; `descendants` counts the replies at every depth under it. `date` is
-when it was written, as the page gives it (UTC), if it does. `grey` is how light its text
-is, from 0 (black) up: Hacker News fades the text of a comment that was voted down.
--}
-type Comment
-    = Comment
-        { index : Int
-        , author : String
-        , date : Maybe String
-        , grey : Int
-        , content : String
-        , children : List Comment
-        , descendants : Int
-        , isExpanded : Bool
-        }
 
 
 type HttpRequestId
@@ -226,7 +174,7 @@ stringToHttpRequestId list =
 onClick : UiId -> Model -> ( Model, List Effect )
 onClick uiId model =
     case uiId of
-        OpenButton ->
+        HackerNewsOpenButton ->
             let
                 isOpen =
                     not model.isOpen
@@ -252,13 +200,13 @@ onClick uiId model =
                 ( False, _ ) ->
                     ( { model | isOpen = isOpen }, [] )
 
-        PostsViewport ->
+        HackerNewsPostsViewport ->
             ( model, [] )
 
-        CommentsViewport _ ->
+        HackerNewsCommentsViewport _ ->
             ( model, [] )
 
-        NewsPostButton postId ->
+        HackerNewsNewsPostButton postId ->
             let
                 cached : Maybe CommentsState
                 cached =
@@ -313,14 +261,10 @@ onClick uiId model =
                     load
             )
 
-        BackButton ->
+        HackerNewsBackButton ->
             ( { model | page = PostsPage }, [] )
 
-        Lazy _ ->
-            -- Never clicked: a lazy element's key is never a button's id.
-            ( model, [] )
-
-        CommentToggle index ->
+        HackerNewsCommentToggle index ->
             case model.page of
                 CommentsPage id _ ->
                     ( { model
@@ -345,6 +289,11 @@ onClick uiId model =
 
                 PostsPage ->
                     ( model, [] )
+
+        _ ->
+            -- Another app's id, or a Ui.lazy key (never clicked): Main only sends Hacker
+            -- News's ids here.
+            ( model, [] )
 
 
 {-| Drops the comments opened longest ago while more than `maxKeptComments` are kept.
@@ -791,7 +740,7 @@ postsView lazyCache uiState screenSize data =
         , Ui.column
             { spacing = 0, padding = Ui.noPadding }
             (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling uiState PostsViewport screenSize (Coord.yRaw (Ui.size title))
+            |> scrolling uiState HackerNewsPostsViewport screenSize (Coord.yRaw (Ui.size title))
         ]
 
 
@@ -839,7 +788,7 @@ postView width index { id, title, comments } =
         ]
         |> Ui.left (Units.uiPixels width)
         |> Ui.customButton
-            { id = NewsPostButton id
+            { id = HackerNewsNewsPostButton id
             , padding = Ui.paddingXY 0 postPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
@@ -856,7 +805,7 @@ commentsView lazyCache uiState screenSize postId title comments =
 
         backButton : Element UiId
         backButton =
-            Ui.button { id = BackButton, padding = Ui.paddingXY 6 0 } (Ui.text Small (Sans Regular) "< Posts")
+            Ui.button { id = HackerNewsBackButton, padding = Ui.paddingXY 6 0 } (Ui.text Small (Sans Regular) "< Posts")
 
         headerSpacing : Int
         headerSpacing =
@@ -886,7 +835,7 @@ commentsView lazyCache uiState screenSize postId title comments =
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
-            |> scrolling uiState (CommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling uiState (HackerNewsCommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
@@ -983,7 +932,7 @@ toggleButton : Int -> String -> Element UiId
 toggleButton index label =
     Ui.colorText Color.lightFont Small Mono label
         |> Ui.customButton
-            { id = CommentToggle index
+            { id = HackerNewsCommentToggle index
             , padding = Ui.noPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill

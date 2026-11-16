@@ -1,4 +1,4 @@
-module Main exposing (App, Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, UiId, WeatherState, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, WeatherState, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
@@ -15,6 +15,7 @@ import AsciiCollab
 import BootInfo
 import Bytes exposing (Bytes)
 import Calculator
+import Calculator.Types
 import Clock
 import Color exposing (Color)
 import Coord exposing (Coord)
@@ -36,6 +37,7 @@ import TextInput
 import TextInputMultiline
 import Time
 import Ui exposing (ElementState(..))
+import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather
 import Wifi exposing (Ssid)
@@ -267,6 +269,8 @@ type alias Model =
     , lastFrame : Maybe Float
     , frameIntervals : List Float -- milliseconds, newest first
     , frames : Int
+    , -- Last frame's `Ui.lazy` elements: never saved (tools/wire saves it as empty).
+      lazyCache : Ui.LazyCache UiId
     , shift : Bool
     , ctrl : Bool
     , clipboard : String
@@ -338,32 +342,6 @@ type Msg
     | Tick Time.Posix
 
 
-type UiId
-    = RefreshButton
-    | NetworkButton Ssid
-    | PasswordInput
-    | ShowPasswordButton
-    | ConnectButton
-    | DisconnectButton
-    | WeatherButton
-    | AboutButton
-    | NewsButton
-    | CloseAboutButton
-    | CalculatorButton
-    | PowerOffButton
-    | RestartButton
-    | ConfirmPowerButton
-    | CancelPowerButton
-    | CalculatorUiId Calculator.UiId
-    | EditorButton
-    | EditorInput
-    | EditorWindow
-    | CloseEditorButton
-    | NewsUiId News.UiId
-    | HackerNewsUiId HackerNews.UiId
-    | AsciiCollabUiId AsciiCollab.UiId
-
-
 init : Model
 init =
     { displays = []
@@ -376,6 +354,7 @@ init =
     , lastFrame = Nothing
     , frameIntervals = []
     , frames = 0
+    , lazyCache = Ui.noLazyCache
     , shift = False
     , ctrl = False
     , clipboard = ""
@@ -503,11 +482,8 @@ step event model =
                         , uiState = Ui.onAnimationFrame elapsedTime model.uiState
                     }
             in
-            ( next
-            , [ Effect.Render
-                    (\() -> List.map (\display -> { display = display.id, triangles = view model display }) model.displays)
-              ]
-            )
+            -- `draw` draws it, unless the message is being replayed.
+            ( next, [] )
 
         HttpResponse id result ->
             case stringToHttpRequestId id of
@@ -619,10 +595,10 @@ step event model =
                     uiMouse model
             in
             case hover model of
-                ( AsciiCollabUiId AsciiCollab.GridArea, { relativePositionToUi } ) :: _ ->
+                ( AsciiCollabGridArea, { relativePositionToUi } ) :: _ ->
                     ( { model
                         | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
-                        , uiState = Ui.setFocus (Just (AsciiCollabUiId AsciiCollab.GridArea)) model.uiState
+                        , uiState = Ui.setFocus (Just AsciiCollabGridArea) model.uiState
                       }
                     , []
                     )
@@ -649,7 +625,7 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case List.filter (\( id, _ ) -> id == AsciiCollabUiId AsciiCollab.GridArea) (hover model) of
+            case List.filter (\( id, _ ) -> id == AsciiCollabGridArea) (hover model) of
                 _ :: _ ->
                     AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
                         |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
@@ -689,14 +665,14 @@ step event model =
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
 
-            else if model.uiState.focus == Just (AsciiCollabUiId AsciiCollab.GridArea) && model.asciiCollab.isOpen then
+            else if model.uiState.focus == Just AsciiCollabGridArea && model.asciiCollab.isOpen then
                 AsciiCollab.key (appUiSize AsciiCollabApp model) model.ctrl key model.asciiCollab
                     |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
             else if calculatorFocused model then
                 case ( model.ctrl, Calculator.fromKeyboard key ) of
                     ( False, Just key2 ) ->
-                        if repeat && key2 /= Calculator.Backspace then
+                        if repeat && key2 /= Calculator.Types.Backspace then
                             ( model, [] )
 
                         else
@@ -903,10 +879,10 @@ appButton id =
         NewsButton ->
             Just NewsApp
 
-        HackerNewsUiId HackerNews.OpenButton ->
+        HackerNewsOpenButton ->
             Just HackerNewsApp
 
-        AsciiCollabUiId AsciiCollab.OpenButton ->
+        AsciiCollabOpenButton ->
             Just AsciiCollabApp
 
         CalculatorButton ->
@@ -915,10 +891,28 @@ appButton id =
         EditorButton ->
             Just EditorApp
 
-        HackerNewsUiId _ ->
+        HackerNewsNewsPostButton _ ->
             Nothing
 
-        AsciiCollabUiId _ ->
+        HackerNewsPostsViewport ->
+            Nothing
+
+        HackerNewsCommentsViewport _ ->
+            Nothing
+
+        HackerNewsBackButton ->
+            Nothing
+
+        HackerNewsCommentToggle _ ->
+            Nothing
+
+        AsciiCollabCloseButton ->
+            Nothing
+
+        AsciiCollabGridArea ->
+            Nothing
+
+        Lazy _ ->
             Nothing
 
         RefreshButton ->
@@ -957,7 +951,13 @@ appButton id =
         CancelPowerButton ->
             Nothing
 
-        CalculatorUiId _ ->
+        CalculatorKeyButton _ ->
+            Nothing
+
+        CalculatorCloseButton ->
+            Nothing
+
+        CalculatorPanel ->
             Nothing
 
         EditorInput ->
@@ -969,7 +969,7 @@ appButton id =
         CloseEditorButton ->
             Nothing
 
-        NewsUiId _ ->
+        NewsViewport ->
             Nothing
 
 
@@ -1107,7 +1107,7 @@ clickElement model id uiState =
             else
                 ( { model
                     | calculatorOpen = True
-                    , uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState
+                    , uiState = Ui.setFocus (Just CalculatorPanel) uiState
                   }
                 , []
                 )
@@ -1137,54 +1137,93 @@ clickElement model id uiState =
               ]
             )
 
-        CalculatorUiId Calculator.CloseButton ->
+        CalculatorCloseButton ->
             ( closeCalculator model, [] )
 
-        CalculatorUiId (Calculator.KeyButton key) ->
+        CalculatorKeyButton key ->
             ( { model
                 | calculator = Calculator.press key model.calculator
-                , uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState
+                , uiState = Ui.setFocus (Just CalculatorPanel) uiState
               }
             , []
             )
 
-        CalculatorUiId Calculator.Panel ->
-            ( { model | uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState }, [] )
+        CalculatorPanel ->
+            ( { model | uiState = Ui.setFocus (Just CalculatorPanel) uiState }, [] )
 
-        NewsUiId _ ->
+        NewsViewport ->
             ( model, [] )
 
-        AsciiCollabUiId uiId ->
-            let
-                ( asciiCollab, effects ) =
-                    AsciiCollab.onClick uiId model.asciiCollab
-            in
-            ( { model
-                | asciiCollab = asciiCollab
-                , uiState =
-                    if asciiCollab.isOpen then
-                        Ui.setFocus (Just (AsciiCollabUiId AsciiCollab.GridArea)) uiState
+        Lazy _ ->
+            ( model, [] )
 
-                    else
-                        uiState
-              }
-            , effects
-            )
+        AsciiCollabOpenButton as uiId ->
+            asciiCollabClick uiId model uiState
 
-        HackerNewsUiId uiId ->
-            let
-                ( hackerNews, effects ) =
-                    HackerNews.onClick uiId model.hackerNews
-            in
-            List.foldl
-                (\effect ( model2, effects2 ) ->
-                    case effect of
-                        HackerNews.HttpRequest requestId url ->
-                            ( model2, httpGet (HackerNewsRequest requestId) url :: effects2 )
-                )
-                ( { model | hackerNews = hackerNews }, [] )
-                effects
-                |> Tuple.mapSecond List.reverse
+        AsciiCollabCloseButton as uiId ->
+            asciiCollabClick uiId model uiState
+
+        AsciiCollabGridArea as uiId ->
+            asciiCollabClick uiId model uiState
+
+        (HackerNewsNewsPostButton _) as uiId ->
+            hackerNewsClick uiId model
+
+        HackerNewsOpenButton as uiId ->
+            hackerNewsClick uiId model
+
+        HackerNewsPostsViewport as uiId ->
+            hackerNewsClick uiId model
+
+        (HackerNewsCommentsViewport _) as uiId ->
+            hackerNewsClick uiId model
+
+        HackerNewsBackButton as uiId ->
+            hackerNewsClick uiId model
+
+        (HackerNewsCommentToggle _) as uiId ->
+            hackerNewsClick uiId model
+
+
+{-| A click on one of the ASCII collab app's elements.
+-}
+asciiCollabClick : UiId -> Model -> Ui.Model UiId -> ( Model, List Effect )
+asciiCollabClick uiId model uiState =
+    let
+        ( asciiCollab, effects ) =
+            AsciiCollab.onClick uiId model.asciiCollab
+    in
+    ( { model
+        | asciiCollab = asciiCollab
+        , uiState =
+            if asciiCollab.isOpen then
+                Ui.setFocus (Just AsciiCollabGridArea) uiState
+
+            else
+                uiState
+      }
+    , effects
+    )
+
+
+{-| A click on one of the Hacker News app's elements.
+-}
+hackerNewsClick : UiId -> Model -> ( Model, List Effect )
+hackerNewsClick uiId model =
+    let
+        ( hackerNews, effects ) =
+            HackerNews.onClick uiId model.hackerNews
+    in
+    List.foldl
+        (\effect ( model2, effects2 ) ->
+            case effect of
+                HackerNews.HttpRequest requestId url ->
+                    ( model2, httpGet (HackerNewsRequest requestId) url :: effects2 )
+        )
+        ( { model | hackerNews = hackerNews }, [] )
+        effects
+        |> Tuple.mapSecond List.reverse
+
 
 
 httpGet : HttpRequestId -> String -> Effect
@@ -1239,7 +1278,13 @@ stringToHttpRequestId string =
 calculatorFocused : Model -> Bool
 calculatorFocused model =
     case model.uiState.focus of
-        Just (CalculatorUiId _) ->
+        Just (CalculatorKeyButton _) ->
+            model.calculatorOpen
+
+        Just CalculatorCloseButton ->
+            model.calculatorOpen
+
+        Just CalculatorPanel ->
             model.calculatorOpen
 
         _ ->
@@ -1460,7 +1505,13 @@ dragSelect focus mouse position model =
         CancelPowerButton ->
             model
 
-        CalculatorUiId _ ->
+        CalculatorKeyButton _ ->
+            model
+
+        CalculatorCloseButton ->
+            model
+
+        CalculatorPanel ->
             model
 
         EditorButton ->
@@ -1472,13 +1523,37 @@ dragSelect focus mouse position model =
         CloseEditorButton ->
             model
 
-        NewsUiId _ ->
+        NewsViewport ->
             model
 
-        HackerNewsUiId _ ->
+        HackerNewsNewsPostButton _ ->
             model
 
-        AsciiCollabUiId _ ->
+        HackerNewsOpenButton ->
+            model
+
+        HackerNewsPostsViewport ->
+            model
+
+        HackerNewsCommentsViewport _ ->
+            model
+
+        HackerNewsBackButton ->
+            model
+
+        HackerNewsCommentToggle _ ->
+            model
+
+        AsciiCollabOpenButton ->
+            model
+
+        AsciiCollabCloseButton ->
+            model
+
+        AsciiCollabGridArea ->
+            model
+
+        Lazy _ ->
             model
 
 
@@ -1582,14 +1657,11 @@ cursorColor model =
 -- VIEW
 
 
-{-| What one display shows: its part of the UI, and the cursor if the mouse is on it.
+{-| What one display shows: its part of the UI (`ui`), and the cursor if the mouse is on it.
 -}
-view : Model -> Display -> List (Triangle DevicePixels)
-view model display =
+view : Model -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
+view model display ui =
     let
-        ui =
-            displayUi model display
-
         hovered =
             if (mouseDisplay model).id == display.id then
                 Ui.hover (uiMouseOn display model.mouse) ui |> List.head |> Maybe.map Tuple.first
@@ -1760,56 +1832,16 @@ displayUi model display =
                 ++ on EditorApp (\() -> editorWindow model)
                 ++ on CalculatorApp (\() -> calculatorWindow model)
                 ++ on AboutApp (\() -> aboutPage model)
-                ++ on NewsApp
-                    (\() ->
-                        Ui.topRight
-                            { size = size }
-                            (News.view
-                                (Ui.mapModel
-                                    (\id ->
-                                        case id of
-                                            NewsUiId id2 ->
-                                                Just id2
-
-                                            _ ->
-                                                Nothing
-                                    )
-                                    model.uiState
-                                )
-                                model.news
-                                |> Ui.map NewsUiId
-                            )
-                    )
+                ++ on NewsApp (\() -> Ui.topRight { size = size } (News.view model.uiState model.news))
                 ++ on AsciiCollabApp
                     (\() ->
                         AsciiCollab.view
                             size
-                            (model.uiState.focus == Just (AsciiCollabUiId AsciiCollab.GridArea))
+                            (model.uiState.focus == Just AsciiCollabGridArea)
                             model.asciiCollab
-                            |> Ui.map AsciiCollabUiId
                     )
                 ++ on HackerNewsApp
-                    (\() ->
-                        Ui.topRight
-                            { size = size }
-                            (HackerNews.view
-                                Ui.noLazyCache
-                                (Ui.mapModel
-                                    (\id ->
-                                        case id of
-                                            HackerNewsUiId id2 ->
-                                                Just id2
-
-                                            _ ->
-                                                Nothing
-                                    )
-                                    model.uiState
-                                )
-                                size
-                                model.hackerNews
-                            )
-                            |> Ui.map HackerNewsUiId
-                    )
+                    (\() -> Ui.topRight { size = size } (HackerNews.view model.lazyCache model.uiState size model.hackerNews))
                 ++ (if isMain then
                         case model.upgradingTo of
                             Just build ->
@@ -2077,7 +2109,31 @@ persistConfig =
     , httpAnswered = httpAnswered
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     , webSocketsOpen = \ids -> GotInput (Ok (WebSocketsOpen ids))
+    , draw = draw
     }
+
+
+{-| The frame the host asks for with a Frame message: what each display shows, with
+last frame's `Ui.lazy` elements, which are kept for the next. Persist calls it after
+`update`, except while replaying the log.
+-}
+draw : Msg -> Model -> ( Model, List Effect )
+draw msg model =
+    case msg of
+        GotInput (Ok (Frame _)) ->
+            let
+                uis =
+                    List.map (\display -> ( display, displayUi model display )) model.displays
+            in
+            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
+            , [ Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model display ui }) uis) ]
+            )
+
+        GotInput _ ->
+            ( model, [] )
+
+        Tick _ ->
+            ( model, [] )
 
 
 {-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
@@ -2802,8 +2858,8 @@ toolbar model display =
                 Nothing ->
                     [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (t "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (t "Wikipedia")
-                    , Ui.selectableButton { id = HackerNewsUiId HackerNews.OpenButton, padding = small } (openHere HackerNewsApp) (t "Hacker news")
-                    , Ui.selectableButton { id = AsciiCollabUiId AsciiCollab.OpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
+                    , Ui.selectableButton { id = HackerNewsOpenButton, padding = small } (openHere HackerNewsApp) (t "Hacker news")
+                    , Ui.selectableButton { id = AsciiCollabOpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
                     , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
@@ -2824,7 +2880,7 @@ calculatorWindow model =
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
             }
-            (Calculator.view (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
+            (Calculator.view (calculatorFocused model) model.calculator)
         )
 
 

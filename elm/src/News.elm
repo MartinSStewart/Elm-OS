@@ -4,7 +4,6 @@ module News exposing
     , Item(..)
     , NewsState(..)
     , Topic
-    , UiId(..)
     , decoder
     , lastDays
     , parseWikitext
@@ -41,6 +40,7 @@ import SeqDict
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
+import UiId exposing (UiId(..))
 
 
 type alias Day =
@@ -75,10 +75,6 @@ type NewsState
     | LoadingNews (Maybe (List Day))
     | LoadedNews (List Day)
     | NewsFailed Effect.HttpError
-
-
-type UiId
-    = NewsViewport
 
 
 view : Ui.Model UiId -> NewsState -> Element UiId

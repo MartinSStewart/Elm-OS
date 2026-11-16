@@ -1,9 +1,6 @@
 module Calculator exposing
     ( Entry(..)
-    , Key(..)
     , Model
-    , Operator(..)
-    , UiId(..)
     , display
     , expression
     , format
@@ -26,11 +23,13 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 -}
 
 import Color
+import Calculator.Types exposing (Key(..), Operator(..))
 import Coord exposing (Coord)
 import Keyboard
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
+import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
 
 
@@ -57,23 +56,6 @@ type Entry
     | Shown Float
       -- Divided by zero, or a number too big for a Float: only digits and C do anything.
     | Error
-
-
-type Operator
-    = Add
-    | Subtract
-    | Multiply
-    | Divide
-
-
-type Key
-    = Digit Int
-    | Point
-    | Operator Operator
-    | Equals
-    | Negate
-    | Backspace
-    | Clear
 
 
 init : Model
@@ -603,12 +585,6 @@ fromKeyboard key =
 -- VIEW
 
 
-type UiId
-    = KeyButton Key
-    | CloseButton
-    | Panel
-
-
 spacing : Int
 spacing =
     4
@@ -680,9 +656,9 @@ view focused model =
         title =
             Ui.leftAndRight (Units.uiPixels width)
                 (Ui.text Small sans "Calculator")
-                (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
+                (Ui.button { id = CalculatorCloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
     in
-    Ui.elWithId Panel
+    Ui.elWithId CalculatorPanel
         { padding = Ui.paddingXY 8 8
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
@@ -726,7 +702,7 @@ keyRow model row =
                             Big
                 in
                 Ui.selectableButton
-                    { id = KeyButton key, padding = Ui.noPadding }
+                    { id = CalculatorKeyButton key, padding = Ui.noPadding }
                     (isPendingOperator model key)
                     (Ui.center { size = size } (Ui.text fontSize sans label))
             )

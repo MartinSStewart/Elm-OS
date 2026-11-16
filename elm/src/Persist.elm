@@ -99,6 +99,13 @@ type alias Config model msg =
     -- The WebSockets open now (by id), once the Model is restored: any other the
     -- Model thinks is open was closed by a restart or a power cut.
     , webSocketsOpen : List String -> msg
+
+    -- Called after `update` with each message that isn't being replayed from the log:
+    -- draws a frame if the message asks for one. Drawing here, rather than in `update`,
+    -- keeps replaying the log quick, as it holds every frame's message. It may only
+    -- change what the Model keeps for drawing (such as last frame's `Ui.lazy`
+    -- elements), and isn't saved, as replaying doesn't call it.
+    , draw : msg -> model -> ( model, List Effect )
     }
 
 
@@ -458,8 +465,11 @@ live config codecs arrival app saving pending =
             let
                 ( next, sent ) =
                     config.update arrival.msg app
+
+                ( drawn, drawEffects ) =
+                    config.draw arrival.msg next
             in
-            ( next, trackRequests config arrival.msg sent pending )
+            ( drawn, trackRequests config arrival.msg (sent ++ drawEffects) pending )
     in
     case saving of
         NotSaving ->

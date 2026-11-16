@@ -2,7 +2,6 @@ module AsciiCollab exposing
     ( Connection(..)
     , Model
     , State(..)
-    , UiId(..)
     , clickGrid
     , gotRandomBytes
     , init
@@ -65,15 +64,10 @@ import SeqSet
 import Sprite
 import Time
 import Ui
+import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
 import Wire
 import WireCodecs
-
-
-type UiId
-    = OpenButton
-    | CloseButton
-    | GridArea
 
 
 type alias Model =
@@ -162,17 +156,21 @@ randomBytesPath =
 onClick : UiId -> Model -> ( Model, List Effect )
 onClick uiId model =
     case uiId of
-        OpenButton ->
+        AsciiCollabOpenButton ->
             if model.isOpen then
                 close model
 
             else
                 connect { model | isOpen = True }
 
-        CloseButton ->
+        AsciiCollabCloseButton ->
             close model
 
-        GridArea ->
+        AsciiCollabGridArea ->
+            ( model, [] )
+
+        _ ->
+            -- Another app's id: Main only sends ASCII collab's ids here.
             ( model, [] )
 
 
@@ -850,8 +848,8 @@ view screen focused model =
                 (Ui.column { spacing = 6, padding = Ui.noPadding }
                     [ Ui.leftAndRight (Quantity.Quantity (cols * charWidth))
                         (t ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
-                        (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-                    , Ui.elWithId GridArea
+                        (Ui.button { id = AsciiCollabCloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+                    , Ui.elWithId AsciiCollabGridArea
                         { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
                         (gridView focused cols rows model)
                     ]

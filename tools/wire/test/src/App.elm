@@ -121,4 +121,5 @@ config =
     , httpAnswered = \_ -> Nothing
     , httpInterrupted = \_ -> NoOp
     , webSocketsOpen = \_ -> NoOp
+    , draw = \_ model -> ( model, [] )
     }

@@ -34,8 +34,6 @@ module Ui exposing
     , lazyKeyed
     , left
     , leftAndRight
-    , map
-    , mapModel
     , noPadding
     , noLazyCache
     , none
@@ -164,30 +162,6 @@ type ElementState
 type alias Model id =
     { focus : Maybe id
     , uiState : SeqDict id ElementState
-    }
-
-
-mapModel : (id -> Maybe id2) -> Model id -> Model id2
-mapModel idMap model =
-    { focus =
-        case model.focus of
-            Just focus ->
-                idMap focus
-
-            Nothing ->
-                Nothing
-    , uiState =
-        SeqDict.toList model.uiState
-            |> List.filterMap
-                (\( k, v ) ->
-                    case idMap k of
-                        Just k2 ->
-                            Just ( k2, v )
-
-                        Nothing ->
-                            Nothing
-                )
-            |> SeqDict.fromList
     }
 
 
@@ -700,71 +674,6 @@ viewport { id, viewportHeight, model } =
     Viewport { id = id, viewportHeight = viewportHeight, scrollOffset = model.offset }
 
 
-{-| Change the ids, so a module's UI can sit in a bigger one with its own id type.
--}
-map : (a -> b) -> Element a -> Element b
-map f element =
-    case element of
-        TextInput data ->
-            TextInput { id = f data.id, style = data.style, isValid = data.isValid, state = data.state }
-
-        TextInputMultiline data ->
-            TextInputMultiline { id = f data.id, style = data.style, state = data.state }
-
-        Text data ->
-            Text data
-
-        Button data child ->
-            Button
-                { id = f data.id
-                , padding = data.padding
-                , borderAndFill = data.borderAndFill
-                , borderAndFillFocus = data.borderAndFillFocus
-                , borderAndFillHover = data.borderAndFillHover
-                , cachedSize = data.cachedSize
-                , inFront = List.map (map f) data.inFront
-                }
-                (map f child)
-
-        Row data children ->
-            Row data (List.map (map f) children)
-
-        Column data children ->
-            Column data (List.map (map f) children)
-
-        Single data child ->
-            Single
-                { padding = data.padding
-                , borderAndFill = data.borderAndFill
-                , inFront = List.map (map f) data.inFront
-                , cachedSize = data.cachedSize
-                , id = Maybe.map f data.id
-                }
-                (map f child)
-
-        Quads data ->
-            Quads data
-
-        Empty ->
-            Empty
-
-        Viewport data child ->
-            Viewport
-                { id = f data.id, viewportHeight = data.viewportHeight, scrollOffset = data.scrollOffset }
-                (map f child)
-
-        Lazy key _ child ->
-            let
-                mapped =
-                    map f child
-            in
-            -- Without the Lazy elements inside: mapping them again, or finding them in
-            -- the mapped child, would take as long as the rest of `map` many times over.
-            -- So a `lazyCache` of a mapped element is slow to make: make it from the
-            -- element before it was mapped.
-            Lazy (f key) SeqDict.empty mapped
-
-
 -- LAZY
 
 
@@ -813,7 +722,7 @@ lazyParts element found =
     case element of
         Lazy key inner child ->
             if SeqDict.isEmpty inner then
-                -- No Lazy inside, or `map` left them out: look.
+                -- No Lazy inside it: look anyway, as it's quick.
                 lazyParts child (SeqDict.singleton key element :: found)
 
             else
@@ -857,10 +766,11 @@ uses them: elm-review allows no unused exports.)
 
 This is what you write; as it stands it just calls `f`. At build time tools/wire
 (tools/wire/src/Lazy.elm) turns each call into a `lazyKeyed` whose key is a variant
-it adds to the module's `LazyKey` type, holding the arguments; the module's `UiId`
-has one variant `Lazy LazyKey` for them, written by hand. So `f` must be a function
-defined at the top level of the same module, with a type annotation. The `LazyCache`
-arguments are left out of the key, and the other arguments can't hold functions.
+it adds to `UiId.LazyKey`, holding the arguments (`UiId.Lazy` holds the key). So `f`
+must be a function defined at the top level of the module that calls `lazy3`, with a
+type annotation. The `LazyCache` arguments are left out of the key; the others can't
+hold functions, and their types must be in modules that don't import UiId (such as an
+app's `<App>/Types.elm`), as UiId.elm imports them.
 
 -}
 lazy3 : LazyCache id -> (a -> b -> c -> Element id) -> a -> b -> c -> Element id
