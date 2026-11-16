@@ -24,8 +24,10 @@
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
 #   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
-#   make migration  after changing the Model's types: freeze them as the next version
-#                   (elm/src/Evergreen/V<n>) and write the migration to fill in (Evergreen/Migrate)
+#   make migration  after changing the Model's types: freeze the program as the next version
+#                   (elm/src/Evergreen/V<n>) and write the migration to fill in (Evergreen/Migrate);
+#                   again after filling it in, to copy the code it calls
+#   make migration-reset  delete every version and migration, and start again from this one
 #   make check-migration  fail if the Model's types changed with no migration (make check,
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
@@ -126,7 +128,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas test-containers migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -304,12 +306,39 @@ define WIRE
 endef
 
 # Every commit that changes the types the Model is made of adds a version of them:
-# a frozen copy in elm/src/Evergreen/V<n>, and the migration from version n - 1 in
-# elm/src/Evergreen/Migrate/V<n>.elm, so a Model saved by an older build is migrated
-# rather than lost. The build stops when the types changed without one. This writes
-# both; the migration says `Unimplemented` wherever it needs someone to fill it in.
+# a frozen copy of the program in elm/src/Evergreen/V<n>, and the migration from version
+# n - 1 in elm/src/Evergreen/Migrate/V<n>.elm, so a Model saved by an older build is
+# migrated rather than lost. The build stops when the types changed with no new version.
+#
+# `make migration` copies the program (as Evergreen.V<n>.<Module>, see
+# tools/wire/src/Freeze.elm) and writes the migration, saying `Unimplemented` wherever
+# it needs someone to fill it in. The migration can call any of the copied code, such as
+# Evergreen.V<n>.HackerNews.init, and goes on compiling whatever happens to the code later.
+# Only what's needed is copied: the Model's types and what the migration uses. So run
+# `make migration` again after writing the migration: while the newest version isn't
+# committed, it's copied again from the code as it is now, with what the migration uses
+# now, and the migration is left as it is.
 migration: $(BUILD)/wire-tool
-	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes
+	@latest=$$(tools/latest-version.sh); \
+	if [ -n "$$latest" ] && [ -n "$$(git status --porcelain -- elm/src/Evergreen/V$$latest)" ]; then \
+	  echo "Version $$latest isn't committed: copying it again from the code as it is now (Migrate/V$$latest.elm stays as it is)."; \
+	  rm -r "elm/src/Evergreen/V$$latest"; \
+	  $(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes --version "$$latest"; \
+	else \
+	  $(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes; \
+	fi
+
+# Starts the versions again: deletes elm/src/Evergreen (every frozen version and migration)
+# and freezes the program as the version after the newest there was, with no migration to
+# it. A computer whose Model is of an older version starts afresh. Numbering on, rather than
+# from 1, matters: a computer only switches to a build whose Model version isn't older than
+# its own (host/init/src/update.rs).
+migration-reset: $(BUILD)/wire-tool
+	@latest=$$(tools/latest-version.sh); \
+	next=$$(( $${latest:-0} + 1 )); \
+	echo "Deleting elm/src/Evergreen and freezing the program as version $$next, with no migration to it."; \
+	rm -r elm/src/Evergreen; \
+	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes --version "$$next"
 
 # Until then, `make` (and so `make run` and `make test`) still builds, with a warning: a
 # draft build, whose Model is called version n + 1 and is read from version n's as it

@@ -150,7 +150,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
 | `elm/src/Persist.elm` | Saving the Model: snapshots, replaying the host's message log at start |
 | `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
-| `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
+| `elm/src/Evergreen/` | Frozen versions of the program (what the Model and migrations need), and the migrations between them |
 | `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU rendering, HTTP |
 | `host/link/` | Linked into the Elm program: carries its ports over the socket to `/init` |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
@@ -264,14 +264,29 @@ Evergreen does, so a Model saved by an older build is migrated rather than lost:
    `make run` boots it on a copy of the data disk (`build/data-draft.img`, copied anew each run),
    so `build/data-qemu.img` never holds a Model no commit describes. `make check-migration`, which
    `make check` (so CI), `make release` and `make usb` run, refuses a draft.
-2. `make migration` freezes the types as version n+1 (`elm/src/Evergreen/V<n+1>/`, copies of
-   the types only; never edit them) and writes `elm/src/Evergreen/Migrate/V<n+1>.elm`, a function
-   from version n's Model to version n+1's. It writes all it can (fields and variants that are
-   still there, through Lists, Dicts, Maybes and the like); where it can't (a new field, a variant
-   that's gone, a type that changed) it writes `Unimplemented`, which doesn't compile.
-3. Replace each `Unimplemented`, build, and commit the change, the frozen types and the
-   migration together. Run `make check-migration` (or `make check`) before committing: a commit
-   without its migration fails CI, so `deployed` doesn't move to it.
+2. `make migration` freezes the program as version n+1 (`elm/src/Evergreen/V<n+1>/`; never edit
+   it) and writes `elm/src/Evergreen/Migrate/V<n+1>.elm`, a function from version n's Model to
+   version n+1's. It writes all it can (fields and variants that are still there, through Lists,
+   Dicts, Maybes and the like); where it can't (a new field, a variant that's gone, a type that
+   changed) it writes `Unimplemented`, which doesn't compile.
+3. Replace each `Unimplemented`. The migration can call the program's own code as it is now,
+   frozen: `Evergreen.V<n+1>.HackerNews.init`, say, rather than a copy written out by hand. Then
+   run `make migration` again: while version n+1 isn't committed, it copies the program again from
+   the code as it is now, with whatever the migration calls, and leaves the migration as it is.
+4. Build, and commit the change, the frozen version and the migration together. Run
+   `make check-migration` (or `make check`) before committing: a commit without its migration
+   fails CI, so `deployed` doesn't move to it.
+
+The frozen copy (`tools/wire/src/Freeze.elm`) is each module renamed to `Evergreen.V<n>.<Module>`,
+exposing everything, with only what's needed: the Model's types, what the migration calls, and
+what those use in turn (for a version with no call into the code, about 1,400 lines; with
+`Main.init`, about 1,500). Once committed it never changes, so the migration keeps compiling
+whatever happens to the code later.
+
+`make migration-reset` starts the versions again: it deletes `elm/src/Evergreen` and freezes the
+program as the version after the newest there was, with no migration to it. A computer whose Model
+is older starts afresh. The numbers go on rather than starting from 1, because a computer only
+switches to a build whose Model version isn't older than its own (`host/init/src/update.rs`).
 
 A build reads a snapshot of any earlier version by running the migrations one after another.
 Old versions cost the Elm program a little (version 1's codecs are about 50 KB). `make test-wire`

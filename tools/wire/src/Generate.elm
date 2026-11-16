@@ -30,6 +30,7 @@ import Elm.Syntax.Import exposing (Import)
 import Elm.Syntax.Module as Module
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
+import Freeze
 import Lazy
 import Set exposing (Set)
 
@@ -623,7 +624,7 @@ changing a `Ui.lazy` call never changes the Model's shape or needs a migration.
 -}
 isLazyKey : Module -> String -> Bool
 isLazyKey m name =
-    name == "LazyKey" && String.contains "type LazyKey = Restored" m.source
+    name == "LazyKey" && String.contains "type LazyKey = Restored" (String.join " " (String.words m.source))
 
 
 {-| Types that are never saved, and what they come back as: `Ui.lazy`'s keys (see
@@ -636,7 +637,7 @@ unsavedValue m name =
     if isLazyKey m name then
         Just "Restored"
 
-    else if m.name == "Ui" && name == "LazyCache" then
+    else if unfreezeAny m.name == "Ui" && name == "LazyCache" then
         Just "noLazyCache"
 
     else
@@ -2009,6 +2010,11 @@ entryModule options configKey modelKey msgKey shapes =
         latest =
             List.map Tuple.first shapes.versions |> List.maximum |> Maybe.withDefault 0
 
+        -- The oldest version: there's no migration to it (Models saved by older ones
+        -- aren't read, see Persist.elm).
+        first =
+            List.map Tuple.first shapes.versions |> List.minimum |> Maybe.withDefault 0
+
         -- The versions in elm/src/Evergreen (a draft build's own isn't).
         versions =
             List.map Tuple.first shapes.versions
@@ -2023,7 +2029,7 @@ entryModule options configKey modelKey msgKey shapes =
         imports =
             ([ Tuple.first configKey, Tuple.first modelKey, Tuple.first msgKey, "Persist", "Bytes", "Wire" ]
                 ++ List.map frozenModule versions
-                ++ List.map migrationModule (List.filter (\k -> k > 1) versions)
+                ++ List.map migrationModule (List.filter (\k -> k > first) versions)
             )
                 |> Set.fromList
                 |> Set.toList
@@ -2107,7 +2113,7 @@ entryModule options configKey modelKey msgKey shapes =
                , "migrate from bytes ="
                , "    case from of"
                ]
-            ++ List.concatMap migrateCase (List.filter (\k -> k > 1) (List.map Tuple.first shapes.versions))
+            ++ List.concatMap migrateCase (List.filter (\k -> k > first) (List.map Tuple.first shapes.versions))
             ++ [ "        _ ->"
                , "            Nothing"
                , ""
@@ -2125,11 +2131,13 @@ stringLiteral s =
 
 
 {-| The frozen versions of the Model's types: version n is the modules
-Evergreen.V<n>.*, copies of the types the Model was made of when it was frozen, and
-Evergreen.Migrate.V<n> turns a Model of version n - 1 into one of version n. The
-newest version must have the same shape as the current types, so a Model saved by
-this build is of that version. They're only ever added to (by `freeze`, which is
-`make migration`), and every commit that changes the Model's types adds one.
+Evergreen.V<n>.*, a copy of the program as it was when it was frozen (of what the
+Model's types and the migration need, see Freeze.elm), and Evergreen.Migrate.V<n>
+turns a Model of version n - 1 into one of version n. The newest version must have
+the same shape as the current types, so a Model saved by this build is of that
+version. They're added to by `freeze` (`make migration`), and every commit that
+changes the Model's types adds one; `make migration-reset` starts them again, from
+the version after the newest, with no migration to it.
 -}
 frozenVersions : Dict String Module -> Key -> List Int
 frozenVersions modules modelKey =
@@ -2181,6 +2189,22 @@ unfreeze version moduleName =
         moduleName
 
 
+{-| Any frozen module's name as the module it is a copy of.
+-}
+unfreezeAny : String -> String
+unfreezeAny moduleName =
+    case String.split "." moduleName of
+        "Evergreen" :: v :: rest ->
+            if String.startsWith "V" v && String.toInt (String.dropLeft 1 v) /= Nothing then
+                String.join "." rest
+
+            else
+                moduleName
+
+        _ ->
+            moduleName
+
+
 isFrozen : String -> Bool
 isFrozen moduleName =
     String.startsWith "Evergreen." moduleName
@@ -2223,25 +2247,25 @@ draftVersion versions =
 
 versionErrors : Dict String Module -> List Int -> List String
 versionErrors modules versions =
-    case List.reverse versions of
-        [] ->
-            [ "the Model's types have no frozen version yet. Run `make migration` to freeze them as version 1 (elm/src/Evergreen/V1)." ]
-
-        latest :: _ ->
+    case ( versions, List.reverse versions ) of
+        ( first :: _, latest :: _ ) ->
             let
                 gaps =
-                    if versions == List.range 1 latest then
+                    if versions == List.range first latest then
                         []
 
                     else
-                        [ "elm/src/Evergreen has versions " ++ String.join ", " (List.map String.fromInt versions) ++ ", but they must be 1 to " ++ String.fromInt latest ++ " with none missing." ]
+                        [ "elm/src/Evergreen has versions " ++ String.join ", " (List.map String.fromInt versions) ++ ", but they must be " ++ String.fromInt first ++ " to " ++ String.fromInt latest ++ " with none missing." ]
 
                 missingMigrations =
-                    List.range 2 latest
+                    List.range (first + 1) latest
                         |> List.filter (\k -> not (Dict.member (migrationModule k) modules))
                         |> List.map (\k -> "there's no migration to version " ++ String.fromInt k ++ ": " ++ migrationModule k ++ " (elm/src/Evergreen/Migrate/V" ++ String.fromInt k ++ ".elm) is missing.")
             in
             gaps ++ missingMigrations
+
+        _ ->
+            [ "the Model's types have no frozen version yet. Run `make migration` to freeze them as version 1 (elm/src/Evergreen/V1), or `make migration-reset` to start again after the versions there were." ]
 
 
 {-| When the current types aren't those of the newest version: what changed.
@@ -2263,13 +2287,15 @@ changeErrors defs used modelKey latest =
             ++ String.fromInt latest
             ++ ", and there's no migration for that yet.\n    ("
             ++ describeChanges frozen current
-            ++ ")\n  To add one:\n    1. make migration\n       (freezes the types as version "
+            ++ ")\n  To add one:\n    1. make migration\n       (copies the program as version "
             ++ String.fromInt (latest + 1)
             ++ " and writes elm/src/Evergreen/Migrate/V"
             ++ String.fromInt (latest + 1)
             ++ ".elm)\n    2. fill in elm/src/Evergreen/Migrate/V"
             ++ String.fromInt (latest + 1)
-            ++ ".elm wherever it says Unimplemented"
+            ++ ".elm wherever it says Unimplemented; it can call the copied code, such as Evergreen.V"
+            ++ String.fromInt (latest + 1)
+            ++ ".HackerNews.init\n    3. make migration again, to copy what the migration calls"
         ]
 
 
@@ -2301,17 +2327,28 @@ describeChanges old new =
     String.join "; " (part "changed:" changed ++ part "new:" added ++ part "gone:" removed)
 
 
-{-| `make migration`: freezes the Model's current types as the next version, and
-writes the migration to it from the version before, as far as it can. The files to
-add to the source directory.
+{-| `make migration`: freezes the program as version `version` (by default the one
+after the newest frozen one): a copy of every module in Evergreen.V<version> (see
+Freeze.elm), and the migration to it from the version before, as far as tools/wire
+can write it, unless that version doesn't exist or the migration already does. The
+files to add to the source directory.
+
+With no frozen version left (`make migration-reset` deleted them), the version is the
+first, and Models saved by older ones aren't read: the program starts afresh.
+
 -}
-freeze : Options -> List SourceFile -> Result (List String) (List SourceFile)
-freeze options files =
-    withModules options files freezeWith
+freeze : Options -> Maybe Int -> List SourceFile -> Result (List String) (List SourceFile)
+freeze options version files =
+    case parseModules files of
+        Err problems ->
+            Err problems
+
+        Ok original ->
+            withModules options files (freezeWith original.modules version)
 
 
-freezeWith : Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) (List SourceFile)
-freezeWith _ modules modelKey _ _ =
+freezeWith : Dict String Module -> Maybe Int -> Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) (List SourceFile)
+freezeWith original givenVersion _ modules modelKey _ _ =
     let
         defs =
             allDefs modules
@@ -2326,10 +2363,46 @@ freezeWith _ modules modelKey _ _ =
             List.maximum versions |> Maybe.withDefault 0
 
         version =
-            latest + 1
+            Maybe.withDefault (latest + 1) givenVersion
 
-        ( reached, reachErrors ) =
+        ( _, reachErrors ) =
             reach defs used [ ( modelKey, keyName modelKey ) ] Set.empty []
+
+        migration =
+            if List.member (version - 1) versions && not (Dict.member (migrationModule version) modules) then
+                [ migrationFile defs used modelKey (version - 1) ]
+
+            else
+                []
+
+        -- The program's modules, as they are in the source files (`modules` has
+        -- Ui.lazy's calls rewritten), apart from tools/wire's runtime (Wire), which
+        -- the build adds. What's kept of them: the migration to this version (the one
+        -- written now, or the one there already), the Model, and the values given to
+        -- types that are never saved (`unsavedValue`), which only the build's codecs use.
+        program =
+            original
+                |> Dict.values
+                |> List.filter (\m -> not (isFrozen m.name) && m.name /= "Wire")
+                |> List.map (\m -> { name = m.name, path = m.path, source = m.source, file = m.file })
+
+        rootModules =
+            (List.filterMap (\f -> parseFile f |> Result.toMaybe) migration
+                |> List.map (\( f, file ) -> { name = migrationModule version, path = f.path, source = f.source, file = file })
+            )
+                ++ (Dict.get (migrationModule version) original
+                        |> Maybe.map (\m -> [ { name = m.name, path = m.path, source = m.source, file = m.file } ])
+                        |> Maybe.withDefault []
+                   )
+
+        unsavedRoots =
+            original
+                |> Dict.values
+                |> List.filter (\m -> not (isFrozen m.name))
+                |> List.concatMap (\m -> Dict.keys m.types |> List.filterMap (unsavedValue m) |> List.filter (not << startsUpper) |> List.map (Tuple.pair m.name))
+
+        copies =
+            Freeze.freeze version program { modules = rootModules, names = modelKey :: unsavedRoots }
     in
     if not (Dict.member modelKey defs) then
         Err [ "--model: there is no type " ++ keyName modelKey ++ " in the source files" ]
@@ -2337,100 +2410,19 @@ freezeWith _ modules modelKey _ _ =
     else if not (List.isEmpty reachErrors) then
         Err (List.reverse reachErrors)
 
-    else if latest > 0 && List.isEmpty (changeErrors defs used modelKey latest) then
+    else if version <= latest then
+        Err [ "version " ++ String.fromInt version ++ " can't be frozen: elm/src/Evergreen already has version " ++ String.fromInt latest ++ "." ]
+
+    else if latest > 0 && version == latest + 1 && List.isEmpty (changeErrors defs used modelKey latest) then
         Err [ "the Model's types are the same as version " ++ String.fromInt latest ++ "'s, so there's nothing to freeze." ]
 
     else
-        let
-            dataDefs =
-                reached |> Set.toList |> List.filterMap (\key -> Dict.get key defs)
-
-            -- Types that only label others (such as a Quantity's units) hold no
-            -- data, so their frozen copy is just a type with the same name.
-            labelDefs =
-                dataDefs
-                    |> List.concatMap (\def -> Set.toList (userRefs defs (bodyTypes def.body)))
-                    |> Set.fromList
-                    |> (\keys -> Set.diff keys reached)
-                    |> Set.toList
-                    |> List.filterMap (\key -> Dict.get key defs)
-
-            frozenFiles =
-                (List.map (\d -> ( d, True )) dataDefs ++ List.map (\d -> ( d, False )) labelDefs)
-                    |> List.foldl (\( def, hasData ) acc -> Dict.update def.moduleName (\ds -> Just (( def, hasData ) :: Maybe.withDefault [] ds)) acc) Dict.empty
-                    |> Dict.toList
-                    |> List.map (\( moduleName, ds ) -> frozenFile defs version moduleName (List.sortBy (Tuple.first >> .name) ds))
-
-            migration =
-                if latest == 0 then
-                    []
-
-                else
-                    [ migrationFile defs used modelKey latest ]
-        in
-        Ok (frozenFiles ++ migration)
+        Ok (copies ++ migration)
 
 
-frozenFile : Dict Key Def -> Int -> String -> List ( Def, Bool ) -> SourceFile
-frozenFile defs version moduleName ds =
-    let
-        name =
-            frozenModuleName version moduleName
-
-        render =
-            renderTy (frozenRef defs version moduleName)
-
-        decl ( def, hasData ) =
-            let
-                head =
-                    String.join " " (def.name :: def.generics)
-            in
-            if not hasData then
-                "type " ++ head ++ "\n    = " ++ def.name ++ " Never"
-
-            else
-                case def.body of
-                    Alias (TRecord ((_ :: _) as fields)) ->
-                        "type alias "
-                            ++ head
-                            ++ " =\n    { "
-                            ++ String.join "\n    , " (List.map (\( f, t ) -> f ++ " : " ++ render False t) fields)
-                            ++ "\n    }"
-
-                    Alias ty ->
-                        "type alias " ++ head ++ " =\n    " ++ render False ty
-
-                    Custom variants ->
-                        "type "
-                            ++ head
-                            ++ "\n    = "
-                            ++ String.join "\n    | " (List.map (\( c, tys ) -> String.join " " (c :: List.map (render True) tys)) variants)
-
-        body =
-            String.join "\n\n\n" (List.map decl ds)
-    in
-    { path = String.replace "." "/" name ++ ".elm"
-    , source =
-        String.join "\n"
-            ([ "module " ++ name ++ " exposing (..)"
-             , ""
-             , "{-| The types from " ++ moduleName ++ " that the Model was made of in version " ++ String.fromInt version ++ ", frozen by"
-             , "tools/wire (`make migration`) so that a Model saved by version " ++ String.fromInt version ++ " can still be read"
-             , "and migrated. Don't change them."
-             , ""
-             , "-}"
-             , ""
-             ]
-                ++ (case importsIn body (otherModules defs version name) of
-                        [] ->
-                            []
-
-                        imports ->
-                            List.map (\i -> "import " ++ i) imports ++ [ "" ]
-                   )
-                ++ [ "", body, "" ]
-            )
-    }
+startsUpper : String -> Bool
+startsUpper s =
+    String.left 1 s /= String.toLower (String.left 1 s)
 
 
 {-| Every module a frozen module or a migration might refer to: the frozen copies of

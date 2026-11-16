@@ -99,8 +99,10 @@ rewrite typeText files =
                                 Just { sourceFile = sourceFile, file = file, ui = ui, uses = uses }
                     )
 
+        -- Not the frozen copies of UiId (Evergreen.V<n>.UiId, see Freeze.elm), whose
+        -- `LazyKey` is never filled in.
         keyModules =
-            List.filter (\( _, file ) -> lazyKeyType file /= Nothing) files
+            List.filter (\( _, file ) -> lazyKeyType file /= Nothing && not (String.startsWith "Evergreen." (moduleName file))) files
     in
     if List.isEmpty callers then
         Ok []

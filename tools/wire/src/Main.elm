@@ -39,8 +39,10 @@ type alias Flags =
     , options : Generate.Options
 
     -- `--draft yes` (in options): build even if the Model's types changed with no migration.
-    -- `--freeze yes`: freeze the Model's types as a new version instead (`make migration`).
+    -- `--freeze yes`: freeze the program as a new version instead (`make migration`),
+    -- `--version <n>` as that version rather than the one after the newest.
     , freeze : Bool
+    , version : Maybe Int
     }
 
 
@@ -59,7 +61,7 @@ run env =
                 |> Task.andThen
                     (\( runtime, sources ) ->
                         if f.freeze then
-                            case Generate.freeze f.options sources of
+                            case Generate.freeze f.options f.version sources of
                                 Err problems ->
                                     Task.succeed problems
 
@@ -138,6 +140,7 @@ flags args =
                                     , runtime = runtime
                                     , options = { entry = entry, config = config, model = model, msg = msg, draft = Dict.get "draft" d == Just "yes" }
                                     , freeze = Dict.get "freeze" d == Just "yes"
+                                    , version = Dict.get "version" d |> Maybe.andThen String.toInt
                                     }
                                 )
                                 (need d "config")
