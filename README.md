@@ -379,3 +379,9 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   screen doesn't offer to start without it yet.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and
   virgl drivers would shrink it a lot.
+
+## License
+
+Elm OS is under the MIT license ([LICENSE](LICENSE)). The software it bundles (Linux,
+firmware, Mesa, wpa_supplicant, Rust crates, Elm packages, fonts) keeps its own licenses:
+see [THIRD_PARTY.md](THIRD_PARTY.md). Images carry all of these in `/usr/share/licenses/elmos/`.

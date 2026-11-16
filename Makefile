@@ -511,8 +511,25 @@ $(BUILD)/eco-setting: FORCE
 	@mkdir -p $(BUILD); s="$(ECO_BIN) $$($(ECO) --version)"; \
 	  echo "$$s" | cmp -s - $@ || { rm -rf $(BUILD)/wire/eco-stuff $(BUILD)/wire-test/eco-stuff tools/wire/eco-stuff elm/eco-stuff; echo "$$s" > $@; }
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
-	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos
+# /usr/share/licenses/elmos: Elm OS's LICENSE, THIRD_PARTY.md, and the license texts of
+# everything built into the image (licenses/, Linux's and wpa_supplicant's from their
+# sources, Noto Sans's, and the Rust crates' from tools/rust-licenses.py).
+$(BUILD)/licenses/.done: LICENSE THIRD_PARTY.md $(wildcard licenses/*) host/common/src/noto-sans-OFL.txt \
+    tools/rust-licenses.py host/Cargo.lock $(BUILD)/kernel-version $(BUILD)/src/wpa_supplicant-$(HOSTAP_VER).tar.gz
+	rm -rf $(BUILD)/licenses && mkdir -p $(BUILD)/licenses/elmos
+	cp LICENSE THIRD_PARTY.md licenses/* $(BUILD)/licenses/elmos/
+	cp host/common/src/noto-sans-OFL.txt $(BUILD)/licenses/elmos/noto-sans-OFL.txt
+	cp $(KERNEL_SRC)/COPYING $(BUILD)/licenses/elmos/linux-COPYING
+	cp $(KERNEL_SRC)/LICENSES/preferred/GPL-2.0 $(BUILD)/licenses/elmos/linux-GPL-2.0
+	cp $(KERNEL_SRC)/LICENSES/exceptions/Linux-syscall-note $(BUILD)/licenses/elmos/linux-syscall-note
+	tar xzf $(BUILD)/src/wpa_supplicant-$(HOSTAP_VER).tar.gz -O wpa_supplicant-$(HOSTAP_VER)/README \
+	  > $(BUILD)/licenses/elmos/wpa_supplicant-README
+	python3 -I tools/rust-licenses.py $(BUILD)/licenses/elmos/rust-crates.txt
+	touch $@
+
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
+	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos $(BUILD)/rootfs/usr/share/licenses
+	cp -r $(BUILD)/licenses/elmos $(BUILD)/rootfs/usr/share/licenses/
 	cp $(BUILD)/init $(BUILD)/rootfs/init
 	mkdir -p $(BUILD)/rootfs/usr/lib/elmos
 	cp $(BUILD)/elm $(BUILD)/rootfs/usr/lib/elmos/elm
