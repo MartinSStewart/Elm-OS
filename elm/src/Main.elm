@@ -639,7 +639,7 @@ step event model =
                             displayUi model display
                     in
                     case Ui.hoverIdOnly (uiMouseOn display data.mouse) displayUi2 of
-                        ( _, { relativePositionToUi, ui } ) :: _ ->
+                        _ :: _ ->
                             ( model, [] )
 
                         [] ->

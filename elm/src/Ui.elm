@@ -1,6 +1,5 @@
 module Ui exposing
     ( BorderAndFill(..)
-    , ButtonData
     , Element
     , ElementFull
     , ElementState(..)
@@ -10,8 +9,6 @@ module Ui exposing
     , RowColumn
     , Screenshot
     , ScrollBy(..)
-    , TextInputData
-    , TextInputMultilineData
     , ViewportData
     , ViewportModel
     , bottomLeft
@@ -263,7 +260,7 @@ elementToScreenshotHelper element =
                 }
                 (elementToScreenshotHelper child)
 
-        Lazy id lazy child ->
+        Lazy _ _ child ->
             elementToScreenshotHelper child
 
 

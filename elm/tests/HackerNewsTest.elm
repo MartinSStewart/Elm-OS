@@ -115,17 +115,17 @@ suite =
                 draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) Ui.init uiScreen collapsed)
                     |> Expect.equal (draw (view Ui.noLazyCache collapsed))
             )
-        , test "an Element with Ui.lazy in it can be saved, and draws the same when loaded"
+        , test "a screenshot of an Element with Ui.lazy in it can be saved, and is the same when loaded"
             (\() ->
                 let
-                    element =
-                        view Ui.noLazyCache commentsModel
+                    screenshot : Ui.Screenshot
+                    screenshot =
+                        Ui.elementToScreenshot (view Ui.noLazyCache commentsModel)
                 in
-                Ui.w3_encode_Element UiId.w3_encode_UiId element
+                Ui.w3_encode_Screenshot screenshot
                     |> Wire.toBytes
-                    |> Wire.fromBytes (Ui.w3_decode_Element UiId.w3_decode_UiId)
-                    |> Maybe.map draw
-                    |> Expect.equal (Just (draw element))
+                    |> Wire.fromBytes Ui.w3_decode_Screenshot
+                    |> Expect.equal (Just screenshot)
             )
         ]
 
