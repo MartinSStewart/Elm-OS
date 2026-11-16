@@ -40,6 +40,7 @@ module Ui exposing
     , onAnimationFrame
     , onMouseDown
     , onWheel
+    , stopMomentum
     , ScrollBy(..)
     , paddingXY
     , quads
@@ -174,16 +175,53 @@ init =
 type alias ViewportModel =
     { offset : Quantity Float UiPixels
     , target : Quantity Float UiPixels
+
+    -- Gliding after a touchpad scroll: UI pixels a second (positive is down), slowing
+    -- down, and the lowest offset it can reach (the bottom of the content).
+    , momentum : Float
+    , bottom : Quantity Float UiPixels
     }
 
 
 {-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
 UI pixels two fingers moved on a touchpad (positive is down, the content following
-them), which move the content at once.
+them), which move the content at once, or the speed the fingers lifted at, in UI
+pixels a second (positive is down), at which the content keeps going, slowing down.
 -}
 type ScrollBy
     = WheelClicks Int
     | ScrollPixels (Quantity Float UiPixels)
+    | Momentum Float
+
+
+{-| How much of its speed a glide keeps after a second: it keeps 0.998 of it a
+millisecond, as on iOS.
+-}
+momentumKeptPerSecond : Float
+momentumKeptPerSecond =
+    0.998 ^ 1000
+
+
+{-| Stop every glide (a finger touched the touchpad).
+-}
+stopMomentum : Model id -> Model id
+stopMomentum model =
+    { model
+        | uiState =
+            SeqDict.map
+                (\_ value ->
+                    case value of
+                        ViewportState viewport2 ->
+                            ViewportState { viewport2 | momentum = 0 }
+
+                        TextInputState _ ->
+                            value
+
+                        TextInputMultilineState _ ->
+                            value
+                )
+                model.uiState
+    }
 
 
 setFocus : Maybe id -> Model id -> Model id
@@ -205,39 +243,11 @@ onAnimationFrame timeElapsed model =
                             value
 
                         ViewportState viewport2 ->
-                            let
-                                distance : Quantity Float UiPixels
-                                distance =
-                                    Quantity.plus
-                                        (Quantity.for timeElapsed scrollBaseSpeed)
-                                        (diff
-                                            |> Quantity.minus
-                                                (Quantity.multiplyBy (0.05 ^ Duration.inSeconds timeElapsed) diff)
-                                        )
+                            if viewport2.momentum /= 0 then
+                                glide timeElapsed viewport2 |> ViewportState
 
-                                target : Quantity Float UiPixels
-                                target =
-                                    viewport2.target
-
-                                diff : Quantity Float UiPixels
-                                diff =
-                                    target |> Quantity.minus viewport2.offset |> Quantity.abs
-                            in
-                            { viewport2
-                                | offset =
-                                    -- Also mends an offset that a negative frame time made
-                                    -- NaN (NaN is never less than anything), which a saved
-                                    -- Model may still hold.
-                                    if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
-                                        target
-
-                                    else if viewport2.offset |> Quantity.lessThan target then
-                                        Quantity.plus distance viewport2.offset
-
-                                    else
-                                        viewport2.offset |> Quantity.minus distance
-                            }
-                                |> ViewportState
+                            else
+                                ease timeElapsed viewport2 |> ViewportState
                 )
                 model.uiState
     }
@@ -350,6 +360,10 @@ onWheel id scrollBy element model =
 
                         ScrollPixels pixels ->
                             TextInputMultiline.scrollPixels textInput2.style (Quantity.unwrap pixels)
+
+                        Momentum _ ->
+                            -- it moves a whole line at a time, so it doesn't glide
+                            identity
                     )
                         (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
@@ -448,7 +462,79 @@ scrolls element =
 
 initViewportModel : ViewportModel
 initViewportModel =
-    { offset = Quantity.zero, target = Quantity.zero }
+    { offset = Quantity.zero, target = Quantity.zero, momentum = 0, bottom = Quantity.zero }
+
+
+{-| A frame of easing towards where the wheel scrolled to.
+-}
+ease : Duration -> ViewportModel -> ViewportModel
+ease timeElapsed viewport2 =
+    let
+        distance : Quantity Float UiPixels
+        distance =
+            Quantity.plus
+                (Quantity.for timeElapsed scrollBaseSpeed)
+                (diff
+                    |> Quantity.minus
+                        (Quantity.multiplyBy (0.05 ^ Duration.inSeconds timeElapsed) diff)
+                )
+
+        target : Quantity Float UiPixels
+        target =
+            viewport2.target
+
+        diff : Quantity Float UiPixels
+        diff =
+            target |> Quantity.minus viewport2.offset |> Quantity.abs
+    in
+    { viewport2
+        | offset =
+            -- Also mends an offset that a negative frame time made
+            -- NaN (NaN is never less than anything), which a saved
+            -- Model may still hold.
+            if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
+                target
+
+            else if viewport2.offset |> Quantity.lessThan target then
+                Quantity.plus distance viewport2.offset
+
+            else
+                viewport2.offset |> Quantity.minus distance
+    }
+
+
+{-| A frame of gliding after a touchpad scroll: move at the speed, then slow down,
+stopping once it is slow or at the top or bottom.
+-}
+glide : Duration -> ViewportModel -> ViewportModel
+glide timeElapsed model =
+    let
+        seconds : Float
+        seconds =
+            Duration.inSeconds timeElapsed
+
+        moved : Quantity Float UiPixels
+        moved =
+            Quantity.plus (Units.uiPixels (model.momentum * seconds)) model.offset
+
+        offset : Quantity Float UiPixels
+        offset =
+            Quantity.clamp model.bottom Quantity.zero moved
+
+        momentum : Float
+        momentum =
+            model.momentum * (momentumKeptPerSecond ^ seconds)
+    in
+    { model
+        | offset = offset
+        , target = offset
+        , momentum =
+            if offset /= moved || abs momentum < 10 || isNaN momentum then
+                0
+
+            else
+                momentum
+    }
 
 
 scroll : ScrollBy -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
@@ -462,13 +548,21 @@ scroll scrollBy size2 data model =
     in
     case scrollBy of
         WheelClicks clicks ->
-            { model | target = Quantity.plus (Units.uiPixels (toFloat (clicks * 150))) model.target |> clampOffset }
+            { model
+                | target = Quantity.plus (Units.uiPixels (toFloat (clicks * 150))) model.target |> clampOffset
+                , momentum = 0
+            }
 
         ScrollPixels pixels ->
-            -- No gliding: the content stays under the fingers.
+            -- No easing: the content stays under the fingers.
             { offset = Quantity.plus pixels model.offset |> clampOffset
             , target = Quantity.plus pixels model.target |> clampOffset
+            , momentum = 0
+            , bottom = model.bottom
             }
+
+        Momentum velocity ->
+            { model | momentum = velocity, bottom = clampOffset (Units.uiPixels -1.0e9) }
 
 
 scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)

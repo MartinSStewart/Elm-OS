@@ -94,6 +94,9 @@ type ToElm
       -- Two fingers on a touchpad moved: UI pixels the content under the pointer
       -- follows them, positive is down (as for a Wheel click up).
     | Scroll Float
+      -- The fingers lifted while scrolling: the content keeps going at this many UI
+      -- pixels a second (positive is down), slowing down. 0 stops any glide.
+    | ScrollMomentum Float
 
 
 type HttpFailure
@@ -253,6 +256,9 @@ decoder =
 
                     31 ->
                         BD.map Scroll P.decodeFloat64
+
+                    32 ->
+                        BD.map ScrollMomentum P.decodeFloat64
 
                     _ ->
                         BD.fail

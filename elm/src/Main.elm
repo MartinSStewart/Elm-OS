@@ -63,6 +63,7 @@ type Input
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
     | Scroll Float -- touchpad scrolling, UI pixels, positive is down
+    | ScrollMomentum Float -- the fingers lifted: keep going at this many UI pixels a second, 0 stops
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
@@ -136,6 +137,9 @@ toInput message =
 
         HostMessage.Scroll dy ->
             Ok (Scroll dy)
+
+        HostMessage.ScrollMomentum velocity ->
+            Ok (ScrollMomentum velocity)
 
         HostMessage.Key code down repeat ->
             Ok (Key code down repeat)
@@ -645,6 +649,13 @@ step event model =
 
         Scroll pixels ->
             scrollUnderMouse (Ui.ScrollPixels (Units.uiPixels pixels)) model
+
+        ScrollMomentum velocity ->
+            if velocity == 0 then
+                ( { model | uiState = Ui.stopMomentum model.uiState }, [] )
+
+            else
+                scrollUnderMouse (Ui.Momentum velocity) model
 
         Key code down repeat ->
             let
@@ -1705,6 +1716,10 @@ scrollUnderMouse scrollBy model =
 
                 Ui.ScrollPixels pixels ->
                     AsciiCollab.scrollPixels (appUiSize AsciiCollabApp model) (Quantity.unwrap pixels) model.asciiCollab
+
+                Ui.Momentum _ ->
+                    -- the grid moves a whole row at a time, so it doesn't glide
+                    ( model.asciiCollab, [] )
             )
                 |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 

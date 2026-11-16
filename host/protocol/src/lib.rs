@@ -284,6 +284,11 @@ pub enum ToElm {
     /// under the pointer follows the fingers. Positive is down, the way the content
     /// goes for a `Wheel` click up. A mouse wheel still sends `Wheel`.
     Scroll { dy: f64 },
+    /// The fingers left the touchpad (or all but one did) while scrolling: the content
+    /// they were scrolling should keep going at `velocity` UI pixels a second (positive
+    /// is down, as for `Scroll`), slowing down. 0 when the fingers had stopped. Also
+    /// sent with 0 when a finger touches the pad again, which stops any glide.
+    ScrollMomentum { velocity: f64 },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -459,6 +464,7 @@ mod tests {
             ToElm::Button { .. } => "button",
             ToElm::Wheel { .. } => "wheel",
             ToElm::Scroll { .. } => "scroll",
+            ToElm::ScrollMomentum { .. } => "scrollMomentum",
             ToElm::Key { .. } => "key",
             ToElm::Renderer { .. } => "renderer",
             ToElm::System { .. } => "system",
@@ -487,7 +493,7 @@ mod tests {
             ToElm::DisplaysChanged { .. } => "displaysChanged",
         }
     }
-    const TO_ELM_TAGS: usize = 32;
+    const TO_ELM_TAGS: usize = 33;
 
     #[test]
     fn reads_the_render_example() {

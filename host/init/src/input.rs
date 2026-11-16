@@ -21,6 +21,7 @@
 //!   {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
 //!   {"t":"wheel","dy":N}                 scroll wheel clicks, positive away from you (up)
 //!   {"t":"scroll","dy":F}                two-finger scrolling, UI pixels, positive down
+//!   {"t":"scrollMomentum","velocity":F}  the fingers lifted: keep going at F UI px/s
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
 
@@ -43,6 +44,12 @@ const REL_Y: u16 = 1;
 const REL_WHEEL: u16 = 8;
 const ABS_X: u16 = 0;
 const ABS_Y: u16 = 1;
+/// The fingers' speed as they lift is their scrolling over this many seconds before.
+const MOMENTUM_WINDOW: f64 = 0.1;
+/// If the fingers held still this long before lifting, nothing glides.
+const MOMENTUM_STILL: f64 = 0.05;
+/// The fastest glide, in UI pixels a second: a flick shouldn't fly off to the end.
+const MOMENTUM_MAX: f64 = 8000.0;
 const KEY_POWER: u16 = 116;
 const BTN_MISC: u16 = 0x100;
 const BTN_LEFT: u16 = 0x110;
@@ -103,6 +110,8 @@ struct Device {
     fingers: i32, // most fingers down during this touch
     tools: u8,    // bit n: the BTN_TOOL_* for n + 1 fingers is down
     scroll: f64,  // two-finger scrolling since the last SYN_REPORT, in device pixels
+    // this scroll's recent reports (when, UI pixels), for its speed as the fingers lift
+    scroll_reports: Vec<(f64, f64)>,
     touch_start: f64,
     frac_x: f64,
     frac_y: f64,
@@ -177,6 +186,7 @@ impl Device {
             fingers: 0,
             tools: 0,
             scroll: 0.0,
+            scroll_reports: Vec::new(),
             touch_start: 0.0,
             frac_x: 0.0,
             frac_y: 0.0,
@@ -252,6 +262,33 @@ pub struct Inputs {
     // what's left of the pointer's motion after rounding to whole pixels
     frac_x: f64,
     frac_y: f64,
+    /// Whether Elm was last told to glide (ScrollMomentum), so a new touch stops it.
+    gliding: bool,
+}
+
+/// How fast two fingers were scrolling as they lifted at `end`, in UI pixels a second,
+/// from their reports (when, UI pixels): 0 if they had stopped.
+fn momentum(reports: &[(f64, f64)], end: f64) -> f64 {
+    let (Some(&(first, _)), Some(&(last, _))) = (reports.first(), reports.last()) else {
+        return 0.0;
+    };
+    if end - last > MOMENTUM_STILL {
+        return 0.0;
+    }
+    // Over the window, or the whole scroll if it was shorter (from the report before
+    // its first, which isn't known: count the first report as one report's time).
+    let from = (end - MOMENTUM_WINDOW).max(first);
+    let recent: Vec<_> = reports.iter().filter(|(t, _)| *t >= from).collect();
+    let span = match recent.as_slice() {
+        [] => return 0.0,
+        [_] => 1.0 / 100.0,
+        [a, .., b] => (b.0 - a.0) * recent.len() as f64 / (recent.len() - 1) as f64,
+    };
+    if span <= 0.0 {
+        return 0.0;
+    }
+    let distance: f64 = recent.iter().map(|(_, dy)| dy).sum();
+    (distance / span).clamp(-MOMENTUM_MAX, MOMENTUM_MAX)
 }
 
 /// How much faster than the mouse's own counts the pointer moves, at a speed in counts
@@ -284,6 +321,7 @@ impl Inputs {
             scale: 1.0,
             frac_x: 0.0,
             frac_y: 0.0,
+            gliding: false,
         }
     }
 
@@ -350,6 +388,21 @@ impl Inputs {
             }
         }
         moved
+    }
+
+    /// Two fingers stopped scrolling (lifted): tell Elm how fast the content should
+    /// keep going.
+    fn end_scroll(&mut self, i: usize, time: f64) {
+        let dev = &mut self.devices[i];
+        if dev.scroll_reports.is_empty() {
+            return;
+        }
+        let velocity = momentum(&dev.scroll_reports, time);
+        dev.scroll_reports.clear();
+        if velocity != 0.0 {
+            self.gliding = true;
+            elm::send(&ToElm::ScrollMomentum { velocity });
+        }
     }
 
     /// Touchpad finger motion: move the pointer by the finger's movement. A full
@@ -421,8 +474,11 @@ impl Inputs {
             EV_SYN if ev.code == SYN_REPORT => {
                 let dev = &mut self.devices[i];
                 if dev.scroll != 0.0 {
-                    elm::send(&ToElm::Scroll { dy: dev.scroll / self.scale });
+                    let dy = dev.scroll / self.scale;
+                    elm::send(&ToElm::Scroll { dy });
                     dev.scroll = 0.0;
+                    dev.scroll_reports.retain(|(t, _)| event_time - t <= MOMENTUM_WINDOW);
+                    dev.scroll_reports.push((event_time, dy));
                 }
                 if dev.rel_x != 0 || dev.rel_y != 0 {
                     let (dx, dy) = (dev.rel_x as f64, dev.rel_y as f64);
@@ -493,6 +549,10 @@ impl Inputs {
                 let dev = &mut self.devices[i];
                 if touchpad && ev.code == BTN_TOUCH {
                     if down {
+                        if self.gliding {
+                            self.gliding = false;
+                            elm::send(&ToElm::ScrollMomentum { velocity: 0.0 });
+                        }
                         dev.touching = true;
                         dev.have_last = 0;
                         dev.tap_moved = 0;
@@ -503,6 +563,8 @@ impl Inputs {
                         dev.frac_y = 0.0;
                         dev.touch_start = event_time;
                     } else {
+                        self.end_scroll(i, event_time);
+                        let dev = &mut self.devices[i];
                         dev.touching = false;
                         // A short touch that barely moved, without pressing the pad down: a
                         // tap, so click. Hold the button for a moment (released by
@@ -533,6 +595,10 @@ impl Inputs {
                         dev.fingers = dev.fingers.max(f);
                     } else {
                         dev.tools &= !(1 << (f - 1));
+                        if dev.tools <= 1 {
+                            // down to one finger (or none): the scroll is over
+                            self.end_scroll(i, event_time);
+                        }
                     }
                 } else if ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE {
                     if touchpad {
@@ -597,6 +663,23 @@ mod tests {
             .into_iter()
             .filter(|m| !matches!(m, ToElm::Mouse { .. }))
             .collect()
+    }
+
+    #[test]
+    fn momentum_is_the_speed_as_the_fingers_lift() {
+        // Reports every 10 ms: slow, then 20 UI pixels a report (2000 a second).
+        let mut reports: Vec<(f64, f64)> = (0..5).map(|n| (n as f64 * 0.01, 2.0)).collect();
+        reports.extend((5..20).map(|n| (n as f64 * 0.01, 20.0)));
+        let v = momentum(&reports[reports.len() - 11..], 0.195);
+        assert!((v - 2000.0).abs() < 1.0, "{v}");
+        // Upwards too, and capped.
+        let fast: Vec<_> = (0..10).map(|n| (n as f64 * 0.01, -500.0)).collect();
+        assert_eq!(momentum(&fast, 0.095), -MOMENTUM_MAX);
+        // Fingers that held still before lifting don't throw the content.
+        assert_eq!(momentum(&reports, 0.3), 0.0);
+        // A single report: one report's time, 10 ms.
+        assert_eq!(momentum(&[(1.0, 5.0)], 1.0), 500.0);
+        assert_eq!(momentum(&[], 1.0), 0.0);
     }
 
     /// How far the content scrolled, in UI pixels.
