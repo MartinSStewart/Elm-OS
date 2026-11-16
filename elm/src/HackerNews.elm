@@ -691,7 +691,7 @@ view lazyCache uiState screenSize model =
             PostsPage ->
                 case model.data of
                     NotLoading ->
-                        Ui.Empty
+                        Ui.empty
 
                     Loading maybe ->
                         case maybe of
@@ -881,7 +881,7 @@ commentView lazyCache width (Comment comment) =
             [ text
             , Ui.row
                 { spacing = 0, padding = Ui.noPadding }
-                [ Ui.left (Units.uiPixels replyIndent) Ui.none
+                [ Ui.left (Units.uiPixels replyIndent) Ui.empty
                 , commentsColumn lazyCache (width - replyIndent) comment.children
                 ]
             ]

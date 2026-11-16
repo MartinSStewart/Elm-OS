@@ -35,12 +35,12 @@ import Date exposing (Date)
 import Duration
 import Effect
 import Json.Decode as D
+import News.Types
 import Quantity
 import SeqDict
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
-import News.Types
 import UiId exposing (UiId(..))
 
 
@@ -90,7 +90,7 @@ view uiState news =
             [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
             , case news of
                 NewsNotRequested ->
-                    Ui.none
+                    Ui.empty
 
                 LoadingNews maybeDays ->
                     case maybeDays of

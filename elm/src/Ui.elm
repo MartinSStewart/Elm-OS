@@ -1,12 +1,15 @@
 module Ui exposing
     ( BorderAndFill(..)
     , ButtonData
-    , Element(..)
+    , Element
+    , ElementFull
     , ElementState(..)
     , InputType(..)
     , LazyCache
     , Model
     , RowColumn
+    , Screenshot
+    , ScrollBy(..)
     , TextInputData
     , TextInputMultilineData
     , ViewportData
@@ -24,8 +27,11 @@ module Ui exposing
     , defaultElBorderAndFill
     , el
     , elWithId
+    , elementToScreenshot
+    , empty
     , findInput
     , hover
+    , hoverIdOnly
     , init
     , initViewportModel
     , insertElement
@@ -34,14 +40,11 @@ module Ui exposing
     , lazyKeyed
     , left
     , leftAndRight
-    , noPadding
     , noLazyCache
-    , none
+    , noPadding
     , onAnimationFrame
     , onMouseDown
     , onWheel
-    , stopMomentum
-    , ScrollBy(..)
     , paddingXY
     , quads
     , right
@@ -50,6 +53,7 @@ module Ui exposing
     , selectableButton
     , setFocus
     , size
+    , stopMomentum
     , text
     , textInput
     , textInputMultiline
@@ -98,14 +102,14 @@ type alias RowColumn =
     }
 
 
-type alias ButtonData id =
+type alias ButtonData id lazy =
     { id : id
     , padding : Bounds UiPixels
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     , borderAndFillHover : BorderAndFill
     , cachedSize : Coord UiPixels
-    , inFront : List (Element id)
+    , inFront : List (ElementFull id lazy)
     }
 
 
@@ -125,6 +129,14 @@ type alias TextInputMultilineData id =
 
 
 type Element id
+    = Element (ElementFull id (SeqDict id (Element id)))
+
+
+type alias Screenshot =
+    ElementFull () ()
+
+
+type ElementFull id lazy
     = TextInput (TextInputData id)
     | TextInputMultiline (TextInputMultilineData id)
     | Text
@@ -132,23 +144,23 @@ type Element id
         , segments : List Sprite.Segment
         , cachedSize : Coord UiPixels
         }
-    | Button (ButtonData id) (Element id)
-    | Row RowColumn (List (Element id))
-    | Column RowColumn (List (Element id))
+    | Button (ButtonData id lazy) (ElementFull id lazy)
+    | Row RowColumn (List (ElementFull id lazy))
+    | Column RowColumn (List (ElementFull id lazy))
     | Single
         { padding : Bounds UiPixels
         , borderAndFill : BorderAndFill
-        , inFront : List (Element id)
+        , inFront : List (ElementFull id lazy)
         , cachedSize : Coord UiPixels
         , id : Maybe id
         }
-        (Element id)
+        (ElementFull id lazy)
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
-    | Viewport (ViewportData id) (Element id)
+    | Viewport (ViewportData id) (ElementFull id lazy)
       -- What `lazyKeyed` made: its key (which call it was, with the arguments), and
       -- every `Lazy` inside it by key, so that reusing it reuses them too.
-    | Lazy id (SeqDict id (Element id)) (Element id)
+    | Lazy id lazy (ElementFull id lazy)
 
 
 type alias ViewportData id =
@@ -181,6 +193,78 @@ type alias ViewportModel =
     , momentum : Float
     , bottom : Quantity Float UiPixels
     }
+
+
+elementToScreenshot : Element id -> Screenshot
+elementToScreenshot (Element element) =
+    elementToScreenshotHelper element
+
+
+elementToScreenshotHelper : ElementFull id lazy -> Screenshot
+elementToScreenshotHelper element =
+    case element of
+        TextInput data ->
+            TextInput
+                { id = ()
+                , style = data.style
+                , isValid = data.isValid
+                , state = data.state
+                }
+
+        TextInputMultiline data ->
+            TextInputMultiline
+                { id = ()
+                , style = data.style
+                , state = data.state
+                }
+
+        Text data ->
+            Text data
+
+        Button data child ->
+            Button
+                { id = ()
+                , padding = data.padding
+                , borderAndFill = data.borderAndFill
+                , borderAndFillFocus = data.borderAndFillFocus
+                , borderAndFillHover = data.borderAndFillHover
+                , cachedSize = data.cachedSize
+                , inFront = List.map elementToScreenshotHelper data.inFront
+                }
+                (elementToScreenshotHelper child)
+
+        Row data children ->
+            Row data (List.map elementToScreenshotHelper children)
+
+        Column data children ->
+            Column data (List.map elementToScreenshotHelper children)
+
+        Single data child ->
+            Single
+                { padding = data.padding
+                , borderAndFill = data.borderAndFill
+                , inFront = List.map elementToScreenshotHelper data.inFront
+                , cachedSize = data.cachedSize
+                , id = Just ()
+                }
+                (elementToScreenshotHelper child)
+
+        Quads data ->
+            Quads data
+
+        Empty ->
+            Empty
+
+        Viewport data child ->
+            Viewport
+                { id = ()
+                , viewportHeight = data.viewportHeight
+                , scrollOffset = data.scrollOffset
+                }
+                (elementToScreenshotHelper child)
+
+        Lazy id lazy child ->
+            elementToScreenshotHelper child
 
 
 {-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
@@ -271,7 +355,19 @@ onMouseDown :
     -> Element id
     -> Model id
     -> ( Model id, Maybe a )
-onMouseDown onClick relativePositionToUi cursor id element model =
+onMouseDown onClick relativePositionToUi cursor id (Element element) model =
+    onMouseDownHelper onClick relativePositionToUi cursor id element model
+
+
+onMouseDownHelper :
+    (id -> Model id -> a)
+    -> Coord UiPixels
+    -> Coord UiPixels
+    -> id
+    -> ElementFull id lazy
+    -> Model id
+    -> ( Model id, Maybe a )
+onMouseDownHelper onClick relativePositionToUi cursor id element model =
     case element of
         TextInput textInput2 ->
             let
@@ -346,7 +442,12 @@ onMouseDown onClick relativePositionToUi cursor id element model =
 
 
 onWheel : id -> ScrollBy -> Element id -> Model id -> Model id
-onWheel id scrollBy element model =
+onWheel id scrollBy (Element element) model =
+    onWheelHelper id scrollBy element model
+
+
+onWheelHelper : id -> ScrollBy -> ElementFull id lazy -> Model id -> Model id
+onWheelHelper id scrollBy element model =
     case element of
         TextInput _ ->
             model
@@ -406,7 +507,7 @@ onWheel id scrollBy element model =
                 state3 =
                     scroll
                         scrollBy
-                        (size element2)
+                        (sizeHelper element2)
                         data
                         (case SeqDict.get id model.uiState of
                             Just (ViewportState state2) ->
@@ -424,7 +525,7 @@ innermost hovered element that scrolls, so wheeling over a button inside a viewp
 scrolls the viewport.
 -}
 scrolls : Element id -> Bool
-scrolls element =
+scrolls (Element element) =
     case element of
         Viewport _ _ ->
             True
@@ -621,6 +722,7 @@ customText fontSize segments =
         , segments = segments
         , cachedSize = Sprite.customTextSize fontSize segments
         }
+        |> Element
 
 
 {-| `customText` with word wrap: lines are broken between words so that none is wider
@@ -632,7 +734,7 @@ customTextWrapped fontSize maxWidth segments =
         ( wrapped, cachedSize ) =
             Sprite.wrapWithSize fontSize maxWidth segments
     in
-    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
+    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize } |> Element
 
 
 
@@ -640,24 +742,24 @@ customTextWrapped fontSize maxWidth segments =
 
 
 textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.Model } -> Element id
-textInput =
-    TextInput
+textInput data =
+    TextInput data |> Element
 
 
 {-| A text box with many lines, showing `style.lines` of them from line `scroll`.
 -}
 textInputMultiline : { id : id, style : TextInputMultiline.Style, state : TextInputMultiline.Model } -> Element id
-textInputMultiline =
-    TextInputMultiline
+textInputMultiline data =
+    TextInputMultiline data |> Element
 
 
 
 -- BUTTONS
 
 
-none : Element id
-none =
-    Empty
+empty : Element id
+empty =
+    Element Empty
 
 
 button : { id : id, padding : Bounds UiPixels } -> Element id -> Element id
@@ -701,17 +803,18 @@ customButton :
     }
     -> Element id
     -> Element id
-customButton data child =
+customButton data (Element child) =
     Button
         { id = data.id
         , padding = data.padding
-        , inFront = data.inFront
+        , inFront = List.map (\(Element a) -> a) data.inFront
         , borderAndFill = data.borderAndFill
         , borderAndFillFocus = data.borderAndFillFocus
         , borderAndFillHover = defaultButtonBorderAndFillHover
         , cachedSize = paddedSize data.padding child
         }
         child
+        |> Element
 
 
 selectableButton : { id : id, padding : Bounds UiPixels } -> Bool -> Element id -> Element id
@@ -738,59 +841,79 @@ selectableButton data isSelected child =
 -- LAYOUT
 
 
-paddedSize : Bounds UiPixels -> Element id -> Coord UiPixels
+paddedSize : Bounds UiPixels -> ElementFull id lazy -> Coord UiPixels
 paddedSize padding child =
-    Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (size child)
+    Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (sizeHelper child)
 
 
 row : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
 row data children =
     let
         children2 =
-            List.filter (\a -> a /= Empty) children
+            List.filterMap
+                (\(Element a) ->
+                    if a == Empty then
+                        Nothing
+
+                    else
+                        Just a
+                )
+                children
     in
-    Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize data children2 } children2
+    Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize data children2 } children2 |> Element
 
 
 column : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
 column data children =
     let
         children2 =
-            List.filter (\a -> a /= Empty) children
+            List.filterMap
+                (\(Element a) ->
+                    if a == Empty then
+                        Nothing
+
+                    else
+                        Just a
+                )
+                children
     in
     Column { spacing = data.spacing, padding = data.padding, cachedSize = columnSize data children2 } children2
+        |> Element
 
 
 el : { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
-el data child =
+el data (Element child) =
     Single
         { padding = data.padding
         , borderAndFill = data.borderAndFill
-        , inFront = data.inFront
+        , inFront = List.map (\(Element a) -> a) data.inFront
         , cachedSize = paddedSize data.padding child
         , id = Nothing
         }
         child
+        |> Element
 
 
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
 elWithId : id -> { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
-elWithId id data child =
+elWithId id data (Element child) =
     Single
         { padding = data.padding
         , borderAndFill = data.borderAndFill
-        , inFront = data.inFront
+        , inFront = List.map (\(Element a) -> a) data.inFront
         , cachedSize = paddedSize data.padding child
         , id = Just id
         }
         child
+        |> Element
 
 
 viewport : { id : id, viewportHeight : Quantity Int UiPixels, model : ViewportModel } -> Element id -> Element id
-viewport { id, viewportHeight, model } =
-    Viewport { id = id, viewportHeight = viewportHeight, scrollOffset = model.offset }
+viewport { id, viewportHeight, model } (Element child) =
+    Viewport { id = id, viewportHeight = viewportHeight, scrollOffset = model.offset } child |> Element
+
 
 
 -- LAZY
@@ -837,30 +960,30 @@ lazyElements elements =
 
 
 lazyParts : Element id -> List (SeqDict id (Element id)) -> List (SeqDict id (Element id))
-lazyParts element found =
+lazyParts (Element element) found =
     case element of
         Lazy key inner child ->
             if SeqDict.isEmpty inner then
                 -- No Lazy inside it: look anyway, as it's quick.
-                lazyParts child (SeqDict.singleton key element :: found)
+                lazyParts (Element child) (SeqDict.singleton key (Element element) :: found)
 
             else
-                SeqDict.insert key element inner :: found
+                SeqDict.insert key (Element element) inner :: found
 
         Button data child ->
-            List.foldl lazyParts (lazyParts child found) data.inFront
+            List.foldl lazyParts (lazyParts (Element child) found) (List.map Element data.inFront)
 
         Row _ children ->
-            List.foldl lazyParts found children
+            List.foldl lazyParts found (List.map Element children)
 
         Column _ children ->
-            List.foldl lazyParts found children
+            List.foldl lazyParts found (List.map Element children)
 
         Single data child ->
-            List.foldl lazyParts (lazyParts child found) data.inFront
+            List.foldl lazyParts (lazyParts (Element child) found) (List.map Element data.inFront)
 
         Viewport _ child ->
-            lazyParts child found
+            lazyParts (Element child) found
 
         TextInput _ ->
             found
@@ -909,28 +1032,27 @@ lazyKeyed (LazyCache cache) key build =
 
         Nothing ->
             let
-                child : Element id
-                child =
+                (Element child) =
                     build ()
             in
-            Lazy key (lazyElements [ child ]) child
+            Lazy key (lazyElements [ Element child ]) child |> Element
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
-quads =
-    Quads
+quads data =
+    Quads data |> Element
 
 
 {-| Put a child somewhere in an area of the given size. `fx` and `fy` go from 0 (left, top) to 2 (right, bottom).
 -}
-align : Int -> Int -> Coord UiPixels -> Element id -> Element id
+align : Int -> Int -> Coord UiPixels -> ElementFull id lazy -> ElementFull id lazy
 align fx fy areaSize child =
     let
         ( sizeX, sizeY ) =
             Coord.toTuple areaSize
 
         ( childX, childY ) =
-            Coord.toTuple (size child)
+            Coord.toTuple (sizeHelper child)
 
         left2 =
             (sizeX - childX) * fx // 2
@@ -954,49 +1076,56 @@ align fx fy areaSize child =
 {-| A child at the left of a space at least `width` wide, for lining things up in columns.
 -}
 left : Quantity Int UiPixels -> Element id -> Element id
-left width child =
-    align 0 0 ( Quantity.max width (Coord.x (size child)), Coord.y (size child) ) child
+left width (Element child) =
+    align 0 0 ( Quantity.max width (Coord.x (sizeHelper child)), Coord.y (sizeHelper child) ) child |> Element
 
 
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
-leftAndRight width leftChild rightChild =
-    row { spacing = 0, padding = noPadding } [ left (width |> Quantity.minus (Coord.x (size rightChild))) leftChild, rightChild ]
+leftAndRight width leftChild (Element rightChild) =
+    row
+        { spacing = 0, padding = noPadding }
+        [ left (width |> Quantity.minus (Coord.x (sizeHelper rightChild))) leftChild, Element rightChild ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
-center data =
-    align 1 1 data.size
+center data (Element child) =
+    align 1 1 data.size child |> Element
 
 
 right : { width : Quantity Int UiPixels } -> Element id -> Element id
-right data element =
-    align 2 0 ( data.width, Coord.y (size element) ) element
+right data (Element child) =
+    align 2 0 ( data.width, Coord.y (sizeHelper child) ) child |> Element
 
 
 topLeft : { size : Coord UiPixels } -> Element id -> Element id
-topLeft data =
-    align 0 0 data.size
+topLeft data (Element child) =
+    align 0 0 data.size child |> Element
 
 
 topRight : { size : Coord UiPixels } -> Element id -> Element id
-topRight data =
-    align 2 0 data.size
+topRight data (Element child) =
+    align 2 0 data.size child |> Element
 
 
 bottomLeft : { size : Coord UiPixels } -> Element id -> Element id
-bottomLeft data =
-    align 0 2 data.size
+bottomLeft data (Element child) =
+    align 0 2 data.size child |> Element
 
 
 bottomRight : { size : Coord UiPixels } -> Element id -> Element id
-bottomRight data =
-    align 2 2 data.size
+bottomRight data (Element child) =
+    align 2 2 data.size child |> Element
 
 
 size : Element id -> Coord UiPixels
-size element =
+size (Element element) =
+    sizeHelper element
+
+
+sizeHelper : ElementFull id lazy -> Coord UiPixels
+sizeHelper element =
     case element of
         TextInput data ->
             TextInput.size data.style
@@ -1029,19 +1158,19 @@ size element =
             viewportSize data child
 
         Lazy _ _ child ->
-            size child
+            sizeHelper child
 
 
-viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
+viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> ElementFull id lazy -> Coord UiPixels
 viewportSize data child =
-    ( Coord.x (size child), data.viewportHeight )
+    ( Coord.x (sizeHelper child), data.viewportHeight )
 
 
-rowSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Coord UiPixels
+rowSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (ElementFull id lazy) -> Coord UiPixels
 rowSize data children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( Coord.xRaw (size child) + data.spacing + x, max (Coord.yRaw (size child)) y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + data.spacing + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
     in
     Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
         (Coord.xy
@@ -1055,11 +1184,11 @@ rowSize data children =
         )
 
 
-columnSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Coord UiPixels
+columnSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (ElementFull id lazy) -> Coord UiPixels
 columnSize data children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (size child)) x, Coord.yRaw (size child) + data.spacing + y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + data.spacing + y )) ( 0, 0 ) children
     in
     Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
         (Coord.xy
@@ -1075,16 +1204,16 @@ columnSize data children =
 
 {-| Where each child of a row or column goes.
 -}
-childPositions : Bool -> RowColumn -> Coord UiPixels -> List (Element id) -> List ( Coord UiPixels, Element id )
+childPositions : Bool -> RowColumn -> Coord UiPixels -> List (ElementFull id lazy) -> List ( Coord UiPixels, ElementFull id lazy )
 childPositions isRow data position children =
     List.foldl
         (\child ( at, acc ) ->
             ( Coord.plus
                 (if isRow then
-                    Coord.xy (Coord.xRaw (size child) + data.spacing) 0
+                    Coord.xy (Coord.xRaw (sizeHelper child) + data.spacing) 0
 
                  else
-                    Coord.xy 0 (Coord.yRaw (size child) + data.spacing)
+                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + data.spacing)
                 )
                 at
             , ( at, child ) :: acc
@@ -1103,9 +1232,24 @@ childPositions isRow data position children =
 {-| All of the elements with ids that contain the given point (usually the mouse cursor position).
 The first element in the list is the top most visible element.
 -}
-hover : Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
-hover point element =
+hover : Coord UiPixels -> Element id -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+hover point (Element element) =
     hoverHelper [] point Coord.origin element
+        |> List.map (\( a, b ) -> ( a, { relativePositionToUi = b.relativePositionToUi, ui = Element b.ui } ))
+
+
+hoverIdOnly : Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+hoverIdOnly point element =
+    List.filterMap
+        (\( maybeId, element2 ) ->
+            case maybeId of
+                Just id ->
+                    Just ( id, element2 )
+
+                Nothing ->
+                    Nothing
+        )
+        (hover point element)
 
 
 contains : Coord UiPixels -> Coord UiPixels -> Coord UiPixels -> Bool
@@ -1124,30 +1268,30 @@ contains point position size2 =
 
 
 hoverHelper :
-    List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+    List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
     -> Coord UiPixels
     -> Coord UiPixels
-    -> Element id
-    -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+    -> ElementFull id lazy
+    -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
 hoverHelper hovers point position element =
     case element of
         TextInput data ->
             if contains point position (TextInput.size data.style) then
-                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             else
                 hovers
 
         TextInputMultiline data ->
             if contains point position (TextInputMultiline.size data.style) then
-                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             else
                 hovers
 
         Button data _ ->
             if contains point position data.cachedSize then
-                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             else
                 hovers
@@ -1163,16 +1307,11 @@ hoverHelper hovers point position element =
         Single data child ->
             let
                 hovers2 =
-                    case data.id of
-                        Just id ->
-                            if contains point position data.cachedSize then
-                                ( id, { relativePositionToUi = position, ui = element } ) :: hovers
+                    if contains point position data.cachedSize then
+                        ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-                            else
-                                hovers
-
-                        Nothing ->
-                            hovers
+                    else
+                        hovers
 
                 hovers3 =
                     hoverHelper hovers2 point (Coord.plus data.padding.topLeft position) child
@@ -1191,7 +1330,7 @@ hoverHelper hovers point position element =
         Viewport data child ->
             if contains point position (viewportSize data child) then
                 hoverHelper
-                    (( data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
+                    (( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
                     point
                     (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                     child
@@ -1204,16 +1343,16 @@ hoverHelper hovers point position element =
 
 
 type InputType id
-    = ButtonType { data : ButtonData id, position : Coord UiPixels, size : Coord UiPixels }
+    = ButtonType { position : Coord UiPixels, size : Coord UiPixels }
     | TextInputType { position : Coord UiPixels, size : Coord UiPixels }
 
 
 findInput : id -> Element id -> Maybe (InputType id)
-findInput id element =
+findInput id (Element element) =
     findInputHelper id Coord.origin element
 
 
-findInputHelper : id -> Coord UiPixels -> Element id -> Maybe (InputType id)
+findInputHelper : id -> Coord UiPixels -> ElementFull id lazy -> Maybe (InputType id)
 findInputHelper id position element =
     case element of
         TextInput data ->
@@ -1232,7 +1371,12 @@ findInputHelper id position element =
 
         Button data _ ->
             if data.id == id then
-                Just (ButtonType { data = data, position = position, size = data.cachedSize })
+                Just
+                    (ButtonType
+                        { position = position
+                        , size = data.cachedSize
+                        }
+                    )
 
             else
                 Nothing
@@ -1291,7 +1435,7 @@ focused ids, on a screen with the given UI scale. A parent draws before its chil
 `inFront` elements after the child.
 -}
 view : UiScale -> Bool -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view scale showUiBorder maybeHover focus screenSize element =
+view scale showUiBorder maybeHover focus screenSize (Element element) =
     viewList
         scale
         showUiBorder
@@ -1302,9 +1446,9 @@ view scale showUiBorder maybeHover focus screenSize element =
         element
 
 
-viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
+viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
 viewList scale showUiBorder maybeHover focus viewport2 position element =
-    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (size element) } of
+    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
                 TextInput data ->

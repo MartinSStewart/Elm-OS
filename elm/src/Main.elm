@@ -321,7 +321,7 @@ type alias Model =
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
     , takingScreenshot : Maybe { mouse : Coord DevicePixels }
-    , screenshots : List (Ui.Element UiId)
+    , screenshots : List Ui.Screenshot
     }
 
 
@@ -445,6 +445,16 @@ update msg model =
 
                 Err error ->
                     ( model, [ Effect.Log ("couldn't read a message from the host: " ++ error) ] )
+
+
+mousePosition : Model -> Coord DevicePixels
+mousePosition model =
+    case model.takingScreenshot of
+        Just data ->
+            data.mouse
+
+        Nothing ->
+            model.mouse
 
 
 step : Input -> Model -> ( Model, List Effect )
@@ -593,50 +603,72 @@ step event model =
                 moved =
                     { model | mouse = Coord.xy x y }
             in
-            case ( model.selectingText, model.uiState.focus ) of
-                ( True, Just focus ) ->
-                    case findInput focus model of
-                        Just ( display, Ui.TextInputType { position } ) ->
-                            -- The mouse in that display's UI pixels, even once it has left it.
-                            ( dragSelect focus (uiMouseOn display moved.mouse) position moved, [] )
+            if mousePosition moved == mousePosition model then
+                ( moved, [] )
 
-                        Just ( _, Ui.ButtonType _ ) ->
-                            ( moved, [] )
+            else
+                case ( model.selectingText, model.uiState.focus ) of
+                    ( True, Just focus ) ->
+                        case findInput focus model of
+                            Just ( display, Ui.TextInputType { position } ) ->
+                                -- The mouse in that display's UI pixels, even once it has left it.
+                                ( dragSelect focus (uiMouseOn display moved.mouse) position moved, [] )
 
-                        Nothing ->
-                            ( moved, [] )
+                            Just ( _, Ui.ButtonType _ ) ->
+                                ( moved, [] )
 
-                _ ->
-                    ( moved, [] )
+                            Nothing ->
+                                ( moved, [] )
+
+                    _ ->
+                        ( moved, [] )
 
         Button 0 True ->
             let
                 cursor =
                     uiMouse model
             in
-            case hover model of
-                ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
-                    ( { model
-                        | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
-                        , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
-                      }
-                    , []
-                    )
-
-                ( id, { relativePositionToUi, ui } ) :: _ ->
+            case model.takingScreenshot of
+                Just data ->
                     let
-                        ( uiState, maybeModelAndEffects ) =
-                            Ui.onMouseDown (click model) relativePositionToUi cursor id ui model.uiState
+                        display =
+                            mouseDisplay model
+
+                        displayUi2 : Ui.Element UiId
+                        displayUi2 =
+                            displayUi model display
                     in
-                    case maybeModelAndEffects of
-                        Just ( model2, effects ) ->
-                            ( { model2 | selectingText = True }, effects )
+                    case Ui.hoverIdOnly (uiMouseOn display data.mouse) displayUi2 of
+                        ( _, { relativePositionToUi, ui } ) :: _ ->
+                            ( model, [] )
 
-                        Nothing ->
-                            ( { model | selectingText = True, uiState = uiState }, [] )
+                        [] ->
+                            ( { model | screenshots = Ui.elementToScreenshot displayUi2 :: model.screenshots }, [] )
 
-                [] ->
-                    ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
+                Nothing ->
+                    case hover model of
+                        ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
+                            ( { model
+                                | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
+                                , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
+                              }
+                            , []
+                            )
+
+                        ( id, { relativePositionToUi, ui } ) :: _ ->
+                            let
+                                ( uiState, maybeModelAndEffects ) =
+                                    Ui.onMouseDown (click model) relativePositionToUi cursor id ui model.uiState
+                            in
+                            case maybeModelAndEffects of
+                                Just ( model2, effects ) ->
+                                    ( { model2 | selectingText = True }, effects )
+
+                                Nothing ->
+                                    ( { model | selectingText = True, uiState = uiState }, [] )
+
+                        [] ->
+                            ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
 
         Button 0 False ->
             ( { model | pressed = False, selectingText = False }, [] )
@@ -1614,15 +1646,16 @@ cursorColor model =
 view : Model -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
 view model display ui =
     let
+        hovered : Maybe UiId
         hovered =
             if (mouseDisplay model).id == display.id then
-                Ui.hover (uiMouseOn display model.mouse) ui |> List.head |> Maybe.map Tuple.first
+                Ui.hoverIdOnly (uiMouseOn display (mousePosition model)) ui |> List.head |> Maybe.map Tuple.first
 
             else
                 Nothing
     in
     Ui.view (Display.uiScale display) model.showUiBorders hovered model.uiState.focus display.size ui
-        ++ (if Display.contains model.mouse display then
+        ++ (if Display.contains (mousePosition model) display then
                 Sprite.cursor
                     (if Maybe.map .hardwareCursor model.renderer == Just True then
                         -- The host moves the real cursor; this orange one trails it by however
@@ -1633,7 +1666,7 @@ view model display ui =
                         cursorColor model
                     )
                     (Display.uiScale display)
-                    (Display.local display model.mouse)
+                    (Display.local display (mousePosition model))
 
             else
                 []
@@ -1657,7 +1690,7 @@ mainDisplay model =
 -}
 mouseDisplay : Model -> Display
 mouseDisplay model =
-    Display.at model.mouse model.displays |> Maybe.withDefault (mainDisplay model)
+    Display.at (mousePosition model) model.displays |> Maybe.withDefault (mainDisplay model)
 
 
 {-| The display an app shows on.
@@ -1693,7 +1726,7 @@ uiScale model =
 -}
 uiMouse : Model -> Coord UiPixels
 uiMouse model =
-    uiMouseOn (mouseDisplay model) model.mouse
+    uiMouseOn (mouseDisplay model) (mousePosition model)
 
 
 {-| A point in the displays' space, in a display's UI pixels.
@@ -1740,7 +1773,7 @@ hover model =
         display =
             mouseDisplay model
     in
-    Ui.hover (uiMouseOn display model.mouse) (displayUi model display)
+    Ui.hoverIdOnly (uiMouseOn display (mousePosition model)) (displayUi model display)
 
 
 {-| The text box or button `id`, and the display it is on.
@@ -1841,7 +1874,7 @@ displayUi model display =
                    )
         , borderAndFill = Ui.NoBorderOrFill
         }
-        Ui.none
+        Ui.empty
 
 
 {-| The debug panel, in the bottom left corner of the screen.
