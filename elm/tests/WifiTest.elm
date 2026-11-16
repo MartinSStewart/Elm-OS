@@ -4,13 +4,15 @@ module WifiTest exposing (suite)
 joined it (Main.reconnect, Main.savePassword).
 -}
 
-import Dict
 import Effect exposing (Effect)
 import Expect
 import HostMessage
 import Main
+import SeqDict
 import Test exposing (Test, describe, test)
+import Unsafe
 import Wifi
+import Wpa2Password
 
 
 run : List HostMessage.ToElm -> Main.Model -> ( Main.Model, List Effect )
@@ -29,7 +31,17 @@ connects effects =
         (\effect ->
             case effect of
                 Effect.WifiConnect { ssid, password } ->
-                    Just (ssid ++ " " ++ password)
+                    Just
+                        (Wifi.ssidToString ssid
+                            ++ " "
+                            ++ (case password of
+                                    Just password2 ->
+                                        Wpa2Password.toString password2
+
+                                    Nothing ->
+                                        ""
+                               )
+                        )
 
                 _ ->
                     Nothing
@@ -44,21 +56,21 @@ saved =
         init =
             Main.persistConfig.init
     in
-    { init | savedWifiPasswords = Dict.fromList [ ( "Home", "secret" ), ( "Cafe", "" ) ] }
+    { init | savedWifiPasswords = SeqDict.fromList [ ( Wifi.stringToSsid "Home", Unsafe.wpa2Password "password" ) ] }
 
 
 scan : HostMessage.ToElm
 scan =
     HostMessage.WifiScan
-        [ { ssid = "Other", signal = -30, security = Wifi.Wpa }
-        , { ssid = "Cafe", signal = -70, security = Wifi.Open }
-        , { ssid = "Home", signal = -40, security = Wifi.Wpa }
+        [ { ssid = Wifi.stringToSsid "Other", signal = -30, security = Wifi.Wpa }
+        , { ssid = Wifi.stringToSsid "Cafe", signal = -70, security = Wifi.Open }
+        , { ssid = Wifi.stringToSsid "Home", signal = -40, security = Wifi.Wpa }
         ]
 
 
 status : Wifi.State -> String -> HostMessage.ToElm
 status state ssid =
-    HostMessage.WifiStatus { state = state, ssid = ssid, ip = "", error = "" }
+    HostMessage.WifiStatus { state = state, ssid = Wifi.stringToSsid ssid, ip = Nothing, error = "" }
 
 
 suite : Test
@@ -69,7 +81,7 @@ suite =
                 run [ status Wifi.Idle "", scan ] saved
                     |> Tuple.second
                     |> connects
-                    |> Expect.equal [ "Home secret" ]
+                    |> Expect.equal [ "Home password" ]
             )
         , test "after a failure, scans don't try again"
             (\_ ->

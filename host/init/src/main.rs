@@ -37,6 +37,7 @@ mod error_screen;
 mod files;
 mod gpu;
 mod host;
+mod hotplug;
 mod http;
 mod input;
 mod net;
@@ -45,6 +46,7 @@ mod programs;
 mod update;
 mod stats;
 mod sys;
+mod websocket;
 
 /// When /init started, in seconds on the monotonic clock (f64 bits).
 static INIT_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -67,6 +69,7 @@ fn test_panic() {
         Ok("main") => host::panic_at(init_started_at() + 10.0),
         _ => {}
     }
+    hotplug::test_hotplug();
 }
 
 fn main() {

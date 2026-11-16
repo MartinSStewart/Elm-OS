@@ -4,9 +4,7 @@ module News exposing
     , Item(..)
     , NewsState(..)
     , Topic
-    , UiId(..)
     , decoder
-    , idToString
     , lastDays
     , parseWikitext
     , request
@@ -34,14 +32,16 @@ Main asks the host for it with `request`, and `decoder` reads the answer's body.
 import Color exposing (Color)
 import Coord
 import Date exposing (Date)
-import Dict
 import Duration
 import Effect
 import Json.Decode as D
 import Quantity
+import SeqDict
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
+import News.Types
+import UiId exposing (UiId(..))
 
 
 type alias Day =
@@ -78,19 +78,8 @@ type NewsState
     | NewsFailed Effect.HttpError
 
 
-type UiId
-    = NewsViewport
-
-
-idToString : UiId -> String
-idToString id =
-    case id of
-        NewsViewport ->
-            "newsViewport"
-
-
-view : (UiId -> id) -> Ui.Model id -> NewsState -> Element id
-view idMap uiState news =
+view : Ui.Model UiId -> NewsState -> Element UiId
+view uiState news =
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -98,7 +87,7 @@ view idMap uiState news =
         }
         (Ui.column
             { spacing = 4, padding = Ui.noPadding }
-            [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
+            [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
             , case news of
                 NewsNotRequested ->
                     Ui.none
@@ -106,22 +95,22 @@ view idMap uiState news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            daysView idMap uiState days
+                            daysView uiState days
 
                         Nothing ->
-                            Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
+                            Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
 
                 LoadedNews days ->
-                    daysView idMap uiState days
+                    daysView uiState days
 
                 NewsFailed string ->
-                    Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
+                    Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
             ]
         )
 
 
-daysView : (UiId -> id) -> Ui.Model id -> List Day -> Element id
-daysView idMap uiState days =
+daysView : Ui.Model UiId -> List Day -> Element UiId
+daysView uiState days =
     List.map
         (\{ date, topics } ->
             let
@@ -131,10 +120,10 @@ daysView idMap uiState days =
                         (\topic ->
                             Ui.column
                                 { spacing = 8, padding = Ui.noPadding }
-                                [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
+                                [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
                                 , Ui.column
                                     { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
-                                    (List.map (itemView uiState 140) topic.items)
+                                    (List.map (itemView 140) topic.items)
                                 ]
                         )
                         topics
@@ -147,7 +136,7 @@ daysView idMap uiState days =
                     ++ String.fromInt (Date.day date)
                     ++ ", "
                     ++ String.fromInt (Date.year date)
-                    |> Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular)
+                    |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
                     |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
                     |> Ui.el
                         { padding = Ui.paddingXY 12 4
@@ -167,10 +156,10 @@ daysView idMap uiState days =
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
         |> Ui.viewport
-            { id = idMap NewsViewport
+            { id = News News.Types.Viewport
             , viewportHeight = Quantity.unsafe 1000
             , model =
-                case Dict.get (idToString NewsViewport) uiState.uiState of
+                case SeqDict.get (News News.Types.Viewport) uiState.uiState of
                     Just (ViewportState viewport) ->
                         viewport
 
@@ -189,8 +178,8 @@ itemSpacing =
     6
 
 
-itemView : Ui.Model id -> Int -> Item -> Element id
-itemView uiState width (Item item) =
+itemView : Int -> Item -> Element id
+itemView width (Item item) =
     let
         inlineText : String
         inlineText =
@@ -200,7 +189,7 @@ itemView uiState width (Item item) =
         { spacing = itemSpacing, padding = Ui.noPadding }
         [ Ui.row
             { spacing = 6, padding = Ui.noPadding }
-            [ Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular) "•"
+            [ Ui.text Sprite.Small (Sprite.Sans Sprite.Regular) "•"
             , String.foldl
                 (\char { lastSpace, lastBreak, index, lines } ->
                     if index - lastBreak > width then
@@ -230,11 +219,11 @@ itemView uiState width (Item item) =
                 |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
                 |> List.reverse
                 |> String.join "\n"
-                |> Ui.text uiState Sprite.Small (Sprite.Sans Sprite.Regular)
+                |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
             ]
         , Ui.column
             { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }
-            (List.map (itemView uiState (width - 2)) item.children)
+            (List.map (itemView (width - 2)) item.children)
         ]
 
 

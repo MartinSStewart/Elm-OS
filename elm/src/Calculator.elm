@@ -1,14 +1,10 @@
 module Calculator exposing
     ( Entry(..)
-    , Key(..)
     , Model
-    , Operator(..)
-    , UiId(..)
     , display
     , expression
     , format
     , fromKeyboard
-    , idToString
     , init
     , press
     , view
@@ -27,11 +23,13 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 -}
 
 import Color
+import Calculator.Types exposing (Key(..), Operator(..))
 import Coord exposing (Coord)
 import Keyboard
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
+import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
 
 
@@ -58,23 +56,6 @@ type Entry
     | Shown Float
       -- Divided by zero, or a number too big for a Float: only digits and C do anything.
     | Error
-
-
-type Operator
-    = Add
-    | Subtract
-    | Multiply
-    | Divide
-
-
-type Key
-    = Digit Int
-    | Point
-    | Operator Operator
-    | Equals
-    | Negate
-    | Backspace
-    | Clear
 
 
 init : Model
@@ -596,28 +577,12 @@ fromKeyboard key =
         Keyboard.Other ->
             Nothing
 
+        Keyboard.PrintScreen ->
+            Nothing
+
 
 
 -- VIEW
-
-
-type UiId
-    = KeyButton Key
-    | CloseButton
-    | Panel
-
-
-idToString : UiId -> String
-idToString uiId =
-    case uiId of
-        KeyButton _ ->
-            "KeyButton"
-
-        CloseButton ->
-            "CloseButton"
-
-        Panel ->
-            "Panel"
 
 
 spacing : Int
@@ -645,8 +610,8 @@ width =
 {-| The calculator's window. `focused` when keys go to it: then its display has the
 focus colour around it.
 -}
-view : Ui.Model a -> Bool -> Model -> Element UiId
-view uiState focused model =
+view : Bool -> Model -> Element UiId
+view focused model =
     let
         displayPadding =
             6
@@ -656,17 +621,17 @@ view uiState focused model =
 
         line fontSize color text =
             Ui.topRight { size = Coord.xy inner (Quantity.unwrap (Sprite.lineHeight fontSize)) }
-                (Ui.colorText uiState color fontSize sans text)
+                (Ui.colorText color fontSize sans text)
 
         big =
             display model
 
         bigLine =
-            if Coord.xRaw (Sprite.textSize uiState.scale Big sans big) <= inner then
+            if Coord.xRaw (Sprite.textSize Big sans big) <= inner then
                 line Big Color.black big
 
             else
-                line Small Color.black (Sprite.ellipsis uiState.scale Small sans (Units.uiPixels inner) big)
+                line Small Color.black (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
 
         displayBox =
             Ui.el
@@ -690,10 +655,10 @@ view uiState focused model =
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text uiState Small sans "Calculator")
-                (Ui.button { id = CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text uiState Small sans "×"))
+                (Ui.text Small sans "Calculator")
+                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
     in
-    Ui.elWithId Panel
+    Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
@@ -701,7 +666,7 @@ view uiState focused model =
         (Ui.column { spacing = spacing, padding = Ui.noPadding }
             (title
                 :: displayBox
-                :: List.map (keyRow uiState model) keys
+                :: List.map (keyRow model) keys
             )
         )
 
@@ -718,8 +683,8 @@ keys =
 
 {-| A row of buttons; the third number is how many columns a button spans.
 -}
-keyRow : Ui.Model a -> Model -> List ( Key, String, Int ) -> Element UiId
-keyRow uiState model row =
+keyRow : Model -> List ( Key, String, Int ) -> Element UiId
+keyRow model row =
     Ui.row { spacing = spacing, padding = Ui.noPadding }
         (List.map
             (\( key, label, columns ) ->
@@ -737,9 +702,9 @@ keyRow uiState model row =
                             Big
                 in
                 Ui.selectableButton
-                    { id = KeyButton key, padding = Ui.noPadding }
+                    { id = Calculator (Calculator.Types.KeyButton key), padding = Ui.noPadding }
                     (isPendingOperator model key)
-                    (Ui.center { size = size } (Ui.text uiState fontSize sans label))
+                    (Ui.center { size = size } (Ui.text fontSize sans label))
             )
             row
         )

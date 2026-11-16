@@ -82,12 +82,12 @@ fn hang_after() -> Duration {
 }
 
 /// The messages that describe how things are, of which only the newest matters, in
-/// the order a new program gets them: the screen first, as Elm expects.
+/// the order a new program gets them: the displays first, as Elm expects.
 const LATEST_KINDS: usize = 11;
 
 fn latest_slot(msg: &ToElm) -> Option<usize> {
     Some(match msg {
-        ToElm::Screen { .. } => 0,
+        ToElm::Displays { .. } | ToElm::DisplaysChanged { .. } => 0,
         ToElm::Renderer { .. } => 1,
         ToElm::System { .. } => 2,
         ToElm::Boot { .. } => 3,
@@ -111,15 +111,18 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Sha256 { .. }
         | ToElm::Switching { .. }
         | ToElm::ReflashNeeded { .. }
-        | ToElm::Tick
+        | ToElm::Tick { .. }
         | ToElm::Snapshot { .. }
-        | ToElm::ReplayDone { .. } => return None,
+        | ToElm::ReplayDone { .. }
+        | ToElm::WebSocketOpened { .. }
+        | ToElm::WebSocketMessage { .. }
+        | ToElm::WebSocketClosed { .. } => return None,
     })
 }
 
 /// Only worth sending to the program running now.
 fn only_now(msg: &ToElm) -> bool {
-    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::Tick)
+    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::Tick { .. })
 }
 
 fn http_answer(msg: &ToElm) -> Option<&str> {
@@ -204,7 +207,11 @@ pub fn send(msg: &ToElm) {
     }
     let mut s = state();
     if let Some(slot) = latest_slot(msg) {
-        s.latest[slot] = Some(msg.clone());
+        s.latest[slot] = Some(match msg {
+            // A new program starts from the displays as they are now.
+            ToElm::DisplaysChanged { displays } => ToElm::Displays { displays: displays.clone() },
+            _ => msg.clone(),
+        });
         if s.to_elm.is_none() {
             return; // the next program gets it when it starts
         }
@@ -221,6 +228,12 @@ pub fn send(msg: &ToElm) {
     s.queue.push_back(Queued::new(msg.clone()));
     drop(s);
     link().ready.notify_all();
+}
+
+/// The messages waiting for a program, taken off the queue: for tests.
+#[cfg(test)]
+pub fn take_queued() -> Vec<ToElm> {
+    state().queue.drain(..).map(|q| q.msg).collect()
 }
 
 /// A logged message that program number `program` asked to have again
@@ -272,6 +285,7 @@ fn encode(s: &State, msg: &ToElm) -> Vec<u8> {
         ToElm::DataDisk { path, .. } => ToElm::DataDisk {
             path: path.clone(),
             http_in_flight: s.http_in_flight.clone(),
+            web_sockets_open: crate::websocket::open_ids(),
         }
         .to_bytes(),
         msg => msg.to_bytes(),

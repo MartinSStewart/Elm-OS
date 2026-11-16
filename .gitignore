@@ -9,3 +9,5 @@ host/target/
 tools/wire/eco-stuff/
 tools/wire/elm-stuff/
 __pycache__/
+eco-containers/tests/eco-stuff/
+eco-containers/tests/elm-stuff/

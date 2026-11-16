@@ -59,13 +59,43 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
     )
 }
 
+/// What one display shows: triangles as `read_render` reads them, in that display's
+/// own pixels (0, 0 is its top left corner). The triangles are a byte string, so eco
+/// and the host copy them rather than look at each number.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Scene {
+    /// `Display::id`.
+    pub display: u32,
+    #[serde(with = "serde_bytes")]
+    pub triangles: Vec<u8>,
+}
+
+/// A screen the host draws on. Displays sit side by side in one space that the mouse
+/// moves through (`ToElm::Mouse` is in it): `x`, `y` is where the display's top left
+/// corner is in that space, in pixels.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Display {
+    /// The DRM connector's id: the same for the same socket from one boot to the next.
+    pub id: u32,
+    /// The connector's name as Linux gives it, such as "eDP-1" or "HDMI-A-1".
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    /// Its physical size in millimetres, 0 if the screen didn't say.
+    pub width_mm: u32,
+    pub height_mm: u32,
+}
+
 /// What Elm asks the host to do.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum Effect {
-    /// The scene to draw, once a frame: triangles as `read_render` reads them. A byte
-    /// string, so eco and the host copy it rather than look at each number.
-    Render(#[serde(with = "serde_bytes")] Vec<u8>),
+    /// The scene to draw on each display, once a frame (see `Scene`).
+    Render(Vec<Scene>),
     /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
     /// sets the cursor's size and how far mouse motion moves it.
     Cursor { rgba: u32, scale: u32 },
@@ -87,8 +117,12 @@ pub enum Effect {
     WriteSys { path: String, text: String },
     /// Adds `text` to the end of a file on the data disk. No answer.
     AppendFile { path: String, text: String },
-    /// Replaces a file on the data disk, atomically. No answer.
-    WriteFile { path: String, text: String },
+    /// Replaces a file on the data disk with these bytes, atomically. No answer.
+    WriteFile {
+        path: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
     /// A line for the serial console / log, from Elm.
     Log { text: String },
     /// The answer to `ToElm::Switching`: the snapshot is written (the effects before
@@ -96,13 +130,29 @@ pub enum Effect {
     SwitchReady,
     /// Answered with `ToElm::Snapshot`: the data disk's snapshot file, as it is.
     ReadSnapshot,
-    /// Replaces the snapshot with `text` (the host frames it: length and CRC-32,
+    /// Replaces the snapshot with `data` (the host frames it: length and CRC-32,
     /// elm/src/Persist.elm reads them), atomically, and then drops the messages up to
     /// number `seq` from the log, which the snapshot has in it.
-    WriteSnapshot { text: String, seq: u64 },
+    WriteSnapshot {
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+        seq: u64,
+    },
     /// Sends the logged messages numbered after `after` that went to earlier programs
     /// (each with its number), then `ToElm::ReplayDone`.
     ReplayLog { after: u64 },
+    /// Opens a WebSocket (ws:// or wss://) with these extra request headers, such as a
+    /// cookie. Answered with `ToElm::WebSocketOpened`, then a `ToElm::WebSocketMessage`
+    /// for each message, and last `ToElm::WebSocketClosed`, all with the same id.
+    WebSocketOpen { id: String, url: String, headers: Vec<(String, String)> },
+    /// A binary message on an open WebSocket.
+    WebSocketSend {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// Closes a WebSocket; `ToElm::WebSocketClosed` follows.
+    WebSocketClose { id: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -131,8 +181,9 @@ pub struct HttpRequest {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ToElm {
-    /// First, once: the screen's size in pixels.
-    Screen { w: u32, h: u32 },
+    /// First, to each program: the connected displays, the built-in one (if any)
+    /// first. When they change later, `DisplaysChanged` says so.
+    Displays { displays: Vec<Display> },
     /// Draw a frame now. The host's monotonic clock, in milliseconds.
     Frame { time: f64 },
     Mouse { x: i32, y: i32 },
@@ -175,6 +226,9 @@ pub enum ToElm {
     DataDisk {
         path: Option<String>,
         http_in_flight: Vec<String>,
+        /// The ids of the WebSockets open now: they belong to the host and stay open
+        /// from one program to the next. Any other is closed.
+        web_sockets_open: Vec<String>,
     },
     /// Any status, 404 included. The body as it came, so not necessarily text.
     HttpResponse {
@@ -200,14 +254,32 @@ pub enum ToElm {
     /// computer can't switch to it: its USB stick needs flashing again. Sent again to
     /// each program the host starts.
     ReflashNeeded { build: String },
-    /// Once a second, so the program's clock-driven work is in the log too.
-    Tick,
-    /// The answer to `Effect::ReadSnapshot`: the snapshot file's text, null if there
-    /// is none.
-    Snapshot { text: Option<String> },
+    /// Once a second, so the program's clock-driven work is in the log too. `time` is
+    /// the wall clock (CLOCK_REALTIME), in whole milliseconds since 1970 UTC: from the
+    /// hardware clock at boot, then from the network (host/init/src/ntp.rs).
+    Tick { time: f64 },
+    /// The answer to `Effect::ReadSnapshot`: the snapshot file's bytes, as they are,
+    /// null if there is none.
+    Snapshot {
+        #[serde(with = "serde_bytes")]
+        data: Option<Vec<u8>>,
+    },
     /// After `Effect::ReplayLog`'s messages: the number of the last message that went
     /// to an earlier program. Messages numbered after it are new.
     ReplayDone { upto: u64 },
+    /// The WebSocket is open: the server's response headers (a cookie it sets, say).
+    WebSocketOpened { id: String, headers: Vec<(String, String)> },
+    /// A message from the server, binary or text (as UTF-8).
+    WebSocketMessage {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// The WebSocket has closed, or couldn't open, and why. Its id can be used again.
+    WebSocketClosed { id: String, reason: String },
+    /// A display was plugged in or out (or a window resized, in the dev runner): the
+    /// displays now, as in `Displays`. Unlike `Displays`, not the start of a program.
+    DisplaysChanged { displays: Vec<Display> },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -287,6 +359,12 @@ pub enum HttpFailure {
 }
 
 impl ToElm {
+    /// A `Tick` with the wall clock now.
+    pub fn tick_now() -> ToElm {
+        let since_1970 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        ToElm::Tick { time: since_1970.map_or(0, |d| d.as_millis()) as f64 }
+    }
+
     /// What goes on the socket to the Elm program.
     pub fn to_bytes(&self) -> Vec<u8> {
         postcard::to_allocvec(self).expect("a ToElm always encodes")
@@ -362,13 +440,16 @@ mod tests {
             Effect::ReadSnapshot => "readSnapshot",
             Effect::WriteSnapshot { .. } => "writeSnapshot",
             Effect::ReplayLog { .. } => "replayLog",
+            Effect::WebSocketOpen { .. } => "webSocketOpen",
+            Effect::WebSocketSend { .. } => "webSocketSend",
+            Effect::WebSocketClose { .. } => "webSocketClose",
         }
     }
-    const EFFECT_TAGS: usize = 19;
+    const EFFECT_TAGS: usize = 22;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
-            ToElm::Screen { .. } => "screen",
+            ToElm::Displays { .. } => "displays",
             ToElm::Frame { .. } => "frame",
             ToElm::Mouse { .. } => "mouse",
             ToElm::Button { .. } => "button",
@@ -392,20 +473,27 @@ mod tests {
             ToElm::Sha256 { .. } => "sha256",
             ToElm::Switching { .. } => "switching",
             ToElm::ReflashNeeded { .. } => "reflashNeeded",
-            ToElm::Tick => "tick",
+            ToElm::Tick { .. } => "tick",
             ToElm::Snapshot { .. } => "snapshot",
             ToElm::ReplayDone { .. } => "replayDone",
+            ToElm::WebSocketOpened { .. } => "webSocketOpened",
+            ToElm::WebSocketMessage { .. } => "webSocketMessage",
+            ToElm::WebSocketClosed { .. } => "webSocketClosed",
+            ToElm::DisplaysChanged { .. } => "displaysChanged",
         }
     }
-    const TO_ELM_TAGS: usize = 27;
+    const TO_ELM_TAGS: usize = 31;
 
     #[test]
     fn reads_the_render_example() {
         let render = examples("toHost").into_iter().find(|e| tag(e) == "render").unwrap();
-        let Effect::Render(bytes) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
+        let Effect::Render(scenes) = serde_json::from_value(render).unwrap() else { panic!("not a Render") };
+        assert_eq!(scenes.iter().map(|s| s.display).collect::<Vec<_>>(), vec![33, 34]);
+        assert_eq!(read_render(&scenes[1].triangles), Some(vec![]));
+        let bytes = &scenes[0].triangles;
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
-            read_render(&bytes),
+            read_render(bytes),
             Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff }])
         );
         assert_eq!(read_render(&bytes[1..]), None);
@@ -457,7 +545,7 @@ mod tests {
 
     #[test]
     fn messages_carry_their_number() {
-        let tick = ToElm::Tick.to_bytes();
+        let tick = ToElm::Tick { time: 0.0 }.to_bytes();
         assert_eq!(from_host_payload(None, &tick), [vec![0], tick.clone()].concat());
         assert_eq!(from_host_payload(Some(300), &tick), [vec![1, 0xac, 0x02], tick.clone()].concat());
         assert_eq!(read_from_host_payload(&from_host_payload(Some(300), &tick)), Some((Some(300), &tick[..])));

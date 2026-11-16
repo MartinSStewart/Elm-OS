@@ -109,19 +109,19 @@ pub fn intercept(msg: &protocol::ToElm) -> bool {
     panicked() || matches!(msg, ToElm::Key { .. } | ToElm::Button { .. } | ToElm::Wheel { .. })
 }
 
-/// For the host thread: the screen's triangles if it changed since last asked (an
-/// empty list when it has been hidden), and whether one is up now.
-pub fn changed(w: u32, h: u32) -> Option<Vec<Tri>> {
+/// For the host thread: whether a screen is up now, if that or the screen changed
+/// since last asked (`current` draws it).
+pub fn changed() -> Option<bool> {
     let generation = GENERATION.load(Ordering::SeqCst);
     if DRAWN.load(Ordering::SeqCst) == generation {
         return None;
     }
-    let tris = screen().as_ref().map(|s| triangles(s, w, h)).unwrap_or_default();
+    let up = screen().is_some();
     DRAWN.store(generation, Ordering::SeqCst);
-    Some(tris)
+    Some(up)
 }
 
-/// The screen as it is now, for drawing in place of a frame Elm sent.
+/// The screen as it is now, on a w x h display, for drawing in place of a frame Elm sent.
 pub fn current(w: u32, h: u32) -> Option<Vec<Tri>> {
     screen().as_ref().map(|s| triangles(s, w, h))
 }

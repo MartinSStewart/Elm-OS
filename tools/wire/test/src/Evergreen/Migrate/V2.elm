@@ -14,6 +14,7 @@ import Evergreen.V1.Sub.Things
 import Evergreen.V2.App
 import Evergreen.V2.Sub.Things
 import Quantity
+import SeqDict
 
 
 model : Evergreen.V1.App.Model -> Evergreen.V2.App.Model
@@ -49,6 +50,9 @@ migrate_App_Model old =
     , kind = migrate_App_Kind old.kind
     , kinds = List.map migrate_App_Kind old.kinds
     , kindDict = Dict.map (\_ -> (Maybe.map migrate_App_Kind)) old.kindDict
+    , seqSet = old.seqSet
+    , seqDict = old.seqDict
+    , kindSeqDict = SeqDict.map (\_ -> (Maybe.map migrate_App_Kind)) old.kindSeqDict
     }
 
 

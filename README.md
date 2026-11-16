@@ -42,6 +42,9 @@ make bench        # times the Hacker News app on a saved 3,236-comment page, nat
 make GPU=0        # leave Mesa out: CPU rendering only, much smaller initramfs
 ```
 
+make is quiet: it prints errors (with all the output of the step that failed), warnings,
+and what was built or passed. `make V=1 ...` prints every command and all its output.
+
 CI (`.github/workflows/boot-test.yml`) runs `make`, `make check`, `make test` and
 `make test-persist` on every push.
 
@@ -147,7 +150,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `elm/src/Effect.elm` | The `Effect` type: everything Elm can ask the host to do, sent on one port |
 | `elm/src/Persist.elm` | Saving the Model: snapshots, replaying the host's message log at start |
 | `tools/wire/` | Writes the encoders and decoders for the Model and Msg before each build, and `make migration` |
-| `elm/src/Evergreen/` | Frozen versions of the Model's types, and the migrations between them |
+| `elm/src/Evergreen/` | Frozen versions of the program (what the Model and migrations need), and the migrations between them |
 | `host/init/` | Rust host, `/init`: mounts `/dev`, `/proc` and `/sys`, runs the Elm program (`elm.rs`), reads evdev, runs effects, CPU rendering, HTTP |
 | `host/link/` | Linked into the Elm program: carries its ports over the socket to `/init` |
 | `host/init/src/net/` | Networking thread: `wpa_supplicant`, DHCP, `/etc/resolv.conf` |
@@ -230,7 +233,8 @@ Drawing is left out of `update` (`Main.draw`), so replaying is quick.
   and `build/data-qemu.img` in QEMU. `host/init/src/persist.rs` waits up to 5 s for it at start
   (a USB stick appears a second or two after boot; `ELMOS_DATA_WAIT` on the kernel command line
   changes that), mounts it at `/data` and tells Elm. Without one, nothing is saved.
-- **Files:** `/data/snapshot` is one line: its length in bytes, its CRC-32, and JSON (see below).
+- **Files:** `/data/snapshot` is its length in bytes, its CRC-32 and then the Model in Lamdera's
+  Wire3 bytes (see below), ending in a newline.
   `/data/log` is binary (`host/common/src/msglog.rs`): each entry has its length, CRC-32 and
   number. Either way a write cut short by a power cut is recognised and ignored, along with
   anything after it. Messages the snapshot already has are skipped by their numbers.
@@ -260,14 +264,29 @@ Evergreen does, so a Model saved by an older build is migrated rather than lost:
    `make run` boots it on a copy of the data disk (`build/data-draft.img`, copied anew each run),
    so `build/data-qemu.img` never holds a Model no commit describes. `make check-migration`, which
    `make check` (so CI), `make release` and `make usb` run, refuses a draft.
-2. `make migration` freezes the types as version n+1 (`elm/src/Evergreen/V<n+1>/`, copies of
-   the types only; never edit them) and writes `elm/src/Evergreen/Migrate/V<n+1>.elm`, a function
-   from version n's Model to version n+1's. It writes all it can (fields and variants that are
-   still there, through Lists, Dicts, Maybes and the like); where it can't (a new field, a variant
-   that's gone, a type that changed) it writes `Unimplemented`, which doesn't compile.
-3. Replace each `Unimplemented`, build, and commit the change, the frozen types and the
-   migration together. Run `make check-migration` (or `make check`) before committing: a commit
-   without its migration fails CI, so `deployed` doesn't move to it.
+2. `make migration` freezes the program as version n+1 (`elm/src/Evergreen/V<n+1>/`; never edit
+   it) and writes `elm/src/Evergreen/Migrate/V<n+1>.elm`, a function from version n's Model to
+   version n+1's. It writes all it can (fields and variants that are still there, through Lists,
+   Dicts, Maybes and the like); where it can't (a new field, a variant that's gone, a type that
+   changed) it writes `Unimplemented`, which doesn't compile.
+3. Replace each `Unimplemented`. The migration can call the program's own code as it is now,
+   frozen: `Evergreen.V<n+1>.HackerNews.init`, say, rather than a copy written out by hand. Then
+   run `make migration` again: while version n+1 isn't committed, it copies the program again from
+   the code as it is now, with whatever the migration calls, and leaves the migration as it is.
+4. Build, and commit the change, the frozen version and the migration together. Run
+   `make check-migration` (or `make check`) before committing: a commit without its migration
+   fails CI, so `deployed` doesn't move to it.
+
+The frozen copy (`tools/wire/src/Freeze.elm`) is each module renamed to `Evergreen.V<n>.<Module>`,
+exposing everything, with only what's needed: the Model's types, what the migration calls, and
+what those use in turn (for a version with no call into the code, about 1,400 lines; with
+`Main.init`, about 1,500). Once committed it never changes, so the migration keeps compiling
+whatever happens to the code later.
+
+`make migration-reset` starts the versions again: it deletes `elm/src/Evergreen` and freezes the
+program as the version after the newest there was, with no migration to it. A computer whose Model
+is older starts afresh. The numbers go on rather than starting from 1, because a computer only
+switches to a build whose Model version isn't older than its own (`host/init/src/update.rs`).
 
 A build reads a snapshot of any earlier version by running the migrations one after another.
 Old versions cost the Elm program a little (version 1's codecs are about 50 KB). `make test-wire`
@@ -331,8 +350,13 @@ forwards again.
 
 ### Encoders and decoders (tools/wire)
 
-Nobody writes the code that turns the Model and Msgs into JSON and back: `tools/wire` writes it
-from the types before each build, the way Lamdera's Wire does. It is an Elm program (elm-syntax
+Nobody writes the code that turns the Model into bytes and back: `tools/wire` writes it
+from the types before each build, the way Lamdera's Wire does, and in the same format, Wire3
+(`elm/src/Wire.elm`), so the same codecs talk to Lamdera apps' servers (`elm/src/AsciiCollab.elm`
+speaks to ascii-collab.app). Functions in `elm/src/WireCodecs.elm` get codecs for other types,
+such as what a Lamdera app sends and receives: tools/wire writes each one's body from its type.
+Those are exactly Lamdera's (`w3l_encode_T`); the Model's (`w3_encode_T`) differ in one way:
+an Int past 32 bits is a 64-bit integer, as eco's Ints are, where Lamdera writes a float. It is an Elm program (elm-syntax
 to read the source, eco's `eco/system` for files), compiled natively with eco.
 
 - `make` runs it on `elm/src` and compiles `build/wire` instead: a copy of `elm/` in which each
@@ -346,7 +370,8 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   goes in the snapshot), and the migrations from each earlier version.
 - It handles records, custom types, tuples, type variables, recursive types, `Int`, `Float`
   (NaN and infinities too), `String`, `Char`, `Bool`, `Order`, `List`, `Array`, `Set`, `Dict`,
-  `Maybe`, `Result`, elm-units' `Quantity`, `Time.Posix` and `Json.Encode.Value`. It stops the
+  `Maybe`, `Result`, `Bytes`, `SeqDict`, `SeqSet`, elm-units' `Quantity`, `Time.Posix` and
+  `Json.Encode.Value`. It stops the
   build, saying which field, for a function, an extensible record or another package's type.
   Type variables that are only labels (a `Quantity`'s units) don't need to be saveable.
 - `make test-wire` checks it on a program with all of those (`tools/wire/test`): the generated
@@ -369,3 +394,9 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   screen doesn't offer to start without it yet.
 - Mesa makes up most of the initramfs (about 58 MB); building Mesa with only the iris and
   virgl drivers would shrink it a lot.
+
+## License
+
+Elm OS is under the MIT license ([LICENSE](LICENSE)). The software it bundles (Linux,
+firmware, Mesa, wpa_supplicant, Rust crates, Elm packages, fonts) keeps its own licenses:
+see [THIRD_PARTY.md](THIRD_PARTY.md). Images carry all of these in `/usr/share/licenses/elmos/`.

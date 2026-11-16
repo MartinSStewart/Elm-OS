@@ -10,17 +10,10 @@ The source files themselves are left alone: this works on a copy (see Main.elm),
 and only ever adds to a line or replaces a blank one, so the line numbers in the
 compiler's errors are those of the original files.
 
-The JSON is compact and positional:
-
-  - a record is an array of its fields, in the order the type declares them
-  - a custom type is an array of the variant's number (from 0, in declaration
-    order) and then its arguments
-  - Maybe is `[]` or `[x]`, Result is `[0, error]` or `[1, value]`
-  - a tuple is an array, `()` is `[]`, List, Array and Set are arrays, and a Dict is
-    an array of `[key, value]` arrays
-  - Int, String and Bool are themselves, a Char is a string, a Float is a number or
-    "NaN", "+Inf" or "-Inf", a Quantity is its number, a Time.Posix is its
-    milliseconds, Bytes is a base64 string, and a Json.Encode.Value is itself
+The format is Lamdera's Wire3, the same bytes Lamdera's own generated codecs write
+(elm/src/Wire.elm describes it), so the codecs also talk to Lamdera apps: record
+fields are written in the order of their names, and a custom type's variants are
+numbered in the order of theirs, rather than in the order the type lists them.
 
 So the data doesn't say which field is which, and `shape` describes every type the
 codecs cover: data saved with a different shape mustn't be decoded with these.
@@ -37,6 +30,8 @@ import Elm.Syntax.Import exposing (Import)
 import Elm.Syntax.Module as Module
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
+import Freeze
+import Lazy
 import Set exposing (Set)
 
 
@@ -121,13 +116,15 @@ builtins =
         , ( ( "Array", "Array" ), Builtin "Wire.encodeArray" "Wire.decodeArray" [ 0 ] )
         , ( ( "Set", "Set" ), Builtin "Wire.encodeSet" "Wire.decodeSet" [ 0 ] )
         , ( ( "Dict", "Dict" ), Builtin "Wire.encodeDict" "Wire.decodeDict" [ 0, 1 ] )
+        , ( ( "SeqSet", "SeqSet" ), Builtin "Wire.encodeSeqSet" "Wire.decodeSeqSet" [ 0 ] )
+        , ( ( "SeqDict", "SeqDict" ), Builtin "Wire.encodeSeqDict" "Wire.decodeSeqDict" [ 0, 1 ] )
         , ( ( "Maybe", "Maybe" ), Builtin "Wire.encodeMaybe" "Wire.decodeMaybe" [ 0 ] )
         , ( ( "Result", "Result" ), Builtin "Wire.encodeResult" "Wire.decodeResult" [ 0, 1 ] )
         , ( ( "Quantity", "Quantity" ), Builtin "Wire.encodeQuantity" "Wire.decodeQuantity" [ 0 ] )
         , ( ( "Date", "Date" ), Builtin "Wire.encodeDate" "Wire.decodeDate" [] )
         , ( ( "Time", "Posix" ), Builtin "Wire.encodePosix" "Wire.decodePosix" [] )
-        , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
-        , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeValue" "Wire.decodeValue" [] )
+        , ( ( "Json.Encode", "Value" ), Builtin "Wire.encodeJson" "Wire.decodeJson" [] )
+        , ( ( "Json.Decode", "Value" ), Builtin "Wire.encodeJson" "Wire.decodeJson" [] )
         ]
 
 
@@ -168,13 +165,13 @@ placeholder options files =
             Maybe.map Tuple.first (splitName full) |> Maybe.withDefault full
 
         imports =
-            [ modulePart options.config, modulePart options.model, modulePart options.msg, "Json.Decode", "Json.Encode", "Persist" ]
+            [ modulePart options.config, modulePart options.model, modulePart options.msg, "Bytes.Decode", "Bytes.Encode", "Persist" ]
                 |> Set.fromList
                 |> Set.toList
                 |> List.map (\i -> "import " ++ i)
 
         failing =
-            "Json.Decode.fail \"tools/wire failed: this build has placeholder codecs\""
+            "Bytes.Decode.fail"
     in
     files
         ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
@@ -197,7 +194,7 @@ placeholder options files =
                            , ""
                            , "codecs : Persist.Codecs " ++ options.model
                            , "codecs ="
-                           , "    { encodeModel = \\_ -> Json.Encode.null"
+                           , "    { encodeModel = \\_ -> Bytes.Encode.sequence []"
                            , "    , modelDecoder = " ++ failing
                            , "    , version = 0"
                            , "    , modelShape = \"\""
@@ -216,6 +213,32 @@ config's names.
 -}
 withModules : Options -> List SourceFile -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
 withModules options files next =
+    case parseModules files of
+        Err problems ->
+            Err problems
+
+        Ok parsed ->
+            -- `Ui.lazy`'s calls rewritten (Lazy.elm), and the files it changed parsed again.
+            case Lazy.rewrite (lazyTypeText parsed.modules) parsed.files of
+                Err problems ->
+                    Err problems
+
+                Ok [] ->
+                    withLazyKeys options parsed.modules next
+
+                Ok changed ->
+                    case parseModules changed of
+                        Err problems ->
+                            Err problems
+
+                        Ok reparsed ->
+                            withLazyKeys options (Dict.union reparsed.modules parsed.modules) next
+
+
+{-| The files parsed, and their modules by name.
+-}
+parseModules : List SourceFile -> Result (List String) { files : List ( SourceFile, File ), modules : Dict String Module }
+parseModules files =
     let
         parsedFiles =
             List.map parseFile files
@@ -228,9 +251,6 @@ withModules options files next =
                 |> List.map (\( _, file ) -> moduleExposes file)
                 |> Dict.fromList
 
-        parsed =
-            List.map (Result.map (toModule exposures)) parsedFiles
-
         parseErrors =
             List.filterMap
                 (\r ->
@@ -241,25 +261,162 @@ withModules options files next =
                         Ok _ ->
                             Nothing
                 )
-                parsed
+                parsedFiles
     in
     if not (List.isEmpty parseErrors) then
         Err parseErrors
 
     else
         let
-            modules =
-                parsed
-                    |> List.filterMap Result.toMaybe
-                    |> List.map (\m -> ( m.name, m ))
-                    |> Dict.fromList
+            ok =
+                List.filterMap Result.toMaybe parsedFiles
         in
-        case ( splitName options.model, splitName options.msg, splitName options.config ) of
-            ( Just modelKey, Just msgKey, Just configKey ) ->
+        Ok
+            { files = ok
+            , modules =
+                ok
+                    |> List.map (toModule exposures >> (\m -> ( m.name, m )))
+                    |> Dict.fromList
+            }
+
+
+{-| How the module with `LazyKey` writes a type that the module `caller` writes as
+`annotation` (Lazy.elm): every name qualified, apart from the ones every module sees.
+-}
+lazyTypeText : Dict String Module -> Lazy.TypeText
+lazyTypeText modules { caller, qualifier } annotation =
+    case Dict.get caller modules of
+        Nothing ->
+            Err ("there is no module " ++ caller)
+
+        Just m ->
+            let
+                ty =
+                    canonical m (Node.value annotation)
+
+                named t =
+                    case t of
+                        TNamed key args ->
+                            key :: List.concatMap named args
+
+                        TTuple items ->
+                            List.concatMap named items
+
+                        TRecord fields ->
+                            List.concatMap (Tuple.second >> named) fields
+
+                        _ ->
+                            []
+
+                problems t =
+                    case t of
+                        TVar v ->
+                            [ "it has a type variable (" ++ v ++ ")" ]
+
+                        TFunction ->
+                            [ "a function can't be compared (put its result in the argument instead)" ]
+
+                        TExtensibleRecord ->
+                            [ "an extensible record ({ r | ... }) can't be written in the key; use a plain record" ]
+
+                        TUnknown name ->
+                            [ "can't tell which type " ++ name ++ " is" ]
+
+                        TNamed ( moduleName, name ) args ->
+                            (case Dict.get moduleName m.exposures of
+                                Just exposed ->
+                                    if Set.member name exposed then
+                                        []
+
+                                    else
+                                        [ moduleName ++ " doesn't expose " ++ name ]
+
+                                Nothing ->
+                                    []
+                            )
+                                ++ List.concatMap problems args
+
+                        TTuple items ->
+                            List.concatMap problems items
+
+                        TRecord fields ->
+                            List.concatMap (Tuple.second >> problems) fields
+
+                        TUnit ->
+                            []
+
+                ref ( moduleName, name ) =
+                    if List.member moduleName bareModules then
+                        name
+
+                    else
+                        qualifier moduleName ++ "." ++ name
+            in
+            case problems ty of
+                problem :: _ ->
+                    Err problem
+
+                [] ->
+                    Ok
+                        { text = renderTy ref False ty
+                        , modules =
+                            named ty
+                                |> List.map Tuple.first
+                                |> List.filter (\moduleName -> not (List.member moduleName bareModules))
+                        }
+
+
+{-| Each `LazyKey` that Lazy.elm wrote is checked for what can't be compared, then
+seen by the rest of wire as just `type LazyKey = Restored` (see `isLazyKey`).
+-}
+withLazyKeys : Options -> Dict String Module -> (Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) a) -> Result (List String) a
+withLazyKeys options written next =
+    let
+        lazyKeys =
+            Dict.values written |> List.filter (\m -> isLazyKey m "LazyKey")
+
+        lazyErrors =
+            let
+                defs =
+                    allDefs written
+            in
+            List.concatMap
+                (\m ->
+                    reach defs (usedParams defs) [ ( ( m.name, "LazyKey" ), "the arguments of a Ui.lazy call (" ++ m.name ++ ".LazyKey)" ) ] Set.empty []
+                        |> Tuple.second
+                        |> List.reverse
+                        |> List.map (String.replace "can't be saved" "can't be compared, so it can't be a Ui.lazy argument (put the function's result in it instead)")
+                )
+                lazyKeys
+
+        modules =
+            Dict.map
+                (\_ m ->
+                    { m
+                        | types =
+                            Dict.map
+                                (\name ( generics, body ) ->
+                                    if unsavedValue m name /= Nothing then
+                                        ( generics, unsavedBody name )
+
+                                    else
+                                        ( generics, body )
+                                )
+                                m.types
+                    }
+                )
+                written
+    in
+    case ( splitName options.model, splitName options.msg, splitName options.config ) of
+        ( Just modelKey, Just msgKey, Just configKey ) ->
+            if List.isEmpty lazyErrors then
                 next options modules modelKey msgKey configKey
 
-            _ ->
-                Err [ "--model, --msg and --config must each be Module.name" ]
+            else
+                Err lazyErrors
+
+        _ ->
+            Err [ "--model, --msg and --config must each be Module.name" ]
 
 
 generateWith : Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) { files : List SourceFile, warnings : List String }
@@ -293,11 +450,42 @@ generateWith options modules modelKey msgKey configKey =
                                     Just (flag ++ ": " ++ keyName key ++ " can't have type variables")
                     )
 
-        ( reached, reachErrors ) =
-            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots) Set.empty []
+        stubs =
+            codecStubs modules
+
+        stubRoots =
+            stubs
+                |> List.concatMap
+                    (\( m, stub ) ->
+                        walk defs used (m.name ++ "." ++ stub.name) stub.ty ( [], [] ) |> Tuple.first
+                    )
+
+        stubErrors =
+            stubs
+                |> List.concatMap
+                    (\( m, stub ) ->
+                        (walk defs used (m.name ++ "." ++ stub.name) stub.ty ( [], [] ) |> Tuple.second)
+                            ++ (if stub.kind == Unknown then
+                                    [ m.name ++ "." ++ stub.name ++ ": a function in " ++ codecsModule ++ " must be a `T -> Wire.Value` or a `Wire.Decoder T`" ]
+
+                                else
+                                    []
+                               )
+                    )
+
+        -- The Model's types get codecs for snapshots, and the codecs module's get
+        -- Lamdera's: a type in both gets both.
+        ( snapshotReached, snapshotErrors ) =
+            reach defs used (( modelKey, keyName modelKey ) :: frozenRoots) Set.empty stubErrors
+
+        ( lamderaReached, reachErrors ) =
+            reach defs used stubRoots Set.empty snapshotErrors
+
+        reached =
+            Set.union snapshotReached lamderaReached
 
         clashes =
-            [ "Wire", options.entry ]
+            [ options.entry ]
                 |> List.filter (\name -> Dict.member name modules)
                 |> List.map (\name -> "there is already a module called " ++ name ++ ", and tools/wire writes one with that name")
     in
@@ -323,11 +511,34 @@ generateWith options modules modelKey msgKey configKey =
                             |> Dict.fromList
 
                     ctx =
-                        { defs = defs, used = used, graph = graph }
+                        { defs = defs, used = used, graph = graph, lamdera = False }
+
+                    lamderaCtx =
+                        { ctx | lamdera = True }
 
                     byModule =
                         List.foldl
-                            (\def acc -> Dict.update def.moduleName (\ds -> Just (def :: Maybe.withDefault [] ds)) acc)
+                            (\def acc ->
+                                let
+                                    key =
+                                        ( def.moduleName, def.name )
+
+                                    flavours =
+                                        (if Set.member key snapshotReached then
+                                            [ ( ctx, def ) ]
+
+                                         else
+                                            []
+                                        )
+                                            ++ (if Set.member key lamderaReached then
+                                                    [ ( lamderaCtx, def ) ]
+
+                                                else
+                                                    []
+                                               )
+                                in
+                                Dict.update def.moduleName (\ds -> Just (flavours ++ Maybe.withDefault [] ds)) acc
+                            )
                             Dict.empty
                             reachedDefs
 
@@ -336,12 +547,16 @@ generateWith options modules modelKey msgKey configKey =
                             |> Dict.values
                             |> List.map
                                 (\m ->
-                                    case Dict.get m.name byModule of
-                                        Just ds ->
-                                            { path = m.path, source = addToModule ctx m (List.sortBy .name ds) }
+                                    if m.name == codecsModule then
+                                        { path = m.path, source = writeStubs lamderaCtx m (List.filterMap (\( sm, stub ) -> ifSame sm m stub) stubs) }
 
-                                        Nothing ->
-                                            { path = m.path, source = m.source }
+                                    else
+                                        case Dict.get m.name byModule of
+                                            Just ds ->
+                                                { path = m.path, source = addToModule m (List.sortBy (\( c, d ) -> ( d.name, codecPrefix c )) ds) }
+
+                                            Nothing ->
+                                                { path = m.path, source = m.source }
                                 )
 
                     modelShape =
@@ -401,6 +616,41 @@ splitName full =
 keyName : Key -> String
 keyName ( m, n ) =
     m ++ "." ++ n
+
+
+{-| Whether `name` is a `LazyKey` that Lazy.elm wrote for `Ui.lazy`. Its arguments
+are never saved: it is saved as `Restored`, the only variant the rest of wire sees, so
+changing a `Ui.lazy` call never changes the Model's shape or needs a migration.
+-}
+isLazyKey : Module -> String -> Bool
+isLazyKey m name =
+    name == "LazyKey" && String.contains "type LazyKey = Restored" (String.join " " (String.words m.source))
+
+
+{-| Types that are never saved, and what they come back as: `Ui.lazy`'s keys (see
+`isLazyKey`), and Ui's `LazyCache`, last frame's lazy elements, which would be big and
+are only a cache. The rest of wire sees each as a type with one variant and nothing in
+it (`unsavedBody`), so it has a fixed shape.
+-}
+unsavedValue : Module -> String -> Maybe String
+unsavedValue m name =
+    if isLazyKey m name then
+        Just "Restored"
+
+    else if unfreezeAny m.name == "Ui" && name == "LazyCache" then
+        Just "noLazyCache"
+
+    else
+        Nothing
+
+
+unsavedBody : String -> Body
+unsavedBody name =
+    if name == "LazyCache" then
+        Custom [ ( "Empty", [] ) ]
+
+    else
+        Custom [ ( "Restored", [] ) ]
 
 
 
@@ -933,24 +1183,266 @@ leadsTo graph to from =
 
 
 
+-- CODECS FOR OTHER CODE
+
+
+{-| The module whose functions are codecs for types other than the Model: what a
+program sends to a server and gets back, say. In elm/src each is a placeholder that
+compiles (any body will do, such as `Wire.fail`); tools/wire writes the real codec in
+its place, from its type: a `T -> Wire.Value` encodes a `T`, and a `Wire.Decoder T`
+decodes one. So other code calls them as `WireCodecs.name` and gets Wire3.
+-}
+codecsModule : String
+codecsModule =
+    "WireCodecs"
+
+
+type StubKind
+    = Encode
+    | Decode
+    | Unknown
+
+
+type alias Stub =
+    { name : String, kind : StubKind, ty : Ty }
+
+
+codecStubs : Dict String Module -> List ( Module, Stub )
+codecStubs modules =
+    case Dict.get codecsModule modules of
+        Nothing ->
+            []
+
+        Just m ->
+            m.file.declarations
+                |> List.filterMap
+                    (\decl ->
+                        case Node.value decl of
+                            FunctionDeclaration f ->
+                                f.signature
+                                    |> Maybe.map
+                                        (\sig ->
+                                            let
+                                                name =
+                                                    Node.value (Node.value sig).name
+
+                                                annotation =
+                                                    Node.value (Node.value sig).typeAnnotation
+                                            in
+                                            ( m, stubOf m name annotation )
+                                        )
+
+                            _ ->
+                                Nothing
+                    )
+
+
+stubOf : Module -> String -> TypeAnnotation -> Stub
+stubOf m name annotation =
+    let
+        isWire typeName node =
+            case canonical m (Typed node []) of
+                TNamed ( "Wire", n ) _ ->
+                    n == typeName
+
+                _ ->
+                    False
+    in
+    case annotation of
+        FunctionTypeAnnotation arg result ->
+            case Node.value result of
+                Typed node [] ->
+                    if isWire "Value" node then
+                        { name = name, kind = Encode, ty = canonical m (Node.value arg) }
+
+                    else
+                        { name = name, kind = Unknown, ty = TUnit }
+
+                _ ->
+                    { name = name, kind = Unknown, ty = TUnit }
+
+        Typed node [ arg ] ->
+            if isWire "Decoder" node then
+                { name = name, kind = Decode, ty = canonical m (Node.value arg) }
+
+            else
+                { name = name, kind = Unknown, ty = TUnit }
+
+        _ ->
+            { name = name, kind = Unknown, ty = TUnit }
+
+
+ifSame : Module -> Module -> Stub -> Maybe Stub
+ifSame a b stub =
+    if a.name == b.name then
+        Just stub
+
+    else
+        Nothing
+
+
+{-| The codecs module with every placeholder replaced: its header and imports as
+they are, then each function, written from its type.
+-}
+writeStubs : Ctx -> Module -> List Stub -> String
+writeStubs ctx m stubs =
+    let
+        lastImportRow =
+            m.file.imports
+                |> List.map (Node.range >> .end >> .row)
+                |> List.maximum
+                |> Maybe.withDefault (Node.range m.file.moduleDefinition).end.row
+
+        header =
+            m.source |> String.lines |> List.take lastImportRow
+
+        self =
+            ( m.name, "" )
+
+        function stub =
+            case stub.kind of
+                Encode ->
+                    stub.name ++ " : " ++ renderSig stub ++ "\n" ++ stub.name ++ " =\n    " ++ unwrap (encFn ctx m 1 stub.ty)
+
+                Decode ->
+                    stub.name ++ " : " ++ renderSig stub ++ "\n" ++ stub.name ++ " =\n    " ++ unwrap (decFn ctx m self 1 stub.ty)
+
+                Unknown ->
+                    ""
+
+        renderSig stub =
+            case List.filter (\decl -> declName decl == Just stub.name) m.file.declarations |> List.head of
+                Just decl ->
+                    signatureText m decl
+
+                Nothing ->
+                    ""
+    in
+    String.join "\n" header
+        ++ "\n\n\n-- Written by tools/wire from the placeholders in elm/src.\n\n\n"
+        ++ String.join "\n\n\n" (List.map function stubs)
+        ++ "\n"
+
+
+declName : Node Declaration -> Maybe String
+declName decl =
+    case Node.value decl of
+        FunctionDeclaration f ->
+            Just (Node.value (Node.value f.declaration).name)
+
+        _ ->
+            Nothing
+
+
+{-| A function's type, as the source has it.
+-}
+signatureText : Module -> Node Declaration -> String
+signatureText m decl =
+    case Node.value decl of
+        FunctionDeclaration f ->
+            case f.signature of
+                Just sig ->
+                    let
+                        range =
+                            Node.range (Node.value sig).typeAnnotation
+
+                        lines =
+                            String.lines m.source |> List.drop (range.start.row - 1) |> List.take (range.end.row - range.start.row + 1)
+                    in
+                    case lines of
+                        [ one ] ->
+                            String.slice (range.start.column - 1) (range.end.column - 1) one
+
+                        first :: rest ->
+                            String.join "\n"
+                                (String.dropLeft (range.start.column - 1) first
+                                    :: List.reverse
+                                        (case List.reverse rest of
+                                            last :: middle ->
+                                                String.left (range.end.column - 1) last :: middle
+
+                                            [] ->
+                                                []
+                                        )
+                                )
+
+                        [] ->
+                            ""
+
+                Nothing ->
+                    ""
+
+        _ ->
+            ""
+
+
+
 -- WRITING THE CODE
 
 
+{-| `lamdera`: the codecs are for talking to a Lamdera app (WireCodecs), so their Ints
+are exactly Lamdera's, which writes one past 32 bits as a 64-bit float. Otherwise
+they are for snapshots, whose Ints past 32 bits are 64-bit integers, as eco's are
+(Wire.encodeSnapshotInt). The two only differ there, but each kind gets its own
+functions: `w3_encode_T` for snapshots and `w3l_encode_T` for Lamdera.
+-}
 type alias Ctx =
     { defs : Dict Key Def
     , used : Dict Key (List Bool)
     , graph : Dict Key (Set Key)
+    , lamdera : Bool
     }
 
 
-addToModule : Ctx -> Module -> List Def -> String
-addToModule ctx m defs =
+codecPrefix : Ctx -> String
+codecPrefix ctx =
+    if ctx.lamdera then
+        "w3l_"
+
+    else
+        "w3_"
+
+
+{-| The Wire function for a builtin type: Ints, and the types made of one (Posix, Date),
+have their own for snapshots.
+-}
+builtinCodec : Ctx -> String -> String
+builtinCodec ctx name =
+    if ctx.lamdera then
+        name
+
+    else
+        case name of
+            "Wire.encodeInt" ->
+                "Wire.encodeSnapshotInt"
+
+            "Wire.decodeInt" ->
+                "Wire.decodeSnapshotInt"
+
+            "Wire.encodePosix" ->
+                "Wire.encodeSnapshotPosix"
+
+            "Wire.decodePosix" ->
+                "Wire.decodeSnapshotPosix"
+
+            "Wire.encodeDate" ->
+                "Wire.encodeSnapshotDate"
+
+            "Wire.decodeDate" ->
+                "Wire.decodeSnapshotDate"
+
+            _ ->
+                name
+
+
+addToModule : Module -> List ( Ctx, Def ) -> String
+addToModule m defs =
     let
         names =
-            List.concatMap (\d -> [ "w3_encode_" ++ d.name, "w3_decode_" ++ d.name ]) defs
+            List.concatMap (\( c, d ) -> [ codecPrefix c ++ "encode_" ++ d.name, codecPrefix c ++ "decode_" ++ d.name ]) defs
 
         code =
-            List.concatMap (\d -> [ encoder ctx m d, decoder ctx m d ]) defs
+            List.concatMap (\( c, d ) -> [ encoder c m d, decoder c m d ]) defs
 
         lines =
             m.source |> String.lines |> exposeNames m names |> addImport m
@@ -1000,6 +1492,15 @@ there is one, so the lines below don't move.
 -}
 addImport : Module -> List String -> List String
 addImport m lines =
+    if List.any (\i -> Node.value (Node.value i).moduleName == [ "Wire" ]) m.file.imports then
+        lines
+
+    else
+        addImportAfter m lines
+
+
+addImportAfter : Module -> List String -> List String
+addImportAfter m lines =
     let
         afterRow =
             case List.map (Node.range >> .end >> .row) m.file.imports |> List.maximum of
@@ -1052,7 +1553,7 @@ encoder ctx m def =
             usedOf ctx def
 
         name =
-            "w3_encode_" ++ def.name
+            codecPrefix ctx ++ "encode_" ++ def.name
 
         signature =
             name
@@ -1066,28 +1567,32 @@ encoder ctx m def =
 
         body =
             case def.body of
+                Custom variants ->
+                    if unsavedValue m def.name /= Nothing then
+                        "    Wire.encodeCustom 0 []"
+
+                    else
+                        "    case w3_v of\n"
+                            ++ String.join "\n\n"
+                                (List.map
+                                    (\( ctor, tys ) ->
+                                        let
+                                            vars =
+                                                List.indexedMap (\j _ -> "w3_x" ++ String.fromInt j) tys
+                                        in
+                                        "        "
+                                            ++ String.join " " (ctor :: vars)
+                                            ++ " ->\n            "
+                                            ++ layoutList 12 ("Wire.encodeCustom " ++ String.fromInt (tagOf variants ctor)) (List.map2 (encApply ctx m 1) tys vars)
+                                    )
+                                    variants
+                                )
+
                 Alias (TRecord fields) ->
-                    "    " ++ layoutList 4 "Wire.encodeRecord" (List.map (\( f, t ) -> encApply ctx m 1 t ("w3_v." ++ f)) fields)
+                    "    " ++ layoutList 4 "Wire.encodeRecord" (List.map (\( f, t ) -> encApply ctx m 1 t ("w3_v." ++ f)) (byName fields))
 
                 Alias ty ->
                     "    " ++ encApply ctx m 1 ty "w3_v"
-
-                Custom variants ->
-                    "    case w3_v of\n"
-                        ++ String.join "\n\n"
-                            (List.indexedMap
-                                (\i ( ctor, tys ) ->
-                                    let
-                                        vars =
-                                            List.indexedMap (\j _ -> "w3_x" ++ String.fromInt j) tys
-                                    in
-                                    "        "
-                                        ++ String.join " " (ctor :: vars)
-                                        ++ " ->\n            "
-                                        ++ layoutList 12 ("Wire.encodeCustom " ++ String.fromInt i) (List.map2 (encApply ctx m 1) tys vars)
-                                )
-                                variants
-                            )
     in
     signature ++ "\n" ++ name ++ args ++ " w3_v =\n" ++ body
 
@@ -1099,7 +1604,7 @@ decoder ctx m def =
             usedOf ctx def
 
         name =
-            "w3_decode_" ++ def.name
+            codecPrefix ctx ++ "decode_" ++ def.name
 
         self =
             ( def.moduleName, def.name )
@@ -1122,25 +1627,35 @@ decoder ctx m def =
         body =
             case def.body of
                 Alias (TRecord fields) ->
-                    "    " ++ layoutPipeline 4 (decFields ctx m self 1 def.name 0 (List.map Tuple.second fields))
+                    "    " ++ layoutPipeline 4 (decRecord ctx m self 1 fields)
 
                 Alias ty ->
                     "    " ++ unwrap (decFn ctx m self 1 ty)
 
                 Custom variants ->
-                    "    Wire.decodeCustom\n        (\\w3_tag ->\n            case w3_tag of\n"
-                        ++ String.concat
-                            (List.indexedMap
-                                (\i ( ctor, tys ) ->
-                                    "                "
-                                        ++ String.fromInt i
-                                        ++ " ->\n                    "
-                                        ++ layoutPipeline 20 (decFields ctx m self 1 ctor 1 tys)
-                                        ++ "\n\n"
-                                )
-                                variants
-                            )
-                        ++ "                _ ->\n                    Wire.fail\n        )"
+                    case unsavedValue m def.name of
+                        Just value ->
+                            "    Wire.decodeCustom\n        (\\w3_tag ->\n            case w3_tag of\n                0 ->\n                    Wire.succeed "
+                                ++ value
+                                ++ "\n\n                _ ->\n                    Wire.fail\n        )"
+
+                        Nothing ->
+                            customDecoder variants
+
+        customDecoder variants =
+            "    Wire.decodeCustom\n        (\\w3_tag ->\n            case w3_tag of\n"
+                ++ String.concat
+                    (List.indexedMap
+                        (\i ( ctor, tys ) ->
+                            "                "
+                                ++ String.fromInt i
+                                ++ " ->\n                    "
+                                ++ layoutPipeline 20 (decFields ctx m self 1 ctor tys)
+                                ++ "\n\n"
+                        )
+                        (byName variants)
+                    )
+                ++ "                _ ->\n                    Wire.fail\n        )"
     in
     signature ++ "\n" ++ name ++ args ++ " =\n" ++ body
 
@@ -1208,10 +1723,10 @@ encFn ctx m depth ty =
                 ( fn, argCodecs ) =
                     case Dict.get key builtins of
                         Just b ->
-                            ( b.encode, dataArgs ctx.used key args )
+                            ( builtinCodec ctx b.encode, dataArgs ctx.used key args )
 
                         Nothing ->
-                            ( qualify m (Tuple.first key) ("w3_encode_" ++ Tuple.second key), dataArgs ctx.used key args )
+                            ( qualify m (Tuple.first key) (codecPrefix ctx ++ "encode_" ++ Tuple.second key), dataArgs ctx.used key args )
             in
             if List.isEmpty argCodecs then
                 fn
@@ -1229,7 +1744,7 @@ encRecord ctx m depth fields v =
         "Wire.encodeRecord []"
 
     else
-        "Wire.encodeRecord [ " ++ String.join ", " (List.map (\( f, t ) -> encApply ctx m depth t (v ++ "." ++ f)) fields) ++ " ]"
+        "Wire.encodeRecord [ " ++ String.join ", " (List.map (\( f, t ) -> encApply ctx m depth t (v ++ "." ++ f)) (byName fields)) ++ " ]"
 
 
 encApply : Ctx -> Module -> Int -> Ty -> String -> String
@@ -1250,14 +1765,57 @@ encApply ctx m depth ty value =
                 String.dropRight 1 (String.dropLeft 1 fn) ++ " " ++ value
 
 
-{-| Decodes the arguments of `ctor`, which are the array's items from `first` on.
+{-| Decodes the arguments of `ctor`, in order.
 -}
-decFields : Ctx -> Module -> Key -> Int -> String -> Int -> List Ty -> List String
-decFields ctx m self depth ctor first tys =
+decFields : Ctx -> Module -> Key -> Int -> String -> List Ty -> List String
+decFields ctx m self depth ctor tys =
     ("Wire.succeed " ++ ctor)
-        :: List.indexedMap
-            (\i t -> "|> Wire.andIndex " ++ String.fromInt (first + i) ++ " " ++ decFn ctx m self depth t)
-            tys
+        :: List.map (\t -> "|> Wire.andMap " ++ decFn ctx m self depth t) tys
+
+
+{-| Decodes a record: its fields in the order of their names, as Wire3 writes them.
+-}
+decRecord : Ctx -> Module -> Key -> Int -> List ( String, Ty ) -> List String
+decRecord ctx m self depth fields =
+    let
+        sorted =
+            byName fields
+
+        vars =
+            List.indexedMap (\i _ -> "w3_f" ++ String.fromInt depth ++ "_" ++ String.fromInt i) sorted
+
+        build =
+            if List.isEmpty fields then
+                "{}"
+
+            else
+                "(\\"
+                    ++ String.join " " vars
+                    ++ " -> { "
+                    ++ String.join ", " (List.map2 (\( f, _ ) v -> f ++ " = " ++ v) sorted vars)
+                    ++ " })"
+    in
+    decFields ctx m self (depth + 1) build (List.map Tuple.second sorted)
+
+
+{-| Wire3 orders record fields, and numbers a custom type's variants, by their names
+(Lamdera.Lexical: their bytes compared, which is how Elm compares Strings).
+-}
+byName : List ( String, a ) -> List ( String, a )
+byName =
+    List.sortBy Tuple.first
+
+
+{-| The number Wire3 gives the variant `ctor`.
+-}
+tagOf : List ( String, a ) -> String -> Int
+tagOf variants ctor =
+    byName variants
+        |> List.indexedMap (\i ( c, _ ) -> ( c, i ))
+        |> List.filter (\( c, _ ) -> c == ctor)
+        |> List.head
+        |> Maybe.map Tuple.second
+        |> Maybe.withDefault 0
 
 
 {-| `f [ a, b ]`, on one line if it's short, otherwise one item per line.
@@ -1311,32 +1869,17 @@ decFn ctx m self depth ty =
             "(Wire.decodeTuple" ++ String.fromInt (List.length items) ++ String.concat (List.map (\t -> " " ++ decFn ctx m self depth t) items) ++ ")"
 
         TRecord fields ->
-            let
-                vars =
-                    List.indexedMap (\i _ -> "w3_f" ++ String.fromInt depth ++ "_" ++ String.fromInt i) fields
-
-                build =
-                    if List.isEmpty fields then
-                        "{}"
-
-                    else
-                        "(\\"
-                            ++ String.join " " vars
-                            ++ " -> { "
-                            ++ String.join ", " (List.map2 (\( f, _ ) v -> f ++ " = " ++ v) fields vars)
-                            ++ " })"
-            in
-            "(" ++ String.join " " (decFields ctx m self (depth + 1) build 0 (List.map Tuple.second fields)) ++ ")"
+            "(" ++ String.join " " (decRecord ctx m self depth fields) ++ ")"
 
         TNamed key args ->
             let
                 ( fn, argCodecs ) =
                     case Dict.get key builtins of
                         Just b ->
-                            ( b.decode, dataArgs ctx.used key args )
+                            ( builtinCodec ctx b.decode, dataArgs ctx.used key args )
 
                         Nothing ->
-                            ( qualify m (Tuple.first key) ("w3_decode_" ++ Tuple.second key), dataArgs ctx.used key args )
+                            ( qualify m (Tuple.first key) (codecPrefix ctx ++ "decode_" ++ Tuple.second key), dataArgs ctx.used key args )
 
                 call =
                     if List.isEmpty argCodecs then
@@ -1467,6 +2010,11 @@ entryModule options configKey modelKey msgKey shapes =
         latest =
             List.map Tuple.first shapes.versions |> List.maximum |> Maybe.withDefault 0
 
+        -- The oldest version: there's no migration to it (Models saved by older ones
+        -- aren't read, see Persist.elm).
+        first =
+            List.map Tuple.first shapes.versions |> List.minimum |> Maybe.withDefault 0
+
         -- The versions in elm/src/Evergreen (a draft build's own isn't).
         versions =
             List.map Tuple.first shapes.versions
@@ -1479,9 +2027,9 @@ entryModule options configKey modelKey msgKey shapes =
             Tuple.first (frozenKey k modelKey)
 
         imports =
-            ([ Tuple.first configKey, Tuple.first modelKey, Tuple.first msgKey, "Persist", "Json.Decode" ]
+            ([ Tuple.first configKey, Tuple.first modelKey, Tuple.first msgKey, "Persist", "Bytes", "Wire" ]
                 ++ List.map frozenModule versions
-                ++ List.map migrationModule (List.filter (\k -> k > 1) versions)
+                ++ List.map migrationModule (List.filter (\k -> k > first) versions)
             )
                 |> Set.fromList
                 |> Set.toList
@@ -1492,15 +2040,14 @@ entryModule options configKey modelKey msgKey shapes =
                 [ "        " ++ String.fromInt (k - 1) ++ " ->"
                 , "            -- A draft build: there's no migration yet, so the Model is read as it is,"
                 , "            -- and starts afresh if that fails. See the warning `make` showed."
-                , "            Just json"
+                , "            Just bytes"
                 , ""
                 ]
 
             else
                 [ "        " ++ String.fromInt (k - 1) ++ " ->"
-                , "            Json.Decode.decodeValue " ++ frozenModule (k - 1) ++ ".w3_decode_" ++ Tuple.second modelKey ++ " json"
-                , "                |> Result.toMaybe"
-                , "                |> Maybe.map (\\old -> " ++ frozenModule k ++ ".w3_encode_" ++ Tuple.second modelKey ++ " (" ++ migrationModule k ++ ".model old))"
+                , "            Wire.fromBytes " ++ frozenModule (k - 1) ++ ".w3_decode_" ++ Tuple.second modelKey ++ " bytes"
+                , "                |> Maybe.map (\\old -> Wire.toBytes (" ++ frozenModule k ++ ".w3_encode_" ++ Tuple.second modelKey ++ " (" ++ migrationModule k ++ ".model old)))"
                 , ""
                 ]
 
@@ -1562,11 +2109,11 @@ entryModule options configKey modelKey msgKey shapes =
                , ""
                , "{-| A Model saved by version `from`, as version `from + 1` would have saved it."
                , "-}"
-               , "migrate : Int -> Json.Decode.Value -> Maybe Json.Decode.Value"
-               , "migrate from json ="
+               , "migrate : Int -> Bytes.Bytes -> Maybe Bytes.Bytes"
+               , "migrate from bytes ="
                , "    case from of"
                ]
-            ++ List.concatMap migrateCase (List.filter (\k -> k > 1) (List.map Tuple.first shapes.versions))
+            ++ List.concatMap migrateCase (List.filter (\k -> k > first) (List.map Tuple.first shapes.versions))
             ++ [ "        _ ->"
                , "            Nothing"
                , ""
@@ -1584,11 +2131,13 @@ stringLiteral s =
 
 
 {-| The frozen versions of the Model's types: version n is the modules
-Evergreen.V<n>.*, copies of the types the Model was made of when it was frozen, and
-Evergreen.Migrate.V<n> turns a Model of version n - 1 into one of version n. The
-newest version must have the same shape as the current types, so a Model saved by
-this build is of that version. They're only ever added to (by `freeze`, which is
-`make migration`), and every commit that changes the Model's types adds one.
+Evergreen.V<n>.*, a copy of the program as it was when it was frozen (of what the
+Model's types and the migration need, see Freeze.elm), and Evergreen.Migrate.V<n>
+turns a Model of version n - 1 into one of version n. The newest version must have
+the same shape as the current types, so a Model saved by this build is of that
+version. They're added to by `freeze` (`make migration`), and every commit that
+changes the Model's types adds one; `make migration-reset` starts them again, from
+the version after the newest, with no migration to it.
 -}
 frozenVersions : Dict String Module -> Key -> List Int
 frozenVersions modules modelKey =
@@ -1640,6 +2189,22 @@ unfreeze version moduleName =
         moduleName
 
 
+{-| Any frozen module's name as the module it is a copy of.
+-}
+unfreezeAny : String -> String
+unfreezeAny moduleName =
+    case String.split "." moduleName of
+        "Evergreen" :: v :: rest ->
+            if String.startsWith "V" v && String.toInt (String.dropLeft 1 v) /= Nothing then
+                String.join "." rest
+
+            else
+                moduleName
+
+        _ ->
+            moduleName
+
+
 isFrozen : String -> Bool
 isFrozen moduleName =
     String.startsWith "Evergreen." moduleName
@@ -1682,25 +2247,25 @@ draftVersion versions =
 
 versionErrors : Dict String Module -> List Int -> List String
 versionErrors modules versions =
-    case List.reverse versions of
-        [] ->
-            [ "the Model's types have no frozen version yet. Run `make migration` to freeze them as version 1 (elm/src/Evergreen/V1)." ]
-
-        latest :: _ ->
+    case ( versions, List.reverse versions ) of
+        ( first :: _, latest :: _ ) ->
             let
                 gaps =
-                    if versions == List.range 1 latest then
+                    if versions == List.range first latest then
                         []
 
                     else
-                        [ "elm/src/Evergreen has versions " ++ String.join ", " (List.map String.fromInt versions) ++ ", but they must be 1 to " ++ String.fromInt latest ++ " with none missing." ]
+                        [ "elm/src/Evergreen has versions " ++ String.join ", " (List.map String.fromInt versions) ++ ", but they must be " ++ String.fromInt first ++ " to " ++ String.fromInt latest ++ " with none missing." ]
 
                 missingMigrations =
-                    List.range 2 latest
+                    List.range (first + 1) latest
                         |> List.filter (\k -> not (Dict.member (migrationModule k) modules))
                         |> List.map (\k -> "there's no migration to version " ++ String.fromInt k ++ ": " ++ migrationModule k ++ " (elm/src/Evergreen/Migrate/V" ++ String.fromInt k ++ ".elm) is missing.")
             in
             gaps ++ missingMigrations
+
+        _ ->
+            [ "the Model's types have no frozen version yet. Run `make migration` to freeze them as version 1 (elm/src/Evergreen/V1), or `make migration-reset` to start again after the versions there were." ]
 
 
 {-| When the current types aren't those of the newest version: what changed.
@@ -1720,13 +2285,17 @@ changeErrors defs used modelKey latest =
     else
         [ "the Model's types have changed since version "
             ++ String.fromInt latest
-            ++ " ("
+            ++ ", and there's no migration for that yet.\n    ("
             ++ describeChanges frozen current
-            ++ "). Run `make migration` to freeze them as version "
+            ++ ")\n  To add one:\n    1. make migration\n       (copies the program as version "
             ++ String.fromInt (latest + 1)
-            ++ ", then fill in the migration it writes (elm/src/Evergreen/Migrate/V"
+            ++ " and writes elm/src/Evergreen/Migrate/V"
             ++ String.fromInt (latest + 1)
-            ++ ".elm) wherever it says Unimplemented."
+            ++ ".elm)\n    2. fill in elm/src/Evergreen/Migrate/V"
+            ++ String.fromInt (latest + 1)
+            ++ ".elm wherever it says Unimplemented; it can call the copied code, such as Evergreen.V"
+            ++ String.fromInt (latest + 1)
+            ++ ".HackerNews.init\n    3. make migration again, to copy what the migration calls"
         ]
 
 
@@ -1758,17 +2327,28 @@ describeChanges old new =
     String.join "; " (part "changed:" changed ++ part "new:" added ++ part "gone:" removed)
 
 
-{-| `make migration`: freezes the Model's current types as the next version, and
-writes the migration to it from the version before, as far as it can. The files to
-add to the source directory.
+{-| `make migration`: freezes the program as version `version` (by default the one
+after the newest frozen one): a copy of every module in Evergreen.V<version> (see
+Freeze.elm), and the migration to it from the version before, as far as tools/wire
+can write it, unless that version doesn't exist or the migration already does. The
+files to add to the source directory.
+
+With no frozen version left (`make migration-reset` deleted them), the version is the
+first, and Models saved by older ones aren't read: the program starts afresh.
+
 -}
-freeze : Options -> List SourceFile -> Result (List String) (List SourceFile)
-freeze options files =
-    withModules options files freezeWith
+freeze : Options -> Maybe Int -> List SourceFile -> Result (List String) (List SourceFile)
+freeze options version files =
+    case parseModules files of
+        Err problems ->
+            Err problems
+
+        Ok original ->
+            withModules options files (freezeWith original.modules version)
 
 
-freezeWith : Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) (List SourceFile)
-freezeWith _ modules modelKey _ _ =
+freezeWith : Dict String Module -> Maybe Int -> Options -> Dict String Module -> Key -> Key -> Key -> Result (List String) (List SourceFile)
+freezeWith original givenVersion _ modules modelKey _ _ =
     let
         defs =
             allDefs modules
@@ -1783,10 +2363,46 @@ freezeWith _ modules modelKey _ _ =
             List.maximum versions |> Maybe.withDefault 0
 
         version =
-            latest + 1
+            Maybe.withDefault (latest + 1) givenVersion
 
-        ( reached, reachErrors ) =
+        ( _, reachErrors ) =
             reach defs used [ ( modelKey, keyName modelKey ) ] Set.empty []
+
+        migration =
+            if List.member (version - 1) versions && not (Dict.member (migrationModule version) modules) then
+                [ migrationFile defs used modelKey (version - 1) ]
+
+            else
+                []
+
+        -- The program's modules, as they are in the source files (`modules` has
+        -- Ui.lazy's calls rewritten), apart from tools/wire's runtime (Wire), which
+        -- the build adds. What's kept of them: the migration to this version (the one
+        -- written now, or the one there already), the Model, and the values given to
+        -- types that are never saved (`unsavedValue`), which only the build's codecs use.
+        program =
+            original
+                |> Dict.values
+                |> List.filter (\m -> not (isFrozen m.name) && m.name /= "Wire")
+                |> List.map (\m -> { name = m.name, path = m.path, source = m.source, file = m.file })
+
+        rootModules =
+            (List.filterMap (\f -> parseFile f |> Result.toMaybe) migration
+                |> List.map (\( f, file ) -> { name = migrationModule version, path = f.path, source = f.source, file = file })
+            )
+                ++ (Dict.get (migrationModule version) original
+                        |> Maybe.map (\m -> [ { name = m.name, path = m.path, source = m.source, file = m.file } ])
+                        |> Maybe.withDefault []
+                   )
+
+        unsavedRoots =
+            original
+                |> Dict.values
+                |> List.filter (\m -> not (isFrozen m.name))
+                |> List.concatMap (\m -> Dict.keys m.types |> List.filterMap (unsavedValue m) |> List.filter (not << startsUpper) |> List.map (Tuple.pair m.name))
+
+        copies =
+            Freeze.freeze version program { modules = rootModules, names = modelKey :: unsavedRoots }
     in
     if not (Dict.member modelKey defs) then
         Err [ "--model: there is no type " ++ keyName modelKey ++ " in the source files" ]
@@ -1794,100 +2410,19 @@ freezeWith _ modules modelKey _ _ =
     else if not (List.isEmpty reachErrors) then
         Err (List.reverse reachErrors)
 
-    else if latest > 0 && List.isEmpty (changeErrors defs used modelKey latest) then
+    else if version <= latest then
+        Err [ "version " ++ String.fromInt version ++ " can't be frozen: elm/src/Evergreen already has version " ++ String.fromInt latest ++ "." ]
+
+    else if latest > 0 && version == latest + 1 && List.isEmpty (changeErrors defs used modelKey latest) then
         Err [ "the Model's types are the same as version " ++ String.fromInt latest ++ "'s, so there's nothing to freeze." ]
 
     else
-        let
-            dataDefs =
-                reached |> Set.toList |> List.filterMap (\key -> Dict.get key defs)
-
-            -- Types that only label others (such as a Quantity's units) hold no
-            -- data, so their frozen copy is just a type with the same name.
-            labelDefs =
-                dataDefs
-                    |> List.concatMap (\def -> Set.toList (userRefs defs (bodyTypes def.body)))
-                    |> Set.fromList
-                    |> (\keys -> Set.diff keys reached)
-                    |> Set.toList
-                    |> List.filterMap (\key -> Dict.get key defs)
-
-            frozenFiles =
-                (List.map (\d -> ( d, True )) dataDefs ++ List.map (\d -> ( d, False )) labelDefs)
-                    |> List.foldl (\( def, hasData ) acc -> Dict.update def.moduleName (\ds -> Just (( def, hasData ) :: Maybe.withDefault [] ds)) acc) Dict.empty
-                    |> Dict.toList
-                    |> List.map (\( moduleName, ds ) -> frozenFile defs version moduleName (List.sortBy (Tuple.first >> .name) ds))
-
-            migration =
-                if latest == 0 then
-                    []
-
-                else
-                    [ migrationFile defs used modelKey latest ]
-        in
-        Ok (frozenFiles ++ migration)
+        Ok (copies ++ migration)
 
 
-frozenFile : Dict Key Def -> Int -> String -> List ( Def, Bool ) -> SourceFile
-frozenFile defs version moduleName ds =
-    let
-        name =
-            frozenModuleName version moduleName
-
-        render =
-            renderTy (frozenRef defs version moduleName)
-
-        decl ( def, hasData ) =
-            let
-                head =
-                    String.join " " (def.name :: def.generics)
-            in
-            if not hasData then
-                "type " ++ head ++ "\n    = " ++ def.name ++ " Never"
-
-            else
-                case def.body of
-                    Alias (TRecord ((_ :: _) as fields)) ->
-                        "type alias "
-                            ++ head
-                            ++ " =\n    { "
-                            ++ String.join "\n    , " (List.map (\( f, t ) -> f ++ " : " ++ render False t) fields)
-                            ++ "\n    }"
-
-                    Alias ty ->
-                        "type alias " ++ head ++ " =\n    " ++ render False ty
-
-                    Custom variants ->
-                        "type "
-                            ++ head
-                            ++ "\n    = "
-                            ++ String.join "\n    | " (List.map (\( c, tys ) -> String.join " " (c :: List.map (render True) tys)) variants)
-
-        body =
-            String.join "\n\n\n" (List.map decl ds)
-    in
-    { path = String.replace "." "/" name ++ ".elm"
-    , source =
-        String.join "\n"
-            ([ "module " ++ name ++ " exposing (..)"
-             , ""
-             , "{-| The types from " ++ moduleName ++ " that the Model was made of in version " ++ String.fromInt version ++ ", frozen by"
-             , "tools/wire (`make migration`) so that a Model saved by version " ++ String.fromInt version ++ " can still be read"
-             , "and migrated. Don't change them."
-             , ""
-             , "-}"
-             , ""
-             ]
-                ++ (case importsIn body (otherModules defs version name) of
-                        [] ->
-                            []
-
-                        imports ->
-                            List.map (\i -> "import " ++ i) imports ++ [ "" ]
-                   )
-                ++ [ "", body, "" ]
-            )
-    }
+startsUpper : String -> Bool
+startsUpper s =
+    String.left 1 s /= String.toLower (String.left 1 s)
 
 
 {-| Every module a frozen module or a migration might refer to: the frozen copies of
@@ -1930,13 +2465,86 @@ bareModules =
 
 
 {-| The modules in `candidates` that `body` refers to (`Module.name`).
+
+Only a module that `body` names in full counts: `Evergreen.V12.AsciiCollab.LocalGrid.T`
+refers to `Evergreen.V12.AsciiCollab.LocalGrid`, not to `Evergreen.V12.AsciiCollab`.
+Matching the text `Evergreen.V12.AsciiCollab.` instead once had the frozen
+`AsciiCollab.LocalGrid` import its parent `AsciiCollab`, which imports it: a cycle.
+
 -}
 importsIn : String -> List String -> List String
 importsIn body candidates =
+    let
+        referred =
+            referredModules body
+    in
     candidates
-        |> List.filter (\m -> String.contains (m ++ ".") body)
+        |> List.filter (\m -> Set.member m referred)
         |> Set.fromList
         |> Set.toList
+
+
+{-| Every module that `body` qualifies a name with: the capitalized words before the
+name in `A.B.Name` or `A.B.name` (and `A.B.name.field`).
+-}
+referredModules : String -> Set String
+referredModules body =
+    body
+        |> String.map
+            (\c ->
+                if Char.isAlphaNum c || c == '_' || c == '.' then
+                    c
+
+                else
+                    ' '
+            )
+        |> String.words
+        |> List.filterMap qualifyingModule
+        |> Set.fromList
+
+
+{-| The module that a dotted word like `A.B.Name` or `A.B.name.field` is qualified with.
+-}
+qualifyingModule : String -> Maybe String
+qualifyingModule word =
+    let
+        parts =
+            String.split "." word
+
+        isUpper part =
+            String.left 1 part |> String.any Char.isUpper
+
+        capitalized =
+            takeWhile isUpper parts
+
+        moduleParts =
+            if List.length capitalized == List.length parts then
+                -- `A.B.Name`: the last one is the name.
+                List.take (List.length parts - 1) capitalized
+
+            else
+                -- `A.B.name`: everything before the name.
+                capitalized
+    in
+    if List.isEmpty moduleParts then
+        Nothing
+
+    else
+        Just (String.join "." moduleParts)
+
+
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile ok list =
+    case list of
+        x :: rest ->
+            if ok x then
+                x :: takeWhile ok rest
+
+            else
+                []
+
+        [] ->
+            []
 
 
 {-| How the frozen module of `self` (in `version`) writes a type: its own types bare,
@@ -2474,6 +3082,28 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
                         Just (changedConv ("Dict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
 
             ( ( "Set", "Set" ), [ o ], [ n ] ) ->
+                if fixed o && o == n then
+                    Just (sameConv value)
+
+                else
+                    Nothing
+
+            ( ( "SeqDict", "SeqDict" ), [ oldK, oldV ], [ newK, newV ] ) ->
+                if not (fixed oldK) || oldK /= newK then
+                    Nothing
+
+                else
+                    let
+                        ( f, isSame, needs ) =
+                            convFn env depth oldV newV
+                    in
+                    if isSame then
+                        Just (sameConv value)
+
+                    else
+                        Just (changedConv ("SeqDict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
+
+            ( ( "SeqSet", "SeqSet" ), [ o ], [ n ] ) ->
                 if fixed o && o == n then
                     Just (sameConv value)
 

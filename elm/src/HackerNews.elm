@@ -1,19 +1,15 @@
 module HackerNews exposing
-    ( Comment
-    , CommentsState
+    ( CommentsState
     , Effect(..)
     , HackerNewsState(..)
     , HttpRequestId(..)
     , Model
     , Page
-    , Post
-    , PostId(..)
-    , UiId(..)
     , gotHttpRequest
     , httpRequestIdToString
-    , idToString
     , init
     , onClick
+    , postIdToString
     , stringToHttpRequestId
     , view
     )
@@ -30,47 +26,15 @@ import Color
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect
+import HackerNews.Types exposing (Comment(..), Post, PostId(..))
 import Hex
 import Html.Parser
 import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
+import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
-
-
-type PostId
-    = PostId String
-
-
-type UiId
-    = NewsPostButton PostId
-    | OpenButton
-    | PostsViewport
-    | CommentsViewport PostId
-    | BackButton
-    | CommentToggle Int
-
-
-idToString : UiId -> String
-idToString id =
-    case id of
-        NewsPostButton (PostId postId) ->
-            "NewsPostButton_" ++ postId
-
-        OpenButton ->
-            "OpenButton"
-
-        PostsViewport ->
-            "PostsViewport"
-
-        CommentsViewport (PostId postId) ->
-            "CommentsViewport_" ++ postId
-
-        BackButton ->
-            "BackButton"
-
-        CommentToggle index ->
-            "CommentToggle_" ++ String.fromInt index
 
 
 type Effect
@@ -83,7 +47,7 @@ type alias Model =
 
     -- The comments of the last few posts opened, by post id. `opened` says when (it
     -- counts up from `openCount`), so the longest unopened can go when there are too many.
-    , comments : Dict String { opened : Int, state : CommentsState }
+    , comments : SeqDict PostId { opened : Int, state : CommentsState }
     , openCount : Int
     , isOpen : Bool
     }
@@ -96,13 +60,9 @@ type HackerNewsState
     | LoadFailed Effect.HttpError
 
 
-{-| A post on the front page, with how many comments it has.
--}
-type alias Post =
-    { id : PostId
-    , title : String
-    , comments : Int
-    }
+postIdToString : PostId -> String
+postIdToString (PostId postId) =
+    postId
 
 
 {-| The list of posts, or one post's comments (in `comments`), with its title.
@@ -118,24 +78,6 @@ type CommentsState
     | CommentsLoadFailed Effect.HttpError
 
 
-{-| A comment and its replies. `index` is its place in the page (from 0), which tells
-the buttons apart; `descendants` counts the replies at every depth under it. `date` is
-when it was written, as the page gives it (UTC), if it does. `grey` is how light its text
-is, from 0 (black) up: Hacker News fades the text of a comment that was voted down.
--}
-type Comment
-    = Comment
-        { index : Int
-        , author : String
-        , date : Maybe String
-        , grey : Int
-        , content : String
-        , children : List Comment
-        , descendants : Int
-        , isExpanded : Bool
-        }
-
-
 type HttpRequestId
     = TopPostsRequest
     | GetPostRequest PostId
@@ -143,7 +85,7 @@ type HttpRequestId
 
 init : Model
 init =
-    { data = NotLoading, page = PostsPage, comments = Dict.empty, openCount = 0, isOpen = False }
+    { data = NotLoading, page = PostsPage, comments = SeqDict.empty, openCount = 0, isOpen = False }
 
 
 {-| How many posts' comments are kept. Opening another drops those of the post opened
@@ -185,7 +127,7 @@ gotHttpRequest requestId result model =
                 Err error ->
                     { model | data = LoadFailed error }
 
-        GetPostRequest (PostId postId) ->
+        GetPostRequest postId ->
             let
                 comments : CommentsState
                 comments =
@@ -203,7 +145,7 @@ gotHttpRequest requestId result model =
                         Err error ->
                             CommentsLoadFailed error
             in
-            { model | comments = Dict.update postId (Maybe.map (\entry -> { entry | state = comments })) model.comments }
+            { model | comments = SeqDict.updateIfExists postId (\entry -> { entry | state = comments }) model.comments }
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -229,10 +171,10 @@ stringToHttpRequestId list =
             Nothing
 
 
-onClick : UiId -> Model -> ( Model, List Effect )
+onClick : HackerNews.Types.UiId -> Model -> ( Model, List Effect )
 onClick uiId model =
     case uiId of
-        OpenButton ->
+        HackerNews.Types.OpenButton ->
             let
                 isOpen =
                     not model.isOpen
@@ -258,25 +200,25 @@ onClick uiId model =
                 ( False, _ ) ->
                     ( { model | isOpen = isOpen }, [] )
 
-        PostsViewport ->
+        HackerNews.Types.PostsViewport ->
             ( model, [] )
 
-        CommentsViewport _ ->
+        HackerNews.Types.CommentsViewport _ ->
             ( model, [] )
 
-        NewsPostButton ((PostId id) as postId) ->
+        HackerNews.Types.PostButton postId ->
             let
                 cached : Maybe CommentsState
                 cached =
-                    Dict.get id model.comments |> Maybe.map .state
+                    SeqDict.get postId model.comments |> Maybe.map .state
 
                 opened : Model
                 opened =
                     { model
                         | page = CommentsPage postId (postTitle postId model.data)
                         , comments =
-                            Dict.insert
-                                id
+                            SeqDict.insert
+                                postId
                                 { opened = model.openCount
                                 , state =
                                     case cached of
@@ -299,7 +241,10 @@ onClick uiId model =
 
                 load : List Effect
                 load =
-                    [ HttpRequest (GetPostRequest postId) ("https://news.ycombinator.com/item?id=" ++ id) ]
+                    [ HttpRequest
+                        (GetPostRequest postId)
+                        ("https://news.ycombinator.com/item?id=" ++ postIdToString postId)
+                    ]
             in
             ( opened
             , case cached of
@@ -316,28 +261,26 @@ onClick uiId model =
                     load
             )
 
-        BackButton ->
+        HackerNews.Types.BackButton ->
             ( { model | page = PostsPage }, [] )
 
-        CommentToggle index ->
+        HackerNews.Types.CommentToggle index ->
             case model.page of
-                CommentsPage (PostId id) _ ->
+                CommentsPage id _ ->
                     ( { model
                         | comments =
-                            Dict.update
+                            SeqDict.updateIfExists
                                 id
-                                (Maybe.map
-                                    (\entry ->
-                                        case entry.state of
-                                            CommentsLoaded comments ->
-                                                { entry | state = CommentsLoaded (List.map (toggle index) comments) }
+                                (\entry ->
+                                    case entry.state of
+                                        CommentsLoaded comments ->
+                                            { entry | state = CommentsLoaded (List.map (toggle index) comments) }
 
-                                            CommentsLoading ->
-                                                entry
+                                        CommentsLoading ->
+                                            entry
 
-                                            CommentsLoadFailed _ ->
-                                                entry
-                                    )
+                                        CommentsLoadFailed _ ->
+                                            entry
                                 )
                                 model.comments
                       }
@@ -350,10 +293,10 @@ onClick uiId model =
 
 {-| Drops the comments opened longest ago while more than `maxKeptComments` are kept.
 -}
-dropOldest : Dict String { opened : Int, state : CommentsState } -> Dict String { opened : Int, state : CommentsState }
+dropOldest : SeqDict PostId { opened : Int, state : CommentsState } -> SeqDict PostId { opened : Int, state : CommentsState }
 dropOldest comments =
-    if Dict.size comments > maxKeptComments then
-        Dict.foldl
+    if SeqDict.size comments > maxKeptComments then
+        SeqDict.foldl
             (\id entry oldest ->
                 case oldest of
                     Just ( _, oldestOpened ) ->
@@ -368,7 +311,7 @@ dropOldest comments =
             )
             Nothing
             comments
-            |> Maybe.map (\( id, _ ) -> dropOldest (Dict.remove id comments))
+            |> Maybe.map (\( id, _ ) -> dropOldest (SeqDict.remove id comments))
             |> Maybe.withDefault comments
 
     else
@@ -720,9 +663,9 @@ replyIndent =
 
 {-| Room for the button that shows or hides a comment's replies, left of its text.
 -}
-toggleWidth : Ui.Model a -> Int
-toggleWidth uiState =
-    Sprite.textSize uiState.scale Small Mono "[+0000]" |> Coord.xRaw
+toggleWidth : Int
+toggleWidth =
+    Sprite.textSize Small Mono "[+000]" |> Coord.xRaw
 
 
 toggleSpacing : Int
@@ -732,8 +675,8 @@ toggleSpacing =
 
 {-| The window, in the top right corner of a screen this big (UI pixels).
 -}
-view : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> Model -> Element id
-view idMap uiState screenSize model =
+view : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> Model -> Element UiId
+view lazyCache uiState screenSize model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding
         , inFront = []
@@ -753,30 +696,30 @@ view idMap uiState screenSize model =
                     Loading maybe ->
                         case maybe of
                             Just data ->
-                                postsView idMap uiState screenSize data
+                                postsView lazyCache uiState screenSize data
 
                             Nothing ->
-                                Ui.text uiState Small (Sans Regular) "Loading..."
+                                Ui.text Small (Sans Regular) "Loading..."
 
                     Loaded data ->
-                        postsView idMap uiState screenSize data
+                        postsView lazyCache uiState screenSize data
 
                     LoadFailed httpError ->
-                        Ui.text uiState Small (Sans Regular) (Effect.httpErrorToString httpError)
+                        Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
 
-            CommentsPage (PostId id) title ->
+            CommentsPage id title ->
                 commentsView
-                    idMap
+                    lazyCache
                     uiState
                     screenSize
-                    (PostId id)
+                    id
                     title
-                    (Dict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
+                    (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
 
 
-postsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> List Post -> Element id
-postsView idMap uiState screenSize data =
+postsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> List Post -> Element UiId
+postsView lazyCache uiState screenSize data =
     let
         width : Int
         width =
@@ -784,28 +727,28 @@ postsView idMap uiState screenSize data =
 
         title : Element id
         title =
-            Ui.text uiState Small (Sans Bold) "Hacker News"
+            Ui.text Small (Sans Bold) "Hacker News"
     in
     Ui.column
         { spacing = titleSpacing, padding = Ui.noPadding }
         [ title
         , Ui.column
             { spacing = 0, padding = Ui.noPadding }
-            (List.indexedMap (postView idMap uiState width) data)
-            |> scrolling idMap uiState PostsViewport screenSize (Coord.yRaw (Ui.size title))
+            (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
+            |> scrolling uiState (HackerNews HackerNews.Types.PostsViewport) screenSize (Coord.yRaw (Ui.size title))
         ]
 
 
-postView : (UiId -> id) -> Ui.Model a -> Int -> Int -> Post -> Element id
-postView idMap uiState width index { id, title, comments } =
+postView : Int -> Int -> Post -> Element UiId
+postView width index { id, title, comments } =
     let
         countWidth : Quantity Int UiPixels
         countWidth =
-            Sprite.textSize uiState.scale Small (Sans Regular) "0000 comments" |> Coord.x
+            Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x
 
         numberWidth : Quantity Int UiPixels
         numberWidth =
-            Sprite.textSize uiState.scale Small (Sans Regular) "00." |> Coord.x
+            Sprite.textSize Small (Sans Regular) "00." |> Coord.x
 
         spacing : Int
         spacing =
@@ -816,17 +759,15 @@ postView idMap uiState width index { id, title, comments } =
         [ Ui.right
             { width = numberWidth }
             (Ui.colorText
-                uiState
                 Color.lightFont
                 Small
                 (Sans Regular)
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
             )
-        , Ui.text uiState Small (Sans Regular) (Sprite.ellipsis uiState.scale Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
+        , Ui.text Small (Sans Regular) (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
         , Ui.right
             { width = countWidth }
             (Ui.colorText
-                uiState
                 Color.lightFont
                 Small
                 (Sans Regular)
@@ -842,7 +783,7 @@ postView idMap uiState width index { id, title, comments } =
         ]
         |> Ui.left (Units.uiPixels width)
         |> Ui.customButton
-            { id = idMap (NewsPostButton id)
+            { id = HackerNews (HackerNews.Types.PostButton id)
             , padding = Ui.paddingXY 0 postPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
@@ -850,16 +791,20 @@ postView idMap uiState width index { id, title, comments } =
             }
 
 
-commentsView : (UiId -> id) -> Ui.Model id -> Coord UiPixels -> PostId -> String -> CommentsState -> Element id
-commentsView idMap uiState screenSize postId title comments =
+commentsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
+commentsView lazyCache uiState screenSize postId title comments =
     let
         width : Int
         width =
             pageWidth screenSize
 
-        backButton : Element id
+        backButton : Element UiId
         backButton =
-            Ui.button { id = idMap BackButton, padding = Ui.paddingXY 6 0 } (Ui.text uiState Small (Sans Regular) "< Posts")
+            Ui.button
+                { id = HackerNews HackerNews.Types.BackButton
+                , padding = Ui.paddingXY 6 0
+                }
+                (Ui.text Small (Sans Regular) "< Posts")
 
         headerSpacing : Int
         headerSpacing =
@@ -871,60 +816,58 @@ commentsView idMap uiState screenSize postId title comments =
             { spacing = headerSpacing, padding = Ui.noPadding }
             [ backButton
             , Ui.text
-                uiState
                 Small
                 (Sans Bold)
-                (Sprite.ellipsis uiState.scale Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title)
+                (Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title)
             ]
         , (case comments of
             CommentsLoading ->
-                Ui.text uiState Small (Sans Regular) "Loading comments..."
+                Ui.text Small (Sans Regular) "Loading comments..."
 
             CommentsLoaded [] ->
-                Ui.text uiState Small (Sans Regular) "No comments yet."
+                Ui.text Small (Sans Regular) "No comments yet."
 
             CommentsLoaded loaded ->
-                commentsColumn idMap uiState width loaded
+                Ui.lazy3 lazyCache commentsColumn lazyCache width loaded
 
             CommentsLoadFailed error ->
-                Ui.text uiState Small (Sans Regular) (Effect.httpErrorToString error)
+                Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
-            |> scrolling idMap uiState (CommentsViewport postId) screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) screenSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
-commentsColumn : (UiId -> id) -> Ui.Model a -> Int -> List Comment -> Element id
-commentsColumn idMap uiState width comments =
+commentsColumn : Ui.LazyCache UiId -> Int -> List Comment -> Element UiId
+commentsColumn lazyCache width comments =
     Ui.column
         { spacing = commentSpacing, padding = Ui.noPadding }
-        (List.map (commentView idMap uiState width) comments)
+        (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache width comment) comments)
 
 
 {-| A comment, and under it its replies if they are shown. `width` is how wide it can be.
 -}
-commentView : (UiId -> id) -> Ui.Model a -> Int -> Comment -> Element id
-commentView idMap uiState width (Comment comment) =
+commentView : Ui.LazyCache UiId -> Int -> Comment -> Element UiId
+commentView lazyCache width (Comment comment) =
     let
         textWidth : Int
         textWidth =
-            width - toggleWidth uiState - toggleSpacing
+            width - toggleWidth - toggleSpacing
 
-        repliesButton : Element id
+        repliesButton : Element UiId
         repliesButton =
             if comment.isExpanded then
-                toggleButton idMap uiState comment.index "[-]"
+                toggleButton comment.index "[-]"
 
             else
-                toggleButton idMap uiState comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
+                toggleButton comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
 
-        text : Element id
+        text : Element UiId
         text =
             Ui.row
                 { spacing = toggleSpacing, padding = Ui.noPadding }
-                [ Ui.right { width = Units.uiPixels (toggleWidth uiState) } repliesButton
+                [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
                 , Ui.customTextWrapped
-                    uiState
                     Small
                     (Units.uiPixels textWidth)
                     (commentHeader comment.author comment.date
@@ -939,16 +882,15 @@ commentView idMap uiState width (Comment comment) =
             , Ui.row
                 { spacing = 0, padding = Ui.noPadding }
                 [ Ui.left (Units.uiPixels replyIndent) Ui.none
-                , commentsColumn idMap uiState (width - replyIndent) comment.children
+                , commentsColumn lazyCache (width - replyIndent) comment.children
                 ]
             ]
 
     else
         Ui.row
             { spacing = toggleSpacing, padding = Ui.noPadding }
-            [ Ui.right { width = Units.uiPixels (toggleWidth uiState) } repliesButton
+            [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
             , Ui.customTextWrapped
-                uiState
                 Small
                 (Units.uiPixels textWidth)
                 (commentHeader comment.author comment.date)
@@ -985,11 +927,11 @@ greyColor grey =
         (modBy 256 (fill // 256) * grey // 255)
 
 
-toggleButton : (UiId -> id) -> Ui.Model a -> Int -> String -> Element id
-toggleButton idMap uiState index label =
-    Ui.colorText uiState Color.lightFont Small Mono label
+toggleButton : Int -> String -> Element UiId
+toggleButton index label =
+    Ui.colorText Color.lightFont Small Mono label
         |> Ui.customButton
-            { id = idMap (CommentToggle index)
+            { id = HackerNews (HackerNews.Types.CommentToggle index)
             , padding = Ui.noPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
@@ -1000,13 +942,13 @@ toggleButton idMap uiState index label =
 {-| Content in a viewport that reaches from below the header (`headerHeight` high) to
 the bottom of the screen, scrolled to where `uiState` says.
 -}
-scrolling : (UiId -> id) -> Ui.Model id -> UiId -> Coord UiPixels -> Int -> Element id -> Element id
-scrolling idMap uiState viewportId screenSize headerHeight content =
+scrolling : Ui.Model UiId -> UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
+scrolling uiState viewportId screenSize headerHeight content =
     Ui.viewport
-        { id = idMap viewportId
+        { id = viewportId
         , viewportHeight = Units.uiPixels (Coord.yRaw screenSize - 2 * windowPadding - headerHeight - titleSpacing)
         , model =
-            case Dict.get (idToString viewportId) uiState.uiState of
+            case SeqDict.get viewportId uiState.uiState of
                 Just (Ui.ViewportState viewport) ->
                     viewport
 

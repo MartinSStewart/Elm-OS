@@ -21,3 +21,8 @@ libc = "0.2"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # SHA-256 of the boot image for the debug overlay (bootinfo.rs); rustls already uses it.
 ring = "0.17"
+# WebSockets for Elm (websocket.rs): tungstenite for the protocol, over our own rustls
+# stream (ring and webpki-roots, as ureq's), so no OpenSSL and no aws-lc.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"

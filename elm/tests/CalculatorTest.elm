@@ -1,6 +1,7 @@
 module CalculatorTest exposing (suite)
 
-import Calculator exposing (Key(..), Operator(..))
+import Calculator
+import Calculator.Types exposing (Key(..), Operator(..))
 import Expect
 import Keyboard
 import Test exposing (Test, describe, test)

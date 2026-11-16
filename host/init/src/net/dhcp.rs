@@ -264,6 +264,7 @@ pub fn apply(name: &str, l: &Lease, metric: i16) {
         resolv = "nameserver 1.1.1.1\n".into();
     }
     let _ = std::fs::write("/etc/resolv.conf", resolv);
+    super::ntp::kick();
     log!(
         "net",
         "{}: {}/{} via {}, {} DNS servers, lease {} s",

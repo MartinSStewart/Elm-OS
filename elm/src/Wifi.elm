@@ -2,13 +2,17 @@ module Wifi exposing
     ( Device(..)
     , Network
     , Security(..)
+    , Ssid
     , State(..)
     , Status
+    , ssidToString
+    , stringToSsid
     )
 
 {-| What the host's networking thread (host/net.c) tells Elm about the wifi card.
 -}
 
+import Ipv4 exposing (Ipv4)
 
 
 type Device
@@ -26,7 +30,21 @@ type Security
 
 
 type alias Network =
-    { ssid : String, signal : Int, security : Security }
+    { ssid : Ssid, signal : Int, security : Security }
+
+
+type Ssid
+    = Ssid String
+
+
+stringToSsid : String -> Ssid
+stringToSsid =
+    Ssid
+
+
+ssidToString : Ssid -> String
+ssidToString (Ssid ssid) =
+    ssid
 
 
 type State
@@ -38,6 +56,4 @@ type State
 
 
 type alias Status =
-    { state : State, ssid : String, ip : String, error : String }
-
-
+    { state : State, ssid : Ssid, ip : Maybe Ipv4, error : String }

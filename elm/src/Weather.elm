@@ -41,6 +41,8 @@ type alias Forecast =
     , code : Int
     , time : String
     , days : List Day
+    , -- The place's offset from UTC now, daylight saving included (timezone=auto).
+      utcOffsetSeconds : Maybe Int
     }
 
 
@@ -100,8 +102,8 @@ decodePlace =
 
 decodeForecast : D.Decoder Forecast
 decodeForecast =
-    D.map2
-        (\toForecast days -> toForecast days)
+    D.map3
+        (\toForecast days offset -> toForecast days offset)
         (D.field "current"
             (D.map5 Forecast
                 (D.field "temperature_2m" D.float)
@@ -119,6 +121,7 @@ decodeForecast =
                 (D.field "temperature_2m_min" (D.list D.float))
             )
         )
+        (D.maybe (D.field "utc_offset_seconds" D.int))
 
 
 {-| WMO weather interpretation codes, as open-meteo uses them.

@@ -44,6 +44,8 @@ pub struct ModeInfo {
 }
 
 pub const MODE_TYPE_PREFERRED: u32 = 1 << 3;
+/// Asked for on the kernel command line (video=CONNECTOR:WxH).
+pub const MODE_TYPE_USERDEF: u32 = 1 << 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -239,22 +241,73 @@ pub fn open_card(index: u32) -> Option<File> {
         .ok()
 }
 
-/// The first connected screen on a card: its connector, the CRTC to drive it with,
-/// and its preferred mode.
+/// A connected screen on a card: its connector, the CRTC to drive it with, its
+/// preferred mode, and where it sits among the others (`arrange`).
+#[derive(Clone)]
 pub struct Output {
     pub connector: u32,
     pub crtc: u32,
     pub mode: ModeInfo,
+    /// Linux's name for the connector, such as "eDP-1" or "HDMI-A-1".
+    pub name: String,
+    /// The screen's physical size, 0 if it didn't say.
+    pub mm_width: u32,
+    pub mm_height: u32,
+    /// A laptop's own panel (eDP, LVDS, DSI).
+    pub internal: bool,
+    /// Its top left corner in the space the mouse moves through (`arrange`).
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Output {
+    pub fn w(&self) -> u32 {
+        self.mode.hdisplay as u32
+    }
+
+    pub fn h(&self) -> u32 {
+        self.mode.vdisplay as u32
+    }
+}
+
+/// The kernel's connector type names (drm_connector.c), by DRM_MODE_CONNECTOR_*.
+fn connector_type_name(t: u32) -> &'static str {
+    match t {
+        1 => "VGA",
+        2 => "DVI-I",
+        3 => "DVI-D",
+        4 => "DVI-A",
+        5 => "Composite",
+        6 => "SVIDEO",
+        7 => "LVDS",
+        8 => "Component",
+        9 => "DIN",
+        10 => "DP",
+        11 => "HDMI-A",
+        12 => "HDMI-B",
+        13 => "TV",
+        14 => "eDP",
+        15 => "Virtual",
+        16 => "DSI",
+        17 => "DPI",
+        18 => "Writeback",
+        19 => "SPI",
+        20 => "USB",
+        _ => "Unknown",
+    }
 }
 
 fn ids(n: u32) -> Vec<u32> {
     vec![0; n.max(1) as usize]
 }
 
-pub fn find_output(card: &File) -> Option<Output> {
+/// Every connected screen on a card, each with a CRTC of its own (a screen left over
+/// when the card has no free CRTC for it is left out), arranged side by side
+/// (`arrange`). Empty if the card has none.
+pub fn find_outputs(card: &File) -> Vec<Output> {
     let mut res = CardRes::default();
     if !ioctl(card, IOCTL_MODE_GETRESOURCES, &mut res) {
-        return None;
+        return Vec::new();
     }
     let (mut conns, mut crtcs, mut encs, mut fbs) = (
         ids(res.count_connectors),
@@ -266,10 +319,17 @@ pub fn find_output(card: &File) -> Option<Output> {
     res.crtc_id_ptr = crtcs.as_mut_ptr() as u64;
     res.encoder_id_ptr = encs.as_mut_ptr() as u64;
     res.fb_id_ptr = fbs.as_mut_ptr() as u64;
+    // The counts may have grown since the first call; ask for no more than we have room for.
+    res.count_connectors = conns.len() as u32;
+    res.count_crtcs = crtcs.len() as u32;
+    res.count_encoders = encs.len() as u32;
+    res.count_fbs = fbs.len() as u32;
     if !ioctl(card, IOCTL_MODE_GETRESOURCES, &mut res) {
-        return None;
+        return Vec::new();
     }
     let crtcs = &crtcs[..(res.count_crtcs as usize).min(crtcs.len())];
+    let mut taken: Vec<u32> = Vec::new();
+    let mut outputs = Vec::new();
     for &id in &conns[..(res.count_connectors as usize).min(conns.len())] {
         let mut c = GetConnector {
             connector_id: id,
@@ -286,7 +346,6 @@ pub fn find_output(card: &File) -> Option<Output> {
         c.encoders_ptr = cencs.as_mut_ptr() as u64;
         c.props_ptr = props.as_mut_ptr() as u64;
         c.prop_values_ptr = pvals.as_mut_ptr() as u64;
-        // The counts may have grown since the first call; ask for no more than we have room for.
         c.count_modes = modes.len() as u32;
         c.count_encoders = cencs.len() as u32;
         c.count_props = props.len() as u32;
@@ -294,21 +353,24 @@ pub fn find_output(card: &File) -> Option<Output> {
             continue;
         }
         let modes = &modes[..(c.count_modes as usize).min(modes.len())];
+        // The mode the kernel command line asks for, else the screen's preferred one.
         let mode = *modes
             .iter()
-            .find(|m| m.type_ & MODE_TYPE_PREFERRED != 0)
+            .find(|m| m.type_ & MODE_TYPE_USERDEF != 0)
+            .or_else(|| modes.iter().find(|m| m.type_ & MODE_TYPE_PREFERRED != 0))
             .unwrap_or(&modes[0]);
+        // The CRTC driving it now (as the firmware left it), if no other screen has it.
         let mut crtc = 0;
         if c.encoder_id != 0 {
             let mut e = GetEncoder {
                 encoder_id: c.encoder_id,
                 ..Default::default()
             };
-            if ioctl(card, IOCTL_MODE_GETENCODER, &mut e) {
+            if ioctl(card, IOCTL_MODE_GETENCODER, &mut e) && e.crtc_id != 0 && !taken.contains(&e.crtc_id) {
                 crtc = e.crtc_id;
             }
         }
-        // No encoder bound yet: take the first CRTC an encoder can drive.
+        // Otherwise the first free CRTC one of its encoders can drive.
         for &enc in &cencs[..(c.count_encoders as usize).min(cencs.len())] {
             if crtc != 0 {
                 break;
@@ -318,21 +380,43 @@ pub fn find_output(card: &File) -> Option<Output> {
                 ..Default::default()
             };
             if ioctl(card, IOCTL_MODE_GETENCODER, &mut e) {
-                if let Some(k) = (0..crtcs.len()).find(|k| e.possible_crtcs & (1 << k) != 0) {
+                if let Some(k) =
+                    (0..crtcs.len()).find(|&k| e.possible_crtcs & (1 << k) != 0 && !taken.contains(&crtcs[k]))
+                {
                     crtc = crtcs[k];
                 }
             }
         }
         if crtc == 0 {
-            crtc = *crtcs.first()?;
+            continue; // every CRTC it could use is driving another screen
         }
-        return Some(Output {
+        taken.push(crtc);
+        outputs.push(Output {
             connector: id,
             crtc,
             mode,
+            name: format!("{}-{}", connector_type_name(c.connector_type), c.connector_type_id),
+            mm_width: c.mm_width,
+            mm_height: c.mm_height,
+            internal: matches!(c.connector_type, 7 | 14 | 16),
+            x: 0,
+            y: 0,
         });
     }
-    None
+    arrange(&mut outputs);
+    outputs
+}
+
+/// Puts the screens side by side, tops lined up: a laptop's own panel first (on the
+/// left), then the others by connector id.
+pub fn arrange(outputs: &mut [Output]) {
+    outputs.sort_by_key(|o| (!o.internal, o.connector));
+    let mut x = 0;
+    for o in outputs {
+        o.x = x;
+        o.y = 0;
+        x += o.w() as i32;
+    }
 }
 
 /// Shows framebuffer `fb` on the output.

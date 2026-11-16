@@ -4,6 +4,7 @@ module Ui exposing
     , Element(..)
     , ElementState(..)
     , InputType(..)
+    , LazyCache
     , Model
     , RowColumn
     , TextInputData
@@ -28,10 +29,13 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , lazy3
+    , lazyCache
+    , lazyKeyed
     , left
     , leftAndRight
-    , map
     , noPadding
+    , noLazyCache
     , none
     , onAnimationFrame
     , onMouseDown
@@ -76,9 +80,9 @@ for now: underlined text and sprites from town-collab's texture.
 import Bounds exposing (Bounds)
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Dict exposing (Dict)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
+import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -140,6 +144,9 @@ type Element id
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
     | Viewport (ViewportData id) (Element id)
+      -- What `lazyKeyed` made: its key (which call it was, with the arguments), and
+      -- every `Lazy` inside it by key, so that reusing it reuses them too.
+    | Lazy id (SeqDict id (Element id)) (Element id)
 
 
 type alias ViewportData id =
@@ -152,19 +159,15 @@ type ElementState
     | ViewportState ViewportModel
 
 
-{-| `scale` is the screen's UI scale. Text is laid out differently at each scale (see
-Sprite), so `text` and the other text elements take the Model to measure at it.
--}
 type alias Model id =
     { focus : Maybe id
-    , uiState : Dict String ElementState
-    , scale : UiScale
+    , uiState : SeqDict id ElementState
     }
 
 
-init : UiScale -> Model id
-init scale =
-    { focus = Nothing, uiState = Dict.empty, scale = scale }
+init : Model id
+init =
+    { focus = Nothing, uiState = SeqDict.empty }
 
 
 type alias ViewportModel =
@@ -182,7 +185,7 @@ onAnimationFrame : Duration -> Model id -> Model id
 onAnimationFrame timeElapsed model =
     { model
         | uiState =
-            Dict.map
+            SeqDict.map
                 (\_ value ->
                     case value of
                         TextInputState _ ->
@@ -230,14 +233,14 @@ onAnimationFrame timeElapsed model =
     }
 
 
-insertElement : String -> ElementState -> Model id -> Model id
+insertElement : id -> ElementState -> Model id -> Model id
 insertElement id state model =
-    { model | uiState = Dict.insert id state model.uiState }
+    { model | uiState = SeqDict.insert id state model.uiState }
 
 
-updateElement : String -> (Maybe ElementState -> Maybe ElementState) -> Model id -> Model id
+updateElement : id -> (Maybe ElementState -> Maybe ElementState) -> Model id -> Model id
 updateElement id state model =
-    { model | uiState = Dict.update id state model.uiState }
+    { model | uiState = SeqDict.update id state model.uiState }
 
 
 onMouseDown :
@@ -245,11 +248,10 @@ onMouseDown :
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
-    -> String
     -> Element id
     -> Model id
     -> ( Model id, Maybe a )
-onMouseDown onClick relativePositionToUi cursor id idString element model =
+onMouseDown onClick relativePositionToUi cursor id element model =
     case element of
         TextInput textInput2 ->
             let
@@ -258,7 +260,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case Dict.get idString model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (TextInputState state2) ->
                                 state2
 
@@ -267,7 +269,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         )
             in
             ( { model
-                | uiState = Dict.insert idString (TextInputState state3) model.uiState
+                | uiState = SeqDict.insert id (TextInputState state3) model.uiState
                 , focus = Just id
               }
             , Nothing
@@ -280,7 +282,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case Dict.get idString model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
 
@@ -289,7 +291,7 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                         )
             in
             ( { model
-                | uiState = Dict.insert idString (TextInputMultilineState state3) model.uiState
+                | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState
                 , focus = Just id
               }
             , Nothing
@@ -319,8 +321,11 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
         Viewport _ _ ->
             ( { model | focus = Nothing }, Nothing )
 
+        Lazy _ _ _ ->
+            ( { model | focus = Nothing }, Nothing )
 
-onWheel : String -> Int -> Element id -> Model id -> Model id
+
+onWheel : id -> Int -> Element id -> Model id -> Model id
 onWheel id clicks element model =
     case element of
         TextInput _ ->
@@ -332,7 +337,7 @@ onWheel id clicks element model =
                     TextInputMultiline.wheel
                         textInput2.style
                         clicks
-                        (case Dict.get id model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
 
@@ -340,7 +345,7 @@ onWheel id clicks element model =
                                 TextInputMultiline.init
                         )
             in
-            { model | uiState = Dict.insert id (TextInputMultilineState state3) model.uiState }
+            { model | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState }
 
         -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
         Text _ ->
@@ -364,6 +369,9 @@ onWheel id clicks element model =
         Empty ->
             model
 
+        Lazy _ _ _ ->
+            model
+
         Viewport data element2 ->
             let
                 state3 : ViewportModel
@@ -372,7 +380,7 @@ onWheel id clicks element model =
                         clicks
                         (size element2)
                         data
-                        (case Dict.get id model.uiState of
+                        (case SeqDict.get id model.uiState of
                             Just (ViewportState state2) ->
                                 state2
 
@@ -380,7 +388,7 @@ onWheel id clicks element model =
                                 initViewportModel
                         )
             in
-            { model | uiState = Dict.insert id (ViewportState state3) model.uiState }
+            { model | uiState = SeqDict.insert id (ViewportState state3) model.uiState }
 
 
 {-| Whether the wheel does something over this element. The wheel goes to the
@@ -418,6 +426,9 @@ scrolls element =
             False
 
         Empty ->
+            False
+
+        Lazy _ _ _ ->
             False
 
 
@@ -463,44 +474,44 @@ paddingXY x y =
 
 {-| Black text. '\\n' starts a new line.
 -}
-text : Model a -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-text model fontSize font =
-    colorText model Color.black fontSize font
+text : Sprite.FontSize -> Sprite.Font -> String -> Element id
+text fontSize font =
+    colorText Color.black fontSize font
 
 
-colorText : Model a -> Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-colorText model color fontSize font text2 =
-    customText model fontSize [ { text = text2, color = color, font = font } ]
+colorText : Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
+colorText color fontSize font text2 =
+    customText fontSize [ { text = text2, color = color, font = font } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
 font size, so every line is the same height whichever fonts it mixes. '\\n' in any of
-them starts a new line. It's measured at the Model's UI scale, which it will be drawn at.
+them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
-    Ui.customText uiState Sprite.Small
+    Ui.customText Sprite.Small
         [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
         , { text = "make check", color = Color.black, font = Sprite.Mono }
         , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
         ]
 
 -}
-customText : Model a -> Sprite.FontSize -> List Sprite.Segment -> Element id
-customText model fontSize segments =
+customText : Sprite.FontSize -> List Sprite.Segment -> Element id
+customText fontSize segments =
     Text
         { fontSize = fontSize
         , segments = segments
-        , cachedSize = Sprite.customTextSize model.scale fontSize segments
+        , cachedSize = Sprite.customTextSize fontSize segments
         }
 
 
 {-| `customText` with word wrap: lines are broken between words so that none is wider
 than `maxWidth` (see Sprite.wrapLines). '\\n' still starts a new line too.
 -}
-customTextWrapped : Model a -> Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
-customTextWrapped model fontSize maxWidth segments =
+customTextWrapped : Sprite.FontSize -> Quantity Int UiPixels -> List Sprite.Segment -> Element id
+customTextWrapped fontSize maxWidth segments =
     let
         ( wrapped, cachedSize ) =
-            Sprite.wrapWithSize model.scale fontSize maxWidth segments
+            Sprite.wrapWithSize fontSize maxWidth segments
     in
     Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
 
@@ -663,58 +674,127 @@ viewport { id, viewportHeight, model } =
     Viewport { id = id, viewportHeight = viewportHeight, scrollOffset = model.offset }
 
 
-{-| Change the ids, so a module's UI can sit in a bigger one with its own id type.
+-- LAZY
+
+
+{-| The `lazy` elements of the last frame, by their keys.
 -}
-map : (a -> b) -> Element a -> Element b
-map f element =
+type LazyCache id
+    = LazyCache (SeqDict id (Element id))
+
+
+{-| Nothing remembered: every `lazy` calls its function.
+-}
+noLazyCache : LazyCache id
+noLazyCache =
+    LazyCache SeqDict.empty
+
+
+{-| What the next frame's `lazy` calls can reuse: every `lazy` element in these (the
+UI of every display).
+-}
+lazyCache : List (Element id) -> LazyCache id
+lazyCache elements =
+    LazyCache (lazyElements elements)
+
+
+{-| Every `Lazy` in these elements, by key. Each `Lazy` already holds the ones inside
+it, so the walk stops there, and the biggest of those is added to rather than copied:
+a frame that reuses a big lazy part costs little here.
+-}
+lazyElements : List (Element id) -> SeqDict id (Element id)
+lazyElements elements =
+    let
+        found : List (SeqDict id (Element id))
+        found =
+            List.foldl lazyParts [] elements
+    in
+    case List.sortBy (\dict -> negate (SeqDict.size dict)) found of
+        biggest :: rest ->
+            List.foldl (\dict acc -> SeqDict.foldl SeqDict.insert acc dict) biggest rest
+
+        [] ->
+            SeqDict.empty
+
+
+lazyParts : Element id -> List (SeqDict id (Element id)) -> List (SeqDict id (Element id))
+lazyParts element found =
     case element of
-        TextInput data ->
-            TextInput { id = f data.id, style = data.style, isValid = data.isValid, state = data.state }
+        Lazy key inner child ->
+            if SeqDict.isEmpty inner then
+                -- No Lazy inside it: look anyway, as it's quick.
+                lazyParts child (SeqDict.singleton key element :: found)
 
-        TextInputMultiline data ->
-            TextInputMultiline { id = f data.id, style = data.style, state = data.state }
-
-        Text data ->
-            Text data
+            else
+                SeqDict.insert key element inner :: found
 
         Button data child ->
-            Button
-                { id = f data.id
-                , padding = data.padding
-                , borderAndFill = data.borderAndFill
-                , borderAndFillFocus = data.borderAndFillFocus
-                , borderAndFillHover = data.borderAndFillHover
-                , cachedSize = data.cachedSize
-                , inFront = List.map (map f) data.inFront
-                }
-                (map f child)
+            List.foldl lazyParts (lazyParts child found) data.inFront
 
-        Row data children ->
-            Row data (List.map (map f) children)
+        Row _ children ->
+            List.foldl lazyParts found children
 
-        Column data children ->
-            Column data (List.map (map f) children)
+        Column _ children ->
+            List.foldl lazyParts found children
 
         Single data child ->
-            Single
-                { padding = data.padding
-                , borderAndFill = data.borderAndFill
-                , inFront = List.map (map f) data.inFront
-                , cachedSize = data.cachedSize
-                , id = Maybe.map f data.id
-                }
-                (map f child)
+            List.foldl lazyParts (lazyParts child found) data.inFront
 
-        Quads data ->
-            Quads data
+        Viewport _ child ->
+            lazyParts child found
+
+        TextInput _ ->
+            found
+
+        TextInputMultiline _ ->
+            found
+
+        Text _ ->
+            found
+
+        Quads _ ->
+            found
 
         Empty ->
-            Empty
+            found
 
-        Viewport data child ->
-            Viewport
-                { id = f data.id, viewportHeight = data.viewportHeight, scrollOffset = data.scrollOffset }
-                (map f child)
+
+{-| `f a b c`, built only when `a`, `b` or `c` has changed since the last frame; like
+`Html.Lazy.lazy3`, for parts of the UI that are slow to build and seldom change, such
+as a long list of wrapped text. (`lazy`, `lazy2`, `lazy4` and so on can join it once something
+uses them: elm-review allows no unused exports.)
+
+This is what you write; as it stands it just calls `f`. At build time tools/wire
+(tools/wire/src/Lazy.elm) turns each call into a `lazyKeyed` whose key is a variant
+it adds to `UiId.LazyKey`, holding the arguments (`UiId.Lazy` holds the key). So `f`
+must be a function defined at the top level of the module that calls `lazy3`, with a
+type annotation. The `LazyCache` arguments are left out of the key; the others can't
+hold functions, and their types must be in modules that don't import UiId (such as an
+app's `<App>/Types.elm`), as UiId.elm imports them.
+
+-}
+lazy3 : LazyCache id -> (a -> b -> c -> Element id) -> a -> b -> c -> Element id
+lazy3 _ f a b c =
+    f a b c
+
+
+{-| What the code generator turns a `lazy` call into: the element that last frame's
+`lazy` with an equal (`==`) key made, or else what `build` gives. `==` is quick
+when nothing changed, as it first checks whether the two are the very same value.
+-}
+lazyKeyed : LazyCache id -> id -> (() -> Element id) -> Element id
+lazyKeyed (LazyCache cache) key build =
+    case SeqDict.get key cache of
+        Just element ->
+            element
+
+        Nothing ->
+            let
+                child : Element id
+                child =
+                    build ()
+            in
+            Lazy key (lazyElements [ child ]) child
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
@@ -828,6 +908,9 @@ size element =
 
         Viewport data child ->
             viewportSize data child
+
+        Lazy _ _ child ->
+            size child
 
 
 viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
@@ -997,6 +1080,9 @@ hoverHelper hovers point position element =
             else
                 hovers
 
+        Lazy _ _ child ->
+            hoverHelper hovers point position child
+
 
 type InputType id
     = ButtonType { data : ButtonData id, position : Coord UiPixels, size : Coord UiPixels }
@@ -1057,6 +1143,9 @@ findInputHelper id position element =
 
         Viewport data child ->
             findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
+
+        Lazy _ _ child ->
+            findInputHelper id position child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -1193,6 +1282,9 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         viewport3
                         (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
                         child
+
+                Lazy _ _ child ->
+                    viewList scale showUiBorder maybeHover focus viewport3 position child
 
         Nothing ->
             []

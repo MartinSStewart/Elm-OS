@@ -11,13 +11,17 @@ import ElmOs
 import Evergreen.V1.App
 import Evergreen.V1.Sub.Things
 import Expect
-import Json.Decode as D
+import Bytes exposing (Bytes)
+import Bytes.Encode as BE
 import Json.Encode as E
 import Persist
 import Quantity
+import SeqDict
+import SeqSet
 import Set
 import Test exposing (Test, describe, test)
 import Time
+import Wire
 
 
 v1Sample : Evergreen.V1.App.Model
@@ -48,29 +52,35 @@ v1Sample =
     , kind = Evergreen.V1.App.Gamma "abc"
     , kinds = [ Evergreen.V1.App.Alpha, Evergreen.V1.App.Gamma "x" ]
     , kindDict = Dict.fromList [ ( "a", Just (Evergreen.V1.App.Beta 4) ), ( "b", Nothing ) ]
+    , seqSet = SeqSet.fromList [ 2, 1 ]
+    , seqDict = SeqDict.empty
+    , kindSeqDict = SeqDict.fromList [ ( "z", Just (Evergreen.V1.App.Gamma "y") ), ( "a", Nothing ) ]
     }
 
 
-{-| A snapshot as a build of version 1 would have written it (in the format before the
-host logged messages).
+{-| A snapshot as a build of version 1 would have written it.
 -}
-v1Snapshot : Maybe String
+v1Snapshot : Maybe Bytes
 v1Snapshot =
     Just
         (Persist.frame
-                (E.encode 0
-                    (E.list identity
-                        [ E.string "elmos-persist-4"
-                        , E.int 1
-                        , E.string (Persist.hash (Maybe.withDefault "" (ElmOs.codecs.versionShape 1)))
-                        , E.string "an older Msg type"
-                        , E.int 4
-                        , Evergreen.V1.App.w3_encode_Model v1Sample
-                        , E.list E.string []
-                        ]
-                    )
+            (Wire.toBytes
+                (BE.sequence
+                    [ Wire.encodeString "elmos-persist-7"
+                    , Wire.encodeSnapshotInt 1
+                    , Wire.encodeString (Persist.hash (Maybe.withDefault "" (ElmOs.codecs.versionShape 1)))
+                    , Wire.encodeSnapshotInt 4
+                    , Wire.encodeBytes (Wire.toBytes (Evergreen.V1.App.w3_encode_Model v1Sample))
+                    , Wire.encodeList Wire.encodeString []
+                    ]
                 )
+            )
         )
+
+
+text : String -> Bytes
+text string =
+    BE.encode (BE.string string)
 
 
 suite : Test
@@ -80,9 +90,13 @@ suite =
         , test "version 2's shape is the current one" (\_ -> ElmOs.codecs.versionShape 2 |> Expect.equal (Just ElmOs.codecs.modelShape))
         , test "a version 1 Model migrates"
             (\_ ->
-                case ElmOs.codecs.migrate 1 (Evergreen.V1.App.w3_encode_Model v1Sample) |> Maybe.map (D.decodeValue ElmOs.codecs.modelDecoder) of
-                    Just (Ok m) ->
-                        ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, App.Beta 3 ), ( [ App.Alpha, App.Beta 1 ], [ ( "a", Just (App.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
+                case ElmOs.codecs.migrate 1 (Wire.toBytes (Evergreen.V1.App.w3_encode_Model v1Sample)) |> Maybe.andThen (Wire.fromBytes ElmOs.codecs.modelDecoder) of
+                    Just m ->
+                        Expect.all
+                            [ \_ -> ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, App.Beta 3 ), ( [ App.Alpha, App.Beta 1 ], [ ( "a", Just (App.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
+                            , \_ -> ( SeqSet.toList m.seqSet, SeqDict.toList m.kindSeqDict ) |> Expect.equal ( [ 2, 1 ], [ ( "z", Just (App.Beta 1) ), ( "a", Nothing ) ] )
+                            ]
+                            ()
 
                     _ ->
                         Expect.fail "didn't migrate"
@@ -96,8 +110,8 @@ suite =
                 Expect.all
                     [ \r -> r.model.kind |> Expect.equal (App.Beta 3)
 
-                    -- Its Msg log is gone: the host's log starts from 1.
-                    , \r -> r.seq |> Expect.equal (Just 0)
+                    -- The host's log carries on from the snapshot's place in it.
+                    , \r -> r.seq |> Expect.equal (Just 4)
                     , \r -> r.unreadable |> Expect.equal Nothing
                     , \r -> r.notes |> Expect.equal [ "migrated the Model from version 1 to 2" ]
                     ]
@@ -107,7 +121,7 @@ suite =
             (\_ ->
                 let
                     old =
-                        Persist.frame "[\"0123abcd\",3,[]]"
+                        Persist.frame (text "[\"0123abcd\",3,[]]")
 
                     restored =
                         Persist.restore App.config ElmOs.codecs (Just old)
@@ -118,7 +132,18 @@ suite =
             (\_ ->
                 let
                     newer =
-                        Persist.frame "[\"elmos-persist-4\",3,\"00000000\",\"00000000\",0,[],[]]"
+                        Persist.frame
+                            (Wire.toBytes
+                                (BE.sequence
+                                    [ Wire.encodeString "elmos-persist-7"
+                                    , Wire.encodeSnapshotInt 3
+                                    , Wire.encodeString "00000000"
+                                    , Wire.encodeSnapshotInt 0
+                                    , Wire.encodeBytes (text "")
+                                    , Wire.encodeList Wire.encodeString []
+                                    ]
+                                )
+                            )
                 in
                 (Persist.restore App.config ElmOs.codecs (Just newer)).notes
                     |> Expect.equal [ "the snapshot is of version 3 of the Model, newer than this build's 2; starting afresh, and keeping it as snapshot-unreadable" ]

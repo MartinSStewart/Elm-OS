@@ -20,7 +20,7 @@ SPACING = 6  # between buttons
 
 def labels():
     src = open(f"{ROOT}/elm/src/Main.elm").read()
-    body = src.split("\ntoolbar model =\n", 1)[1].split("\n    in\n", 1)[0]
+    body = src.split("\ntoolbar model display =\n", 1)[1].split("\n    in\n", 1)[0]
     names = re.findall(r'\(t "([^"]+)"\)', body.split("Nothing ->", 1)[1])
     if not names:
         raise RuntimeError("found no buttons in Main.toolbar (elm/src/Main.elm)")
