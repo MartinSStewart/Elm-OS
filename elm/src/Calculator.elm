@@ -22,8 +22,8 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 
 -}
 
-import Color
 import Calculator.Types exposing (Key(..), Operator(..))
+import Color
 import Coord exposing (Coord)
 import Keyboard
 import Quantity
@@ -575,6 +575,9 @@ fromKeyboard key =
             Nothing
 
         Keyboard.Other ->
+            Nothing
+
+        Keyboard.ScrollLock ->
             Nothing
 
         Keyboard.PrintScreen ->

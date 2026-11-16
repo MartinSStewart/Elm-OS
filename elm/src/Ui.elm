@@ -1226,15 +1226,15 @@ childPositions isRow data position children =
 -- HOVER AND FOCUS
 
 
-{-| All of the elements with ids that contain the given point (usually the mouse cursor position).
-The first element in the list is the top most visible element.
--}
 hover : Coord UiPixels -> Element id -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
 hover point (Element element) =
     hoverHelper [] point Coord.origin element
         |> List.map (\( a, b ) -> ( a, { relativePositionToUi = b.relativePositionToUi, ui = Element b.ui } ))
 
 
+{-| All of the elements with ids that contain the given point (usually the mouse cursor position).
+The first element in the list is the top most visible element.
+-}
 hoverIdOnly : Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
 hoverIdOnly point element =
     List.filterMap

@@ -14,6 +14,7 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 import AsciiCollab
 import AsciiCollab.Types
 import BootInfo
+import Bounds exposing (Bounds)
 import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
@@ -31,6 +32,7 @@ import Ipv4
 import Json.Decode as D
 import Keyboard exposing (Key(..))
 import News exposing (NewsState(..))
+import Nonempty
 import Persist
 import Quantity exposing (Quantity)
 import SeqDict exposing (SeqDict)
@@ -320,9 +322,13 @@ type alias Model =
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
-    , takingScreenshot : Maybe { mouse : Coord DevicePixels }
+    , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
     }
+
+
+type alias ScreenshotPreview =
+    { mouse : Coord DevicePixels, bounds : Bounds DevicePixels, depth : Int }
 
 
 type PowerAction
@@ -600,28 +606,32 @@ step event model =
 
         Mouse x y ->
             let
-                moved =
+                model2 =
                     { model | mouse = Coord.xy x y }
+
+                modelOld =
+                    model
             in
-            if mousePosition moved == mousePosition model then
-                ( moved, [] )
+            case model2.takingScreenshot of
+                Just data ->
+                    updateScreenshotPreview data model2
 
-            else
-                case ( model.selectingText, model.uiState.focus ) of
-                    ( True, Just focus ) ->
-                        case findInput focus model of
-                            Just ( display, Ui.TextInputType { position } ) ->
-                                -- The mouse in that display's UI pixels, even once it has left it.
-                                ( dragSelect focus (uiMouseOn display moved.mouse) position moved, [] )
+                Nothing ->
+                    case ( model2.selectingText, model2.uiState.focus ) of
+                        ( True, Just focus ) ->
+                            case findInput focus modelOld of
+                                Just ( display, Ui.TextInputType { position } ) ->
+                                    -- The mouse in that display's UI pixels, even once it has left it.
+                                    ( dragSelect focus (uiMouseOn display model2.mouse) position model2, [] )
 
-                            Just ( _, Ui.ButtonType _ ) ->
-                                ( moved, [] )
+                                Just ( _, Ui.ButtonType _ ) ->
+                                    ( model2, [] )
 
-                            Nothing ->
-                                ( moved, [] )
+                                Nothing ->
+                                    ( model2, [] )
 
-                    _ ->
-                        ( moved, [] )
+                        _ ->
+                            ( model2, [] )
 
         Button 0 True ->
             let
@@ -631,6 +641,7 @@ step event model =
             case model.takingScreenshot of
                 Just data ->
                     let
+                        display : Display
                         display =
                             mouseDisplay model
 
@@ -639,11 +650,21 @@ step event model =
                             displayUi model display
                     in
                     case Ui.hoverIdOnly (uiMouseOn display data.mouse) displayUi2 of
-                        _ :: _ ->
-                            ( model, [] )
+                        ( _, { relativePositionToUi, ui } ) :: _ ->
+                            ( { model
+                                | screenshots = Ui.elementToScreenshot ui :: model.screenshots
+                                , takingScreenshot = Nothing
+                              }
+                            , []
+                            )
 
                         [] ->
-                            ( { model | screenshots = Ui.elementToScreenshot displayUi2 :: model.screenshots }, [] )
+                            ( { model
+                                | screenshots = Ui.elementToScreenshot displayUi2 :: model.screenshots
+                                , takingScreenshot = Nothing
+                              }
+                            , []
+                            )
 
                 Nothing ->
                     case hover model of
@@ -677,7 +698,12 @@ step event model =
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            scrollUnderMouse (Ui.WheelClicks clicks) model
+            case model.takingScreenshot of
+                Just data ->
+                    updateScreenshotPreview { data | depth = Debug.log "depth" (data.depth + clicks) } model
+
+                Nothing ->
+                    scrollUnderMouse (Ui.WheelClicks clicks) model
 
         Scroll pixels ->
             scrollUnderMouse (Ui.ScrollPixels (Units.uiPixels pixels)) model
@@ -696,7 +722,21 @@ step event model =
                     Keyboard.fromCode model.shift code
             in
             if key == PrintScreen then
-                ( { model | takingScreenshot = Just { mouse = model.mouse } }, [] )
+                let
+                    display : Display
+                    display =
+                        mouseDisplay model
+                in
+                ( { model
+                    | takingScreenshot =
+                        Just
+                            { mouse = model.mouse
+                            , bounds = Bounds.fromTopLeftAndSize display.position display.size
+                            , depth = 0
+                            }
+                  }
+                , []
+                )
 
             else if model.ctrl && model.shift && key == Character "Q" && down then
                 ( { model | showUiBorders = not model.showUiBorders }, [] )
@@ -786,6 +826,53 @@ step event model =
             ( { model
                 | geoUrl = nonEmpty urls.geoUrl Weather.defaultGeoUrl
                 , weatherUrl = nonEmpty urls.weatherUrl Weather.defaultWeatherUrl
+              }
+            , []
+            )
+
+
+updateScreenshotPreview : ScreenshotPreview -> Model -> ( Model, List Effect )
+updateScreenshotPreview data model2 =
+    let
+        display : Display
+        display =
+            Display.at model2.mouse model2.displays |> Maybe.withDefault (mainDisplay model2)
+
+        displayUi2 : Ui.Element UiId
+        displayUi2 =
+            displayUi model2 display
+
+        uiScale2 : UiScale
+        uiScale2 =
+            uiScale model2
+
+        mouse : Coord UiPixels
+        mouse =
+            uiMouseOn display model2.mouse
+    in
+    case Nonempty.fromList (Ui.hover mouse displayUi2) |> Maybe.map (Nonempty.get data.depth) of
+        Just ( _, { relativePositionToUi, ui } ) ->
+            let
+                _ =
+                    Debug.log "rel" relativePositionToUi
+            in
+            ( { model2
+                | takingScreenshot =
+                    Just
+                        { data
+                            | bounds =
+                                Bounds.fromTopLeftAndSize
+                                    (Coord.toDevice uiScale2 relativePositionToUi)
+                                    (Coord.toDevice uiScale2 (Ui.size ui))
+                        }
+              }
+            , []
+            )
+
+        Nothing ->
+            ( { model2
+                | takingScreenshot =
+                    Just { data | bounds = Bounds.fromTopLeftAndSize display.position display.size }
               }
             , []
             )
@@ -1655,6 +1742,48 @@ view model display ui =
                 Nothing
     in
     Ui.view (Display.uiScale display) model.showUiBorders hovered model.uiState.focus display.size ui
+        ++ (case model.takingScreenshot of
+                Just data ->
+                    let
+                        { topLeft, bottomRight } =
+                            data.bounds
+
+                        size =
+                            display.size
+
+                        color =
+                            Color.rgba255 50 50 50 120
+
+                        bounds : Bounds DevicePixels
+                        bounds =
+                            { topLeft = Coord.origin
+                            , bottomRight = size
+                            }
+                    in
+                    Sprite.rectangle
+                        color
+                        bounds
+                        Coord.origin
+                        (Coord.xy (Coord.xRaw size) (Coord.yRaw topLeft))
+                        ++ Sprite.rectangle
+                            color
+                            bounds
+                            (Coord.xy 0 (Coord.yRaw bottomRight))
+                            (Coord.xy (Coord.xRaw size) (Coord.yRaw size - Coord.yRaw bottomRight))
+                        ++ Sprite.rectangle
+                            color
+                            bounds
+                            (Coord.xy 0 (Coord.yRaw topLeft))
+                            (Coord.xy (Coord.xRaw topLeft) (Coord.yRaw bottomRight - Coord.yRaw topLeft))
+                        ++ Sprite.rectangle
+                            color
+                            bounds
+                            (Coord.xy (Coord.xRaw bottomRight) (Coord.yRaw topLeft))
+                            (Coord.xy (Coord.xRaw size - Coord.xRaw bottomRight) (Coord.yRaw bottomRight - Coord.yRaw topLeft))
+
+                Nothing ->
+                    []
+           )
         ++ (if Display.contains (mousePosition model) display then
                 Sprite.cursor
                     (if Maybe.map .hardwareCursor model.renderer == Just True then

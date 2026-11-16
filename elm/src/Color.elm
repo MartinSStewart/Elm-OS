@@ -11,6 +11,7 @@ module Color exposing
     , outlineColor
     , rgb
     , rgb255
+    , rgba255
     , toInt
     , white
     )

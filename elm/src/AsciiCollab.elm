@@ -47,10 +47,10 @@ back on the next connection, so this computer stays the same user.
 
 -}
 
+import Array
 import AsciiCollab.Grid as Grid
 import AsciiCollab.LocalGrid as LocalGrid exposing (LocalModel)
 import AsciiCollab.Types exposing (Ascii, AsciiUnit, Bounds(..), CellUnit, Change(..), ClientChange(..), Grid(..), LocalChange(..), Nonempty(..), ToBackend(..), ToFrontend(..), UserId(..))
-import Array
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
@@ -763,6 +763,9 @@ key screen ctrl pressed model =
             PageDown ->
                 { model | cursor = Coord.plus (Coord.xy 0 (Tuple.second (gridSize screen))) model.cursor } |> done
 
+            ScrollLock ->
+                ( model, [] )
+
             PrintScreen ->
                 ( model, [] )
 
@@ -981,7 +984,6 @@ gridTriangles cols rows viewPoint local =
                                         let
                                             position =
                                                 Coord.xy (x * charWidth) (y * charHeight)
-
                                         in
                                         Sprite.rectangle (userColor 1 userId) clip position (Coord.xy charWidth charHeight)
                                             ++ Sprite.monoChar (userColor 0.3 userId) position (Grid.toChar ascii)

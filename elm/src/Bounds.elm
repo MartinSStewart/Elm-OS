@@ -1,4 +1,4 @@
-module Bounds exposing (Bounds, intersection)
+module Bounds exposing (Bounds, fromTopLeftAndSize, intersection)
 
 import Coord exposing (Coord)
 import Quantity
@@ -43,3 +43,10 @@ intersection a b =
 
     else
         Nothing
+
+
+fromTopLeftAndSize : Coord units -> Coord units -> Bounds units
+fromTopLeftAndSize topLeft size =
+    { topLeft = topLeft
+    , bottomRight = Coord.plus size topLeft
+    }
