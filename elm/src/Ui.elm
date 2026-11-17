@@ -73,11 +73,11 @@ for now: underlined text and sprites from town-collab's texture.
 -}
 
 import Bounds exposing (Bounds)
+import Bytes exposing (Bytes)
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Duration exposing (Duration, Seconds)
-import Bytes exposing (Bytes)
 import Quantity exposing (Quantity, Rate)
 import Scene
 import Sprite exposing (Triangle)
@@ -270,7 +270,8 @@ onMouseDown onClick relativePositionToUi cursor id idString element model =
                                 state2
 
                             _ ->
-                                TextInput.init
+                                -- None kept yet: the box as the view shows it.
+                                textInput2.state
                         )
             in
             ( { model
