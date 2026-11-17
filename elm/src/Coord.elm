@@ -4,6 +4,7 @@ module Coord exposing
     , origin
     , plus
     , toDevice
+    , toLocal
     , toTuple
     , toUi
     , x
@@ -18,7 +19,7 @@ Units.DevicePixels), like town-collab's Coord.
 -}
 
 import Quantity exposing (Quantity(..))
-import Units exposing (DevicePixels, UiPixels, UiScale)
+import Units exposing (DevicePixels, LocalUiPixels, UiPixels, UiScale)
 
 
 type alias Coord units =
@@ -80,3 +81,10 @@ toDevice scale ( px, py ) =
 toUi : UiScale -> Coord DevicePixels -> Coord UiPixels
 toUi scale ( px, py ) =
     ( Units.toUi scale px, Units.toUi scale py )
+
+
+toLocal : Coord UiPixels -> Coord UiPixels -> Coord LocalUiPixels
+toLocal ( Quantity uiX, Quantity uiY ) ( Quantity cursorX, Quantity cursorY ) =
+    ( cursorX - uiX |> Quantity
+    , cursorY - uiY |> Quantity
+    )

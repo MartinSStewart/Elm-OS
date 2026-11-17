@@ -8,6 +8,7 @@ module Sprite exposing
     , asciiChar
     , asciiIndex
     , caretPositions
+    , circle
     , clipTo
     , cursor
     , customText
@@ -1364,3 +1365,23 @@ italicMetrics =
 boldItalicMetrics : Metrics
 boldItalicMetrics =
     makeMetrics BoldItalic
+
+
+circle : Color -> Float -> ( Float, Float ) -> Float -> List (Triangle unit)
+circle color s ( cx, cy ) r =
+    List.range 0 11
+        |> List.map
+            (\i ->
+                let
+                    startAngle =
+                        turns (toFloat i / 12)
+
+                    endAngle =
+                        turns (toFloat (i + 1) / 12)
+                in
+                triangle
+                    color
+                    ( cx * s, cy * s )
+                    ( (cx + r * cos startAngle) * s, (cy + r * sin startAngle) * s )
+                    ( (cx + r * cos endAngle) * s, (cy + r * sin endAngle) * s )
+            )

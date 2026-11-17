@@ -1,6 +1,5 @@
 module Ui exposing
     ( BorderAndFill(..)
-    , ButtonModel
     , Element
     , ElementFull
     , ElementState(..)
@@ -28,6 +27,7 @@ module Ui exposing
     , elementToScreenshot
     , empty
     , findInput
+    , getButton
     , getTextInput
     , getTextInputMultiline
     , hover
@@ -89,6 +89,7 @@ for now: underlined text and sprites from town-collab's texture.
 -}
 
 import Bounds exposing (Bounds)
+import Button
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Duration exposing (Duration, Seconds)
@@ -97,6 +98,7 @@ import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
+import Time
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
@@ -123,7 +125,7 @@ type Element id
 
 
 type alias Screenshot =
-    { uiState : Model Int, uiScale : UiScale, screenshot : ElementFull Int () }
+    { time : Time.Posix, uiState : Model Int, uiScale : UiScale, screenshot : ElementFull Int () }
 
 
 type ElementFull id lazy
@@ -166,7 +168,7 @@ type ElementState
     = TextInputState TextInput.Model
     | TextInputMultilineState TextInputMultiline.Model
     | ViewportState ViewportModel
-    | ButtonState ButtonModel
+    | ButtonState Button.Model
 
 
 type alias Model id =
@@ -206,13 +208,14 @@ state (text inputs, viewports, buttons) is copied from `model` to its Int, so th
 screenshot doesn't hold the app's id types: those can change in a migration, and the
 screenshot would have to change with them. Nothing in it is hovered or focused.
 -}
-elementToScreenshot : UiScale -> Model id -> Element id -> Screenshot
-elementToScreenshot uiScale model (Element element) =
+elementToScreenshot : Time.Posix -> UiScale -> Model id -> Element id -> Screenshot
+elementToScreenshot time uiScale model (Element element) =
     let
         ( acc, screenshot ) =
             elementToScreenshotHelper model element { next = 0, uiState = SeqDict.empty }
     in
-    { uiState = { init | uiState = acc.uiState }
+    { time = time
+    , uiState = { init | uiState = acc.uiState }
     , uiScale = uiScale
     , screenshot = screenshot
     }
@@ -364,9 +367,10 @@ screenshotSize screenshot =
 same ones `view` makes), with its top left corner at 0, 0. Nothing is hovered or focused.
 -}
 screenshotView : Screenshot -> List (Triangle DevicePixels)
-screenshotView { uiState, uiScale, screenshot } =
+screenshotView { time, uiState, uiScale, screenshot } =
     viewList
         uiState
+        time
         uiScale
         False
         Nothing
@@ -479,18 +483,14 @@ getTextInputMultiline id model =
             TextInputMultiline.init
 
 
-type alias ButtonModel =
-    {}
-
-
-getButton : id -> Model id -> ButtonModel
+getButton : id -> Model id -> Button.Model
 getButton id model =
     case SeqDict.get id model.uiState of
         Just (ButtonState data) ->
             data
 
         _ ->
-            {}
+            { buttonDown = Nothing }
 
 
 {-| A frame went by. `hovered` is what `hoverIdOnly` gives for the mouse, at `mouse`: the
@@ -628,26 +628,26 @@ updateElement id state model =
 
 
 onMouseDown :
-    (id -> Model id -> a)
+    Time.Posix
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
     -> Element id
     -> Model id
-    -> ( Model id, Maybe a )
-onMouseDown onClick relativePositionToUi cursor id (Element element) model =
-    onMouseDownHelper onClick relativePositionToUi cursor id element model
+    -> Model id
+onMouseDown time relativePositionToUi cursor id (Element element) model =
+    onMouseDownHelper time relativePositionToUi cursor id element model
 
 
 onMouseDownHelper :
-    (id -> Model id -> a)
+    Time.Posix
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
     -> ElementFull id lazy
     -> Model id
-    -> ( Model id, Maybe a )
-onMouseDownHelper onClick relativePositionToUi cursor id element model =
+    -> Model id
+onMouseDownHelper time relativePositionToUi cursor id element model =
     case element of
         TextInput textInput2 ->
             let
@@ -656,20 +656,12 @@ onMouseDownHelper onClick relativePositionToUi cursor id element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case SeqDict.get id model.uiState of
-                            Just (TextInputState state2) ->
-                                state2
-
-                            _ ->
-                                TextInput.init
-                        )
+                        (getTextInput id model)
             in
-            ( { model
+            { model
                 | uiState = SeqDict.insert id (TextInputState state3) model.uiState
                 , focus = Just id
-              }
-            , Nothing
-            )
+            }
 
         TextInputMultiline textInput2 ->
             let
@@ -678,41 +670,44 @@ onMouseDownHelper onClick relativePositionToUi cursor id element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case SeqDict.get id model.uiState of
-                            Just (TextInputMultilineState state2) ->
-                                state2
-
-                            _ ->
-                                TextInputMultiline.init
-                        )
+                        (getTextInputMultiline id model)
             in
-            ( { model
+            { model
                 | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState
                 , focus = Just id
-              }
-            , Nothing
-            )
+            }
 
         Text _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Button _ _ ->
-            ( { model | focus = Nothing }, onClick id { model | focus = Nothing } |> Just )
+            { model
+                | uiState =
+                    SeqDict.insert id
+                        (Button.mouseDown
+                            time
+                            (Coord.toLocal relativePositionToUi cursor)
+                            (getButton id model)
+                            |> ButtonState
+                        )
+                        model.uiState
+                , focus = Nothing
+            }
 
         Row _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Column _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Single _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Quads _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Empty ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Viewport data child ->
             let
@@ -747,32 +742,25 @@ onMouseDownHelper onClick relativePositionToUi cursor id element model =
 
                             state2 : ViewportModel
                             state2 =
-                                case SeqDict.get data.id model.uiState of
-                                    Just (ViewportState state) ->
-                                        state
-
-                                    _ ->
-                                        initViewportModel
+                                getViewport data.id model
                         in
-                        ( { model
+                        { model
                             | uiState =
                                 SeqDict.insert
                                     data.id
                                     (ViewportState (moveThumb data.viewportHeight childSize grab y { state2 | grab = Just grab }))
                                     model.uiState
                             , focus = Just data.id
-                          }
-                        , Nothing
-                        )
+                        }
 
                     else
-                        ( { model | focus = Nothing }, Nothing )
+                        { model | focus = Nothing }
 
                 Nothing ->
-                    ( { model | focus = Nothing }, Nothing )
+                    { model | focus = Nothing }
 
         Lazy _ _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
 
 {-| The mouse moved with its button down after pressing the scroll bar of the viewport
@@ -2014,10 +2002,11 @@ findFirst f list =
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 -}
-view : Model id -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view uiState scale showUiBorder maybeHover screenSize (Element element) =
+view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view uiState time scale showUiBorder maybeHover screenSize (Element element) =
     viewList
         uiState
+        time
         scale
         showUiBorder
         maybeHover
@@ -2026,8 +2015,8 @@ view uiState scale showUiBorder maybeHover screenSize (Element element) =
         element
 
 
-viewList : Model id -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
-viewList model scale showUiBorder maybeHover viewport2 position element =
+viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList model time scale showUiBorder maybeHover viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
@@ -2063,6 +2052,11 @@ viewList model scale showUiBorder maybeHover viewport2 position element =
                         ++ Sprite.customText scale data.fontSize viewport3 data.segments position
 
                 Button data child ->
+                    let
+                        state : Button.Model
+                        state =
+                            getButton data.id model
+                    in
                     borderAndFillView
                         scale
                         viewport3
@@ -2077,16 +2071,30 @@ viewList model scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList model scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList model scale showUiBorder maybeHover viewport3 position) data.inFront
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ (case state.buttonDown of
+                                Just ( buttonDownAt, buttonDownPos ) ->
+                                    Sprite.circle
+                                        (Color.rgb255 250 190 40)
+                                        1
+                                        (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
+                                        (Duration.from buttonDownAt time |> Quantity.at buttonCircleGrowSpeed |> Units.inUiPixels |> min 100)
+                                        |> Sprite.move position
+                                        |> Sprite.clipTo (boundsToArea viewport3)
+                                        |> Sprite.toDevice scale
+
+                                Nothing ->
+                                    []
+                           )
+                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
                     childPositions True data position children
-                        |> List.concatMap (\( at, child ) -> viewList model scale showUiBorder maybeHover viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Column data children ->
                     childPositions False data position children
-                        |> List.concatMap (\( at, child ) -> viewList model scale showUiBorder maybeHover viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Single data child ->
                     borderAndFillView
@@ -2111,8 +2119,8 @@ viewList model scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList model scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList model scale showUiBorder maybeHover viewport3 position) data.inFront
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Quads data ->
                     Sprite.move position data.triangles
@@ -2166,6 +2174,7 @@ viewList model scale showUiBorder maybeHover viewport2 position element =
                                 Just inside ->
                                     viewList
                                         model
+                                        time
                                         scale
                                         showUiBorder
                                         maybeHover
@@ -2207,10 +2216,15 @@ viewList model scale showUiBorder maybeHover viewport2 position element =
                            )
 
                 Lazy _ _ child ->
-                    viewList model scale showUiBorder maybeHover viewport3 position child
+                    viewList model time scale showUiBorder maybeHover viewport3 position child
 
         Nothing ->
             []
+
+
+buttonCircleGrowSpeed : Quantity Float (Rate UiPixels Seconds)
+buttonCircleGrowSpeed =
+    Quantity.rate (Units.uiPixels 100) Duration.second
 
 
 borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)

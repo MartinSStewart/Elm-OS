@@ -682,37 +682,42 @@ step event model =
             in
             case model.takingScreenshot of
                 Just data ->
-                    let
-                        display : Display
-                        display =
-                            mouseDisplay model
+                    case model.time of
+                        Just time ->
+                            let
+                                display : Display
+                                display =
+                                    mouseDisplay model
 
-                        displayUi2 : Ui.Element UiId
-                        displayUi2 =
-                            displayUi model display
-                    in
-                    case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
-                        ( _, { ui } ) :: _ ->
-                            ( { model
-                                | screenshots =
-                                    Ui.elementToScreenshot (Display.uiScale display) model.uiState ui
-                                        :: model.screenshots
-                                , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
-                                , takingScreenshot = Nothing
-                              }
-                            , []
-                            )
+                                displayUi2 : Ui.Element UiId
+                                displayUi2 =
+                                    displayUi model display
+                            in
+                            case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
+                                ( _, { ui } ) :: _ ->
+                                    ( { model
+                                        | screenshots =
+                                            Ui.elementToScreenshot time (Display.uiScale display) model.uiState ui
+                                                :: model.screenshots
+                                        , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
+                                        , takingScreenshot = Nothing
+                                      }
+                                    , []
+                                    )
 
-                        [] ->
-                            ( { model
-                                | screenshots =
-                                    Ui.elementToScreenshot (Display.uiScale display) model.uiState displayUi2
-                                        :: model.screenshots
-                                , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
-                                , takingScreenshot = Nothing
-                              }
-                            , []
-                            )
+                                [] ->
+                                    ( { model
+                                        | screenshots =
+                                            Ui.elementToScreenshot time (Display.uiScale display) model.uiState displayUi2
+                                                :: model.screenshots
+                                        , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
+                                        , takingScreenshot = Nothing
+                                      }
+                                    , []
+                                    )
+
+                        Nothing ->
+                            ( model, [] )
 
                 Nothing ->
                     case hover model of
@@ -734,15 +739,23 @@ step event model =
 
                         ( id, { relativePositionToUi, ui } ) :: _ ->
                             let
-                                ( uiState, maybeModelAndEffects ) =
-                                    Ui.onMouseDown (click model) relativePositionToUi cursor id ui model.uiState
-                            in
-                            case maybeModelAndEffects of
-                                Just ( model2, effects ) ->
-                                    ( { model2 | selectingText = True }, effects )
+                                model2 : Model
+                                model2 =
+                                    { model
+                                        | uiState =
+                                            Ui.onMouseDown
+                                                (Maybe.withDefault (Time.millisToPosix 0) model.time)
+                                                relativePositionToUi
+                                                cursor
+                                                id
+                                                ui
+                                                model.uiState
+                                    }
 
-                                Nothing ->
-                                    ( { model | selectingText = True, uiState = uiState }, [] )
+                                ( model3, effects ) =
+                                    click model2 id
+                            in
+                            ( { model3 | selectingText = True }, effects )
 
                         [] ->
                             ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
@@ -1048,8 +1061,8 @@ fetchWeather model =
 {-| A click on a toolbar's app button opens the app on that toolbar's display, or moves
 it there if it is open on another one.
 -}
-click : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
-click model id uiState =
+click : Model -> UiId -> ( Model, List Effect )
+click model id =
     case appButton id of
         Just app ->
             let
@@ -1063,17 +1076,17 @@ click model id uiState =
             if appIsOpen app model && not (shownOn here app model) then
                 -- On another display, or left out of this one's layout for want of room:
                 -- shown here, as the newest.
-                ( { moved | uiState = uiState }, [] )
+                ( moved, [] )
 
             else if appIsOpen app model then
                 -- closing it
-                clickElement model id uiState
+                clickElement model id
 
             else
-                clickElement moved id uiState
+                clickElement moved id
 
         Nothing ->
-            clickElement model id uiState
+            clickElement model id
 
 
 {-| The app a toolbar button opens.
@@ -1257,8 +1270,8 @@ appIsOpen app model =
             model.weatherOpen
 
 
-clickElement : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
-clickElement model id uiState =
+clickElement : Model -> UiId -> ( Model, List Effect )
+clickElement model id =
     case id of
         RefreshButton ->
             ( { model | scanning = True }, [ Effect.WifiScan ] )
@@ -1276,7 +1289,7 @@ clickElement model id uiState =
                                  else
                                     Nothing
                                 )
-                                uiState
+                                model.uiState
                       }
                     , []
                     )
@@ -1285,7 +1298,7 @@ clickElement model id uiState =
                     ( model, [] )
 
         PasswordInput ->
-            ( { model | uiState = Ui.setFocus (Just PasswordInput) uiState }, [] )
+            ( { model | uiState = Ui.setFocus (Just PasswordInput) model.uiState }, [] )
 
         ShowPasswordButton ->
             ( { model | showPassword = not model.showPassword }, [] )
@@ -1343,7 +1356,7 @@ clickElement model id uiState =
                          else
                             Just EditorInput
                         )
-                        uiState
+                        model.uiState
               }
             , []
             )
@@ -1353,7 +1366,7 @@ clickElement model id uiState =
 
         EditorWindow ->
             -- A click on the window around the text still types into it.
-            ( { model | uiState = Ui.setFocus (Just EditorInput) uiState }, [] )
+            ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
 
         CloseEditorButton ->
             ( { model | editorOpen = False }, [] )
@@ -1386,7 +1399,7 @@ clickElement model id uiState =
             else
                 ( { model
                     | calculatorOpen = True
-                    , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState
+                    , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) model.uiState
                   }
                 , []
                 )
@@ -1398,7 +1411,7 @@ clickElement model id uiState =
             else
                 ( { model
                     | ticTacToeOpen = True
-                    , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState
+                    , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState
                   }
                 , []
                 )
@@ -1436,13 +1449,13 @@ clickElement model id uiState =
                 Calculator.Types.KeyButton key ->
                     ( { model
                         | calculator = Calculator.press key model.calculator
-                        , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState
+                        , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) model.uiState
                       }
                     , []
                     )
 
                 Calculator.Types.Panel ->
-                    ( { model | uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState }, [] )
+                    ( { model | uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) model.uiState }, [] )
 
         TicTacToe ticTacToeId ->
             case ticTacToeId of
@@ -1450,18 +1463,18 @@ clickElement model id uiState =
                     ( { model | ticTacToeOpen = False }, [] )
 
                 TicTacToe.Types.NewGameButton ->
-                    ( { model | ticTacToe = TicTacToe.init, uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState }, [] )
+                    ( { model | ticTacToe = TicTacToe.init, uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState }, [] )
 
                 TicTacToe.Types.Square i ->
                     ( { model
                         | ticTacToe = TicTacToe.press i model.ticTacToe
-                        , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState
+                        , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState
                       }
                     , []
                     )
 
                 TicTacToe.Types.Panel ->
-                    ( { model | uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) uiState }, [] )
+                    ( { model | uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState }, [] )
 
         News _ ->
             ( model, [] )
@@ -1470,7 +1483,7 @@ clickElement model id uiState =
             ( model, [] )
 
         AsciiCollab asciiCollabId ->
-            asciiCollabClick asciiCollabId model uiState
+            asciiCollabClick asciiCollabId model model.uiState
 
         HackerNews uiId2 ->
             hackerNewsClick uiId2 model
@@ -1955,7 +1968,14 @@ view model display ui =
             else
                 Nothing
     in
-    Ui.view model.uiState (Display.uiScale display) model.showUiBorders hovered display.size ui
+    Ui.view
+        model.uiState
+        (Maybe.withDefault (Time.millisToPosix 0) model.time)
+        (Display.uiScale display)
+        model.showUiBorders
+        hovered
+        display.size
+        ui
         ++ (case model.takingScreenshot of
                 Just data ->
                     let
@@ -3272,28 +3292,11 @@ weatherIcon unit code =
         side =
             18 * unit
 
-        circle color ( cx, cy ) r =
-            List.range 0 11
-                |> List.map
-                    (\i ->
-                        let
-                            startAngle =
-                                turns (toFloat i / 12)
-
-                            endAngle =
-                                turns (toFloat (i + 1) / 12)
-                        in
-                        Sprite.triangle color
-                            ( cx * s, cy * s )
-                            ( (cx + r * cos startAngle) * s, (cy + r * sin startAngle) * s )
-                            ( (cx + r * cos endAngle) * s, (cy + r * sin endAngle) * s )
-                    )
-
         sun =
-            circle (Color.rgb255 250 190 40) ( 9, 9 ) 6
+            Sprite.circle (Color.rgb255 250 190 40) s ( 9, 9 ) 6
 
         smallSun =
-            circle (Color.rgb255 250 190 40) ( 6, 6 ) 4.5
+            Sprite.circle (Color.rgb255 250 190 40) s ( 6, 6 ) 4.5
 
         cloudColor =
             if code >= 61 || code == 3 then
@@ -3303,9 +3306,9 @@ weatherIcon unit code =
                 Color.rgb255 170 175 185
 
         cloud =
-            circle cloudColor ( 6, 11 ) 4
-                ++ circle cloudColor ( 11, 9 ) 5
-                ++ circle cloudColor ( 14, 12 ) 3.5
+            Sprite.circle cloudColor s ( 6, 11 ) 4
+                ++ Sprite.circle cloudColor s ( 11, 9 ) 5
+                ++ Sprite.circle cloudColor s ( 14, 12 ) 3.5
                 ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
 
         drops color =
@@ -3317,7 +3320,7 @@ weatherIcon unit code =
             drops (Color.rgb255 60 110 220)
 
         snow =
-            List.concatMap (\x -> circle Color.white ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
+            List.concatMap (\x -> Sprite.circle Color.white s ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
 
         bolt =
             [ Sprite.triangle (Color.rgb255 250 200 40) ( 10 * s, 13 * s ) ( 8 * s, 18 * s ) ( 12 * s, 15 * s ) ]
