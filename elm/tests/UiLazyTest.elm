@@ -2,7 +2,7 @@ module UiLazyTest exposing (suite)
 
 import Coord
 import Expect
-import Sprite exposing (Font(..), FontSize(..), Style(..))
+import Sprite
 import Test exposing (Test, describe, test)
 import Ui
 import Units

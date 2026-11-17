@@ -161,14 +161,14 @@ fromList ys =
 {-| Return the head of the list.
 -}
 head : Nonempty a -> a
-head (Nonempty x xs) =
+head (Nonempty x _) =
     x
 
 
 {-| Return the tail of the list.
 -}
 tail : Nonempty a -> List a
-tail (Nonempty x xs) =
+tail (Nonempty _ xs) =
     xs
 
 
@@ -297,7 +297,7 @@ concat (Nonempty xs xss) =
             head xs
 
         tl =
-            tail xs ++ List.concat (List.map toList xss)
+            tail xs ++ List.concatMap toList xss
     in
     Nonempty hd tl
 
@@ -305,21 +305,21 @@ concat (Nonempty xs xss) =
 {-| Exchange the head element while leaving the tail alone.
 -}
 replaceHead : a -> Nonempty a -> Nonempty a
-replaceHead y (Nonempty x xs) =
+replaceHead y (Nonempty _ xs) =
     Nonempty y xs
 
 
 {-| Exchange the tail for another while leaving the head alone.
 -}
 replaceTail : List a -> Nonempty a -> Nonempty a
-replaceTail ys (Nonempty x xs) =
+replaceTail ys (Nonempty x _) =
     Nonempty x ys
 
 
 {-| Replace the tail with the empty list while leaving the head alone.
 -}
 dropTail : Nonempty a -> Nonempty a
-dropTail (Nonempty x xs) =
+dropTail (Nonempty x _) =
     Nonempty x []
 
 
@@ -371,14 +371,14 @@ indexedMap f (Nonempty x xs) =
 {-| Determine if the nonempty list has exactly one element.
 -}
 isSingleton : Nonempty a -> Bool
-isSingleton (Nonempty x xs) =
+isSingleton (Nonempty _ xs) =
     List.isEmpty xs
 
 
 {-| Find the length of the nonempty list.
 -}
 length : Nonempty a -> Int
-length (Nonempty x xs) =
+length (Nonempty _ xs) =
     List.length xs + 1
 
 
@@ -461,7 +461,7 @@ sortBy f (Nonempty x xs) =
 -}
 sortWith : (a -> a -> Order) -> Nonempty a -> Nonempty a
 sortWith f (Nonempty x xs) =
-    insertWith f x <| List.sortWith f xs
+    insertWith f x (List.sortWith f xs)
 
 
 {-| Remove _adjacent_ duplicate elements from the nonempty list.
@@ -485,7 +485,7 @@ dedup (Nonempty x xs) =
                     else
                         dedupe y (prev :: done) ys
     in
-    reverse <| dedupe x [] xs
+    reverse (dedupe x [] xs)
 
 
 {-| Remove _all_ duplicate elements from the nonempty list, with the remaining elements ordered by first occurrence.
@@ -509,7 +509,7 @@ uniq (Nonempty x xs) =
                     else
                         unique (y :: seen) (cons y done) ys
     in
-    reverse <| unique [ x ] (Nonempty x []) xs
+    reverse (unique [ x ] (Nonempty x []) xs)
 
 
 {-| Reduce a nonempty list from the left with a base case.

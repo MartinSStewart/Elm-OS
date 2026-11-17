@@ -53,6 +53,7 @@ rules : List Rule
 rules =
     [ ExposeAllRecordFields.rule
     , NoStaleReferences.rule
+
     -- Sprite's font styles (Bold, Italic, BoldItalic) are kept for when the UI uses them.
     -- AsciiCollab/Types.elm copies ascii-collab's types whole: a custom type's tags in
     -- Wire3 depend on all of its constructors, used here or not.
@@ -68,9 +69,10 @@ rules =
     , NoMissingTypeExpose.rule
     , NoSimpleLetBody.rule
     , NoUnused.Dependencies.rule
+
     -- Persist.program is used by build/wire/src/ElmOs.elm, and Wire's functions by the
     -- codecs, which tools/wire writes.
-    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm", "src/Wire.elm" ]
+    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm", "src/Wire.elm", "src/Nonempty.elm" ]
     , NoUnused.Modules.rule
     , NoUnused.Parameters.rule
         -- Unsafe.unreachable recurses on purpose, to crash with a stack overflow.

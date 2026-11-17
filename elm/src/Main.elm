@@ -1,4 +1,4 @@
-module Main exposing (App, Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, WeatherState, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, WeatherState, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar with a clock, and apps that open from the toolbar,
 drawn by the UI framework (Ui.elm, from town-collab). Each open app gets a window, laid
@@ -637,11 +637,11 @@ step event model =
 
         Mouse x y ->
             let
-                model2 =
-                    dragScreenshot model { model | mouse = Coord.xy x y }
-
                 modelOld =
                     model
+
+                model2 =
+                    dragScreenshot model { model | mouse = Coord.xy x y }
             in
             case model2.takingScreenshot of
                 Just data ->
@@ -681,7 +681,7 @@ step event model =
                             displayUi model display
                     in
                     case Ui.hoverIdOnly (uiMouseOn display data.mouse) displayUi2 of
-                        ( _, { relativePositionToUi, ui } ) :: _ ->
+                        ( _, { ui } ) :: _ ->
                             ( { model
                                 | screenshots =
                                     { uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot ui }
