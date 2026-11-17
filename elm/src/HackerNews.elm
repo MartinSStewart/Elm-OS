@@ -767,18 +767,22 @@ postView width index { id, title, comments } =
         spacing =
             8
     in
-    Ui.row
-        { spacing = spacing, padding = Ui.noPadding }
-        [ Ui.right
-            { width = numberWidth }
-            (Ui.colorText
+    Ui.leftAndRight
+        (Units.uiPixels width)
+        (Ui.row
+            { spacing = spacing, padding = Ui.noPadding }
+            [ Ui.colorText
                 Color.lightFont
                 Small
                 (Sans Regular)
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
-            )
-        , Ui.text Small (Sans Regular) (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
-        , Ui.right
+            , Ui.text
+                Small
+                (Sans Regular)
+                (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
+            ]
+        )
+        (Ui.right
             { width = countWidth }
             (Ui.colorText
                 Color.lightFont
@@ -793,8 +797,7 @@ postView width index { id, title, comments } =
                        )
                 )
             )
-        ]
-        |> Ui.left (Units.uiPixels width)
+        )
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.PostButton id)
             , padding = Ui.paddingXY 0 postPadding
