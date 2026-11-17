@@ -23,8 +23,9 @@ import Wired
 type ToElm
     = -- First, to each program: the connected displays, the built-in one (if any) first.
       Displays (List Display)
-      -- Draw a frame now: the host's monotonic clock, in milliseconds.
-    | Frame Float
+      -- Draw a frame now: the host's monotonic clock, in milliseconds (for how long
+      -- since the last frame), and the wall clock (it can jump when NTP sets the clock).
+    | Frame Float Time.Posix
     | Mouse Int Int
     | Button Int Bool
       -- Wheel clicks, positive is up.
@@ -130,7 +131,7 @@ decoder =
                         BD.map Displays (P.decodeList Display.decoder)
 
                     1 ->
-                        BD.map Frame P.decodeFloat64
+                        BD.map2 (\ms posix -> Frame ms (Time.millisToPosix (round posix))) P.decodeFloat64 P.decodeFloat64
 
                     2 ->
                         BD.map2 Mouse P.decodeInt P.decodeInt

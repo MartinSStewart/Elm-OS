@@ -167,7 +167,7 @@ impl Host {
     fn ask_for_frame(&mut self) {
         self.asked_at = now();
         let ms = (self.asked_at * 1e6).round() / 1000.0;
-        elm::send(&ToElm::Frame { time: ms });
+        elm::send(&ToElm::frame_now(ms));
         self.awaiting_render = true;
         self.cpu_next_at = None;
     }

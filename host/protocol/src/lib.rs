@@ -188,8 +188,10 @@ pub enum ToElm {
     /// First, to each program: the connected displays, the built-in one (if any)
     /// first. When they change later, `DisplaysChanged` says so.
     Displays { displays: Vec<Display> },
-    /// Draw a frame now. The host's monotonic clock, in milliseconds.
-    Frame { time: f64 },
+    /// Draw a frame now. `time` is the host's monotonic clock, in milliseconds (for
+    /// how long since the last frame); `posix` is the wall clock, in whole milliseconds
+    /// since 1970 (it can jump when NTP sets the clock).
+    Frame { time: f64, posix: f64 },
     Mouse { x: i32, y: i32 },
     Button { b: i32, down: bool },
     /// Wheel clicks, positive is up.
@@ -371,11 +373,21 @@ pub enum HttpFailure {
     Network,
 }
 
+/// The wall clock now, in whole milliseconds since 1970.
+pub fn wall_clock_ms() -> f64 {
+    let since_1970 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    since_1970.map_or(0, |d| d.as_millis()) as f64
+}
+
 impl ToElm {
     /// A `Tick` with the wall clock now.
     pub fn tick_now() -> ToElm {
-        let since_1970 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-        ToElm::Tick { time: since_1970.map_or(0, |d| d.as_millis()) as f64 }
+        ToElm::Tick { time: wall_clock_ms() }
+    }
+
+    /// A `Frame` asked for at `time` on the host's monotonic clock, with the wall clock now.
+    pub fn frame_now(time: f64) -> ToElm {
+        ToElm::Frame { time, posix: wall_clock_ms() }
     }
 
     /// What goes on the socket to the Elm program.

@@ -66,8 +66,9 @@ type Input
       -- A display was plugged in or out (an app on a display that has gone shows on
       -- the main one, and goes back when the display does).
     | DisplaysChanged (List Display)
-      -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
-    | Frame Float
+      -- The host's monotonic clock, in milliseconds, when it asked for the frame, and
+      -- the wall clock then: draw now.
+    | Frame Float Time.Posix
     | HttpResponse String (Result HttpError { status : Int, body : Bytes })
     | Mouse Int Int
     | Button Int Bool
@@ -133,8 +134,8 @@ toInput message =
         HostMessage.DisplaysChanged displays ->
             Ok (DisplaysChanged displays)
 
-        HostMessage.Frame time ->
-            Ok (Frame time)
+        HostMessage.Frame time posix ->
+            Ok (Frame time posix)
 
         HostMessage.Mouse x y ->
             Ok (Mouse x y)
@@ -311,7 +312,7 @@ type alias Model =
       savedWifiPasswords : SeqDict Ssid Wpa2Password
     , showPassword : Bool
     , weather : WeatherState
-    , time : Maybe Time.Posix -- the wall clock, from the host's Tick each second
+    , time : Maybe Time.Posix -- the wall clock, from each Frame and the host's Tick each second
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
     , geoUrl : String
     , weatherUrl : String
@@ -522,7 +523,7 @@ step event model =
             -- The host sends where the mouse is next.
             ( { model | displays = displays }, [] )
 
-        Frame time ->
+        Frame time posix ->
             let
                 -- The host's clock starts again at each boot, but lastFrame is saved with
                 -- the Model, so the first frame after a restart can come "before" the last
@@ -539,6 +540,7 @@ step event model =
                 next =
                     { model
                         | lastFrame = Just time
+                        , time = Just posix
                         , frames = model.frames + 1
                         , frameIntervals =
                             case model.lastFrame of
@@ -2697,7 +2699,7 @@ last frame's `Ui.lazy` elements, which are kept for the next. Persist calls it a
 draw : Msg -> Model -> ( Model, List Effect )
 draw msg model =
     case msg of
-        GotInput (Ok (Frame _)) ->
+        GotInput (Ok (Frame _ _)) ->
             let
                 uis =
                     List.map (\display -> ( display, displayUi model display )) model.displays

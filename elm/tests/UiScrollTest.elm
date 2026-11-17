@@ -6,6 +6,7 @@ import Expect
 import Quantity
 import SeqDict
 import Test exposing (Test, describe, test)
+import Time
 import Ui
 import Units
 
@@ -105,8 +106,7 @@ suite =
                     pressed : Ui.Model ()
                     pressed =
                         -- Press the top of the thumb, in the scroll bar to the right of the content.
-                        Ui.onMouseDown (\_ m -> m) Coord.origin (Coord.xy 8 3) () viewport Ui.init
-                            |> Tuple.first
+                        Ui.onMouseDown (Time.millisToPosix 0) Coord.origin (Coord.xy 8 3) () viewport Ui.init
 
                     dragged : Ui.Model ()
                     dragged =
@@ -186,7 +186,7 @@ suite =
 
                     screenshot : Ui.Screenshot
                     screenshot =
-                        Ui.elementToScreenshot (Units.scaleFor (Quantity.Quantity 1280)) scrolled viewport
+                        Ui.elementToScreenshot (Time.millisToPosix 0) (Units.scaleFor (Quantity.Quantity 1280)) scrolled viewport
                 in
                 case SeqDict.get 0 screenshot.uiState.uiState of
                     Just (Ui.ViewportState state) ->

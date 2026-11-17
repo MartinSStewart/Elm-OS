@@ -29,7 +29,7 @@
   ],
   "fromHost": [
     {"displays": {"displays": [{"id": 33, "name": "eDP-1", "x": 0, "y": 0, "w": 2560, "h": 1600, "widthMm": 300, "heightMm": 190}, {"id": 34, "name": "HDMI-A-1", "x": 2560, "y": 0, "w": 1920, "h": 1080, "widthMm": 0, "heightMm": 0}]}},
-    {"frame": {"time": 1000.5}},
+    {"frame": {"time": 1000.5, "posix": 1794701441140}},
     {"mouse": {"x": 300, "y": 20}},
     {"button": {"b": 0, "down": true}},
     {"wheel": {"dy": -1}},

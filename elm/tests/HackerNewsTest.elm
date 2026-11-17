@@ -10,6 +10,7 @@ import HackerNews.Types exposing (PostId(..))
 import SeqDict
 import Sprite
 import Test exposing (Test, describe, test)
+import Time
 import Ui
 import UiId exposing (UiId)
 import Units exposing (DevicePixels)
@@ -120,7 +121,7 @@ suite =
                 let
                     screenshot : Ui.Screenshot
                     screenshot =
-                        Ui.elementToScreenshot (Units.scaleFor (Coord.x screen)) Ui.init (view Ui.noLazyCache commentsModel)
+                        Ui.elementToScreenshot (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) Ui.init (view Ui.noLazyCache commentsModel)
                 in
                 Ui.w3_encode_Screenshot screenshot
                     |> Wire.toBytes
@@ -174,7 +175,7 @@ view lazyCache model =
 
 draw : Ui.Element UiId -> List (Sprite.Triangle DevicePixels)
 draw element =
-    Ui.view Ui.init (Units.scaleFor (Coord.x screen)) False Nothing screen element
+    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing screen element
 
 
 latin1 : Bytes -> String

@@ -529,7 +529,7 @@ impl Runner {
             return;
         }
         self.asked_at = Instant::now();
-        elm::send(&ToElm::Frame { time: (sys::now() * 1e6).round() / 1000.0 });
+        elm::send(&ToElm::frame_now((sys::now() * 1e6).round() / 1000.0));
         self.awaiting_frame = true;
     }
 

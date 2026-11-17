@@ -12,6 +12,7 @@ import HostMessage
 import Main
 import Persist
 import Test exposing (Test, describe, test)
+import Time
 import Unsafe
 import Wifi
 import Wire
@@ -27,8 +28,8 @@ session =
             [ { id = 33, name = "eDP-1", position = Coord.xy 0 0, size = Coord.xy 1280 800, sizeMm = ( 0, 0 ) } ]
         )
     , Ok (HostMessage.Renderer { gpu = False, name = "rasteriser in /init", hardwareCursor = False })
-    , Ok (HostMessage.Frame 1000.5)
-    , Ok (HostMessage.Frame 1017.25)
+    , Ok (HostMessage.Frame 1000.5 (Time.millisToPosix 0))
+    , Ok (HostMessage.Frame 1017.25 (Time.millisToPosix 0))
     , Ok (HostMessage.Mouse 300 20)
     , Ok
         (HostMessage.WifiStatus
@@ -40,11 +41,11 @@ session =
         )
     , Ok (HostMessage.Key 30 True False)
     , Ok (HostMessage.Key 30 False False)
-    , Ok (HostMessage.Frame 1034)
+    , Ok (HostMessage.Frame 1034 (Time.millisToPosix 0))
     , Ok (HostMessage.Wheel -1)
     , Err "a message that couldn't be read"
     ]
-        ++ List.concatMap (\n -> [ Ok (HostMessage.Key n True False), Ok (HostMessage.Frame (toFloat (2000 + n))) ]) (List.range 16 25)
+        ++ List.concatMap (\n -> [ Ok (HostMessage.Key n True False), Ok (HostMessage.Frame (toFloat (2000 + n)) (Time.millisToPosix 0)) ]) (List.range 16 25)
 
 
 {-| A message from the host as the program gets it, or why it couldn't be read.
