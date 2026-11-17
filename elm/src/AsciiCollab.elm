@@ -846,7 +846,7 @@ view screen focused model =
                         "Disconnected (" ++ reason ++ "), trying again…"
 
         t =
-            Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
+            Ui.text
     in
     Ui.el
                 { padding = Ui.paddingXY padding padding

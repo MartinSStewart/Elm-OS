@@ -2214,6 +2214,13 @@ headingSize =
     Sprite.Big
 
 
+{-| A title in `headingSize`.
+-}
+heading : String -> Ui.Element id
+heading string =
+    Ui.customText headingSize [ { text = string, color = Color.black, font = sans } ]
+
+
 {-| Everything the UI framework draws on a display: the toolbar along the top, each
 app open on this display in the window `windows` gives it, and on the main display the
 notices.
@@ -2411,7 +2418,7 @@ smallWindow { title, close, width } rows =
         , borderAndFill = Ui.defaultElBorderAndFill
         }
         (Ui.column { spacing = 4, padding = Ui.noPadding }
-            (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text bodySize sans "Close"))
+            (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
                 :: rows
             )
         )
@@ -2428,16 +2435,15 @@ overlay model =
 
         line label value =
             Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.text Sprite.Small mono (String.padRight 10 ' ' label), Ui.text Sprite.Small mono value ]
+                [ Ui.monoText (String.padRight 10 ' ' label), Ui.monoText value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
                     Ui.row { spacing = 4, padding = Ui.noPadding }
-                        [ Ui.text Sprite.Small mono (String.padRight 10 ' ' "Renderer")
+                        [ Ui.monoText (String.padRight 10 ' ' "Renderer")
                         , badge Sprite.Small gpu
-                        , Ui.text Sprite.Small
-                            mono
+                        , Ui.monoText
                             ((if gpu then
                                 "GPU, "
 
@@ -2516,7 +2522,7 @@ overlay model =
         seconds ms =
             fixed 2 (ms / 1000) ++ " s"
     in
-    smallWindow { title = Ui.text Sprite.Small mono "Elm OS debug", close = CloseDebugButton, width = debugWidth }
+    smallWindow { title = Ui.monoText "Elm OS debug", close = CloseDebugButton, width = debugWidth }
         [ Ui.column { spacing = 3, padding = Ui.noPadding }
             (line "Build" (BootInfo.buildText model.bootInfo)
                 :: List.indexedMap
@@ -2783,7 +2789,7 @@ networkPanel model =
             panelWidth
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         fit string =
             Sprite.ellipsis bodySize font width string
@@ -2855,8 +2861,6 @@ networkPanel model =
                         Wifi.Connected ->
                             Ui.colorText
                                 connectedColor
-                                bodySize
-                                font
                                 (fit
                                     ("Connected to "
                                         ++ ssid
@@ -2872,7 +2876,7 @@ networkPanel model =
                                 )
 
                         Wifi.Failed ->
-                            Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width status.error)
+                            Ui.colorText Color.errorColor (Sprite.wrap bodySize font width status.error)
 
         networkRows =
             case model.wifiDevice of
@@ -2903,7 +2907,7 @@ networkPanel model =
                         []
 
                     else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText Color.errorColor bodySize font "That kind of network isn't supported yet" ]
+                        [ Ui.colorText Color.errorColor "That kind of network isn't supported yet" ]
 
                     else
                         (if needsPassword selected then
@@ -2948,7 +2952,7 @@ networkPanel model =
             else
                 []
     in
-    smallWindow { title = Ui.text headingSize sans "Network", close = CloseNetworkButton, width = width }
+    smallWindow { title = heading "Network", close = CloseNetworkButton, width = width }
         (wiredRows model
             ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
                     []
@@ -2973,7 +2977,7 @@ clock room model =
             let
                 box string =
                     Ui.el { padding = Ui.paddingXY 6 3, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
-                        (Ui.text bodySize sans string)
+                        (Ui.text string)
 
                 full =
                     box (Clock.toString model.utcOffsetMinutes time)
@@ -3000,7 +3004,7 @@ wiredRows model =
             panelWidth
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         link : Wired.Link -> List (Ui.Element id)
         link l =
@@ -3015,8 +3019,6 @@ wiredRows model =
                 Wired.Connected ->
                     Ui.colorText
                         connectedColor
-                        bodySize
-                        font
                         (Sprite.ellipsis
                             bodySize
                             font
@@ -3033,8 +3035,6 @@ wiredRows model =
                 Wired.Failed ->
                     Ui.colorText
                         Color.errorColor
-                        bodySize
-                        font
                         (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
             ]
 
@@ -3117,10 +3117,10 @@ networkRow model network =
             (Ui.row
                 { spacing = 6, padding = Ui.noPadding }
                 [ bars
-                , Ui.text bodySize font (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid))
+                , Ui.text (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid))
                 ]
             )
-            (Ui.text bodySize font label)
+            (Ui.text label)
         )
 
 
@@ -3186,7 +3186,7 @@ passwordInput model =
 
 weatherPanel : Model -> Ui.Element UiId
 weatherPanel model =
-    smallWindow { title = Ui.text headingSize sans "Weather", close = CloseWeatherButton, width = panelWidth }
+    smallWindow { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
         (weatherRows model)
 
 
@@ -3200,7 +3200,7 @@ weatherRows model =
             panelWidth
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         small =
             Ui.paddingXY 6 3
@@ -3214,7 +3214,7 @@ weatherRows model =
                 [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
 
             else
-                [ Ui.colorText Color.outlineColor bodySize font "Waiting for a network connection" ]
+                [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
 
         FindingPlace ->
             [ t "Finding where we are…" ]
@@ -3223,7 +3223,7 @@ weatherRows model =
             [ t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
-            [ Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
+            [ Ui.colorText Color.errorColor (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
@@ -3234,7 +3234,7 @@ weatherRows model =
             , Ui.row { spacing = 8, padding = Ui.noPadding }
                 [ weatherIcon 3 forecast.code
                 , Ui.column { spacing = 3, padding = Ui.noPadding }
-                    [ Ui.text headingSize sans (fixed 1 forecast.temperature ++ "°C")
+                    [ heading (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -3265,7 +3265,7 @@ weatherRows model =
                     )
                     forecast.days
                 )
-            , Ui.colorText Color.outlineColor bodySize font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
             ]
 
 
@@ -3366,7 +3366,7 @@ toolbar model display =
             shownOn display app model
 
         t =
-            Ui.text bodySize sans
+            Ui.text
 
         small =
             Ui.paddingXY 6 3
@@ -3456,7 +3456,7 @@ notice model text =
                 , inFront = []
                 , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                 }
-                (Ui.text bodySize sans text)
+                (Ui.text text)
             )
         )
 
@@ -3468,7 +3468,7 @@ aboutPage model =
             sans
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         valueWidth =
             em 26
@@ -3489,7 +3489,7 @@ aboutPage model =
         , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
         }
         (Ui.column { spacing = 4, padding = Ui.noPadding }
-            [ Ui.text headingSize sans "Elm OS"
+            [ heading "Elm OS"
             , t "A Linux kernel that boots straight into one Elm program."
             , t ""
             , line "Version" (field .commit)
@@ -3562,7 +3562,7 @@ editorWindow : Model -> Ui.Element UiId
 editorWindow model =
     let
         t =
-            Ui.text bodySize sans
+            Ui.text
 
         style =
             editorStyle model
@@ -3606,7 +3606,7 @@ editorWindow model =
         }
         (Ui.column { spacing = 6, padding = Ui.noPadding }
             [ Ui.leftAndRight style.width
-                (Ui.text headingSize sans "Text editor")
+                (heading "Text editor")
                 (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
             , Ui.textInputMultiline
                 { id = EditorInput

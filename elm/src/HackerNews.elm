@@ -712,13 +712,13 @@ view lazyCache uiState windowSize model =
                                 postsView lazyCache uiState windowSize data
 
                             Nothing ->
-                                Ui.text Small (Sans Regular) "Loading..."
+                                Ui.text "Loading..."
 
                     Loaded data ->
                         postsView lazyCache uiState windowSize data
 
                     LoadFailed httpError ->
-                        Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
+                        Ui.text (Effect.httpErrorToString httpError)
 
             CommentsPage id title ->
                 commentsView
@@ -740,7 +740,7 @@ postsView lazyCache uiState windowSize data =
 
         title : Element id
         title =
-            Ui.text Small (Sans Bold) "Hacker News"
+            Ui.customText Small [ { text = "Hacker News", color = Color.black, font = Sans Bold } ]
     in
     Ui.column
         { spacing = titleSpacing, padding = Ui.noPadding }
@@ -773,12 +773,8 @@ postView width index { id, title, comments } =
             { spacing = spacing, padding = Ui.noPadding }
             [ Ui.colorText
                 Color.lightFont
-                Small
-                (Sans Regular)
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
             , Ui.text
-                Small
-                (Sans Regular)
                 (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
             ]
         )
@@ -786,8 +782,6 @@ postView width index { id, title, comments } =
             { width = countWidth }
             (Ui.colorText
                 Color.lightFont
-                Small
-                (Sans Regular)
                 (String.fromInt comments
                     ++ (if comments == 1 then
                             " comment"
@@ -820,7 +814,7 @@ commentsView lazyCache uiState windowSize postId title comments =
                 { id = HackerNews HackerNews.Types.BackButton
                 , padding = Ui.paddingXY 6 0
                 }
-                (Ui.text Small (Sans Regular) "< Posts")
+                (Ui.text "< Posts")
 
         headerSpacing : Int
         headerSpacing =
@@ -831,23 +825,26 @@ commentsView lazyCache uiState windowSize postId title comments =
         [ Ui.row
             { spacing = headerSpacing, padding = Ui.noPadding }
             [ backButton
-            , Ui.text
+            , Ui.customText
                 Small
-                (Sans Bold)
-                (Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title)
+                [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title
+                  , color = Color.black
+                  , font = Sans Bold
+                  }
+                ]
             ]
         , (case comments of
             CommentsLoading ->
-                Ui.text Small (Sans Regular) "Loading comments..."
+                Ui.text "Loading comments..."
 
             CommentsLoaded [] ->
-                Ui.text Small (Sans Regular) "No comments yet."
+                Ui.text "No comments yet."
 
             CommentsLoaded loaded ->
                 Ui.lazy3 lazyCache commentsColumn lazyCache width loaded
 
             CommentsLoadFailed error ->
-                Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
+                Ui.text (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
             |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
@@ -945,7 +942,7 @@ greyColor grey =
 
 toggleButton : Int -> String -> Element UiId
 toggleButton index label =
-    Ui.colorText Color.lightFont Small Mono label
+    Ui.monoColorText Color.lightFont label
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.CommentToggle index)
             , padding = Ui.noPadding

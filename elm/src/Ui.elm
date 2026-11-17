@@ -36,6 +36,8 @@ module Ui exposing
     , lazyKeyed
     , left
     , leftAndRight
+    , monoColorText
+    , monoText
     , noLazyCache
     , noPadding
     , onAnimationFrame
@@ -711,16 +713,33 @@ paddingXY x y =
 -- TEXT
 
 
-{-| Black text. '\\n' starts a new line.
+{-| Black text in the small regular sans font. '\\n' starts a new line. For any other
+size or font use `monoText` or `customText`.
 -}
-text : Sprite.FontSize -> Sprite.Font -> String -> Element id
-text fontSize font =
-    colorText Color.black fontSize font
+text : String -> Element id
+text =
+    colorText Color.black
 
 
-colorText : Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-colorText color fontSize font text2 =
-    customText fontSize [ { text = text2, color = color, font = font } ]
+{-| `text` in a given colour.
+-}
+colorText : Color -> String -> Element id
+colorText color text2 =
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular } ]
+
+
+{-| Black text in the small monospace font. '\\n' starts a new line.
+-}
+monoText : String -> Element id
+monoText =
+    monoColorText Color.black
+
+
+{-| `monoText` in a given colour.
+-}
+monoColorText : Color -> String -> Element id
+monoColorText color text2 =
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one

@@ -344,7 +344,7 @@ headerButton id label =
 
 text : String -> Element UiId
 text =
-    Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
+    Ui.text
 
 
 previewList : UiScale -> Ui.Model UiId -> Int -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId

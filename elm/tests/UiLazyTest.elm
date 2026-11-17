@@ -22,7 +22,7 @@ type LazyKey
 
 label : String -> Ui.Element Id
 label text =
-    Ui.text Small (Sans Regular) text
+    Ui.text text
 
 
 labels : Int -> List String -> Ui.Element Id

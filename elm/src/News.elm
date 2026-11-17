@@ -94,7 +94,7 @@ view uiState height news =
         }
         (Ui.column
             { spacing = 4, padding = Ui.noPadding }
-            [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) "Wikipedia: Current events"
+            [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.black, font = Sprite.Sans Sprite.Bold } ]
             , case news of
                 NewsNotRequested ->
                     Ui.empty
@@ -105,13 +105,13 @@ view uiState height news =
                             daysView uiState viewportHeight days
 
                         Nothing ->
-                            Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
+                            Ui.customText Sprite.Small [ { text = "Loading...", color = Color.black, font = Sprite.Sans Sprite.Italic } ]
 
                 LoadedNews days ->
                     daysView uiState viewportHeight days
 
                 NewsFailed string ->
-                    Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
+                    Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.black, font = Sprite.Sans Sprite.Italic } ]
             ]
         )
 
@@ -127,7 +127,7 @@ daysView uiState viewportHeight days =
                         (\topic ->
                             Ui.column
                                 { spacing = 8, padding = Ui.noPadding }
-                                [ Ui.text Sprite.Small (Sprite.Sans Sprite.Bold) topic.heading
+                                [ Ui.customText Sprite.Small [ { text = topic.heading, color = Color.black, font = Sprite.Sans Sprite.Bold } ]
                                 , Ui.column
                                     { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
                                     (List.map (itemView 140) topic.items)
@@ -143,7 +143,7 @@ daysView uiState viewportHeight days =
                     ++ String.fromInt (Date.day date)
                     ++ ", "
                     ++ String.fromInt (Date.year date)
-                    |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
+                    |> Ui.text
                     |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
                     |> Ui.el
                         { padding = Ui.paddingXY 12 4
@@ -196,7 +196,7 @@ itemView width (Item item) =
         { spacing = itemSpacing, padding = Ui.noPadding }
         [ Ui.row
             { spacing = 6, padding = Ui.noPadding }
-            [ Ui.text Sprite.Small (Sprite.Sans Sprite.Regular) "•"
+            [ Ui.text "•"
             , String.foldl
                 (\char { lastSpace, lastBreak, index, lines } ->
                     if index - lastBreak > width then
@@ -226,7 +226,7 @@ itemView width (Item item) =
                 |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
                 |> List.reverse
                 |> String.join "\n"
-                |> Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
+                |> Ui.text
             ]
         , Ui.column
             { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }

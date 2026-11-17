@@ -15,6 +15,7 @@ The board is a list of nine squares, top row first, each empty or holding a mark
 
 -}
 
+import Color
 import Coord exposing (Coord)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TicTacToe.Types
@@ -169,15 +170,15 @@ view model =
     let
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text Small sans "Noughts and crosses")
-                (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
+                (Ui.text "Noughts and crosses")
+                (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
 
         board =
             Ui.column { spacing = spacing, padding = Ui.noPadding }
                 (List.map (boardRow model) [ [ 0, 1, 2 ], [ 3, 4, 5 ], [ 6, 7, 8 ] ])
 
         newGame =
-            Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, padding = Ui.paddingXY 8 3 } (Ui.text Small sans "New game")
+            Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, padding = Ui.paddingXY 8 3 } (Ui.text "New game")
     in
     Ui.elWithId (TicTacToe TicTacToe.Types.Panel)
         { padding = Ui.paddingXY 8 8
@@ -186,7 +187,7 @@ view model =
         }
         (Ui.column { spacing = spacing, padding = Ui.noPadding }
             [ title
-            , Ui.text Small sans (message model)
+            , Ui.text (message model)
             , board
             , newGame
             ]
@@ -247,4 +248,4 @@ squareView model i =
     in
     Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), padding = Ui.noPadding }
         isWinning
-        (Ui.center { size = squareSize } (Ui.text Big sans label))
+        (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.black, font = sans } ]))

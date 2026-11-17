@@ -624,7 +624,7 @@ view focused model =
 
         line fontSize color text =
             Ui.topRight { size = Coord.xy inner (Quantity.unwrap (Sprite.lineHeight fontSize)) }
-                (Ui.colorText color fontSize sans text)
+                (Ui.customText fontSize [ { text = text, color = color, font = sans } ])
 
         big =
             display model
@@ -658,8 +658,8 @@ view focused model =
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text Small sans "Calculator")
-                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
+                (Ui.text "Calculator")
+                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
     in
     Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
@@ -707,7 +707,7 @@ keyRow model row =
                 Ui.selectableButton
                     { id = Calculator (Calculator.Types.KeyButton key), padding = Ui.noPadding }
                     (isPendingOperator model key)
-                    (Ui.center { size = size } (Ui.text fontSize sans label))
+                    (Ui.center { size = size } (Ui.customText fontSize [ { text = label, color = Color.black, font = sans } ]))
             )
             row
         )
