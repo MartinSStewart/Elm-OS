@@ -174,6 +174,12 @@ suite =
                     , \_ -> scrollbar overBar |> Expect.equal ( 1, 1 )
                     , \_ -> scrollbar (after 60 (Coord.xy 500 50) overBar) |> Expect.equal ( 0, 0 )
                     , \_ -> scrollbar (after 30 (Coord.xy 20 50) overBar) |> Expect.equal ( 1, 0 )
+                    , \_ -> scrollbar (after 200 (Coord.xy 90 50) Ui.init) |> Expect.equal ( 0, 0 )
+                    , \_ ->
+                        after 200 (Coord.xy 90 50) Ui.init
+                            |> after 30 (Coord.xy 91 50)
+                            |> scrollbar
+                            |> Expect.equal ( 1, 1 )
                     ]
                     ()
             )

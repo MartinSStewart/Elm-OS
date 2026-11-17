@@ -185,12 +185,16 @@ type ElementState
 type alias Model id =
     { focus : Maybe id
     , uiState : SeqDict id ElementState
+
+    -- Where the mouse was last frame, and for how many seconds it has stayed there (and
+    -- nothing has scrolled): scroll bars fade out once it has been still a while.
+    , mouseStill : { at : Coord UiPixels, seconds : Float }
     }
 
 
 init : Model id
 init =
-    { focus = Nothing, uiState = SeqDict.empty }
+    { focus = Nothing, uiState = SeqDict.empty, mouseStill = { at = Coord.origin, seconds = 0 } }
 
 
 type alias ViewportModel =
@@ -387,6 +391,14 @@ onAnimationFrame :
     -> Model id
 onAnimationFrame timeElapsed mouse hovered model =
     let
+        mouseStill : { at : Coord UiPixels, seconds : Float }
+        mouseStill =
+            if mouse == model.mouseStill.at then
+                { at = mouse, seconds = model.mouseStill.seconds + Duration.inSeconds timeElapsed }
+
+            else
+                { at = mouse, seconds = 0 }
+
         -- The hovered viewports, and whether the mouse is over their scroll bar.
         hoveredViewports : SeqDict id Bool
         hoveredViewports =
@@ -420,7 +432,8 @@ onAnimationFrame timeElapsed mouse hovered model =
                 hoveredViewports
     in
     { model
-        | uiState =
+        | mouseStill = mouseStill
+        , uiState =
             SeqDict.map
                 (\id value ->
                     case value of
@@ -437,15 +450,31 @@ onAnimationFrame timeElapsed mouse hovered model =
                              else
                                 ease timeElapsed viewport2
                             )
-                                |> fadeScrollbar timeElapsed (SeqDict.get id hoveredViewports)
+                                |> fadeScrollbar
+                                    timeElapsed
+                                    (if mouseStill.seconds < mouseStillSeconds then
+                                        SeqDict.get id hoveredViewports
+
+                                     else
+                                        Nothing
+                                    )
                                 |> ViewportState
                 )
                 withHovered
     }
 
 
+{-| Scroll bars fade out once the mouse has been still this many seconds (unless one is
+being dragged).
+-}
+mouseStillSeconds : Float
+mouseStillSeconds =
+    2
+
+
 {-| A frame of the scroll bar fading in or out and widening or narrowing. `hovered` is
-Nothing if the mouse isn't over the viewport, else whether it is over the scroll bar.
+Nothing if the mouse isn't over the viewport (or has been still a while), else whether
+it is over the scroll bar.
 -}
 fadeScrollbar : Duration -> Maybe Bool -> ViewportModel -> ViewportModel
 fadeScrollbar timeElapsed hovered model =
@@ -691,7 +720,7 @@ moveThumb viewportHeight contentSize grab y state =
 
 onWheel : id -> ScrollBy -> Element id -> Model id -> Model id
 onWheel id scrollBy (Element element) model =
-    onWheelHelper id scrollBy element model
+    onWheelHelper id scrollBy element { model | mouseStill = { at = model.mouseStill.at, seconds = 0 } }
 
 
 onWheelHelper : id -> ScrollBy -> ElementFull id lazy -> Model id -> Model id
