@@ -120,7 +120,7 @@ suite =
                 let
                     screenshot : Ui.Screenshot
                     screenshot =
-                        Ui.elementToScreenshot (view Ui.noLazyCache commentsModel)
+                        Ui.elementToScreenshot (Units.scaleFor (Coord.x screen)) Ui.init (view Ui.noLazyCache commentsModel)
                 in
                 Ui.w3_encode_Screenshot screenshot
                     |> Wire.toBytes
@@ -136,9 +136,9 @@ suite =
                     toggle =
                         UiId.HackerNews (HackerNews.Types.CommentToggle 1)
                 in
-                case Ui.findInput toggle element of
+                case Ui.findInput Ui.init toggle element of
                     Just (Ui.ButtonType { position }) ->
-                        Ui.hoverIdOnly (Coord.plus (Coord.xy 1 1) position) element
+                        Ui.hoverIdOnly Ui.init (Coord.plus (Coord.xy 1 1) position) element
                             |> List.head
                             |> Maybe.map Tuple.first
                             |> Expect.equal (Just toggle)
@@ -169,12 +169,12 @@ uiScreen =
 
 view : Ui.LazyCache UiId -> HackerNews.Model -> Ui.Element UiId
 view lazyCache model =
-    HackerNews.view lazyCache Ui.init uiScreen model
+    HackerNews.view lazyCache uiScreen model
 
 
 draw : Ui.Element UiId -> List (Sprite.Triangle DevicePixels)
 draw element =
-    Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen element
+    Ui.view Ui.init (Units.scaleFor (Coord.x screen)) False Nothing screen element
 
 
 latin1 : Bytes -> String

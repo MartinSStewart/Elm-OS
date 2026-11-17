@@ -12,30 +12,23 @@ import Units
 
 {-| A viewport 100 UI pixels tall (98 inside its outline) onto 1000 pixels of content.
 -}
-viewport : Ui.Model () -> Ui.Element ()
-viewport model =
-    viewportOnto 1000 model
+viewport : Ui.Element ()
+viewport =
+    viewportOnto 1000
 
 
-viewportOnto : Int -> Ui.Model () -> Ui.Element ()
-viewportOnto contentHeight model =
+viewportOnto : Int -> Ui.Element ()
+viewportOnto contentHeight =
     Ui.viewport
         { id = ()
         , viewportHeight = Units.uiPixels 100
-        , model =
-            case SeqDict.get () model.uiState of
-                Just (Ui.ViewportState state) ->
-                    state
-
-                _ ->
-                    Ui.initViewportModel
         }
         (Ui.quads { size = Coord.xy 10 contentHeight, triangles = [] })
 
 
 scroll : Ui.ScrollBy -> Ui.Model () -> Ui.Model ()
 scroll by model =
-    Ui.onWheel () by (viewport model) model
+    Ui.onWheel () by viewport model
 
 
 offset : Ui.Model () -> Float
@@ -94,17 +87,17 @@ suite =
                 let
                     short : Ui.Model () -> Ui.Model ()
                     short model =
-                        Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels -40)) (viewportOnto 50 model) model
-                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels 40)) (viewportOnto 50 m) m)
-                            |> (\m -> Ui.onWheel () (Ui.WheelClicks -3) (viewportOnto 50 m) m)
-                            |> (\m -> Ui.onWheel () (Ui.Momentum -500) (viewportOnto 50 m) m)
+                        Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels -40)) (viewportOnto 50) model
+                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels 40)) (viewportOnto 50) m)
+                            |> (\m -> Ui.onWheel () (Ui.WheelClicks -3) (viewportOnto 50) m)
+                            |> (\m -> Ui.onWheel () (Ui.Momentum -500) (viewportOnto 50) m)
                             |> frames 100
                 in
                 Ui.init |> short |> offset |> Expect.within (Expect.Absolute 1.0e-9) 0
             )
         , test "a viewport is its content's width plus its outline and scroll bar"
             (\_ ->
-                Ui.size (viewport Ui.init) |> Expect.equal (Coord.xy (10 + Ui.viewportFrameWidth) 100)
+                Ui.size viewport |> Expect.equal (Coord.xy (10 + Ui.viewportFrameWidth) 100)
             )
         , test "dragging the scroll bar thumb to the bottom scrolls to the end"
             (\_ ->
@@ -112,7 +105,7 @@ suite =
                     pressed : Ui.Model ()
                     pressed =
                         -- Press the top of the thumb, in the scroll bar to the right of the content.
-                        Ui.onMouseDown (\_ m -> m) Coord.origin (Coord.xy 8 3) () (viewport Ui.init) Ui.init
+                        Ui.onMouseDown (\_ m -> m) Coord.origin (Coord.xy 8 3) () viewport Ui.init
                             |> Tuple.first
 
                     dragged : Ui.Model ()
@@ -135,25 +128,18 @@ suite =
                 let
                     -- 100 wide content, so the viewport is 102 wide and its scroll bar is
                     -- the 24 px strip from x = 77 to 101.
-                    wide : Ui.Model () -> Ui.Element ()
-                    wide model =
+                    wide : Ui.Element ()
+                    wide =
                         Ui.viewport
                             { id = ()
                             , viewportHeight = Units.uiPixels 100
-                            , model =
-                                case SeqDict.get () model.uiState of
-                                    Just (Ui.ViewportState state) ->
-                                        state
-
-                                    _ ->
-                                        Ui.initViewportModel
                             }
                             (Ui.quads { size = Coord.xy 100 1000, triangles = [] })
 
                     after : Int -> Coord.Coord Units.UiPixels -> Ui.Model () -> Ui.Model ()
                     after n mouse model =
                         List.foldl
-                            (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) mouse (Ui.hoverIdOnly mouse (wide m)) m)
+                            (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) mouse (Ui.hoverIdOnly m mouse wide) m)
                             model
                             (List.range 1 n)
 
@@ -190,5 +176,27 @@ suite =
                         Ui.init |> scroll (Ui.Momentum -500) |> frames 2 |> Ui.stopMomentum
                 in
                 offset (frames 10 stopped) |> Expect.within (Expect.Absolute 1.0e-9) (offset stopped)
+            )
+        , test "a screenshot keeps the viewport's scroll under an Int id"
+            (\_ ->
+                let
+                    scrolled : Ui.Model ()
+                    scrolled =
+                        Ui.init |> scroll (Ui.ScrollPixels (Units.uiPixels -300))
+
+                    screenshot : Ui.Screenshot
+                    screenshot =
+                        Ui.elementToScreenshot (Units.scaleFor (Quantity.Quantity 1280)) scrolled viewport
+                in
+                case SeqDict.get 0 screenshot.uiState.uiState of
+                    Just (Ui.ViewportState state) ->
+                        Expect.all
+                            [ \_ -> Quantity.unwrap state.offset |> Expect.within (Expect.Absolute 1.0e-9) (offset scrolled)
+                            , \_ -> offset scrolled |> Expect.notWithin (Expect.Absolute 1.0e-9) 0
+                            ]
+                            ()
+
+                    _ ->
+                        Expect.fail "no viewport state under id 0"
             )
         ]

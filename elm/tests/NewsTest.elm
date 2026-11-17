@@ -6,7 +6,8 @@ import Duration
 import Effect
 import Expect
 import Json.Decode as D
-import News exposing (Inline(..), Item(..))
+import News
+import News.Types exposing (Inline(..), Item(..))
 import Test exposing (Test, describe, test)
 import Time
 

@@ -1,5 +1,6 @@
 module Ui exposing
     ( BorderAndFill(..)
+    , ButtonModel
     , Element
     , ElementFull
     , ElementState(..)
@@ -29,11 +30,9 @@ module Ui exposing
     , findInput
     , getTextInput
     , getTextInputMultiline
-    , getViewport
     , hover
     , hoverIdOnly
     , init
-    , initViewportModel
     , insertElement
     , lazy
     , lazy3
@@ -201,86 +200,157 @@ type alias ViewportModel =
     }
 
 
-elementToScreenshot : Model id -> Element id -> ( SeqDict Int ElementState, ElementFull Int () )
-elementToScreenshot model (Element element) =
+{-| A screenshot of an element, taken on a screen with the given UI scale. Its ids become
+Ints, counted from 0 in the order they come in the tree, and the state of each element with
+state (text inputs, viewports, buttons) is copied from `model` to its Int, so that a
+screenshot doesn't hold the app's id types: those can change in a migration, and the
+screenshot would have to change with them. Nothing in it is hovered or focused.
+-}
+elementToScreenshot : UiScale -> Model id -> Element id -> Screenshot
+elementToScreenshot uiScale model (Element element) =
     let
-        ( _, state, element2 ) =
-            elementToScreenshotHelper model element SeqDict.empty
+        ( acc, screenshot ) =
+            elementToScreenshotHelper model element { next = 0, uiState = SeqDict.empty }
     in
-    ( state, element2 )
+    { uiState = { init | uiState = acc.uiState }
+    , uiScale = uiScale
+    , screenshot = screenshot
+    }
 
 
-elementToScreenshotHelper :
-    Model id
-    -> ElementFull id lazy
-    -> ( SeqDict Int ElementState, ElementFull Int () )
-    -> ( SeqDict Int ElementState, ElementFull Int () )
-elementToScreenshotHelper model element ( dict, screenshot ) =
+{-| The next Int id, and the state of the elements given ids so far.
+-}
+type alias ScreenshotIds =
+    { next : Int, uiState : SeqDict Int ElementState }
+
+
+{-| A new Int id, with the element's state (if it has any) kept under it.
+-}
+screenshotId : Maybe ElementState -> ScreenshotIds -> ( ScreenshotIds, Int )
+screenshotId maybeState acc =
+    ( { next = acc.next + 1
+      , uiState =
+            case maybeState of
+                Just state ->
+                    SeqDict.insert acc.next state acc.uiState
+
+                Nothing ->
+                    acc.uiState
+      }
+    , acc.next
+    )
+
+
+screenshotList : Model id -> List (ElementFull id lazy) -> ScreenshotIds -> ( ScreenshotIds, List (ElementFull Int ()) )
+screenshotList model elements acc =
+    List.foldl
+        (\element ( acc2, done ) ->
+            let
+                ( acc3, element2 ) =
+                    elementToScreenshotHelper model element acc2
+            in
+            ( acc3, element2 :: done )
+        )
+        ( acc, [] )
+        elements
+        |> Tuple.mapSecond List.reverse
+
+
+elementToScreenshotHelper : Model id -> ElementFull id lazy -> ScreenshotIds -> ( ScreenshotIds, ElementFull Int () )
+elementToScreenshotHelper model element acc =
     case element of
         TextInput data ->
-            ( SeqDict.insert (SeqDict.size dict) (getTextInput data.id model |> TextInputState) dict
-            , TextInput { id = SeqDict.size dict, style = data.style, isValid = data.isValid }
-            )
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (TextInputState (getTextInput data.id model))) acc
+            in
+            ( acc2, TextInput { id = id, style = data.style, isValid = data.isValid } )
 
         TextInputMultiline data ->
-            ( SeqDict.insert (SeqDict.size dict) (getTextInputMultiline data.id model |> TextInputMultilineState) dict
-            , TextInputMultiline { id = SeqDict.size dict, style = data.style }
-            )
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (TextInputMultilineState (getTextInputMultiline data.id model))) acc
+            in
+            ( acc2, TextInputMultiline { id = id, style = data.style } )
 
         Text data ->
-            ( dict, Text data )
+            ( acc, Text data )
 
         Button data child ->
-            ( SeqDict.insert (SeqDict.size dict) (getButton data.id model |> ButtonState) dict
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (ButtonState (getButton data.id model))) acc
+
+                ( acc3, inFront ) =
+                    screenshotList model data.inFront acc2
+
+                ( acc4, child2 ) =
+                    elementToScreenshotHelper model child acc3
+            in
+            ( acc4
             , Button
-                { id = SeqDict.size dict
+                { id = id
                 , padding = data.padding
                 , borderAndFill = data.borderAndFill
                 , borderAndFillFocus = data.borderAndFillFocus
                 , borderAndFillHover = data.borderAndFillHover
                 , cachedSize = data.cachedSize
-                , inFront = List.map elementToScreenshotHelper data.inFront
+                , inFront = inFront
                 }
-                (elementToScreenshotHelper child)
+                child2
             )
 
         Row data children ->
-            Row data (List.map elementToScreenshotHelper children)
+            screenshotList model children acc |> Tuple.mapSecond (Row data)
 
         Column data children ->
-            Column data (List.map elementToScreenshotHelper children)
+            screenshotList model children acc |> Tuple.mapSecond (Column data)
 
         Single data child ->
-            Single
+            let
+                ( acc2, maybeId ) =
+                    case data.id of
+                        Just _ ->
+                            screenshotId Nothing acc |> Tuple.mapSecond Just
+
+                        Nothing ->
+                            ( acc, Nothing )
+
+                ( acc3, inFront ) =
+                    screenshotList model data.inFront acc2
+
+                ( acc4, child2 ) =
+                    elementToScreenshotHelper model child acc3
+            in
+            ( acc4
+            , Single
                 { padding = data.padding
                 , borderAndFill = data.borderAndFill
-                , inFront = List.map elementToScreenshotHelper data.inFront
+                , inFront = inFront
                 , cachedSize = data.cachedSize
-                , id = Just index
+                , id = maybeId
                 }
-                (elementToScreenshotHelper child)
+                child2
+            )
 
         Quads data ->
-            Quads data
+            ( acc, Quads data )
 
         Empty ->
-            ( dict, Empty )
+            ( acc, Empty )
 
         Viewport data child ->
             let
-                ( dict2, screenshot2 ) =
-                    elementToScreenshotHelper (SeqDict.insert (SeqDict.size dict) (getViewport data.id model |> ViewportState) dict uiState child)
+                ( acc2, id ) =
+                    screenshotId (Just (ViewportState (getViewport data.id model))) acc
+
+                ( acc3, child2 ) =
+                    elementToScreenshotHelper model child acc2
             in
-            ( dict2
-            , Viewport
-                { id = SeqDict.size dict
-                , viewportHeight = data.viewportHeight
-                }
-            , screenshot2
-            )
+            ( acc3, Viewport { id = id, viewportHeight = data.viewportHeight } child2 )
 
         Lazy _ _ child ->
-            elementToScreenshotHelper index uiState child
+            elementToScreenshotHelper model child acc
 
 
 {-| How big a screenshot is, in UI pixels.
@@ -342,7 +412,7 @@ stopMomentum model =
                         TextInputMultilineState _ ->
                             value
 
-                        ButtonState buttonModel ->
+                        ButtonState _ ->
                             value
                 )
                 model.uiState
@@ -367,7 +437,7 @@ onMouseUp model =
                         TextInputMultilineState _ ->
                             value
 
-                        ButtonState buttonModel ->
+                        ButtonState _ ->
                             value
                 )
                 model.uiState
@@ -484,6 +554,9 @@ onAnimationFrame timeElapsed mouse hovered model =
                             value
 
                         TextInputMultilineState _ ->
+                            value
+
+                        ButtonState _ ->
                             value
 
                         ViewportState viewport2 ->

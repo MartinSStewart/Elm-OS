@@ -693,13 +693,9 @@ step event model =
                     in
                     case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
                         ( _, { ui } ) :: _ ->
-                            let
-                                ( state, screenshot ) =
-                                    Ui.elementToScreenshot model.uiState ui
-                            in
                             ( { model
                                 | screenshots =
-                                    { uiState = state, uiScale = Display.uiScale display, screenshot = screenshot }
+                                    Ui.elementToScreenshot (Display.uiScale display) model.uiState ui
                                         :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
@@ -709,10 +705,9 @@ step event model =
 
                         [] ->
                             ( { model
-                                | screenshots = model.screenshots
-
-                                --{ uiState = model.uiState, uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot displayUi2 }
-                                --    :: model.screenshots
+                                | screenshots =
+                                    Ui.elementToScreenshot (Display.uiScale display) model.uiState displayUi2
+                                        :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
@@ -1684,13 +1679,7 @@ typeKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case SeqDict.get PasswordInput model.uiState.uiState of
-                            Just (TextInputState password2) ->
-                                password2
-
-                            _ ->
-                                TextInput.init
-                        )
+                        (Ui.getTextInput PasswordInput model.uiState)
             in
             ( { model
                 | uiState =
@@ -1897,13 +1886,7 @@ editorKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case SeqDict.get EditorInput model.uiState.uiState of
-                            Just (TextInputMultilineState editor2) ->
-                                editor2
-
-                            _ ->
-                                TextInputMultiline.init
-                        )
+                        (Ui.getTextInputMultiline EditorInput model.uiState)
             in
             { model
                 | uiState = Ui.insertElement EditorInput (TextInputMultilineState editor) model.uiState
@@ -3578,12 +3561,7 @@ editorWindow model =
 
         textInput : TextInputMultiline.Model
         textInput =
-            case SeqDict.get EditorInput model.uiState.uiState of
-                Just (TextInputMultilineState editor) ->
-                    editor
-
-                _ ->
-                    TextInputMultiline.init
+            Ui.getTextInputMultiline EditorInput model.uiState
 
         state =
             textInput.input.current

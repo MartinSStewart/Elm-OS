@@ -50,7 +50,7 @@ screen =
 
 draw : Ui.Element Id -> List (Sprite.Triangle Units.DevicePixels)
 draw =
-    Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen
+    Ui.view Ui.init (Units.scaleFor (Coord.x screen)) False Nothing screen
 
 
 nextFrame : ( List String, String ) -> ( List String, String ) -> List (Sprite.Triangle Units.DevicePixels)
@@ -78,13 +78,13 @@ suite =
             )
         , test "finds buttons inside lazy elements"
             (\() ->
-                Ui.findInput OkButton (window (Ui.lazyCache [ window Ui.noLazyCache [] "T" ]) [] "T")
+                Ui.findInput Ui.init OkButton (window (Ui.lazyCache [ window Ui.noLazyCache [] "T" ]) [] "T")
                     |> Maybe.map (\_ -> True)
                     |> Expect.equal (Just True)
             )
         , test "a lazy element's key isn't hovered"
             (\() ->
-                Ui.hover (Coord.xy 1 1) (window Ui.noLazyCache [ "a" ] "T")
+                Ui.hoverIdOnly Ui.init (Coord.xy 1 1) (window Ui.noLazyCache [ "a" ] "T")
                     |> List.map Tuple.first
                     |> Expect.equal []
             )
