@@ -20,7 +20,7 @@
     {"log": {"text": "couldn't read a message from the host"}},
     "switchReady",
     {"capturePointer": {"capture": true}},
-    {"readFile": {"path": "/usr/share/doom/freedoom1.wad"}},
+    {"readFile": {"path": "/data/doom/freedoom1.wad"}},
     {"writeBytes": {"path": "/data/doom/doomsav0.dsg", "bytes": [0, 1, 255]}},
     {"playSound": {"voice": 3, "sound": {"rate": 11025, "format": "u8", "samples": [128, 255, 0, 128]}, "left": 1.0, "right": 0.5, "speed": 1.0}},
     {"playSound": {"voice": 0, "sound": {"rate": 48000, "format": "s16", "samples": [0, 0, 255, 127, 0, 128]}, "left": 0.25, "right": 0.25, "speed": 2.0}},
@@ -32,6 +32,8 @@
     {"midiVolume": {"volume": 100}},
     {"soundOutput": {"output": [1, 0], "gain": 0.5}},
     {"soundOutput": {"output": null, "gain": 0.0}},
+    {"download": {"url": "https://example.com/freedoom.zip", "path": "/data/doom/freedoom1.wad", "sha256": "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d", "unzip": "freedoom1.wad"}},
+    {"download": {"url": "http://10.0.2.2:8000/mod.wad", "path": "/data/doom/mod.wad", "sha256": null, "unzip": null}},
     {"render": [{"triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}, {"picture": {"x": 10, "y": 20, "w": 6, "h": 3, "width": 2, "height": 1, "format": {"indexed": {"palette": [0, 0, 0, 255, 128, 0]}}, "pixels": [1, 0]}}]}
   ],
   "fromHost": [
@@ -71,6 +73,10 @@
     {"sha256": {"path": "/sys/firmware/initrd", "hex": null}},
     {"mouseMotion": {"dx": -3, "dy": 5}},
     {"file": {"path": "/data/doom/doomsav0.dsg", "bytes": [0, 1, 255]}},
-    {"file": {"path": "/nope", "bytes": null}}
+    {"file": {"path": "/nope", "bytes": null}},
+    {"downloadProgress": {"path": "/data/doom/freedoom1.wad", "bytes": 1048576, "total": 24143781}},
+    {"downloadProgress": {"path": "/data/doom/mod.wad", "bytes": 0, "total": null}},
+    {"downloaded": {"path": "/data/doom/freedoom1.wad", "error": null}},
+    {"downloaded": {"path": "/data/doom/mod.wad", "error": "status 404"}}
   ]
 }

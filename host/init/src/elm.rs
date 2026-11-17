@@ -88,13 +88,22 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::Switching { .. }
         | ToElm::ReflashNeeded { .. }
         | ToElm::MouseMotion { .. }
-        | ToElm::File { .. } => return None,
+        | ToElm::File { .. }
+        | ToElm::DownloadProgress { .. }
+        | ToElm::Downloaded { .. } => return None,
     })
 }
 
 /// Only worth sending to the program running now.
 fn only_now(msg: &ToElm) -> bool {
-    matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::MouseMotion { .. })
+    matches!(
+        msg,
+        ToElm::Frame { .. }
+            | ToElm::Stats { .. }
+            | ToElm::Switching { .. }
+            | ToElm::MouseMotion { .. }
+            | ToElm::DownloadProgress { .. }
+    )
 }
 
 fn http_answer(msg: &ToElm) -> Option<&str> {

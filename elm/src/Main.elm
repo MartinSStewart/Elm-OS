@@ -77,6 +77,10 @@ type Input
     | DataDisk (Maybe String)
       -- The sound cards' outputs (host/init/src/audio.rs), again whenever they change.
     | Audio (List Sound.Output)
+      -- How far a download (Effect.Download) has got: the bytes so far, of how many.
+    | DownloadProgress String Int (Maybe Int)
+      -- A download has ended: Nothing if the file is saved, or what went wrong.
+    | Downloaded String (Maybe String)
 
 
 type alias SystemInfo =
@@ -222,6 +226,12 @@ toInput message =
 
         HostMessage.Audio outputs ->
             Ok (Audio outputs)
+
+        HostMessage.DownloadProgress path bytes total ->
+            Ok (DownloadProgress path bytes total)
+
+        HostMessage.Downloaded path problem ->
+            Ok (Downloaded path problem)
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -717,6 +727,12 @@ step event model =
             ( model, [] )
 
         DataDisk _ ->
+            ( model, [] )
+
+        DownloadProgress _ _ _ ->
+            ( model, [] )
+
+        Downloaded _ _ ->
             ( model, [] )
 
         Audio outputs ->

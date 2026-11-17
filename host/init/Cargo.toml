@@ -23,3 +23,5 @@ libc = "0.2"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # SHA-256 of the boot image for the debug overlay (bootinfo.rs); rustls already uses it.
 ring = "0.17"
+# Unpacks zip archives as they download (download.rs): inflate, in Rust (miniz_oxide).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

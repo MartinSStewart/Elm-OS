@@ -182,7 +182,7 @@ fn send(op: Op) -> bool {
 /// Only files in /data and the directories under it, so Elm can't write anywhere
 /// else: every part of the path a plain name (no "..", nothing hidden), and not in
 /// programs/, the host's own (programs.rs).
-fn checked(path: &str) -> Option<PathBuf> {
+pub fn checked(path: &str) -> Option<PathBuf> {
     let p = Path::new(path);
     let names: Option<Vec<&str>> = p.strip_prefix(MOUNT_POINT).ok().and_then(|rest| {
         rest.components()
@@ -204,7 +204,7 @@ fn checked(path: &str) -> Option<PathBuf> {
 
 /// Makes the directories `path` is in, if they aren't there, each fsynced into its
 /// parent so that it is still there after a power cut.
-fn make_dirs(path: &Path) -> std::io::Result<()> {
+pub fn make_dirs(path: &Path) -> std::io::Result<()> {
     let Some(dir) = path.parent() else { return Ok(()) };
     if dir.is_dir() {
         return Ok(());

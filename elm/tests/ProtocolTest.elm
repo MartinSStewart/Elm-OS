@@ -54,7 +54,7 @@ effects =
     , Effect.Log "couldn't read a message from the host"
     , Effect.SwitchReady
     , Effect.CapturePointer True
-    , Effect.ReadFile { path = "/usr/share/doom/freedoom1.wad" }
+    , Effect.ReadFile { path = "/data/doom/freedoom1.wad" }
     , Effect.WriteBytes { path = "/data/doom/doomsav0.dsg", bytes = BE.encode (BE.sequence (List.map BE.unsignedInt8 [ 0, 1, 255 ])) }
     , Effect.PlaySound { voice = 3, sound = { rate = 11025, format = Effect.U8, samples = byteList [ 128, 255, 0, 128 ] }, left = 1, right = 0.5, speed = 1 }
     , Effect.PlaySound { voice = 0, sound = { rate = 48000, format = Effect.S16, samples = byteList [ 0, 0, 255, 127, 0, 128 ] }, left = 0.25, right = 0.25, speed = 2 }
@@ -66,6 +66,13 @@ effects =
     , Effect.MidiVolume 100
     , Effect.SoundOutput { output = Just { card = 1, device = 0 }, gain = 0.5 }
     , Effect.SoundOutput { output = Nothing, gain = 0 }
+    , Effect.Download
+        { url = "https://example.com/freedoom.zip"
+        , path = "/data/doom/freedoom1.wad"
+        , sha256 = Just "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d"
+        , unzip = Just "freedoom1.wad"
+        }
+    , Effect.Download { url = "http://10.0.2.2:8000/mod.wad", path = "/data/doom/mod.wad", sha256 = Nothing, unzip = Nothing }
     , Effect.Render
         (\() ->
             [ Scene.Triangles [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ]

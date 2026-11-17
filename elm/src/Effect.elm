@@ -117,6 +117,13 @@ type Effect
       -- everything (1 is the sounds' own level, 0 silence). The host plays nothing
       -- until it gets this. Sound.elm makes it.
     | SoundOutput { output : Maybe { card : Int, device : Int }, gain : Float }
+      -- Downloads `url` to `path` on the data disk, whole or not at all, without the
+      -- file passing through Elm (read it afterwards with ReadFile). With `unzip`, a zip
+      -- archive isn't saved: the first file in it whose name ends with `unzip` (any
+      -- case) is, unpacked as it arrives. With `sha256` (hex), the saved file must have
+      -- that SHA-256, or nothing is saved. HostMessage.DownloadProgress comes now and
+      -- then, and HostMessage.Downloaded at the end.
+    | Download { url : String, path : String, sha256 : Maybe String, unzip : Maybe String }
 
 
 {-| A mono sound: `samples` at `rate` a second.
@@ -330,4 +337,12 @@ encode effect =
             Postcard.variant 26
                 [ Postcard.maybe (\{ card, device } -> BE.sequence [ Postcard.unsigned card, Postcard.unsigned device ]) output
                 , Postcard.float32 gain
+                ]
+
+        Download { url, path, sha256, unzip } ->
+            Postcard.variant 27
+                [ Postcard.string url
+                , Postcard.string path
+                , Postcard.maybe Postcard.string sha256
+                , Postcard.maybe Postcard.string unzip
                 ]

@@ -31,7 +31,7 @@ use crate::input::Inputs;
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
-use crate::{audio, elm, http, net, persist, raster};
+use crate::{audio, download, elm, http, net, persist, raster};
 
 /// Elm draws only when asked.
 ///
@@ -304,6 +304,9 @@ impl Host {
                 | Effect::PauseMidi { .. }
                 | Effect::MidiVolume { .. }
                 | Effect::SoundOutput { .. }) => audio::play(effect),
+                Effect::Download { url, path, sha256, unzip } => {
+                    download::start(self.program, download::Request { url, path, sha256, unzip })
+                }
             }
         }
         if cursor_dirty {

@@ -189,6 +189,15 @@ pub enum Effect {
     /// which output and how loud is Elm's choice, and so is the volume curve: the host
     /// only applies a gain.
     SoundOutput { output: Option<(u32, u32)>, gain: f32 },
+    /// Downloads `url` (http or https) to `path` on the data disk, whole or not at all,
+    /// as `WriteBytes` replaces a file: it arrives in a hidden file next to `path`,
+    /// which takes its place once it's all there. With `unzip`, a download that turns
+    /// out to be a zip archive isn't saved itself: the first file in it whose name ends
+    /// with `unzip` (in any case) is, unpacked as it arrives, so the archive takes no
+    /// room on the disk. With `sha256` (hex), the saved file must have that SHA-256, or
+    /// nothing is saved. `ToElm::DownloadProgress` comes now and then while it
+    /// downloads, and `ToElm::Downloaded` at the end.
+    Download { url: String, path: String, sha256: Option<String>, unzip: Option<String> },
 }
 
 /// A sound for `Effect::PlaySound`: mono samples at `rate` a second.
@@ -314,6 +323,13 @@ pub enum ToElm {
     /// driver finishes probing a moment after boot, a card comes or goes), and to
     /// each program the host starts. Elm picks one with `Effect::SoundOutput`.
     Audio { outputs: Vec<AudioOutput> },
+    /// While `Effect::Download` downloads to `path`: the bytes it has had so far, and
+    /// how many there are if the server said (a zip's whole size, with `unzip`). At
+    /// most once a second.
+    DownloadProgress { path: String, bytes: u64, total: Option<u64> },
+    /// The answer to `Effect::Download`: `error` is null when the file is saved, or
+    /// says what went wrong (and nothing was saved).
+    Downloaded { path: String, error: Option<String> },
 }
 
 /// A playback device: ALSA's hw:`card`,`device`.
@@ -463,9 +479,10 @@ mod tests {
             Effect::PauseMidi { .. } => "pauseMidi",
             Effect::MidiVolume { .. } => "midiVolume",
             Effect::SoundOutput { .. } => "soundOutput",
+            Effect::Download { .. } => "download",
         }
     }
-    const EFFECT_TAGS: usize = 27;
+    const EFFECT_TAGS: usize = 28;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -496,9 +513,11 @@ mod tests {
             ToElm::MouseMotion { .. } => "mouseMotion",
             ToElm::File { .. } => "file",
             ToElm::Audio { .. } => "audio",
+            ToElm::DownloadProgress { .. } => "downloadProgress",
+            ToElm::Downloaded { .. } => "downloaded",
         }
     }
-    const TO_ELM_TAGS: usize = 27;
+    const TO_ELM_TAGS: usize = 29;
 
     #[test]
     fn reads_the_render_example() {

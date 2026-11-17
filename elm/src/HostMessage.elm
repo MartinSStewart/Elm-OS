@@ -80,6 +80,11 @@ type ToElm
       -- The sound cards' outputs (host/init/src/audio.rs), again whenever they change;
       -- empty without a sound card. Sound.elm picks one.
     | Audio (List Sound.Output)
+      -- While Effect.Download downloads to this path: the bytes so far, and how many
+      -- there are if the server said. At most once a second.
+    | DownloadProgress String Int (Maybe Int)
+      -- The answer to Effect.Download: Nothing when the file is saved, or what went wrong.
+    | Downloaded String (Maybe String)
 
 
 type HttpFailure
@@ -198,6 +203,12 @@ decoder =
 
                     26 ->
                         BD.map Audio (P.decodeList soundOutput)
+
+                    27 ->
+                        BD.map3 DownloadProgress P.decodeString P.decodeUnsigned (P.decodeMaybe P.decodeUnsigned)
+
+                    28 ->
+                        BD.map2 Downloaded P.decodeString (P.decodeMaybe P.decodeString)
 
                     _ ->
                         BD.fail

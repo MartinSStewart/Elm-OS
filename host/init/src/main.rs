@@ -6,7 +6,8 @@
 //!   - the host thread (host.rs): the display, input devices, frames and stats,
 //!   - the Elm threads (elm.rs): start the Elm program, read what it sends, write to it,
 //!   - the networking thread (net/): wifi through wpa_supplicant, and DHCP,
-//!   - one short-lived thread per HTTP request Elm makes (http.rs),
+//!   - one short-lived thread per HTTP request Elm makes (http.rs), and per download
+//!     to the data disk (download.rs),
 //!   - the persist thread (persist.rs): mounts the data disk and writes Elm's files on it,
 //!   - the audio thread (audio.rs): plays Elm's sounds and music on the sound card.
 //!
@@ -20,7 +21,8 @@
 //!            elm/src/Main.elm's decoder, and where each is sent: host.rs (screen,
 //!            frame, input, renderer, stats, system, boot), files.rs (dir, files, bytes,
 //!            sha256), persist.rs (dataDisk), net/ (wifi*, netConfig),
-//!            http.rs (httpResponse, httpError) and audio.rs (audio).
+//!            http.rs (httpResponse, httpError), download.rs (downloadProgress,
+//!            downloaded) and audio.rs (audio).
 
 /// One line on stderr (the serial console), written with one write, so that a line
 /// another process (the Elm program, wpa_supplicant) writes meanwhile can't land in
@@ -33,6 +35,7 @@ macro_rules! log {
 
 mod audio;
 mod display;
+mod download;
 mod effects;
 mod elm;
 mod files;
