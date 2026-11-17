@@ -32,6 +32,7 @@ module Ui exposing
     , init
     , initViewportModel
     , insertElement
+    , lazy2
     , lazy3
     , lazyCache
     , lazyKeyed
@@ -135,7 +136,7 @@ type Element id
 
 
 type alias Screenshot =
-    ElementFull () ()
+    { uiState : Model (), uiScale : UiScale, screenshot : ElementFull () () }
 
 
 type ElementFull id lazy
@@ -168,11 +169,6 @@ type ElementFull id lazy
 type alias ViewportData id =
     { id : id
     , viewportHeight : Quantity Int UiPixels
-    , scrollOffset : Quantity Float UiPixels
-
-    -- How far the scroll bar has faded in and widened (0 to 1), from its ViewportModel.
-    , scrollbarShown : Float
-    , scrollbarWidened : Float
     }
 
 
@@ -213,12 +209,12 @@ type alias ViewportModel =
     }
 
 
-elementToScreenshot : Element id -> Screenshot
+elementToScreenshot : Element id -> ElementFull () ()
 elementToScreenshot (Element element) =
     elementToScreenshotHelper element
 
 
-elementToScreenshotHelper : ElementFull id lazy -> Screenshot
+elementToScreenshotHelper : ElementFull id lazy -> ElementFull () ()
 elementToScreenshotHelper element =
     case element of
         TextInput data ->
@@ -277,9 +273,6 @@ elementToScreenshotHelper element =
             Viewport
                 { id = ()
                 , viewportHeight = data.viewportHeight
-                , scrollOffset = data.scrollOffset
-                , scrollbarShown = 0
-                , scrollbarWidened = 0
                 }
                 (elementToScreenshotHelper child)
 
@@ -289,7 +282,7 @@ elementToScreenshotHelper element =
 
 {-| How big a screenshot is, in UI pixels.
 -}
-screenshotSize : Screenshot -> Coord UiPixels
+screenshotSize : ElementFull () () -> Coord UiPixels
 screenshotSize screenshot =
     sizeHelper screenshot
 
@@ -297,12 +290,12 @@ screenshotSize screenshot =
 {-| What a screenshot looked like, as triangles for a screen with the given UI scale (the
 same ones `view` makes), with its top left corner at 0, 0. Nothing is hovered or focused.
 -}
-screenshotView : { uiScale : UiScale, screenshot : Screenshot } -> List (Triangle DevicePixels)
-screenshotView { uiScale, screenshot } =
+screenshotView : Screenshot -> List (Triangle DevicePixels)
+screenshotView { uiState, uiScale, screenshot } =
     viewList
+        uiState
         uiScale
         False
-        Nothing
         Nothing
         { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
         Coord.origin
@@ -377,6 +370,16 @@ setFocus maybe model =
     { model | focus = maybe }
 
 
+getViewport : id -> Model id -> ViewportModel
+getViewport id model =
+    case SeqDict.get id model.uiState of
+        Just (ViewportState viewport2) ->
+            viewport2
+
+        _ ->
+            initViewportModel
+
+
 {-| A frame went by. `hovered` is what `hoverIdOnly` gives for the mouse, at `mouse`: the
 scroll bars of the viewports under it fade in, and widen if it is over them.
 -}
@@ -400,12 +403,12 @@ onAnimationFrame timeElapsed mouse hovered model =
         hoveredViewports : SeqDict id Bool
         hoveredViewports =
             List.foldl
-                (\( _, { relativePositionToUi, ui } ) dict ->
+                (\( id, { relativePositionToUi, ui } ) dict ->
                     case ui of
                         Element (Viewport data child) ->
                             SeqDict.insert
                                 data.id
-                                (overScrollbar (Coord.minus relativePositionToUi mouse) data child)
+                                (overScrollbar (Coord.minus relativePositionToUi mouse) data.viewportHeight (getViewport id model).offset child)
                                 dict
 
                         Element _ ->
@@ -608,10 +611,13 @@ onMouseDownHelper onClick relativePositionToUi cursor id element model =
                 y : Int
                 y =
                     Coord.yRaw local - viewportOutline
+
+                viewportModel =
+                    getViewport data.id model
             in
-            case scrollbarThumb data.viewportHeight childSize data.scrollOffset of
+            case scrollbarThumb data.viewportHeight childSize viewportModel.offset of
                 Just thumb ->
-                    if overScrollbar local data child then
+                    if overScrollbar local data.viewportHeight viewportModel.offset child then
                         let
                             -- Pressing the thumb holds it where it was pressed; pressing the
                             -- track beside it moves its middle under the mouse.
@@ -1014,8 +1020,8 @@ thinThumbMargin =
 down the right of its inside, when its content scrolls. The scroll bar lies over the
 content there.
 -}
-overScrollbar : Coord UiPixels -> { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> ElementFull id lazy -> Bool
-overScrollbar point data child =
+overScrollbar : Coord UiPixels -> Quantity Int UiPixels -> Quantity Float UiPixels -> ElementFull id lazy -> Bool
+overScrollbar point viewportHeight scrollOffset child =
     let
         childSize : Coord UiPixels
         childSize =
@@ -1028,11 +1034,11 @@ overScrollbar point data child =
         ( x, y ) =
             Coord.toTuple point
     in
-    (scrollbarThumb data.viewportHeight childSize data.scrollOffset /= Nothing)
+    (scrollbarThumb viewportHeight childSize scrollOffset /= Nothing)
         && (x >= rightEdge - scrollbarWidth)
         && (x < rightEdge)
         && (y >= viewportOutline)
-        && (y < viewportOutline + Quantity.unwrap (insideHeight data.viewportHeight))
+        && (y < viewportOutline + Quantity.unwrap (insideHeight viewportHeight))
 
 
 {-| The shortest a scroll bar thumb gets, so that it stays easy to grab (UI pixels).
@@ -1338,17 +1344,11 @@ elWithId id data (Element child) =
         |> Element
 
 
-viewport : { id : id, viewportHeight : Quantity Int UiPixels, model : ViewportModel } -> Element id -> Element id
-viewport { id, viewportHeight, model } (Element child) =
+viewport : { id : id, viewportHeight : Quantity Int UiPixels } -> Element id -> Element id
+viewport { id, viewportHeight } (Element child) =
     Viewport
         { id = id
         , viewportHeight = viewportHeight
-        , scrollbarShown = model.scrollbarShown
-        , scrollbarWidened = model.scrollbarWidened
-
-        -- Content that got shorter (or a viewport that got taller) since it scrolled
-        -- doesn't leave a gap below it.
-        , scrollOffset = clampScroll viewportHeight (sizeHelper child) model.offset
         }
         child
         |> Element
@@ -1457,6 +1457,11 @@ app's `<App>/Types.elm`), as UiId.elm imports them.
 lazy3 : LazyCache id -> (a -> b -> c -> Element id) -> a -> b -> c -> Element id
 lazy3 _ f a b c =
     f a b c
+
+
+lazy2 : LazyCache id -> (a -> b -> Element id) -> a -> b -> Element id
+lazy2 _ f a b =
+    f a b
 
 
 {-| What the code generator turns a `lazy` call into: the element that last frame's
@@ -1590,7 +1595,7 @@ sizeHelper element =
             sizeHelper child
 
 
-viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> ElementFull id lazy -> Coord UiPixels
+viewportSize : { id : id, viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Coord UiPixels
 viewportSize data child =
     ( Coord.x (sizeHelper child) |> Quantity.plus (Units.uiPixels viewportFrameWidth)
     , data.viewportHeight
@@ -1600,9 +1605,9 @@ viewportSize data child =
 {-| Where a viewport's content is, from the viewport's top left: inside the outline,
 moved up by the scroll offset.
 -}
-contentPosition : { a | scrollOffset : Quantity Float UiPixels } -> Coord UiPixels
+contentPosition : { a | offset : Quantity Float UiPixels } -> Coord UiPixels
 contentPosition data =
-    Coord.xy viewportOutline (viewportOutline + round (Quantity.unwrap data.scrollOffset))
+    Coord.xy viewportOutline (viewportOutline + round (Quantity.unwrap data.offset))
 
 
 {-| The inside of a viewport at `position`, which its content shows through.
@@ -1683,17 +1688,17 @@ childPositions isRow data position children =
 -- HOVER AND FOCUS
 
 
-hover : Coord UiPixels -> Element id -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
-hover point (Element element) =
-    hoverHelper [] point Coord.origin element
+hover : Model id -> Coord UiPixels -> Element id -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+hover uiState point (Element element) =
+    hoverHelper uiState [] point Coord.origin element
         |> List.map (\( a, b ) -> ( a, { relativePositionToUi = b.relativePositionToUi, ui = Element b.ui } ))
 
 
 {-| All of the elements with ids that contain the given point (usually the mouse cursor position).
 The first element in the list is the top most visible element.
 -}
-hoverIdOnly : Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
-hoverIdOnly point element =
+hoverIdOnly : Model id -> Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+hoverIdOnly uiState point element =
     List.filterMap
         (\( maybeId, element2 ) ->
             case maybeId of
@@ -1703,7 +1708,7 @@ hoverIdOnly point element =
                 Nothing ->
                     Nothing
         )
-        (hover point element)
+        (hover uiState point element)
 
 
 contains : Coord UiPixels -> Coord UiPixels -> Coord UiPixels -> Bool
@@ -1722,12 +1727,13 @@ contains point position size2 =
 
 
 hoverHelper :
-    List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
+    Model id
+    -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
     -> Coord UiPixels
     -> Coord UiPixels
     -> ElementFull id lazy
     -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
-hoverHelper hovers point position element =
+hoverHelper model hovers point position element =
     if contains point position (sizeHelper element) then
         case element of
             TextInput data ->
@@ -1741,11 +1747,11 @@ hoverHelper hovers point position element =
 
             Row data children ->
                 childPositions True data position children
-                    |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
+                    |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Column data children ->
                 childPositions False data position children
-                    |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
+                    |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Single data child ->
                 let
@@ -1753,9 +1759,9 @@ hoverHelper hovers point position element =
                         ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
                     hovers3 =
-                        hoverHelper hovers2 point (Coord.plus data.padding.topLeft position) child
+                        hoverHelper model hovers2 point (Coord.plus data.padding.topLeft position) child
                 in
-                List.foldr (\inFront acc -> hoverHelper acc point position inFront) hovers3 data.inFront
+                List.foldr (\inFront acc -> hoverHelper model acc point position inFront) hovers3 data.inFront
 
             Text _ ->
                 ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -1774,19 +1780,22 @@ hoverHelper hovers point position element =
 
                     hovers2 =
                         ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+
+                    viewportModel =
+                        getViewport data.id model
                 in
                 -- Content scrolled out of sight, or under the scroll bar, can't be hovered.
                 if
                     contains point inside.topLeft (Coord.minus inside.topLeft inside.bottomRight)
-                        && not (overScrollbar (Coord.minus position point) data child)
+                        && not (overScrollbar (Coord.minus position point) data.viewportHeight viewportModel.offset child)
                 then
-                    hoverHelper hovers2 point (Coord.plus (contentPosition data) position) child
+                    hoverHelper model hovers2 point (Coord.plus (contentPosition viewportModel) position) child
 
                 else
                     hovers2
 
             Lazy _ _ child ->
-                hoverHelper hovers point position child
+                hoverHelper model hovers point position child
 
     else
         hovers
@@ -1798,13 +1807,13 @@ type InputType id
     | ViewportType { position : Coord UiPixels, viewportHeight : Quantity Int UiPixels, contentSize : Coord UiPixels }
 
 
-findInput : id -> Element id -> Maybe (InputType id)
-findInput id (Element element) =
-    findInputHelper id Coord.origin element
+findInput : Model id -> id -> Element id -> Maybe (InputType id)
+findInput uiState id (Element element) =
+    findInputHelper uiState id Coord.origin element
 
 
-findInputHelper : id -> Coord UiPixels -> ElementFull id lazy -> Maybe (InputType id)
-findInputHelper id position element =
+findInputHelper : Model id -> id -> Coord UiPixels -> ElementFull id lazy -> Maybe (InputType id)
+findInputHelper model id position element =
     case element of
         TextInput data ->
             if data.id == id then
@@ -1833,18 +1842,18 @@ findInputHelper id position element =
                 Nothing
 
         Row data children ->
-            findFirst (\( at, child ) -> findInputHelper id at child) (childPositions True data position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data position children)
 
         Column data children ->
-            findFirst (\( at, child ) -> findInputHelper id at child) (childPositions False data position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data position children)
 
         Single data child ->
-            case findFirst (findInputHelper id position) data.inFront of
+            case findFirst (findInputHelper model id position) data.inFront of
                 Just result ->
                     Just result
 
                 Nothing ->
-                    findInputHelper id (Coord.plus data.padding.topLeft position) child
+                    findInputHelper model id (Coord.plus data.padding.topLeft position) child
 
         Text _ ->
             Nothing
@@ -1860,10 +1869,10 @@ findInputHelper id position element =
                 Just (ViewportType { position = position, viewportHeight = data.viewportHeight, contentSize = sizeHelper child })
 
             else
-                findInputHelper id (Coord.plus (contentPosition data) position) child
+                findInputHelper model id (Coord.plus (contentPosition (getViewport data.id model)) position) child
 
         Lazy _ _ child ->
-            findInputHelper id position child
+            findInputHelper model id position child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -1889,25 +1898,25 @@ findFirst f list =
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 -}
-view : UiScale -> Bool -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view scale showUiBorder maybeHover focus screenSize (Element element) =
+view : Model id -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view uiState scale showUiBorder maybeHover screenSize (Element element) =
     viewList
+        uiState
         scale
         showUiBorder
         maybeHover
-        focus
         { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
 
-viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
-viewList scale showUiBorder maybeHover focus viewport2 position element =
+viewList : Model id -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList model scale showUiBorder maybeHover viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
                 TextInput data ->
-                    TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state.current
+                    TextInput.view scale viewport3 data.style position (model.focus == Just data.id) data.isValid data.state.current
 
                 TextInputMultiline data ->
                     TextInputMultiline.view
@@ -1915,7 +1924,7 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         viewport3
                         data.style
                         position
-                        (focus == Just data.id)
+                        (model.focus == Just data.id)
                         data.state.scroll
                         data.state.input.current
 
@@ -1941,23 +1950,23 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         (if Just data.id == maybeHover then
                             data.borderAndFillHover
 
-                         else if Just data.id == focus then
+                         else if Just data.id == model.focus then
                             data.borderAndFillFocus
 
                          else
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
+                        ++ viewList model scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList model scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
                     childPositions True data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model scale showUiBorder maybeHover viewport3 at child)
 
                 Column data children ->
                     childPositions False data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model scale showUiBorder maybeHover viewport3 at child)
 
                 Single data child ->
                     borderAndFillView
@@ -1982,8 +1991,8 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
+                        ++ viewList model scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ List.concatMap (viewList model scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Quads data ->
                     Sprite.move position data.triangles
@@ -2008,9 +2017,12 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         track =
                             Quantity.unwrap (insideHeight data.viewportHeight)
 
+                        viewportModel =
+                            getViewport data.id model
+
                         between : Int -> Int -> Int
                         between thin wide =
-                            thin + round (toFloat (wide - thin) * data.scrollbarWidened)
+                            thin + round (toFloat (wide - thin) * viewportModel.scrollbarWidened)
 
                         thumbWidth : Int
                         thumbWidth =
@@ -2022,7 +2034,7 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
 
                         alpha : Float -> Int
                         alpha opaque =
-                            round (opaque * data.scrollbarShown)
+                            round (opaque * viewportModel.scrollbarShown)
                     in
                     borderAndFillView
                         scale
@@ -2033,23 +2045,23 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         ++ (case Bounds.intersection viewport3 (viewportInside position data child) of
                                 Just inside ->
                                     viewList
+                                        model
                                         scale
                                         showUiBorder
                                         maybeHover
-                                        focus
                                         inside
-                                        (Coord.plus (contentPosition data) position)
+                                        (Coord.plus (contentPosition viewportModel) position)
                                         child
 
                                 Nothing ->
                                     []
                            )
-                        ++ (case scrollbarThumb data.viewportHeight childSize data.scrollOffset of
+                        ++ (case scrollbarThumb data.viewportHeight childSize viewportModel.offset of
                                 Just thumb ->
-                                    if data.scrollbarShown > 0 then
-                                        (if data.scrollbarWidened > 0 then
+                                    if viewportModel.scrollbarShown > 0 then
+                                        (if viewportModel.scrollbarWidened > 0 then
                                             Sprite.rectangle
-                                                (Color.rgba255 60 50 45 (alpha (40 * data.scrollbarWidened)))
+                                                (Color.rgba255 60 50 45 (alpha (40 * viewportModel.scrollbarWidened)))
                                                 viewport3
                                                 trackPosition
                                                 (Coord.xy scrollbarWidth track)
@@ -2075,7 +2087,7 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                            )
 
                 Lazy _ _ child ->
-                    viewList scale showUiBorder maybeHover focus viewport3 position child
+                    viewList model scale showUiBorder maybeHover viewport3 position child
 
         Nothing ->
             []

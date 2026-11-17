@@ -688,8 +688,8 @@ toggleSpacing =
 
 {-| The window, filling a window this big (UI pixels).
 -}
-view : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> Model -> Element UiId
-view lazyCache uiState windowSize model =
+view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
+view lazyCache windowSize model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding
         , inFront = []
@@ -709,13 +709,13 @@ view lazyCache uiState windowSize model =
                     Loading maybe ->
                         case maybe of
                             Just data ->
-                                postsView lazyCache uiState windowSize data
+                                postsView lazyCache windowSize data
 
                             Nothing ->
                                 Ui.text "Loading..."
 
                     Loaded data ->
-                        postsView lazyCache uiState windowSize data
+                        postsView lazyCache windowSize data
 
                     LoadFailed httpError ->
                         Ui.text (Effect.httpErrorToString httpError)
@@ -723,7 +723,6 @@ view lazyCache uiState windowSize model =
             CommentsPage id title ->
                 commentsView
                     lazyCache
-                    uiState
                     windowSize
                     id
                     title
@@ -731,8 +730,8 @@ view lazyCache uiState windowSize model =
         )
 
 
-postsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> List Post -> Element UiId
-postsView lazyCache uiState windowSize data =
+postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
+postsView lazyCache windowSize data =
     let
         width : Int
         width =
@@ -748,7 +747,7 @@ postsView lazyCache uiState windowSize data =
         , Ui.column
             { spacing = 0, padding = Ui.noPadding }
             (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling uiState (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
+            |> scrolling (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
         ]
 
 
@@ -801,8 +800,8 @@ postView width index { id, title, comments } =
             }
 
 
-commentsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache uiState windowSize postId title comments =
+commentsView : Ui.LazyCache UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
+commentsView lazyCache windowSize postId title comments =
     let
         width : Int
         width =
@@ -847,7 +846,7 @@ commentsView lazyCache uiState windowSize postId title comments =
                 Ui.text (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
-            |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
@@ -955,17 +954,10 @@ toggleButton index label =
 {-| Content in a viewport that reaches from below the header (`headerHeight` high) to
 the bottom of the window, scrolled to where `uiState` says.
 -}
-scrolling : Ui.Model UiId -> UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
-scrolling uiState viewportId windowSize headerHeight content =
+scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
+scrolling viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
         , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
-        , model =
-            case SeqDict.get viewportId uiState.uiState of
-                Just (Ui.ViewportState viewport) ->
-                    viewport
-
-                _ ->
-                    Ui.initViewportModel
         }
         content

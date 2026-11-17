@@ -42,9 +42,10 @@ import Units exposing (UiPixels)
 
 {-| The window, this tall (UI pixels): the days scroll inside it.
 -}
-view : Ui.LazyCache UiId -> Ui.Model UiId -> Quantity Int UiPixels -> NewsState -> Element UiId
-view lazyCache uiState height news =
+view : Ui.LazyCache UiId -> Quantity Int UiPixels -> NewsState -> Element UiId
+view lazyCache height news =
     let
+        viewportHeight : Quantity Int UiPixels
         viewportHeight =
             height |> Quantity.minus (Quantity.plus (Units.uiPixels (2 * 10 + 4)) (Sprite.lineHeight Sprite.Small))
     in
@@ -63,13 +64,13 @@ view lazyCache uiState height news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            Ui.lazy3 lazyCache daysView uiState viewportHeight days
+                            Ui.lazy2 lazyCache daysView viewportHeight days
 
                         Nothing ->
                             Ui.customText Sprite.Small [ { text = "Loading...", color = Color.black, font = Sprite.Sans Sprite.Italic } ]
 
                 LoadedNews days ->
-                    Ui.lazy3 lazyCache daysView uiState viewportHeight days
+                    Ui.lazy2 lazyCache daysView viewportHeight days
 
                 NewsFailed string ->
                     Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.black, font = Sprite.Sans Sprite.Italic } ]
@@ -77,8 +78,8 @@ view lazyCache uiState height news =
         )
 
 
-daysView : Ui.Model UiId -> Quantity Int UiPixels -> List Day -> Element UiId
-daysView uiState viewportHeight days =
+daysView : Quantity Int UiPixels -> List Day -> Element UiId
+daysView viewportHeight days =
     List.map
         (\{ date, topics } ->
             let
@@ -126,13 +127,6 @@ daysView uiState viewportHeight days =
         |> Ui.viewport
             { id = News News.Types.Viewport
             , viewportHeight = viewportHeight
-            , model =
-                case SeqDict.get (News News.Types.Viewport) uiState.uiState of
-                    Just (ViewportState viewport) ->
-                        viewport
-
-                    _ ->
-                        Ui.initViewportModel
             }
 
 

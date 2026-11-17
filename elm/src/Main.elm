@@ -337,7 +337,7 @@ type alias Model =
     , showUiBorders : Bool
     , screenshotViewer : ScreenshotViewer.Model
     , takingScreenshot : Maybe ScreenshotPreview
-    , screenshots : List { uiScale : UiScale, screenshot : Ui.Screenshot }
+    , screenshots : List Ui.Screenshot
     }
 
 
@@ -691,12 +691,13 @@ step event model =
                         displayUi2 =
                             displayUi model display
                     in
-                    case Ui.hoverIdOnly (uiMouseOn display data.mouse) displayUi2 of
+                    case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
                         ( _, { ui } ) :: _ ->
                             ( { model
-                                | screenshots =
-                                    { uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot ui }
-                                        :: model.screenshots
+                                | screenshots = model.screenshots
+
+                                --{ uiState = model.uiState, uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot ui }
+                                --    :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
@@ -705,9 +706,10 @@ step event model =
 
                         [] ->
                             ( { model
-                                | screenshots =
-                                    { uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot displayUi2 }
-                                        :: model.screenshots
+                                | screenshots = model.screenshots
+
+                                --{ uiState = model.uiState, uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot displayUi2 }
+                                --    :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
@@ -895,31 +897,31 @@ step event model =
 
 
 updateScreenshotPreview : ScreenshotPreview -> Model -> ( Model, List Effect )
-updateScreenshotPreview data model2 =
+updateScreenshotPreview data model =
     let
         display : Display
         display =
-            Display.at model2.mouse model2.displays |> Maybe.withDefault (mainDisplay model2)
+            Display.at model.mouse model.displays |> Maybe.withDefault (mainDisplay model)
 
         displayUi2 : Ui.Element UiId
         displayUi2 =
-            displayUi model2 display
+            displayUi model display
 
         uiScale2 : UiScale
         uiScale2 =
-            uiScale model2
+            uiScale model
 
         mouse : Coord UiPixels
         mouse =
-            uiMouseOn display model2.mouse
+            uiMouseOn display model.mouse
     in
-    case Nonempty.fromList (Ui.hover mouse displayUi2) |> Maybe.map (Nonempty.get data.depth) of
+    case Nonempty.fromList (Ui.hover model.uiState mouse displayUi2) |> Maybe.map (Nonempty.get data.depth) of
         Just ( _, { relativePositionToUi, ui } ) ->
             let
                 _ =
                     Debug.log "rel" relativePositionToUi
             in
-            ( { model2
+            ( { model
                 | takingScreenshot =
                     Just
                         { data
@@ -933,7 +935,7 @@ updateScreenshotPreview data model2 =
             )
 
         Nothing ->
-            ( { model2
+            ( { model
                 | takingScreenshot =
                     Just { data | bounds = Bounds.fromTopLeftAndSize display.position display.size }
               }
@@ -1962,12 +1964,12 @@ view model display ui =
         hovered : Maybe UiId
         hovered =
             if (mouseDisplay model).id == display.id then
-                Ui.hoverIdOnly (uiMouseOn display (mousePosition model)) ui |> List.head |> Maybe.map Tuple.first
+                Ui.hoverIdOnly model.uiState (uiMouseOn display (mousePosition model)) ui |> List.head |> Maybe.map Tuple.first
 
             else
                 Nothing
     in
-    Ui.view (Display.uiScale display) model.showUiBorders hovered model.uiState.focus display.size ui
+    Ui.view model.uiState (Display.uiScale display) model.showUiBorders hovered display.size ui
         ++ (case model.takingScreenshot of
                 Just data ->
                     let
@@ -2187,7 +2189,7 @@ hover model =
         display =
             mouseDisplay model
     in
-    Ui.hoverIdOnly (uiMouseOn display (mousePosition model)) (displayUi model display)
+    Ui.hoverIdOnly model.uiState (uiMouseOn display (mousePosition model)) (displayUi model display)
 
 
 {-| The text box or button `id`, and the display it is on.
@@ -2195,7 +2197,7 @@ hover model =
 findInput : UiId -> Model -> Maybe ( Display, Ui.InputType UiId )
 findInput id model =
     List.filterMap
-        (\display -> Ui.findInput id (displayUi model display) |> Maybe.map (Tuple.pair display))
+        (\display -> Ui.findInput model.uiState id (displayUi model display) |> Maybe.map (Tuple.pair display))
         model.displays
         |> List.head
 
@@ -2336,7 +2338,7 @@ appLimits app model =
         NewsApp ->
             let
                 width =
-                    Coord.xRaw (Ui.size (News.view model.lazyCache model.uiState (Units.uiPixels 300) model.news))
+                    Coord.xRaw (Ui.size (News.view model.lazyCache (Units.uiPixels 300) model.news))
             in
             { min = Coord.xy width 300, preferred = Coord.xy width 1100, max = Coord.xy width 100000 }
 
@@ -2381,10 +2383,10 @@ appView app size model =
             aboutPage model
 
         NewsApp ->
-            News.view model.lazyCache model.uiState (Coord.y size) model.news
+            News.view model.lazyCache (Coord.y size) model.news
 
         HackerNewsApp ->
-            HackerNews.view model.lazyCache model.uiState size model.hackerNews
+            HackerNews.view model.lazyCache size model.hackerNews
 
         AsciiCollabApp ->
             AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
@@ -2411,7 +2413,6 @@ appView app size model =
             ScreenshotViewer.view
                 (Display.uiScale (displayOf ScreenshotViewerApp model))
                 size
-                model.uiState
                 model.screenshots
                 model.screenshotViewer
 

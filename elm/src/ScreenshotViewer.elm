@@ -135,7 +135,7 @@ screenshotAdded model =
 {-| A click on one of the viewer's buttons. Takes the UI scale of the screen the viewer is
 on, the area the picture is in, and the screenshots.
 -}
-onClick : UiScale -> Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Types.UiId -> Model -> Model
+onClick : UiScale -> Coord UiPixels -> List Ui.Screenshot -> Types.UiId -> Model -> Model
 onClick scale area screenshots id model =
     case id of
         Types.OpenButton ->
@@ -227,7 +227,7 @@ dragged by model =
 {-| Zooms to the whole picture in the area, in the middle, on a screen with the given UI
 scale.
 -}
-fit : UiScale -> Coord UiPixels -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Model
+fit : UiScale -> Coord UiPixels -> Ui.Screenshot -> Model -> Model
 fit scale area screenshot model =
     let
         -- The picture's size in UI pixels of this screen at a zoom of 1.
@@ -248,7 +248,7 @@ fit scale area screenshot model =
 
 {-| A screenshot's size in pixels of the screen it was taken on.
 -}
-pictureSize : { uiScale : UiScale, screenshot : Ui.Screenshot } -> ( Float, Float )
+pictureSize : Ui.Screenshot -> ( Float, Float )
 pictureSize screenshot =
     Coord.toTuple (Ui.screenshotSize screenshot.screenshot)
         |> Tuple.mapBoth
@@ -294,8 +294,8 @@ nth index list =
 
 {-| The viewer's window, filling a window of the given size (UI pixels).
 -}
-view : UiScale -> Coord UiPixels -> Ui.Model UiId -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
-view scale window uiState screenshots model =
+view : UiScale -> Coord UiPixels -> List Ui.Screenshot -> Model -> Element UiId
+view scale window screenshots model =
     let
         area =
             areaSize window
@@ -330,7 +330,7 @@ view scale window uiState screenshots model =
         (Ui.column { spacing = spacing, padding = Ui.noPadding }
             [ header
             , Ui.row { spacing = spacing, padding = Ui.noPadding }
-                [ previewList scale uiState (Coord.yRaw area) screenshots model
+                [ previewList scale (Coord.yRaw area) screenshots model
                 , imageArea scale area screenshots model
                 ]
             ]
@@ -347,18 +347,11 @@ text =
     Ui.text
 
 
-previewList : UiScale -> Ui.Model UiId -> Int -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
-previewList scale uiState height screenshots model =
+previewList : UiScale -> Int -> List Ui.Screenshot -> Model -> Element UiId
+previewList scale height screenshots model =
     Ui.viewport
         { id = ScreenshotViewer Types.PreviewList
         , viewportHeight = Units.uiPixels height
-        , model =
-            case SeqDict.get (ScreenshotViewer Types.PreviewList) uiState.uiState of
-                Just (Ui.ViewportState viewport) ->
-                    viewport
-
-                _ ->
-                    Ui.initViewportModel
         }
         (Ui.column { spacing = spacing, padding = Ui.noPadding }
             (if List.isEmpty screenshots then
@@ -376,7 +369,7 @@ previewList scale uiState height screenshots model =
         )
 
 
-preview : UiScale -> Model -> Int -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> Element UiId
+preview : UiScale -> Model -> Int -> Ui.Screenshot -> Element UiId
 preview scale model index screenshot =
     let
         ( w, h ) =
@@ -402,7 +395,7 @@ preview scale model index screenshot =
         )
 
 
-imageArea : UiScale -> Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
+imageArea : UiScale -> Coord UiPixels -> List Ui.Screenshot -> Model -> Element UiId
 imageArea scale area screenshots model =
     let
         background : List (Triangle UiPixels)
@@ -430,7 +423,7 @@ imageArea scale area screenshots model =
 the picture's, with its top left corner at the given point of a box of the given size, and
 cut off at the box.
 -}
-pictureTriangles : UiScale -> Float -> ( Float, Float ) -> Coord UiPixels -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> List (Triangle UiPixels)
+pictureTriangles : UiScale -> Float -> ( Float, Float ) -> Coord UiPixels -> Ui.Screenshot -> List (Triangle UiPixels)
 pictureTriangles scale zoom offset box screenshot =
     let
         ( boxW, boxH ) =

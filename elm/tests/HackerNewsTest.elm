@@ -101,7 +101,7 @@ suite =
                             |> latin1
                 in
                 Expect.all
-                    [ \_ -> Expect.equal True (String.contains "faded text\u{0001}\u{0020}2026-11-13 02:26\u{0000}\u{00D8}\u{0084}" saved)
+                    [ \_ -> Expect.equal True (String.contains "faded text\u{0001} 2026-11-13 02:26\u{0000}Ø\u{0084}" saved)
                     , \_ -> Expect.equal True (String.contains "black text\u{0000}\u{0000}\u{0000}" saved)
                     ]
                     ()
@@ -112,7 +112,7 @@ suite =
                     collapsed =
                         HackerNews.onClick (HackerNews.Types.CommentToggle 0) commentsModel |> Tuple.first
                 in
-                draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) Ui.init uiScreen collapsed)
+                draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) uiScreen collapsed)
                     |> Expect.equal (draw (view Ui.noLazyCache collapsed))
             )
         , test "a screenshot of an Element with Ui.lazy in it can be saved, and is the same when loaded"
