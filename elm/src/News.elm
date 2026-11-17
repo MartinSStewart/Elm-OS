@@ -64,13 +64,15 @@ view lazyCache height news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            Ui.lazy2 lazyCache daysView viewportHeight days
+                            Ui.lazy lazyCache daysView days
+                                |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                         Nothing ->
                             Ui.customText Sprite.Small [ { text = "Loading...", color = Color.black, font = Sprite.Sans Sprite.Italic } ]
 
                 LoadedNews days ->
-                    Ui.lazy2 lazyCache daysView viewportHeight days
+                    Ui.lazy lazyCache daysView days
+                        |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                 NewsFailed string ->
                     Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.black, font = Sprite.Sans Sprite.Italic } ]
@@ -78,8 +80,12 @@ view lazyCache height news =
         )
 
 
-daysView : Quantity Int UiPixels -> List Day -> Element UiId
-daysView viewportHeight days =
+{-| The days, in a column. The viewport is put around it outside the `Ui.lazy`, so that
+its key doesn't have the height: Main also builds this view, 300 high, just to measure its
+width, and with the height in the key the two would never share the element.
+-}
+daysView : List Day -> Element UiId
+daysView days =
     List.map
         (\{ date, topics } ->
             let
@@ -124,10 +130,6 @@ daysView viewportHeight days =
         )
         days
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
-        |> Ui.viewport
-            { id = News News.Types.Viewport
-            , viewportHeight = viewportHeight
-            }
 
 
 dateColor : Color
