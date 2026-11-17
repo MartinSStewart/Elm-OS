@@ -1,12 +1,14 @@
 module Sprite exposing
     ( Font(..)
     , FontSize(..)
+    , Sampling(..)
     , Segment
     , Style(..)
     , Triangle
     , asciiChar
     , asciiIndex
     , caretPositions
+    , clipTo
     , cursor
     , customText
     , customTextSize
@@ -16,6 +18,8 @@ module Sprite exposing
     , monoChar
     , move
     , rectangle
+    , sampled
+    , scaleAndMove
     , text
     , textSize
     , toDevice
@@ -67,7 +71,18 @@ type alias Vertex =
 
 
 type Triangle units
-    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color }
+    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling }
+
+
+{-| How a triangle reads the atlas between its pixels: the nearest pixel (what text and
+UI are drawn with, so they stay sharp), or blended from the four around the point
+(bilinear), which is smoother when shapes are drawn smaller than the atlas has them.
+Blending also pulls in the neighbouring pixels of the atlas, so a shape sampled this
+way can get a faint fringe from whatever sits next to it there.
+-}
+type Sampling
+    = Nearest
+    | Linear
 
 
 {-| A triangle as Effect.renderBytes sends it: x, y, u, v of each corner as 32-bit
@@ -93,12 +108,134 @@ encoder (Triangle t) =
         , f t.c.u
         , f t.c.v
         , BE.unsignedInt32 LE (Color.toInt t.color)
+        , BE.unsignedInt32 LE
+            (case t.sampling of
+                Nearest ->
+                    0
+
+                Linear ->
+                    1
+            )
         ]
 
 
 mapCorners : (Vertex -> Vertex) -> List (Triangle a) -> List (Triangle b)
 mapCorners f =
-    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color })
+    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color, sampling = t.sampling })
+
+
+{-| The triangles sampling the atlas the given way.
+-}
+sampled : Sampling -> List (Triangle units) -> List (Triangle units)
+sampled sampling =
+    List.map (\(Triangle t) -> Triangle { t | sampling = sampling })
+
+
+{-| Shapes scaled around the origin, then moved: a point at x, y goes to x \* factor + dx,
+y \* factor + dy. The atlas pixels they show don't change, so scaling up makes them blocky
+with `Nearest` and soft with `Linear`.
+-}
+scaleAndMove : Float -> ( Float, Float ) -> List (Triangle a) -> List (Triangle b)
+scaleAndMove factor ( dx, dy ) =
+    mapCorners (\v -> { v | x = v.x * factor + dx, y = v.y * factor + dy })
+
+
+{-| Shapes cut to a rectangle: what is outside it is not drawn, and a triangle across an
+edge is cut there, its atlas coordinates following. Nothing else stops shapes from drawing
+outside where they were meant to.
+-}
+clipTo : { left : Float, top : Float, right : Float, bottom : Float } -> List (Triangle units) -> List (Triangle units)
+clipTo area triangles =
+    List.concatMap (clipTriangle area) triangles
+
+
+clipTriangle : { left : Float, top : Float, right : Float, bottom : Float } -> Triangle units -> List (Triangle units)
+clipTriangle area (Triangle t) =
+    let
+        xs =
+            [ t.a.x, t.b.x, t.c.x ]
+
+        ys =
+            [ t.a.y, t.b.y, t.c.y ]
+
+        minOf =
+            List.foldl min (1 / 0)
+
+        maxOf =
+            List.foldl max (-1 / 0)
+    in
+    if maxOf xs <= area.left || minOf xs >= area.right || maxOf ys <= area.top || minOf ys >= area.bottom then
+        []
+
+    else if minOf xs >= area.left && maxOf xs <= area.right && minOf ys >= area.top && maxOf ys <= area.bottom then
+        [ Triangle t ]
+
+    else
+        case
+            [ t.a, t.b, t.c ]
+                |> clipSide .x True area.left
+                |> clipSide .x False area.right
+                |> clipSide .y True area.top
+                |> clipSide .y False area.bottom
+        of
+            first :: second :: rest ->
+                -- A fan of triangles around the polygon's first corner.
+                List.map2
+                    (\b c -> Triangle { a = first, b = b, c = c, color = t.color, sampling = t.sampling })
+                    (second :: rest)
+                    rest
+
+            _ ->
+                []
+
+
+{-| Cuts a polygon at one side of a rectangle, keeping the corners at or beyond `limit`
+(or at or before it), and putting new corners where its edges cross it.
+-}
+clipSide : (Vertex -> Float) -> Bool -> Float -> List Vertex -> List Vertex
+clipSide axis keepAbove limit polygon =
+    case polygon of
+        [] ->
+            []
+
+        first :: rest ->
+            let
+                inside v =
+                    if keepAbove then
+                        axis v >= limit
+
+                    else
+                        axis v <= limit
+
+                crossing p q =
+                    let
+                        k =
+                            (limit - axis p) / (axis q - axis p)
+                    in
+                    { x = p.x + (q.x - p.x) * k
+                    , y = p.y + (q.y - p.y) * k
+                    , u = p.u + (q.u - p.u) * k
+                    , v = p.v + (q.v - p.v) * k
+                    }
+            in
+            List.map2
+                (\p q ->
+                    case ( inside p, inside q ) of
+                        ( True, True ) ->
+                            [ q ]
+
+                        ( True, False ) ->
+                            [ crossing p q ]
+
+                        ( False, True ) ->
+                            [ crossing p q, q ]
+
+                        ( False, False ) ->
+                            []
+                )
+                polygon
+                (rest ++ [ first ])
+                |> List.concat
 
 
 {-| Shapes moved by an offset.
@@ -143,6 +280,7 @@ triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
         , b = { x = bx, y = by, u = u, v = v }
         , c = { x = cx, y = cy, u = u, v = v }
         , color = color
+        , sampling = Nearest
         }
 
 
@@ -181,8 +319,8 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
         bottomRight =
             { x = right, y = bottom, u = uRight, v = vBottom }
     in
-    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color }
-    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color }
+    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest }
+    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest }
     ]
 
 

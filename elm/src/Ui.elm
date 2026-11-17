@@ -46,6 +46,8 @@ module Ui exposing
     , quads
     , right
     , row
+    , screenshotSize
+    , screenshotView
     , scrolls
     , selectableButton
     , setFocus
@@ -262,6 +264,28 @@ elementToScreenshotHelper element =
 
         Lazy _ _ child ->
             elementToScreenshotHelper child
+
+
+{-| How big a screenshot is, in UI pixels.
+-}
+screenshotSize : Screenshot -> Coord UiPixels
+screenshotSize screenshot =
+    sizeHelper screenshot
+
+
+{-| What a screenshot looked like, as triangles for a screen with the given UI scale (the
+same ones `view` makes), with its top left corner at 0, 0. Nothing is hovered or focused.
+-}
+screenshotView : UiScale -> Screenshot -> List (Triangle DevicePixels)
+screenshotView scale screenshot =
+    viewList
+        scale
+        False
+        Nothing
+        Nothing
+        { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
+        Coord.origin
+        screenshot
 
 
 {-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
@@ -1528,7 +1552,9 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
 
                 Quads data ->
-                    Sprite.move position data.triangles |> Sprite.toDevice scale
+                    Sprite.move position data.triangles
+                        |> Sprite.clipTo (boundsToArea viewport3)
+                        |> Sprite.toDevice scale
 
                 Empty ->
                     []
@@ -1593,3 +1619,14 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                     (Coord.plus (Coord.xy borderWidth borderWidth) position)
                     (size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth)))
                 |> Sprite.toDevice scale
+
+
+{-| A viewport as `Sprite.clipTo` takes it.
+-}
+boundsToArea : Bounds UiPixels -> { left : Float, top : Float, right : Float, bottom : Float }
+boundsToArea bounds =
+    { left = toFloat (Coord.xRaw bounds.topLeft)
+    , top = toFloat (Coord.yRaw bounds.topLeft)
+    , right = toFloat (Coord.xRaw bounds.bottomRight)
+    , bottom = toFloat (Coord.yRaw bounds.bottomRight)
+    }

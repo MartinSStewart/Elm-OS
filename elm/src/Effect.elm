@@ -202,9 +202,10 @@ message effects =
     BE.encode (Postcard.list encode effects)
 
 
-{-| 52 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
+{-| 56 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
 x, y, u, v of each corner as 32-bit floats (screen pixels, atlas pixels), then the
-colour as an unsigned 32-bit 0xRRGGBBAA.
+colour as an unsigned 32-bit 0xRRGGBBAA, then 0 to sample the atlas by the nearest pixel
+or 1 to blend the four around the point (`Sprite.Sampling`).
 -}
 renderBytes : List (Triangle DevicePixels) -> Bytes
 renderBytes triangles =

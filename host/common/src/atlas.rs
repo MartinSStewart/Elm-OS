@@ -116,19 +116,21 @@ pub fn cursor_image(scale: usize, fill: u32) -> Vec<u32> {
 
 /// One triangle as /init hands it to a renderer: the 13 values Elm sends per triangle,
 /// x, y, u, v for each corner (screen and atlas pixels), then the colour as 0xRRGGBBAA.
-/// elmos-gpu reads these from a pipe, so the layout is fixed (52 bytes).
+/// elmos-gpu reads these from a pipe, so the layout is fixed (56 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Tri {
     pub p: [[f32; 4]; 3],
     pub rgba: u32,
+    /// 1 to sample the atlas with bilinear filtering, 0 for the nearest pixel (`Scene::linear`).
+    pub linear: u32,
 }
 
 impl Tri {
     pub const SIZE: usize = std::mem::size_of::<Tri>();
 
     pub fn as_bytes(tris: &[Tri]) -> &[u8] {
-        // SAFETY: Tri is repr(C), made of f32s and a u32 with no padding.
+        // SAFETY: Tri is repr(C), made of f32s and u32s with no padding.
         unsafe { std::slice::from_raw_parts(tris.as_ptr() as *const u8, tris.len() * Tri::SIZE) }
     }
 }

@@ -1,5 +1,5 @@
 {
-  "comment": "One example of every message between Elm and the host (src/lib.rs), as JSON to be readable: an enum variant is {\"name\": fields}, or just \"name\" without fields. On the wire they are postcard; cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) that the Elm side's bytes are Rust's (cargo run -p protocol --bin protocol-examples). toHost is in the same order as ProtocolTest.effects. The render example draws one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252), on display 33, and nothing on display 34.",
+  "comment": "One example of every message between Elm and the host (src/lib.rs), as JSON to be readable: an enum variant is {\"name\": fields}, or just \"name\" without fields. On the wire they are postcard; cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) that the Elm side's bytes are Rust's (cargo run -p protocol --bin protocol-examples). toHost is in the same order as ProtocolTest.effects. The render example draws one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252) by the nearest pixel, on display 33, and nothing on display 34.",
   "toHost": [
     {"cursor": {"rgba": 4278190335, "scale": 2}},
     "wifiScan",
@@ -25,7 +25,7 @@
     {"webSocketOpen": {"id": "ascii-collab", "url": "wss://ascii-collab.app/_w", "headers": [["Cookie", "sid=abc"]]}},
     {"webSocketSend": {"id": "ascii-collab", "data": [2, 1, 0, 255]}},
     {"webSocketClose": {"id": "ascii-collab"}},
-    {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}, {"display": 34, "triangles": []}]}
+    {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255, 0, 0, 0, 0]}, {"display": 34, "triangles": []}]}
   ],
   "fromHost": [
     {"displays": {"displays": [{"id": 33, "name": "eDP-1", "x": 0, "y": 0, "w": 2560, "h": 1600, "widthMm": 300, "heightMm": 190}, {"id": 34, "name": "HDMI-A-1", "x": 2560, "y": 0, "w": 1920, "h": 1080, "widthMm": 0, "heightMm": 0}]}},

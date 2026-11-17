@@ -31,13 +31,16 @@ pub mod link;
 pub struct RenderTriangle {
     pub corners: [[f32; 4]; 3],
     pub rgba: u32,
+    /// 1 to sample the atlas bilinearly, 0 for the nearest pixel.
+    pub linear: u32,
 }
 
 /// How many bytes each triangle takes in `Effect::Render`.
-pub const RENDER_TRIANGLE_BYTES: usize = 52;
+pub const RENDER_TRIANGLE_BYTES: usize = 56;
 
-/// Reads the scene in `Effect::Render`: 52 bytes a triangle, the 12 numbers of its
-/// corners as 32-bit floats and then its colour as an unsigned 32-bit integer, all
+/// Reads the scene in `Effect::Render`: 56 bytes a triangle, the 12 numbers of its
+/// corners as 32-bit floats, then its colour and whether it samples the atlas
+/// bilinearly (1) or by the nearest pixel (0) as unsigned 32-bit integers, all
 /// little-endian. None if the length isn't a whole number of triangles.
 pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
     if bytes.len() % RENDER_TRIANGLE_BYTES != 0 {
@@ -53,6 +56,7 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
                     t.corners[k / 4][k % 4] = f32::from_le_bytes(word(b, k));
                 }
                 t.rgba = u32::from_le_bytes(word(b, 12));
+                t.linear = u32::from_le_bytes(word(b, 13));
                 t
             })
             .collect(),
@@ -505,7 +509,7 @@ mod tests {
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
             read_render(bytes),
-            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff }])
+            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff, linear: 0 }])
         );
         assert_eq!(read_render(&bytes[1..]), None);
     }

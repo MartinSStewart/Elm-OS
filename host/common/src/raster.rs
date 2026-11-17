@@ -13,8 +13,20 @@ fn sample(atlas: &[u8], u: f32, v: f32) -> u32 {
     atlas[y * ATLAS_W + x] as u32
 }
 
+/// The atlas at u, v with bilinear filtering: the four pixels around that point (atlas
+/// pixel i covers u from i to i + 1, so its middle is at i + 0.5), blended by distance.
+fn sample_linear(atlas: &[u8], u: f32, v: f32) -> u32 {
+    let (u, v) = (u - 0.5, v - 0.5);
+    let (x0, y0) = (u.floor(), v.floor());
+    let (fx, fy) = (u - x0, v - y0);
+    let at = |dx: f32, dy: f32| sample(atlas, x0 + dx, y0 + dy) as f32;
+    let top = at(0.0, 0.0) * (1.0 - fx) + at(1.0, 0.0) * fx;
+    let bottom = at(0.0, 1.0) * (1.0 - fx) + at(1.0, 1.0) * fx;
+    (top * (1.0 - fy) + bottom * fy + 0.5) as u32
+}
+
 /// One textured triangle into `back` (w x h pixels, `stride` per row): each pixel
-/// samples the atlas at its interpolated u, v (nearest pixel), and blends the colour
+/// samples the atlas at its interpolated u, v (the nearest pixel, or bilinear if `t.linear`), and blends the colour
 /// in by the sample.
 pub fn fill_triangle(back: &mut [u32], stride: usize, w: u32, h: u32, atlas: &[u8], t: &Tri) {
     fill_triangle_rows(back, stride, w, 0, h, atlas, t)
@@ -43,6 +55,7 @@ pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: 
     }
     // A flat colour (every corner samples the same atlas pixel) needs no interpolation.
     let flat = p0[2] == p1[2] && p1[2] == p2[2] && p0[3] == p1[3] && p1[3] == p2[3];
+    let sample = if t.linear != 0 { sample_linear } else { sample };
     let flat_cover = sample(atlas, p0[2], p0[3]);
     let inv = 1.0 / area;
     if minx >= maxx || miny >= maxy {

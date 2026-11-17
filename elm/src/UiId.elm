@@ -15,6 +15,7 @@ import AsciiCollab.Types
 import Calculator.Types
 import HackerNews.Types
 import News.Types
+import ScreenshotViewer.Types
 import TicTacToe.Types
 import Wifi exposing (Ssid)
 
@@ -45,6 +46,7 @@ type UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId
+    | ScreenshotViewer ScreenshotViewer.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
 

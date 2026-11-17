@@ -37,6 +37,8 @@ import News exposing (NewsState(..))
 import Nonempty
 import Persist
 import Quantity exposing (Quantity)
+import ScreenshotViewer
+import ScreenshotViewer.Types
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
@@ -326,6 +328,7 @@ type alias Model =
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
+    , screenshotViewer : ScreenshotViewer.Model
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
     }
@@ -351,6 +354,7 @@ type App
     | CalculatorApp
     | TicTacToeApp
     | EditorApp
+    | ScreenshotViewerApp
 
 
 type WeatherState
@@ -416,6 +420,7 @@ init =
     , reflashNeeded = Nothing
     , uiState = Ui.init
     , showUiBorders = False
+    , screenshotViewer = ScreenshotViewer.init
     , takingScreenshot = Nothing
     , screenshots = []
     }
@@ -614,7 +619,7 @@ step event model =
         Mouse x y ->
             let
                 model2 =
-                    { model | mouse = Coord.xy x y }
+                    dragScreenshot model { model | mouse = Coord.xy x y }
 
                 modelOld =
                     model
@@ -660,6 +665,7 @@ step event model =
                         ( _, { relativePositionToUi, ui } ) :: _ ->
                             ( { model
                                 | screenshots = Ui.elementToScreenshot ui :: model.screenshots
+                                , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
                             , []
@@ -668,6 +674,7 @@ step event model =
                         [] ->
                             ( { model
                                 | screenshots = Ui.elementToScreenshot displayUi2 :: model.screenshots
+                                , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
                             , []
@@ -675,6 +682,14 @@ step event model =
 
                 Nothing ->
                     case hover model of
+                        ( ScreenshotViewer ScreenshotViewer.Types.ImageArea, _ ) :: _ ->
+                            ( { model
+                                | screenshotViewer = ScreenshotViewer.startDragging model.screenshotViewer
+                                , uiState = Ui.setFocus Nothing model.uiState
+                              }
+                            , []
+                            )
+
                         ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
                             ( { model
                                 | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
@@ -699,7 +714,13 @@ step event model =
                             ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
 
         Button 0 False ->
-            ( { model | pressed = False, selectingText = False }, [] )
+            ( { model
+                | pressed = False
+                , selectingText = False
+                , screenshotViewer = ScreenshotViewer.stopDragging model.screenshotViewer
+              }
+            , []
+            )
 
         Button _ down ->
             ( { model | pressed = down }, [] )
@@ -1033,6 +1054,35 @@ appButton id =
         EditorButton ->
             Just EditorApp
 
+        ScreenshotViewer id2 ->
+            case id2 of
+                ScreenshotViewer.Types.OpenButton ->
+                    Just ScreenshotViewerApp
+
+                ScreenshotViewer.Types.CloseButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.PreviewList ->
+                    Nothing
+
+                ScreenshotViewer.Types.Preview _ ->
+                    Nothing
+
+                ScreenshotViewer.Types.ImageArea ->
+                    Nothing
+
+                ScreenshotViewer.Types.ZoomInButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.ZoomOutButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.ActualSizeButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.FitButton ->
+                    Nothing
+
         HackerNews id2 ->
             case id2 of
                 HackerNews.Types.OpenButton ->
@@ -1133,6 +1183,9 @@ appIsOpen app model =
 
         EditorApp ->
             model.editorOpen
+
+        ScreenshotViewerApp ->
+            model.screenshotViewer.isOpen
 
 
 clickElement : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
@@ -1335,6 +1388,18 @@ clickElement model id uiState =
 
         HackerNews uiId2 ->
             hackerNewsClick uiId2 model
+
+        ScreenshotViewer uiId2 ->
+            ( { model
+                | screenshotViewer =
+                    ScreenshotViewer.onClick
+                        (screenshotViewerArea model)
+                        model.screenshots
+                        uiId2
+                        model.screenshotViewer
+              }
+            , []
+            )
 
 
 {-| A click on one of the ASCII collab app's elements.
@@ -1677,6 +1742,9 @@ dragSelect focus mouse position model =
         AsciiCollab _ ->
             model
 
+        ScreenshotViewer _ ->
+            model
+
         Lazy _ ->
             model
 
@@ -1918,11 +1986,60 @@ uiMouseOn display point =
     Coord.toUi (Display.uiScale display) (Display.local display point)
 
 
+{-| The size of the area the screenshot viewer shows its picture in, in UI pixels.
+-}
+screenshotViewerArea : Model -> Coord UiPixels
+screenshotViewerArea model =
+    ScreenshotViewer.areaSize (appUiSize ScreenshotViewerApp model) toolbarHeight
+
+
+{-| The mouse moved from where `before` has it to where `after` has it: moves a screenshot
+being dragged with it.
+-}
+dragScreenshot : Model -> Model -> Model
+dragScreenshot before after =
+    let
+        display : Display
+        display =
+            displayOf ScreenshotViewerApp after
+    in
+    { after
+        | screenshotViewer =
+            ScreenshotViewer.dragged
+                (Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse))
+                after.screenshotViewer
+    }
+
+
 {-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
 the mouse scrolls.
 -}
 scrollUnderMouse : Ui.ScrollBy -> Model -> ( Model, List Effect )
 scrollUnderMouse scrollBy model =
+    case List.filter (\( id, _ ) -> id == ScreenshotViewer ScreenshotViewer.Types.ImageArea) (hover model) of
+        ( _, { relativePositionToUi } ) :: _ ->
+            -- The wheel zooms the screenshot; two fingers on a touchpad move it.
+            ( { model
+                | screenshotViewer =
+                    case scrollBy of
+                        Ui.WheelClicks clicks ->
+                            ScreenshotViewer.wheel (Coord.minus relativePositionToUi (uiMouse model)) clicks model.screenshotViewer
+
+                        Ui.ScrollPixels pixels ->
+                            ScreenshotViewer.scrolledBy model.shift (Quantity.unwrap pixels) model.screenshotViewer
+
+                        Ui.Momentum _ ->
+                            model.screenshotViewer
+              }
+            , []
+            )
+
+        [] ->
+            scrollUnderMouseOutsideViewer scrollBy model
+
+
+scrollUnderMouseOutsideViewer : Ui.ScrollBy -> Model -> ( Model, List Effect )
+scrollUnderMouseOutsideViewer scrollBy model =
     case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
         _ :: _ ->
             (case scrollBy of
@@ -2039,6 +2156,16 @@ displayUi model display =
                     )
                 ++ on HackerNewsApp
                     (\() -> Ui.topRight { size = size } (HackerNews.view model.lazyCache model.uiState size model.hackerNews))
+                ++ on ScreenshotViewerApp
+                    (\() ->
+                        ScreenshotViewer.view
+                            (Display.uiScale display)
+                            size
+                            toolbarHeight
+                            model.uiState
+                            model.screenshots
+                            model.screenshotViewer
+                    )
                 ++ (if isMain then
                         case model.upgradingTo of
                             Just build ->
@@ -3063,6 +3190,10 @@ toolbar model display =
                     , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
                     , Ui.selectableButton { id = TicTacToeButton, padding = small } (openHere TicTacToeApp) (t "Noughts")
                     , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
+                    , Ui.selectableButton
+                        { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
+                        (openHere ScreenshotViewerApp)
+                        (t "Screenshots")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
                     ]

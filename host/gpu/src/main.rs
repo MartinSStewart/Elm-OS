@@ -11,7 +11,8 @@
 //!             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
 //!             a frame skipped because a newer one was already waiting.
 //!   stdin  <- frames: u32 n, then n Tri (common/src/atlas.rs): per triangle x, y, u, v
-//!             for each corner and an 0xRRGGBBAA colour, as Elm sends them.
+//!             for each corner, an 0xRRGGBBAA colour as Elm sends them, and whether
+//!             to sample the atlas bilinearly.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m X Y" moves it, "c RGBA S"
 //!             redraws it with that fill colour at scale S.
@@ -64,14 +65,17 @@ fn open_card() -> Option<(File, Vec<drm::Output>)> {
 const VS: &str = "attribute vec2 pos;
 attribute vec2 uv;
 attribute vec4 col;
+attribute float lin;
 uniform vec2 screen;
 varying vec2 v_uv;
 varying vec4 v_col;
+varying float v_lin;
 void main() {
     vec2 ndc = pos / screen * 2.0 - 1.0;
     gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0); // y grows downwards in Elm's pixels
     v_uv = uv / vec2(2048.0, 4096.0); // ATLAS_W, ATLAS_H
     v_col = col;
+    v_lin = lin;
 }
 ";
 
@@ -86,7 +90,23 @@ precision mediump float;
 uniform sampler2D atlas;
 varying vec2 v_uv;
 varying vec4 v_col;
-void main() { gl_FragColor = vec4(v_col.rgb, v_col.a * texture2D(atlas, v_uv).a); }
+varying float v_lin;
+const vec2 texel = vec2(1.0 / 2048.0, 1.0 / 4096.0); // ATLAS_W, ATLAS_H
+void main() {
+    float cover;
+    if (v_lin > 0.5) {
+        // Bilinear by hand, from four nearest samples: atlas pixel i is centred at i + 0.5.
+        vec2 p = v_uv / texel - 0.5;
+        vec2 f = fract(p);
+        vec2 at = (floor(p) + 0.5) * texel;
+        float top = mix(texture2D(atlas, at).a, texture2D(atlas, at + vec2(texel.x, 0.0)).a, f.x);
+        float bottom = mix(texture2D(atlas, at + vec2(0.0, texel.y)).a, texture2D(atlas, at + texel).a, f.x);
+        cover = mix(top, bottom, f.y);
+    } else {
+        cover = texture2D(atlas, v_uv).a;
+    }
+    gl_FragColor = vec4(v_col.rgb, v_col.a * cover);
+}
 ";
 
 unsafe fn compile(kind: GLenum, src: &str) -> GLuint {
@@ -297,6 +317,8 @@ struct Vertex {
     u: f32,
     v: f32,
     rgba: [u8; 4],
+    /// 1.0 to sample the atlas bilinearly (`Tri::linear`), 0.0 for the nearest pixel.
+    linear: f32,
 }
 
 fn read_u32(input: &mut File) -> Option<u32> {
@@ -480,7 +502,7 @@ fn main() {
         let prog = glCreateProgram();
         glAttachShader(prog, compile(GL_VERTEX_SHADER, VS));
         glAttachShader(prog, compile(GL_FRAGMENT_SHADER, FS));
-        for (i, name) in [c"pos", c"uv", c"col"].iter().enumerate() {
+        for (i, name) in [c"pos", c"uv", c"col", c"lin"].iter().enumerate() {
             glBindAttribLocation(prog, i as GLuint, name.as_ptr());
         }
         glLinkProgram(prog);
@@ -489,7 +511,7 @@ fn main() {
         glUniform1i(glGetUniformLocation(prog, c"atlas".as_ptr()), 0);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        for i in 0..3 {
+        for i in 0..4 {
             glEnableVertexAttribArray(i);
         }
         let mut vbo = 0;
@@ -519,6 +541,14 @@ fn main() {
             GL_TRUE,
             stride,
             std::mem::offset_of!(Vertex, rgba) as *const c_void,
+        );
+        glVertexAttribPointer(
+            3,
+            1,
+            GL_FLOAT,
+            GL_FALSE,
+            stride,
+            std::mem::offset_of!(Vertex, linear) as *const c_void,
         );
 
         // The atlas, sampled pixel for pixel: Elm puts glyphs on whole pixels.
@@ -665,6 +695,7 @@ fn main() {
                                 u: p[2],
                                 v: p[3],
                                 rgba,
+                                linear: t.linear as f32,
                             });
                         }
                     }
