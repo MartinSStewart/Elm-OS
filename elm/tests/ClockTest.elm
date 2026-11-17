@@ -21,4 +21,6 @@ suite =
                 ( Clock.toString (Just 60) time, Clock.toString (Just -300) time )
                     |> Expect.equal ( "Sunday 15 November, 01:10", "Saturday 14 November, 19:10" )
             )
+        , test "just the time, when there's no room for the date"
+            (\_ -> ( Clock.timeOnly Nothing time, Clock.timeOnly (Just -300) time ) |> Expect.equal ( "00:10 UTC", "19:10" ))
         ]

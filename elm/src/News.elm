@@ -36,12 +36,13 @@ import Duration
 import Effect
 import Json.Decode as D
 import News.Types
-import Quantity
+import Quantity exposing (Quantity)
 import SeqDict
 import Sprite
 import Time
 import Ui exposing (Element, ElementState(..))
 import UiId exposing (UiId(..))
+import Units exposing (UiPixels)
 
 
 type alias Day =
@@ -78,8 +79,14 @@ type NewsState
     | NewsFailed Effect.HttpError
 
 
-view : Ui.Model UiId -> NewsState -> Element UiId
-view uiState news =
+{-| The window, this tall (UI pixels): the days scroll inside it.
+-}
+view : Ui.Model UiId -> Quantity Int UiPixels -> NewsState -> Element UiId
+view uiState height news =
+    let
+        viewportHeight =
+            height |> Quantity.minus (Quantity.plus (Units.uiPixels (2 * 10 + 4)) (Sprite.lineHeight Sprite.Small))
+    in
     Ui.el
         { padding = Ui.paddingXY 12 10
         , inFront = []
@@ -95,13 +102,13 @@ view uiState news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            daysView uiState days
+                            daysView uiState viewportHeight days
 
                         Nothing ->
                             Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) "Loading..."
 
                 LoadedNews days ->
-                    daysView uiState days
+                    daysView uiState viewportHeight days
 
                 NewsFailed string ->
                     Ui.text Sprite.Small (Sprite.Sans Sprite.Italic) (Effect.httpErrorToString string)
@@ -109,8 +116,8 @@ view uiState news =
         )
 
 
-daysView : Ui.Model UiId -> List Day -> Element UiId
-daysView uiState days =
+daysView : Ui.Model UiId -> Quantity Int UiPixels -> List Day -> Element UiId
+daysView uiState viewportHeight days =
     List.map
         (\{ date, topics } ->
             let
@@ -157,7 +164,7 @@ daysView uiState days =
         |> Ui.column { spacing = 16, padding = Ui.noPadding }
         |> Ui.viewport
             { id = News News.Types.Viewport
-            , viewportHeight = Quantity.unsafe 1000
+            , viewportHeight = viewportHeight
             , model =
                 case SeqDict.get (News News.Types.Viewport) uiState.uiState of
                     Just (ViewportState viewport) ->

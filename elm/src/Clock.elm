@@ -1,4 +1,4 @@
-module Clock exposing (toString)
+module Clock exposing (timeOnly, toString)
 
 {-| The date and time to show, from the host's wall clock (HostMessage.Tick).
 
@@ -30,6 +30,29 @@ toString utcOffsetMinutes time =
         ++ month (Time.toMonth zone time)
         ++ ", "
         ++ two (Time.toHour zone time)
+        ++ ":"
+        ++ two (Time.toMinute zone time)
+        ++ (case utcOffsetMinutes of
+                Just _ ->
+                    ""
+
+                Nothing ->
+                    " UTC"
+           )
+
+
+{-| Like "14:05", or "13:05 UTC" without an offset: for when there's no room for the date.
+-}
+timeOnly : Maybe Int -> Time.Posix -> String
+timeOnly utcOffsetMinutes time =
+    let
+        zone =
+            Time.customZone (Maybe.withDefault 0 utcOffsetMinutes) []
+
+        two n =
+            String.padLeft 2 '0' (String.fromInt n)
+    in
+    two (Time.toHour zone time)
         ++ ":"
         ++ two (Time.toMinute zone time)
         ++ (case utcOffsetMinutes of

@@ -8,6 +8,7 @@ module HackerNews exposing
     , gotHttpRequest
     , httpRequestIdToString
     , init
+    , maxWindowWidth
     , onClick
     , postIdToString
     , stringToHttpRequestId
@@ -647,11 +648,23 @@ titleSpacing =
     8
 
 
-{-| How wide the window's content is on a screen this big (UI pixels).
+{-| How wide the window's content is in a window this big (UI pixels).
 -}
 pageWidth : Coord UiPixels -> Int
-pageWidth screenSize =
-    min 900 (Coord.xRaw screenSize - 2 * windowPadding - 16)
+pageWidth windowSize =
+    min maxPageWidth (Coord.xRaw windowSize - 2 * windowPadding - 16)
+
+
+maxPageWidth : Int
+maxPageWidth =
+    900
+
+
+{-| The window is no wider than this (UI pixels), however much room there is.
+-}
+maxWindowWidth : Int
+maxWindowWidth =
+    maxPageWidth + 2 * windowPadding + 16
 
 
 {-| How far a reply is indented from the comment it replies to.
@@ -673,10 +686,10 @@ toggleSpacing =
     4
 
 
-{-| The window, in the top right corner of a screen this big (UI pixels).
+{-| The window, filling a window this big (UI pixels).
 -}
 view : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> Model -> Element UiId
-view lazyCache uiState screenSize model =
+view lazyCache uiState windowSize model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding
         , inFront = []
@@ -696,13 +709,13 @@ view lazyCache uiState screenSize model =
                     Loading maybe ->
                         case maybe of
                             Just data ->
-                                postsView lazyCache uiState screenSize data
+                                postsView lazyCache uiState windowSize data
 
                             Nothing ->
                                 Ui.text Small (Sans Regular) "Loading..."
 
                     Loaded data ->
-                        postsView lazyCache uiState screenSize data
+                        postsView lazyCache uiState windowSize data
 
                     LoadFailed httpError ->
                         Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
@@ -711,7 +724,7 @@ view lazyCache uiState screenSize model =
                 commentsView
                     lazyCache
                     uiState
-                    screenSize
+                    windowSize
                     id
                     title
                     (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
@@ -719,11 +732,11 @@ view lazyCache uiState screenSize model =
 
 
 postsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> List Post -> Element UiId
-postsView lazyCache uiState screenSize data =
+postsView lazyCache uiState windowSize data =
     let
         width : Int
         width =
-            pageWidth screenSize
+            pageWidth windowSize
 
         title : Element id
         title =
@@ -735,7 +748,7 @@ postsView lazyCache uiState screenSize data =
         , Ui.column
             { spacing = 0, padding = Ui.noPadding }
             (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling uiState (HackerNews HackerNews.Types.PostsViewport) screenSize (Coord.yRaw (Ui.size title))
+            |> scrolling uiState (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
         ]
 
 
@@ -792,11 +805,11 @@ postView width index { id, title, comments } =
 
 
 commentsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache uiState screenSize postId title comments =
+commentsView lazyCache uiState windowSize postId title comments =
     let
         width : Int
         width =
-            pageWidth screenSize
+            pageWidth windowSize
 
         backButton : Element UiId
         backButton =
@@ -834,7 +847,7 @@ commentsView lazyCache uiState screenSize postId title comments =
                 Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
-            |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
@@ -940,13 +953,13 @@ toggleButton index label =
 
 
 {-| Content in a viewport that reaches from below the header (`headerHeight` high) to
-the bottom of the screen, scrolled to where `uiState` says.
+the bottom of the window, scrolled to where `uiState` says.
 -}
 scrolling : Ui.Model UiId -> UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
-scrolling uiState viewportId screenSize headerHeight content =
+scrolling uiState viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw screenSize - 2 * windowPadding - headerHeight - titleSpacing)
+        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
         , model =
             case SeqDict.get viewportId uiState.uiState of
                 Just (Ui.ViewportState viewport) ->

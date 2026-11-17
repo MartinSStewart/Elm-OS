@@ -11,7 +11,6 @@ module Ui exposing
     , ScrollBy(..)
     , ViewportData
     , ViewportModel
-    , bottomLeft
     , bottomRight
     , button
     , center
@@ -56,7 +55,6 @@ module Ui exposing
     , text
     , textInput
     , textInputMultiline
-    , topLeft
     , topRight
     , updateElement
     , view
@@ -1120,19 +1118,9 @@ right data (Element child) =
     align 2 0 ( data.width, Coord.y (sizeHelper child) ) child |> Element
 
 
-topLeft : { size : Coord UiPixels } -> Element id -> Element id
-topLeft data (Element child) =
-    align 0 0 data.size child |> Element
-
-
 topRight : { size : Coord UiPixels } -> Element id -> Element id
 topRight data (Element child) =
     align 2 0 data.size child |> Element
-
-
-bottomLeft : { size : Coord UiPixels } -> Element id -> Element id
-bottomLeft data (Element child) =
-    align 0 2 data.size child |> Element
 
 
 bottomRight : { size : Coord UiPixels } -> Element id -> Element id

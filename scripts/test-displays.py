@@ -8,7 +8,7 @@ which sends the same uevent a cable does. Elm OS puts the displays side by side,
 first on the left. Passes when:
 
   - the host finds one display at boot, and both once the second is plugged in,
-  - each shows a toolbar, and the debug overlay is only on the first,
+  - each shows a toolbar, and the debug app is only on the first,
   - the cursor shows on whichever display the mouse is on, and only there,
   - the About button on the second display's toolbar opens the about page there, and
     the one on the first display's toolbar then moves it to the first,
@@ -198,10 +198,11 @@ except RuntimeError as e:
 print("a toolbar on each display")
 
 PANEL = (220, 210, 199)
-if not near(pixel(shots[0], 11, H - 11), PANEL) or near(pixel(shots[1], 11, H2 - 11), PANEL):
+# The debug app opens on the first display, in the top left corner under the toolbar.
+if not near(pixel(shots[0], 12, 49), PANEL) or near(pixel(shots[1], 12, 49), PANEL):
     save("overlay")
-    fail("expected the debug overlay on the first display only (build/displays-overlay-*.png)")
-print("debug overlay on the first display only")
+    fail("expected the debug app on the first display only (build/displays-overlay-*.png)")
+print("debug app on the first display only")
 
 # The cursor: a white arrow, its tip at the pointer.
 WHITE = (255, 255, 255)
@@ -222,8 +223,11 @@ if not cursor_on(screen(0), 640, 500) or cursor_on(screen(1), 640, 500):
     fail("expected the cursor back on the first display only (build/displays-cursor-*.png)")
 print("the cursor moves from one display to the other")
 
-# The about page sits in the middle of the display it is on.
-middles = [(W // 2, H // 2 - 60), (W2 // 2, H2 // 2 - 60)]
+# Close the apps open from the start (on the first display), so the about page is the
+# only window wherever it is: in the top left corner, under the toolbar.
+for name in ["Debug", "Network", "Weather"]:
+    click(0, *buttons[0][name])
+middles = [(12, 49), (12, 49)]
 
 
 def about_on():

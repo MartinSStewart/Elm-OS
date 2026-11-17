@@ -518,7 +518,7 @@ tick time model =
 -- THE VIEW'S PLACE
 
 
-{-| How many characters across and down the grid shows on a screen this size.
+{-| How many characters across and down the grid shows in a window this size.
 -}
 gridSize : Coord UiPixels -> ( Int, Int )
 gridSize screen =
@@ -526,8 +526,8 @@ gridSize screen =
         ( w, h ) =
             Coord.toTuple screen
     in
-    ( max 1 ((w - 2 * margin - 2 * padding) // charWidth)
-    , max 1 ((h - topGap - margin - 2 * padding - headerHeight) // charHeight)
+    ( max 1 ((w - 2 * padding) // charWidth)
+    , max 1 ((h - 2 * padding - headerHeight) // charHeight)
     )
 
 
@@ -541,21 +541,9 @@ charHeight =
     18
 
 
-margin : Int
-margin =
-    8
-
-
 padding : Int
 padding =
     8
-
-
-{-| Below the toolbar.
--}
-topGap : Int
-topGap =
-    48
 
 
 headerHeight : Int
@@ -860,13 +848,7 @@ view screen focused model =
         t =
             Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
     in
-    Ui.topLeft { size = screen }
-        (Ui.el
-            { padding = { topLeft = Coord.xy margin topGap, bottomRight = Coord.origin }
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            }
-            (Ui.el
+    Ui.el
                 { padding = Ui.paddingXY padding padding
                 , inFront = []
                 , borderAndFill = Ui.defaultElBorderAndFill
@@ -880,8 +862,6 @@ view screen focused model =
                         (gridView focused cols rows model)
                     ]
                 )
-            )
-        )
 
 
 gridView : Bool -> Int -> Int -> Model -> Ui.Element UiId

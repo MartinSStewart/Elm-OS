@@ -41,6 +41,12 @@ type UiId
     | EditorInput
     | EditorWindow
     | CloseEditorButton
+    | DebugButton
+    | CloseDebugButton
+    | NetworkAppButton
+    | CloseNetworkButton
+    | WeatherAppButton
+    | CloseWeatherButton
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
     | News News.Types.UiId

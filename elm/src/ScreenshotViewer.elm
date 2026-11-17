@@ -76,11 +76,6 @@ zoomStep =
 -- LAYOUT
 
 
-windowMargin : Int
-windowMargin =
-    8
-
-
 windowPadding : Int
 windowPadding =
     8
@@ -115,14 +110,14 @@ headerHeight =
     Coord.yRaw (Ui.size (headerButton Types.CloseButton "Close"))
 
 
-{-| The size of the area the screenshot is shown in, on a screen of the given size
-(UI pixels) with the toolbar taking `top` of its height.
+{-| The size of the area the screenshot is shown in, in a window of the given size
+(UI pixels).
 -}
-areaSize : Coord UiPixels -> Int -> Coord UiPixels
-areaSize screen top =
+areaSize : Coord UiPixels -> Coord UiPixels
+areaSize window =
     Coord.xy
-        (max 1 (Coord.xRaw screen - 2 * windowMargin - 2 * windowPadding - listWidth - spacing))
-        (max 1 (Coord.yRaw screen - top - 2 * windowMargin - 2 * windowPadding - headerHeight - spacing))
+        (max 1 (Coord.xRaw window - 2 * windowPadding - listWidth - spacing))
+        (max 1 (Coord.yRaw window - 2 * windowPadding - headerHeight - spacing))
 
 
 
@@ -280,14 +275,13 @@ nth index list =
 -- VIEW
 
 
-{-| The viewer's window, under the toolbar (`top` UI pixels high), for a screen the
-given size.
+{-| The viewer's window, filling a window of the given size (UI pixels).
 -}
-view : UiScale -> Coord UiPixels -> Int -> Ui.Model UiId -> List Ui.Screenshot -> Model -> Element UiId
-view scale screen top uiState screenshots model =
+view : UiScale -> Coord UiPixels -> Ui.Model UiId -> List Ui.Screenshot -> Model -> Element UiId
+view scale window uiState screenshots model =
     let
         area =
-            areaSize screen top
+            areaSize window
 
         header =
             Ui.leftAndRight
@@ -311,26 +305,18 @@ view scale screen top uiState screenshots model =
                 )
                 (headerButton Types.CloseButton "Close")
     in
-    Ui.topLeft { size = screen }
-        (Ui.el
-            { padding = { topLeft = Coord.xy windowMargin (top + windowMargin), bottomRight = Coord.origin }
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            }
-            (Ui.el
-                { padding = Ui.paddingXY windowPadding windowPadding
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = spacing, padding = Ui.noPadding }
-                    [ header
-                    , Ui.row { spacing = spacing, padding = Ui.noPadding }
-                        [ previewList scale uiState (Coord.yRaw area) screenshots model
-                        , imageArea scale area screenshots model
-                        ]
-                    ]
-                )
-            )
+    Ui.el
+        { padding = Ui.paddingXY windowPadding windowPadding
+        , inFront = []
+        , borderAndFill = Ui.defaultElBorderAndFill
+        }
+        (Ui.column { spacing = spacing, padding = Ui.noPadding }
+            [ header
+            , Ui.row { spacing = spacing, padding = Ui.noPadding }
+                [ previewList scale uiState (Coord.yRaw area) screenshots model
+                , imageArea scale area screenshots model
+                ]
+            ]
         )
 
 

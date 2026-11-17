@@ -1,9 +1,11 @@
 module Main exposing (App, Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, WeatherState, persistConfig)
 
-{-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
-a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
-password, join it; networks joined before are joined again by themselves), and the weather once either is connected, and a calculator
-(Calculator.elm) that opens from the toolbar.
+{-| Elm OS: a mouse cursor, a toolbar with a clock, and apps that open from the toolbar,
+drawn by the UI framework (Ui.elm, from town-collab). Each open app gets a window, laid
+out automatically by its size limits (Layout.elm, `windows`). Among them: the debug app,
+the network app (wired Ethernet: plug in a cable; wifi: pick a network, type its
+password, join it; networks joined before are joined again by themselves), the weather
+once either is connected, and a calculator (Calculator.elm).
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
 including a Frame whenever the screen is ready for a frame (HostMessage.elm). `update` answers with a
@@ -33,6 +35,7 @@ import HostMessage
 import Ipv4
 import Json.Decode as D
 import Keyboard exposing (Key(..))
+import Layout
 import News exposing (NewsState(..))
 import Nonempty
 import Persist
@@ -324,6 +327,9 @@ type alias Model =
     , ticTacToeOpen : Bool
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
+    , debugOpen : Bool
+    , networkOpen : Bool
+    , weatherOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Ui.Model UiId
@@ -355,6 +361,16 @@ type App
     | TicTacToeApp
     | EditorApp
     | ScreenshotViewerApp
+    | DebugApp
+    | NetworkApp
+    | WeatherApp
+
+
+{-| Every app, in the order the ones open at start are laid out.
+-}
+allApps : List App
+allApps =
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
 
 
 type WeatherState
@@ -416,6 +432,9 @@ init =
     , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
+    , debugOpen = True
+    , networkOpen = True
+    , weatherOpen = True
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
     , uiState = Ui.init
@@ -1021,11 +1040,16 @@ click model id uiState =
                 here =
                     mouseDisplay model
 
+                -- Last in appDisplays: laid out after the apps already open there.
                 moved =
-                    { model | appDisplays = SeqDict.insert app here.name model.appDisplays }
+                    { model | appDisplays = SeqDict.remove app model.appDisplays |> SeqDict.insert app here.name }
             in
             if appIsOpen app model && (displayOf app model).id /= here.id then
                 ( { moved | uiState = uiState }, [] )
+
+            else if appIsOpen app model then
+                -- closing it
+                clickElement model id uiState
 
             else
                 clickElement moved id uiState
@@ -1082,6 +1106,24 @@ appButton id =
 
                 ScreenshotViewer.Types.FitButton ->
                     Nothing
+
+        DebugButton ->
+            Just DebugApp
+
+        NetworkAppButton ->
+            Just NetworkApp
+
+        WeatherAppButton ->
+            Just WeatherApp
+
+        CloseDebugButton ->
+            Nothing
+
+        CloseNetworkButton ->
+            Nothing
+
+        CloseWeatherButton ->
+            Nothing
 
         HackerNews id2 ->
             case id2 of
@@ -1187,6 +1229,15 @@ appIsOpen app model =
         ScreenshotViewerApp ->
             model.screenshotViewer.isOpen
 
+        DebugApp ->
+            model.debugOpen
+
+        NetworkApp ->
+            model.networkOpen
+
+        WeatherApp ->
+            model.weatherOpen
+
 
 clickElement : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
 clickElement model id uiState =
@@ -1235,7 +1286,7 @@ clickElement model id uiState =
             fetchWeather model
 
         AboutButton ->
-            ( { model | aboutOpen = not model.aboutOpen, editorOpen = False }, [] )
+            ( { model | aboutOpen = not model.aboutOpen }, [] )
 
         NewsButton ->
             let
@@ -1261,12 +1312,11 @@ clickElement model id uiState =
                     )
 
                 ( False, _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False }, [] )
+                    ( { model | newsOpen = isOpen }, [] )
 
         EditorButton ->
             ( { model
                 | editorOpen = not model.editorOpen
-                , aboutOpen = False
                 , uiState =
                     Ui.setFocus
                         (if model.editorOpen then
@@ -1292,6 +1342,24 @@ clickElement model id uiState =
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
+
+        DebugButton ->
+            ( { model | debugOpen = not model.debugOpen }, [] )
+
+        CloseDebugButton ->
+            ( { model | debugOpen = False }, [] )
+
+        NetworkAppButton ->
+            ( { model | networkOpen = not model.networkOpen }, [] )
+
+        CloseNetworkButton ->
+            ( { model | networkOpen = False }, [] )
+
+        WeatherAppButton ->
+            ( { model | weatherOpen = not model.weatherOpen }, [] )
+
+        CloseWeatherButton ->
+            ( { model | weatherOpen = False }, [] )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -1733,6 +1801,24 @@ dragSelect focus mouse position model =
         CloseEditorButton ->
             model
 
+        DebugButton ->
+            model
+
+        CloseDebugButton ->
+            model
+
+        NetworkAppButton ->
+            model
+
+        CloseNetworkButton ->
+            model
+
+        WeatherAppButton ->
+            model
+
+        CloseWeatherButton ->
+            model
+
         News _ ->
             model
 
@@ -1923,8 +2009,8 @@ view model display ui =
            )
 
 
-{-| The main display: the first, with the debug overlay, the network panel and the
-notices on it. A stand-in until the host says which displays there are.
+{-| The main display: the first, with the notices on it, and the apps that haven't been
+moved to another display. A stand-in until the host says which displays there are.
 -}
 mainDisplay : Model -> Display
 mainDisplay model =
@@ -1957,11 +2043,21 @@ displayOf app model =
             mainDisplay model
 
 
-{-| The size, in UI pixels, of the display an app shows on.
+{-| The size, in UI pixels, of an app's window (`windows`); the whole display it shows
+on while it isn't open.
 -}
 appUiSize : App -> Model -> Coord UiPixels
 appUiSize app model =
-    Display.uiSize (displayOf app model)
+    let
+        display =
+            displayOf app model
+    in
+    case List.filter (\( windowApp, _ ) -> windowApp == app) (windows model display) of
+        ( _, bounds ) :: _ ->
+            Coord.minus bounds.topLeft bounds.bottomRight
+
+        [] ->
+            Display.uiSize display
 
 
 {-| Device pixels per UI pixel where the mouse is: the cursor's size, and how far the
@@ -1990,7 +2086,7 @@ uiMouseOn display point =
 -}
 screenshotViewerArea : Model -> Coord UiPixels
 screenshotViewerArea model =
-    ScreenshotViewer.areaSize (appUiSize ScreenshotViewerApp model) toolbarHeight
+    ScreenshotViewer.areaSize (appUiSize ScreenshotViewerApp model)
 
 
 {-| The mouse moved from where `before` has it to where `after` has it: moves a screenshot
@@ -2111,62 +2207,27 @@ headingSize =
     Sprite.Big
 
 
-{-| Everything the UI framework draws on a display. On each, a toolbar in the top left;
-on the main display the debug panel in the bottom left corner and the wifi panel in the
-top right; and each open app on its display: the calculator under the toolbar, the text
-editor or the about page in the middle.
+{-| Everything the UI framework draws on a display: the toolbar along the top, each
+app open on this display in the window `windows` gives it, and on the main display the
+notices.
 -}
 displayUi : Model -> Display -> Ui.Element UiId
 displayUi model display =
-    let
-        isMain =
-            display.id == (mainDisplay model).id
-
-        on app element =
-            if appIsOpen app model && (displayOf app model).id == display.id then
-                [ element () ]
-
-            else
-                []
-
-        size =
-            Display.uiSize display
-    in
     Ui.el
-        { padding = { topLeft = Coord.origin, bottomRight = size }
+        { padding = { topLeft = Coord.origin, bottomRight = Display.uiSize display }
         , inFront =
-            (if isMain then
-                [ overlay model, networkPanel model ]
-
-             else
-                []
-            )
-                ++ [ toolbar model display ]
-                ++ on EditorApp (\() -> editorWindow model)
-                ++ on CalculatorApp (\() -> calculatorWindow model)
-                ++ on TicTacToeApp (\() -> ticTacToeWindow model)
-                ++ on AboutApp (\() -> aboutPage model)
-                ++ on NewsApp (\() -> Ui.topRight { size = size } (News.view model.uiState model.news))
-                ++ on AsciiCollabApp
-                    (\() ->
-                        AsciiCollab.view
-                            size
-                            (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea))
-                            model.asciiCollab
+            toolbar model display
+                :: List.map
+                    (\( app, bounds ) ->
+                        Ui.el
+                            { padding = { topLeft = bounds.topLeft, bottomRight = Coord.origin }
+                            , inFront = []
+                            , borderAndFill = Ui.NoBorderOrFill
+                            }
+                            (appView app (Coord.minus bounds.topLeft bounds.bottomRight) model)
                     )
-                ++ on HackerNewsApp
-                    (\() -> Ui.topRight { size = size } (HackerNews.view model.lazyCache model.uiState size model.hackerNews))
-                ++ on ScreenshotViewerApp
-                    (\() ->
-                        ScreenshotViewer.view
-                            (Display.uiScale display)
-                            size
-                            toolbarHeight
-                            model.uiState
-                            model.screenshots
-                            model.screenshotViewer
-                    )
-                ++ (if isMain then
+                    (windows model display)
+                ++ (if display.id == (mainDisplay model).id then
                         case model.upgradingTo of
                             Just build ->
                                 [ notice model ("Upgrade to " ++ build ++ " in progress") ]
@@ -2187,12 +2248,166 @@ displayUi model display =
         Ui.empty
 
 
-{-| The debug panel, in the bottom left corner of the screen.
+
+-- WINDOW LAYOUT
+
+
+{-| Where each app open on a display goes, in UI pixels from the display's top left
+corner: laid out by Layout.elm under the toolbar, in the order they were opened (the
+ones open from the start first).
+-}
+windows : Model -> Display -> List ( App, Bounds UiPixels )
+windows model display =
+    let
+        areaTopLeft =
+            Coord.xy windowGap (toolbarHeight + windowGap)
+
+        area =
+            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap windowGap)) (Display.uiSize display)
+
+        inOrder =
+            List.filter (\app -> not (SeqDict.member app model.appDisplays)) allApps
+                ++ SeqDict.keys model.appDisplays
+    in
+    inOrder
+        |> List.filter (\app -> appIsOpen app model && (displayOf app model).id == display.id)
+        |> List.map (\app -> ( app, appLimits app model ))
+        |> Layout.layout windowGap area
+        |> List.map
+            (\( app, bounds ) ->
+                ( app
+                , { topLeft = Coord.plus areaTopLeft bounds.topLeft
+                  , bottomRight = Coord.plus areaTopLeft bounds.bottomRight
+                  }
+                )
+            )
+
+
+{-| Space between windows, and around them.
+-}
+windowGap : Int
+windowGap =
+    8
+
+
+{-| How big each app's window can be. The ones that are always the same size say what
+size their view is.
+-}
+appLimits : App -> Model -> Layout.Limits
+appLimits app model =
+    case app of
+        AboutApp ->
+            Layout.fixed (Ui.size (aboutPage model))
+
+        NewsApp ->
+            let
+                width =
+                    Coord.xRaw (Ui.size (News.view model.uiState (Units.uiPixels 300) model.news))
+            in
+            { min = Coord.xy width 300, preferred = Coord.xy width 1100, max = Coord.xy width 100000 }
+
+        HackerNewsApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
+
+        AsciiCollabApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
+
+        CalculatorApp ->
+            Layout.fixed (Ui.size (Calculator.view False model.calculator))
+
+        TicTacToeApp ->
+            Layout.fixed (Ui.size (TicTacToe.view model.ticTacToe))
+
+        EditorApp ->
+            { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
+            , preferred = Coord.xy (Quantity.unwrap (em 40) + 16) (editorChrome + 24 * Quantity.unwrap (Sprite.lineHeight bodySize))
+            , max = Coord.xy (Quantity.unwrap (em 60) + 16) 100000
+            }
+
+        DebugApp ->
+            Layout.fixed (Ui.size (overlay model))
+
+        NetworkApp ->
+            Layout.fixed (Ui.size (networkPanel model))
+
+        WeatherApp ->
+            Layout.fixed (Ui.size (weatherPanel model))
+
+        ScreenshotViewerApp ->
+            { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
+
+
+{-| An app's view, in a window this big. The apps that are always the same size ignore
+it.
+-}
+appView : App -> Coord UiPixels -> Model -> Ui.Element UiId
+appView app size model =
+    case app of
+        AboutApp ->
+            aboutPage model
+
+        NewsApp ->
+            News.view model.uiState (Coord.y size) model.news
+
+        HackerNewsApp ->
+            HackerNews.view model.lazyCache model.uiState size model.hackerNews
+
+        AsciiCollabApp ->
+            AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
+
+        CalculatorApp ->
+            Calculator.view (calculatorFocused model) model.calculator
+
+        TicTacToeApp ->
+            TicTacToe.view model.ticTacToe
+
+        EditorApp ->
+            editorWindow model
+
+        DebugApp ->
+            overlay model
+
+        NetworkApp ->
+            networkPanel model
+
+        WeatherApp ->
+            weatherPanel model
+
+        ScreenshotViewerApp ->
+            ScreenshotViewer.view
+                (Display.uiScale (displayOf ScreenshotViewerApp model))
+                size
+                model.uiState
+                model.screenshots
+                model.screenshotViewer
+
+
+{-| A small app's window: a bordered box with a title and a Close button above its rows.
+-}
+smallWindow : { title : Ui.Element UiId, close : UiId, width : Quantity Int UiPixels } -> List (Ui.Element UiId) -> Ui.Element UiId
+smallWindow { title, close, width } rows =
+    let
+        widest =
+            List.foldl (\row soFar -> Quantity.max (Coord.x (Ui.size row)) soFar) width rows
+    in
+    Ui.el
+        { padding = Ui.paddingXY 6 6
+        , inFront = []
+        , borderAndFill = Ui.defaultElBorderAndFill
+        }
+        (Ui.column { spacing = 4, padding = Ui.noPadding }
+            (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text bodySize sans "Close"))
+                :: rows
+            )
+        )
+
+
+{-| The debug app: the build, the displays, the mouse, frame times and the boot's timings.
 -}
 overlay : Model -> Ui.Element UiId
 overlay model =
     let
-        -- The debug overlay keeps town-collab's pixel font.
+        -- The debug app keeps town-collab's pixel font.
         mono =
             Sprite.Mono
 
@@ -2286,18 +2501,10 @@ overlay model =
         seconds ms =
             fixed 2 (ms / 1000) ++ " s"
     in
-    Ui.bottomLeft { size = Display.uiSize (mainDisplay model) }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-            (Ui.el
-                { padding = Ui.paddingXY 6 6
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = 3, padding = Ui.noPadding }
-                    ([ Ui.text Sprite.Small mono "Elm OS debug"
-                     , line "Build" (BootInfo.buildText model.bootInfo)
-                     ]
-                        ++ List.indexedMap
+    smallWindow { title = Ui.text Sprite.Small mono "Elm OS debug", close = CloseDebugButton, width = debugWidth }
+        [ Ui.column { spacing = 3, padding = Ui.noPadding }
+            (line "Build" (BootInfo.buildText model.bootInfo)
+                :: List.indexedMap
                             (\i display ->
                                 line
                                     (if i == 0 then
@@ -2327,10 +2534,16 @@ overlay model =
                                 :: line "Battery" (BootInfo.batteryText model.bootInfo)
                                 :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
                            )
-                    )
-                )
             )
-        )
+        ]
+
+
+{-| The debug app's width, unless a line is longer: its lines change length as the numbers
+change, and its window shouldn't.
+-}
+debugWidth : Quantity Int UiPixels
+debugWidth =
+    Units.uiPixels 600
 
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
@@ -2535,15 +2748,15 @@ webSocketInput input model =
 -- NETWORK AND WEATHER
 
 
-{-| How wide the wifi panel's contents are, in pixels.
+{-| How wide the network and weather apps' contents are, in UI pixels.
 -}
 panelWidth : Quantity Int UiPixels
 panelWidth =
     em 28
 
 
-{-| The panel in the top right: a line for each wired card, then wifi (left out on a
-computer with a wired card and no wifi), then the weather.
+{-| The network app: a line for each wired card, then wifi (left out on a computer with
+a wired card and no wifi).
 -}
 networkPanel : Model -> Ui.Element UiId
 networkPanel model =
@@ -2720,43 +2933,44 @@ networkPanel model =
             else
                 []
     in
-    Ui.topRight { size = Display.uiSize (mainDisplay model) }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-            (Ui.el
-                { padding = Ui.paddingXY 6 6
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = 4, padding = Ui.noPadding }
-                    (clockRows model
-                        ++ wiredRows model
-                        ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
-                                []
+    smallWindow { title = Ui.text headingSize sans "Network", close = CloseNetworkButton, width = width }
+        (wiredRows model
+            ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
+                    []
 
-                            else
-                                [ header, statusLine ]
-                                    ++ networkRows
-                                    ++ joinRows
-                                    ++ disconnectRow
-                           )
-                        ++ weatherRows model
-                    )
-                )
-            )
+                else
+                    [ header, statusLine ]
+                        ++ networkRows
+                        ++ joinRows
+                        ++ disconnectRow
+               )
         )
 
 
-{-| The date and time, once the host has said (each second). In UTC until the weather
-says where this computer is.
+{-| The date and time, once the host has said (each second), at the right end of the
+toolbar: just the time when the date doesn't fit in `room`. In UTC until the weather says
+where this computer is.
 -}
-clockRows : Model -> List (Ui.Element UiId)
-clockRows model =
+clock : Quantity Int UiPixels -> Model -> Ui.Element UiId
+clock room model =
     case model.time of
         Just time ->
-            [ Ui.text bodySize sans (Clock.toString model.utcOffsetMinutes time) ]
+            let
+                box string =
+                    Ui.el { padding = Ui.paddingXY 6 3, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
+                        (Ui.text bodySize sans string)
+
+                full =
+                    box (Clock.toString model.utcOffsetMinutes time)
+            in
+            if Coord.x (Ui.size full) |> Quantity.lessThanOrEqualTo room then
+                full
+
+            else
+                box (Clock.timeOnly model.utcOffsetMinutes time)
 
         Nothing ->
-            []
+            Ui.empty
 
 
 {-| Two lines for each wired card: its name, and whether it has a cable and an address.
@@ -2955,6 +3169,12 @@ passwordInput model =
         }
 
 
+weatherPanel : Model -> Ui.Element UiId
+weatherPanel model =
+    smallWindow { title = Ui.text headingSize sans "Weather", close = CloseWeatherButton, width = panelWidth }
+        (weatherRows model)
+
+
 weatherRows : Model -> List (Ui.Element UiId)
 weatherRows model =
     let
@@ -2970,43 +3190,30 @@ weatherRows model =
         small =
             Ui.paddingXY 6 3
 
-        divider =
-            Ui.quads
-                { size = ( width, Units.uiPixels 6 )
-                , triangles =
-                    Sprite.rectangle
-                        Color.outlineColor
-                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                        (Coord.xy 0 2)
-                        ( width, Units.uiPixels 2 )
-                }
-
         degrees value =
             String.fromInt (round value) ++ "°"
     in
     case model.weather of
         NoWeather ->
             if isOnline model then
-                [ divider, Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
+                [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
 
             else
-                []
+                [ Ui.colorText Color.outlineColor bodySize font "Waiting for a network connection" ]
 
         FindingPlace ->
-            [ divider, t "Weather: finding where we are…" ]
+            [ t "Finding where we are…" ]
 
         LoadingForecast place ->
-            [ divider, t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
+            [ t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
-            [ divider
-            , Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
+            [ Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
         GotWeather place forecast ->
-            [ divider
-            , Ui.leftAndRight width
+            [ Ui.leftAndRight width
                 (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
             , Ui.row { spacing = 8, padding = Ui.noPadding }
@@ -3194,40 +3401,24 @@ toolbar model display =
                         { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
                         (openHere ScreenshotViewerApp)
                         (t "Screenshots")
+                    , Ui.selectableButton { id = NetworkAppButton, padding = small } (openHere NetworkApp) (t "Network")
+                    , Ui.selectableButton { id = WeatherAppButton, padding = small } (openHere WeatherApp) (t "Weather")
+                    , Ui.selectableButton { id = DebugButton, padding = small } (openHere DebugApp) (t "Debug")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
                     ]
+
+        row =
+            Ui.row { spacing = 4, padding = Ui.noPadding } buttons
+
+        width =
+            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels 16)
+
+        room =
+            width |> Quantity.minus (Coord.x (Ui.size row)) |> Quantity.minus (Units.uiPixels 8)
     in
-    Ui.topLeft { size = Display.uiSize display }
-        (Ui.row { spacing = 6, padding = Ui.paddingXY 8 8 } buttons)
-
-
-{-| The calculator, under the toolbar.
--}
-calculatorWindow : Model -> Ui.Element UiId
-calculatorWindow model =
-    Ui.topLeft { size = appUiSize CalculatorApp model }
-        (Ui.el
-            { padding = { topLeft = Coord.xy 8 (toolbarHeight + 8), bottomRight = Coord.origin }
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            }
-            (Calculator.view (calculatorFocused model) model.calculator)
-        )
-
-
-{-| The noughts and crosses window, under the toolbar.
--}
-ticTacToeWindow : Model -> Ui.Element UiId
-ticTacToeWindow model =
-    Ui.topLeft { size = appUiSize TicTacToeApp model }
-        (Ui.el
-            { padding = { topLeft = Coord.xy 8 (toolbarHeight + 8), bottomRight = Coord.origin }
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            }
-            (TicTacToe.view model.ticTacToe)
-        )
+    Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+        (Ui.leftAndRight width row (clock room model))
 
 
 {-| The toolbar's buttons and the gap above them, in UI pixels.
@@ -3277,8 +3468,7 @@ aboutPage model =
         field f =
             Maybe.map f system |> Maybe.withDefault "?"
     in
-    Ui.center { size = appUiSize AboutApp model }
-        (Ui.el
+    Ui.el
             { padding = Ui.paddingXY 12 10
             , inFront = []
             , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
@@ -3312,7 +3502,7 @@ aboutPage model =
                         font
                         (em 31)
                         ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
-                            ++ "The UI framework and the debug overlay's pixel font are from town-collab. "
+                            ++ "The UI framework and the debug app's pixel font are from town-collab. "
                             ++ "Text is in Noto Sans (SIL Open Font License). "
                             ++ "Weather: open-meteo.com, location: geojs.io."
                         )
@@ -3321,26 +3511,33 @@ aboutPage model =
                 , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
                 ]
             )
-        )
 
 
 
 -- TEXT EDITOR
 
 
-{-| The text box: up to 40 em wide and 24 lines tall, smaller on a small screen.
+{-| The text box: as big as the editor's window lets it be.
 -}
 editorStyle : Model -> TextInputMultiline.Style
 editorStyle model =
     let
-        ( screenWidth, screenHeight ) =
+        ( windowWidth, windowHeight ) =
             Coord.toTuple (appUiSize EditorApp model)
     in
     { font = sans
     , fontSize = bodySize
-    , width = Quantity.min (em 40) (Units.uiPixels (screenWidth - 40))
-    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodySize))
+    , width = Units.uiPixels (windowWidth - 16)
+    , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
     }
+
+
+{-| The editor window's height besides its lines of text: the padding, the title, the
+status line, the spacing between them and the text box's own padding.
+-}
+editorChrome : Int
+editorChrome =
+    2 * 8 + Quantity.unwrap (Sprite.lineHeight headingSize) + Quantity.unwrap (Sprite.lineHeight bodySize) + 2 * 6 + 2 * 4
 
 
 {-| The text editor's window: a title and a close button, the text, and where the cursor is.
@@ -3387,8 +3584,7 @@ editorWindow model =
                         ", " ++ String.fromInt (abs state.cursorSize) ++ " selected"
                    )
     in
-    Ui.center { size = appUiSize EditorApp model }
-        (Ui.elWithId EditorWindow
+    Ui.elWithId EditorWindow
             { padding = Ui.paddingXY 8 8
             , inFront = []
             , borderAndFill = Ui.defaultElBorderAndFill
@@ -3413,4 +3609,3 @@ editorWindow model =
                     )
                 ]
             )
-        )
