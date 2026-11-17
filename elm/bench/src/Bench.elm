@@ -19,6 +19,8 @@ import Wire
 import Sprite
 import Task exposing (Task)
 import Time
+import ScreenshotViewer
+import ScreenshotViewer.Types
 import Ui
 import UiId
 import Units
@@ -116,6 +118,8 @@ steps =
                             |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize)" (\() -> Sprite.textSize Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
                             |> Task.andThen (\_ -> frame (Coord.xy 1280 800) open)
                             |> Task.andThen (\_ -> frame (Coord.xy 2560 1600) open)
+                            |> Task.andThen (\_ -> screenshotViewer 1 open)
+                            |> Task.andThen (\_ -> screenshotViewer 5 open)
                     )
 
 
@@ -194,6 +198,82 @@ frame screen model =
                         in
                         ( Ui.hover (Coord.xy 400 300) ui |> List.length
                         , Ui.lazyCache [ ui ]
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen ui } ]) ] |> Bytes.width
+                        )
+                    )
+            )
+        |> Task.map (\_ -> ())
+
+
+{-| One frame of the screenshot viewer, at 1x, holding this many screenshots of the comments
+page, the first one picked and fitted.
+-}
+screenshotViewer : Int -> HackerNews.Model -> Task Never ()
+screenshotViewer count model =
+    let
+        scale =
+            Units.scaleFor (Coord.x screen)
+
+        screen =
+            Coord.xy 1280 800
+
+        window =
+            Coord.xy 1000 700
+
+        shot =
+            { uiScale = scale
+            , screenshot = Ui.elementToScreenshot (HackerNews.view Ui.noLazyCache Ui.init (Coord.toUi scale screen) model)
+            }
+
+        shots =
+            List.repeat count shot
+
+        viewer =
+            ScreenshotViewer.init
+                |> ScreenshotViewer.onClick scale (ScreenshotViewer.areaSize window) shots (ScreenshotViewer.Types.Preview 0)
+
+        element () =
+            ScreenshotViewer.view scale window Ui.init shots viewer
+
+        named label =
+            String.fromInt count ++ " screenshots: " ++ label
+    in
+    timed (named "Ui.screenshotView of one (draw it again)") (\() -> Ui.screenshotView shot |> List.length)
+        |> Task.andThen
+            (\n ->
+                let
+                    _ =
+                        Debug.log "triangles in one screenshot" n
+                in
+                timed (named "  + scale, clip and sample it (Sprite)")
+                    (\() ->
+                        Ui.screenshotView shot
+                            |> Sprite.scaleAndMove 0.5 ( 0, 0 )
+                            |> Sprite.clipTo { left = 0, top = 0, right = 800, bottom = 600 }
+                            |> Sprite.sampled Sprite.Linear
+                            |> List.length
+                    )
+            )
+        |> Task.andThen (\_ -> timed (named "ScreenshotViewer.view (build the Element)") (\() -> element ()))
+        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
+        |> Task.andThen
+            (\triangles ->
+                let
+                    _ =
+                        Debug.log (named "triangles drawn") (List.length triangles)
+                in
+                timed (named "encode Render") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = triangles } ]) ] |> Bytes.width)
+            )
+        |> Task.andThen
+            (\_ ->
+                timed (named "whole frame")
+                    (\() ->
+                        let
+                            ui =
+                                element ()
+                        in
+                        ( Ui.hover (Coord.xy 400 300) ui |> List.length
                         , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen ui } ]) ] |> Bytes.width
                         )
                     )
