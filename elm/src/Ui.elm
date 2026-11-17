@@ -274,10 +274,10 @@ screenshotSize screenshot =
 {-| What a screenshot looked like, as triangles for a screen with the given UI scale (the
 same ones `view` makes), with its top left corner at 0, 0. Nothing is hovered or focused.
 -}
-screenshotView : UiScale -> Screenshot -> List (Triangle DevicePixels)
-screenshotView scale screenshot =
+screenshotView : { uiScale : UiScale, screenshot : Screenshot } -> List (Triangle DevicePixels)
+screenshotView { uiScale, screenshot } =
     viewList
-        scale
+        uiScale
         False
         Nothing
         Nothing

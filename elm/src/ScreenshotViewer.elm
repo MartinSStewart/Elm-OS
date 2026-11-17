@@ -134,7 +134,7 @@ screenshotAdded model =
 {-| A click on one of the viewer's buttons. Takes the area the picture is in, and the
 screenshots.
 -}
-onClick : Coord UiPixels -> List Ui.Screenshot -> Types.UiId -> Model -> Model
+onClick : Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Types.UiId -> Model -> Model
 onClick area screenshots id model =
     case id of
         Types.OpenButton ->
@@ -236,7 +236,6 @@ fit area screenshot model =
 
         zoom =
             clamp minZoom maxZoom (min (areaW / max 1 w) (areaH / max 1 h))
-
     in
     { model
         | zoom = zoom
@@ -277,7 +276,7 @@ nth index list =
 
 {-| The viewer's window, filling a window of the given size (UI pixels).
 -}
-view : UiScale -> Coord UiPixels -> Ui.Model UiId -> List Ui.Screenshot -> Model -> Element UiId
+view : UiScale -> Coord UiPixels -> Ui.Model UiId -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
 view scale window uiState screenshots model =
     let
         area =
@@ -330,7 +329,7 @@ text =
     Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
 
 
-previewList : UiScale -> Ui.Model UiId -> Int -> List Ui.Screenshot -> Model -> Element UiId
+previewList : UiScale -> Ui.Model UiId -> Int -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
 previewList scale uiState height screenshots model =
     Ui.viewport
         { id = ScreenshotViewer Types.PreviewList
@@ -359,11 +358,11 @@ previewList scale uiState height screenshots model =
         )
 
 
-preview : UiScale -> Model -> Int -> Ui.Screenshot -> Element UiId
+preview : UiScale -> Model -> Int -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> Element UiId
 preview scale model index screenshot =
     let
         ( w, h ) =
-            Coord.toTuple (Ui.screenshotSize screenshot) |> Tuple.mapBoth toFloat toFloat
+            Coord.toTuple (Ui.screenshotSize screenshot.screenshot) |> Tuple.mapBoth toFloat toFloat
 
         ( maxW, maxH ) =
             Coord.toTuple previewSize |> Tuple.mapBoth toFloat toFloat
@@ -381,8 +380,8 @@ preview scale model index screenshot =
         )
 
 
-imageArea : UiScale -> Coord UiPixels -> List Ui.Screenshot -> Model -> Element UiId
-imageArea scale area screenshots model =
+imageArea : Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
+imageArea area screenshots model =
     let
         background : List (Triangle UiPixels)
         background =
@@ -396,7 +395,7 @@ imageArea scale area screenshots model =
                 background
                     ++ (case Maybe.andThen (\index -> nth index screenshots) model.selected of
                             Just screenshot ->
-                                pictureTriangles scale model.zoom model.offset area screenshot
+                                pictureTriangles model.zoom model.offset area screenshot
 
                             Nothing ->
                                 []
@@ -408,17 +407,17 @@ imageArea scale area screenshots model =
 {-| A screenshot drawn `zoom` times as big as a screen of this UI scale shows it, with its
 top left corner at the given point of a box of the given size, and cut off at the box.
 -}
-pictureTriangles : UiScale -> Float -> ( Float, Float ) -> Coord UiPixels -> Ui.Screenshot -> List (Triangle UiPixels)
-pictureTriangles scale zoom offset box screenshot =
+pictureTriangles : Float -> ( Float, Float ) -> Coord UiPixels -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> List (Triangle UiPixels)
+pictureTriangles zoom offset box screenshot =
     let
         -- The picture is in device pixels, the box in UI pixels.
         uiPerDevice =
-            1 / toFloat (Units.scaleInt scale)
+            1 / toFloat (Units.scaleInt screenshot.uiScale)
 
         ( boxW, boxH ) =
             Coord.toTuple box |> Tuple.mapBoth toFloat toFloat
     in
-    Ui.screenshotView scale screenshot
+    Ui.screenshotView screenshot
         |> Sprite.scaleAndMove (zoom * uiPerDevice) offset
         |> Sprite.clipTo { left = 0, top = 0, right = boxW, bottom = boxH }
         |> Sprite.sampled

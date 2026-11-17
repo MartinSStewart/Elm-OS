@@ -21,8 +21,6 @@ import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
 import Clock
-import TicTacToe
-import TicTacToe.Types
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
@@ -46,6 +44,8 @@ import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
+import TicTacToe
+import TicTacToe.Types
 import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
@@ -336,7 +336,7 @@ type alias Model =
     , showUiBorders : Bool
     , screenshotViewer : ScreenshotViewer.Model
     , takingScreenshot : Maybe ScreenshotPreview
-    , screenshots : List Ui.Screenshot
+    , screenshots : List { uiScale : UiScale, screenshot : Ui.Screenshot }
     }
 
 
@@ -683,7 +683,9 @@ step event model =
                     case Ui.hoverIdOnly (uiMouseOn display data.mouse) displayUi2 of
                         ( _, { relativePositionToUi, ui } ) :: _ ->
                             ( { model
-                                | screenshots = Ui.elementToScreenshot ui :: model.screenshots
+                                | screenshots =
+                                    { uiScale = uiScale model, screenshot = Ui.elementToScreenshot ui }
+                                        :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
@@ -692,7 +694,9 @@ step event model =
 
                         [] ->
                             ( { model
-                                | screenshots = Ui.elementToScreenshot displayUi2 :: model.screenshots
+                                | screenshots =
+                                    { uiScale = uiScale model, screenshot = Ui.elementToScreenshot displayUi2 }
+                                        :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
@@ -2515,35 +2519,35 @@ overlay model =
         [ Ui.column { spacing = 3, padding = Ui.noPadding }
             (line "Build" (BootInfo.buildText model.bootInfo)
                 :: List.indexedMap
-                            (\i display ->
-                                line
-                                    (if i == 0 then
-                                        "Screen"
+                    (\i display ->
+                        line
+                            (if i == 0 then
+                                "Screen"
 
-                                     else
-                                        ""
-                                    )
-                                    (display.name
-                                        ++ " "
-                                        ++ String.fromInt (Coord.xRaw display.size)
-                                        ++ " x "
-                                        ++ String.fromInt (Coord.yRaw display.size)
-                                        ++ ", UI scale "
-                                        ++ String.fromInt (Units.scaleInt (Display.uiScale display))
-                                        ++ "x"
-                                    )
+                             else
+                                ""
                             )
-                            model.displays
-                        ++ [ line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
-                           , rendererLine
-                           , cursorLine
-                           , line "Frame" (frameText model)
-                           ]
-                        ++ statsLines
-                        ++ (line "Clock" (BootInfo.clockText model.bootInfo)
-                                :: line "Battery" (BootInfo.batteryText model.bootInfo)
-                                :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
-                           )
+                            (display.name
+                                ++ " "
+                                ++ String.fromInt (Coord.xRaw display.size)
+                                ++ " x "
+                                ++ String.fromInt (Coord.yRaw display.size)
+                                ++ ", UI scale "
+                                ++ String.fromInt (Units.scaleInt (Display.uiScale display))
+                                ++ "x"
+                            )
+                    )
+                    model.displays
+                ++ [ line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
+                   , rendererLine
+                   , cursorLine
+                   , line "Frame" (frameText model)
+                   ]
+                ++ statsLines
+                ++ (line "Clock" (BootInfo.clockText model.bootInfo)
+                        :: line "Battery" (BootInfo.batteryText model.bootInfo)
+                        :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
+                   )
             )
         ]
 
@@ -3479,48 +3483,48 @@ aboutPage model =
             Maybe.map f system |> Maybe.withDefault "?"
     in
     Ui.el
-            { padding = Ui.paddingXY 12 10
-            , inFront = []
-            , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-            }
-            (Ui.column { spacing = 4, padding = Ui.noPadding }
-                [ Ui.text headingSize sans "Elm OS"
-                , t "A Linux kernel that boots straight into one Elm program."
-                , t ""
-                , line "Version" (field .commit)
-                , line "Kernel" (field .kernel)
-                , line "CPU" (field .cpu)
-                , line "Memory"
-                    (case model.stats of
-                        Just stats ->
-                            String.fromInt stats.memTotal ++ " MB"
+        { padding = Ui.paddingXY 12 10
+        , inFront = []
+        , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+        }
+        (Ui.column { spacing = 4, padding = Ui.noPadding }
+            [ Ui.text headingSize sans "Elm OS"
+            , t "A Linux kernel that boots straight into one Elm program."
+            , t ""
+            , line "Version" (field .commit)
+            , line "Kernel" (field .kernel)
+            , line "CPU" (field .cpu)
+            , line "Memory"
+                (case model.stats of
+                    Just stats ->
+                        String.fromInt stats.memTotal ++ " MB"
 
-                        Nothing ->
-                            "?"
-                    )
-                , line "Graphics"
-                    (case model.renderer of
-                        Just r ->
-                            r.name
+                    Nothing ->
+                        "?"
+                )
+            , line "Graphics"
+                (case model.renderer of
+                    Just r ->
+                        r.name
 
-                        Nothing ->
-                            "?"
+                    Nothing ->
+                        "?"
+                )
+            , t ""
+            , t
+                (Sprite.wrap bodySize
+                    font
+                    (em 31)
+                    ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
+                        ++ "The UI framework and the debug app's pixel font are from town-collab. "
+                        ++ "Text is in Noto Sans (SIL Open Font License). "
+                        ++ "Weather: open-meteo.com, location: geojs.io."
                     )
-                , t ""
-                , t
-                    (Sprite.wrap bodySize
-                        font
-                        (em 31)
-                        ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
-                            ++ "The UI framework and the debug app's pixel font are from town-collab. "
-                            ++ "Text is in Noto Sans (SIL Open Font License). "
-                            ++ "Weather: open-meteo.com, location: geojs.io."
-                        )
-                    )
-                , t ""
-                , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
-                ]
-            )
+                )
+            , t ""
+            , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
+            ]
+        )
 
 
 
@@ -3595,27 +3599,27 @@ editorWindow model =
                    )
     in
     Ui.elWithId EditorWindow
-            { padding = Ui.paddingXY 8 8
-            , inFront = []
-            , borderAndFill = Ui.defaultElBorderAndFill
-            }
-            (Ui.column { spacing = 6, padding = Ui.noPadding }
-                [ Ui.leftAndRight style.width
-                    (Ui.text headingSize sans "Text editor")
-                    (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-                , Ui.textInputMultiline
-                    { id = EditorInput
-                    , style = style
-                    , state = textInput
-                    }
-                , Ui.leftAndRight style.width
-                    (t status)
-                    (Ui.customText bodySize
-                        [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
-                        , { text = " undo, ", color = Color.outlineColor, font = sans }
-                        , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
-                        , { text = " redo", color = Color.outlineColor, font = sans }
-                        ]
-                    )
-                ]
-            )
+        { padding = Ui.paddingXY 8 8
+        , inFront = []
+        , borderAndFill = Ui.defaultElBorderAndFill
+        }
+        (Ui.column { spacing = 6, padding = Ui.noPadding }
+            [ Ui.leftAndRight style.width
+                (Ui.text headingSize sans "Text editor")
+                (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+            , Ui.textInputMultiline
+                { id = EditorInput
+                , style = style
+                , state = textInput
+                }
+            , Ui.leftAndRight style.width
+                (t status)
+                (Ui.customText bodySize
+                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
+                    , { text = " undo, ", color = Color.outlineColor, font = sans }
+                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
+                    , { text = " redo", color = Color.outlineColor, font = sans }
+                    ]
+                )
+            ]
+        )
