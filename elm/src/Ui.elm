@@ -1728,6 +1728,23 @@ hoverHelper :
     -> ElementFull id lazy
     -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
 hoverHelper hovers point position element =
+    -- Nothing outside an element is drawn (Ui.view clips its children to it), so
+    -- nothing outside it can be hovered: skipping it saves walking the rest of a long
+    -- page, such as every other comment of a Hacker News thread.
+    if contains point position (sizeHelper element) then
+        hoverInside hovers point position element
+
+    else
+        hovers
+
+
+hoverInside :
+    List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
+    -> Coord UiPixels
+    -> Coord UiPixels
+    -> ElementFull id lazy
+    -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
+hoverInside hovers point position element =
     case element of
         TextInput data ->
             if contains point position (TextInput.size data.style) then

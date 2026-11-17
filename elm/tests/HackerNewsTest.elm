@@ -127,6 +127,25 @@ suite =
                     |> Wire.fromBytes Ui.w3_decode_Screenshot
                     |> Expect.equal (Just screenshot)
             )
+        , test "hovering the second comment's toggle finds it, with the elements around it"
+            (\() ->
+                let
+                    element =
+                        view Ui.noLazyCache commentsModel
+
+                    toggle =
+                        UiId.HackerNews (HackerNews.Types.CommentToggle 1)
+                in
+                case Ui.findInput toggle element of
+                    Just (Ui.ButtonType { position }) ->
+                        Ui.hoverIdOnly (Coord.plus (Coord.xy 1 1) position) element
+                            |> List.head
+                            |> Maybe.map Tuple.first
+                            |> Expect.equal (Just toggle)
+
+                    _ ->
+                        Expect.fail "no toggle button"
+            )
         ]
 
 
