@@ -27,7 +27,6 @@ blocks they are; below that, they are blended (`Sprite.Linear`).
 import Color
 import Coord exposing (Coord)
 import ScreenshotViewer.Types as Types
-import SeqDict
 import Sprite exposing (Sampling(..), Triangle)
 import Ui exposing (Element)
 import UiId exposing (UiId(..))

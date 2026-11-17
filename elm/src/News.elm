@@ -32,10 +32,9 @@ import Effect
 import Json.Decode as D
 import News.Types exposing (Day, Inline(..), Item(..), NewsState(..), Topic)
 import Quantity exposing (Quantity)
-import SeqDict
 import Sprite
 import Time
-import Ui exposing (Element, ElementState(..))
+import Ui exposing (Element)
 import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
 

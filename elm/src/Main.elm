@@ -693,11 +693,14 @@ step event model =
                     in
                     case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
                         ( _, { ui } ) :: _ ->
+                            let
+                                ( state, screenshot ) =
+                                    Ui.elementToScreenshot model.uiState ui
+                            in
                             ( { model
-                                | screenshots = model.screenshots
-
-                                --{ uiState = model.uiState, uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot ui }
-                                --    :: model.screenshots
+                                | screenshots =
+                                    { uiState = state, uiScale = Display.uiScale display, screenshot = screenshot }
+                                        :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
                               }
@@ -3617,7 +3620,6 @@ editorWindow model =
             , Ui.textInputMultiline
                 { id = EditorInput
                 , style = style
-                , state = textInput
                 }
             , Ui.leftAndRight style.width
                 (t status)
