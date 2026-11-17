@@ -57,11 +57,15 @@ suite =
                     |> List.map (\( _, _, size ) -> size)
                     |> Expect.equal [ ( 900, 2000 ), ( 900, 1892 ), ( 100, 100 ) ]
             )
-        , test "too many windows get squeezed but stay on screen"
+        , test "the oldest windows are left out when they don't all fit"
             (\_ ->
-                run 600 400 (List.map (\i -> ( String.fromInt i, fixed 400 300 )) (List.range 1 4))
-                    |> List.all (\( _, ( x, y ), ( w, h ) ) -> x >= 0 && y >= 0 && x + w <= 600 && y + h <= 400)
-                    |> Expect.equal True
+                run 900 400 (List.map (\i -> ( String.fromInt i, fixed 400 300 )) (List.range 1 4))
+                    |> Expect.equal [ ( "3", ( 0, 0 ), ( 400, 300 ) ), ( "4", ( 408, 0 ), ( 400, 300 ) ) ]
+            )
+        , test "the newest window stays, squeezed, when even it doesn't fit"
+            (\_ ->
+                run 300 200 [ ( "old", fixed 100 100 ), ( "new", fixed 400 300 ) ]
+                    |> Expect.equal [ ( "new", ( 0, 0 ), ( 300, 200 ) ) ]
             )
         , test "windows never overlap"
             (\_ ->

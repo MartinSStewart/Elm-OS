@@ -12,6 +12,9 @@ fine for the dozen or so apps a display shows.
 Space beyond what the apps prefer goes to the ones that can grow (up to their maximum),
 and what is left over stays empty, on the right and at the bottom.
 
+When the apps don't all fit at their minimum sizes, the oldest are left out (hidden,
+still open) until the rest do; the newest is always shown, squeezed if need be.
+
 -}
 
 import Bounds exposing (Bounds)
@@ -36,9 +39,10 @@ type alias Range =
     { min : Int, preferred : Int, max : Int }
 
 
-{-| Lay the windows out in `area`, `gap` UI pixels apart. Each window's bounds are
-relative to the area's top left corner; each is within its app's limits when they all
-fit, and smaller than its minimum when they don't.
+{-| Lay the windows out in `area`, `gap` UI pixels apart, oldest first. Each window's
+bounds are relative to the area's top left corner and within its app's limits. The
+oldest windows are left out of the result when they don't all fit; the newest is always
+in it, smaller than its minimum if even it alone doesn't fit.
 -}
 layout : Int -> Coord UiPixels -> List ( a, Limits ) -> List ( a, Bounds UiPixels )
 layout gap area windows =
@@ -61,10 +65,14 @@ layout gap area windows =
                             else
                                 soFar
                         )
-                        { score = 1 / 0, bounds = [] }
+                        { score = 1 / 0, fits = False, bounds = [] }
                         candidates
             in
-            best.bounds
+            if best.fits || List.isEmpty rest then
+                best.bounds
+
+            else
+                layout gap area rest
 
 
 {-| Every way of splitting the windows, in order, into columns. Fewer columns first, so
@@ -97,7 +105,7 @@ splits first rest =
                 (splits next others)
 
 
-place : Int -> Coord UiPixels -> List (List ( a, Limits )) -> { score : Float, bounds : List ( a, Bounds UiPixels ) }
+place : Int -> Coord UiPixels -> List (List ( a, Limits )) -> { score : Float, fits : Bool, bounds : List ( a, Bounds UiPixels ) }
 place gap area columns =
     let
         ( areaWidth, areaHeight ) =
@@ -117,6 +125,7 @@ place gap area columns =
                 |> Tuple.second
     in
     { score = List.foldl (\( _, limits, size ) sum -> sum + penalty limits size) 0 placed
+    , fits = List.all (\( _, limits, ( _, size ) ) -> Coord.xRaw size >= Coord.xRaw limits.min && Coord.yRaw size >= Coord.yRaw limits.min) placed
     , bounds =
         List.map
             (\( a, _, ( topLeft, size ) ) -> ( a, { topLeft = topLeft, bottomRight = Coord.plus topLeft size } ))

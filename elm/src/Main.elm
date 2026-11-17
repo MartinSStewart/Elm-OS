@@ -1044,7 +1044,9 @@ click model id uiState =
                 moved =
                     { model | appDisplays = SeqDict.remove app model.appDisplays |> SeqDict.insert app here.name }
             in
-            if appIsOpen app model && (displayOf app model).id /= here.id then
+            if appIsOpen app model && not (shownOn here app model) then
+                -- On another display, or left out of this one's layout for want of room:
+                -- shown here, as the newest.
                 ( { moved | uiState = uiState }, [] )
 
             else if appIsOpen app model then
@@ -2254,7 +2256,8 @@ displayUi model display =
 
 {-| Where each app open on a display goes, in UI pixels from the display's top left
 corner: laid out by Layout.elm under the toolbar, in the order they were opened (the
-ones open from the start first).
+ones open from the start first). The oldest are left out when there isn't room for them
+all; they stay open, and their toolbar buttons bring them back.
 -}
 windows : Model -> Display -> List ( App, Bounds UiPixels )
 windows model display =
@@ -2281,6 +2284,13 @@ windows model display =
                   }
                 )
             )
+
+
+{-| Whether an app has a window on a display: it is open there, and there was room for it.
+-}
+shownOn : Display -> App -> Model -> Bool
+shownOn display app model =
+    List.any (\( windowApp, _ ) -> windowApp == app) (windows model display)
 
 
 {-| Space between windows, and around them.
@@ -3348,7 +3358,7 @@ toolbar : Model -> Display -> Ui.Element UiId
 toolbar model display =
     let
         openHere app =
-            appIsOpen app model && (displayOf app model).id == display.id
+            shownOn display app model
 
         t =
             Ui.text bodySize sans
