@@ -3,7 +3,7 @@ module Main exposing (Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemS
 {-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
 a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
 password, join it; networks joined before are joined again by themselves), and the weather once either is connected, a sound
-panel (the output and the volume, Sound.elm), and a calculator (Calculator.elm) that opens from the toolbar.
+panel (the output and the volume, Sound.elm), a calculator (Calculator.elm) and Doom (DoomApp.elm) that open from the toolbar.
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
 including a Frame whenever the screen is ready for a frame (HostMessage.elm). `update` answers with a
@@ -18,6 +18,7 @@ import Color exposing (Color)
 import Coord exposing (Coord)
 import Date
 import Dict exposing (Dict)
+import DoomApp
 import Duration exposing (Duration)
 import Effect exposing (Effect)
 import HostMessage
@@ -284,6 +285,7 @@ type alias Model =
     , news : NewsState
     , calculator : Calculator.Model
     , calculatorOpen : Bool
+    , doom : DoomApp.Model
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
@@ -336,6 +338,8 @@ type UiId
     | ConfirmPowerButton
     | CancelPowerButton
     | CalculatorUiId Calculator.UiId
+    | DoomButton
+    | DoomUiId DoomApp.UiId
     | EditorButton
     | EditorInput
     | EditorWindow
@@ -378,6 +382,7 @@ init =
     , news = NewsNotRequested
     , calculator = Calculator.init
     , calculatorOpen = False
+    , doom = DoomApp.init
     , confirmPower = Nothing
     , editorOpen = False
     , upgradingTo = Nothing
@@ -453,6 +458,12 @@ idToString uiId =
         CalculatorUiId uiId2 ->
             "CalculatorUiId_" ++ Calculator.idToString uiId2
 
+        DoomButton ->
+            "DoomButton"
+
+        DoomUiId uiId2 ->
+            "DoomUiId_" ++ DoomApp.idToString uiId2
+
         EditorButton ->
             "EditorButton"
 
@@ -509,14 +520,19 @@ step event model =
             -- effects now. The notices and the sound outputs are about the program before
             -- this one (the Model is the one it saved); the host sends ReflashNeeded and
             -- Audio again.
+            let
+                ( doom, doomEffects ) =
+                    DoomApp.restarted model.doom
+            in
             ( { model
                 | screenSize = Coord.xy w h
                 , mouse = Coord.xy (w // 2) (h // 2)
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
+                , doom = doom
                 , soundOutputs = Nothing
               }
-            , BootInfo.start
+            , BootInfo.start ++ doomEffects
             )
 
         Frame time ->
@@ -543,8 +559,11 @@ step event model =
                                     model.frameIntervals
                         , uiState = Ui.onAnimationFrame elapsedTime model.uiState
                     }
+
+                ( doom, doomEffects ) =
+                    DoomApp.frame time model.doom
             in
-            ( next, [ Effect.Render (\() -> view model) ] )
+            ( { next | doom = doom }, Effect.Render (\() -> view { model | doom = doom }) :: doomEffects )
 
         HttpResponse id result ->
             case Effect.stringToHttpRequestId id of
@@ -629,32 +648,19 @@ step event model =
                 _ ->
                     ( moved, [] )
 
-        Button 0 True ->
-            let
-                cursor =
-                    uiMouse model
-            in
-            case Ui.hover cursor (screenUi model) of
-                ( id, { relativePositionToUi, ui } ) :: _ ->
-                    let
-                        ( uiState, maybeModelAndEffects ) =
-                            Ui.onMouseDown (click model) relativePositionToUi cursor id (idToString id) ui model.uiState
-                    in
-                    case maybeModelAndEffects of
-                        Just ( model2, effects ) ->
-                            ( { model2 | selectingText = True }, effects )
+        Button b down ->
+            if DoomApp.takesButtons model.doom then
+                -- The game has the mouse, or Doom's Controls panel waits for a button.
+                ( { model
+                    | doom = DoomApp.button b down model.doom
+                    , pressed = model.pressed && down
+                    , selectingText = model.selectingText && down
+                  }
+                , []
+                )
 
-                        Nothing ->
-                            ( { model | selectingText = True, uiState = uiState }, [] )
-
-                [] ->
-                    ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
-
-        Button 0 False ->
-            ( { model | pressed = False, selectingText = False }, [] )
-
-        Button _ down ->
-            ( { model | pressed = down }, [] )
+            else
+                uiButton b down model
 
         Wheel clicks ->
             case Ui.hover (uiMouse model) (screenUi model) of
@@ -666,7 +672,7 @@ step event model =
 
         Key code down repeat ->
             if List.member code [ keyMute, keyVolumeDown, keyVolumeUp ] then
-                -- The volume keys work anywhere, even when an app has the keyboard.
+                -- The volume keys work anywhere, the game's window too.
                 if down && not (repeat && code == keyMute) then
                     setSound
                         (if code == keyMute then
@@ -682,6 +688,20 @@ step event model =
 
                 else
                     ( model, [] )
+
+            else if doomFocused model then
+                -- Every key goes to the game, as long as its window has the keyboard.
+                let
+                    ( doom, effects ) =
+                        DoomApp.key code down model.doom
+                in
+                ( { model
+                    | doom = doom
+                    , shift = Keyboard.isShift code && down || (not (Keyboard.isShift code) && model.shift)
+                    , ctrl = Keyboard.isCtrl code && down || (not (Keyboard.isCtrl code) && model.ctrl)
+                  }
+                , effects
+                )
 
             else
                 uiKey code down repeat model
@@ -708,7 +728,17 @@ step event model =
             ( { model | system = Just info }, [] )
 
         BootInfo bootInput ->
-            BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })
+            case bootInput of
+                BootInfo.Dir path entries ->
+                    case DoomApp.directory path entries model.doom of
+                        Just ( doom, effects ) ->
+                            ( { model | doom = doom }, effects )
+
+                        Nothing ->
+                            bootInfo bootInput model
+
+                _ ->
+                    bootInfo bootInput model
 
         Switching build ->
             -- Persist writes the snapshot before SwitchReady goes to the host. The
@@ -718,22 +748,30 @@ step event model =
         ReflashNeeded build ->
             ( { model | reflashNeeded = Just build }, [] )
 
-        MouseMotion _ _ ->
-            -- Nothing captures the pointer yet.
-            ( model, [] )
+        MouseMotion dx dy ->
+            ( { model | doom = DoomApp.mouseMotion dx dy model.doom }, [] )
 
-        File _ _ ->
-            -- Nothing reads files yet.
-            ( model, [] )
+        File path bytes ->
+            case DoomApp.file path bytes model.doom of
+                Just ( doom, effects ) ->
+                    ( { model | doom = doom }, effects )
 
-        DataDisk _ ->
-            ( model, [] )
+                Nothing ->
+                    ( model, [] )
 
-        DownloadProgress _ _ _ ->
-            ( model, [] )
+        DataDisk path ->
+            DoomApp.dataDisk path model.doom |> Tuple.mapFirst (\doom -> { model | doom = doom })
 
-        Downloaded _ _ ->
-            ( model, [] )
+        DownloadProgress path bytes total ->
+            ( { model | doom = DoomApp.downloadProgress path bytes total model.doom |> Maybe.withDefault model.doom }, [] )
+
+        Downloaded path problem ->
+            case DoomApp.downloaded path problem model.doom of
+                Just ( doom, effects ) ->
+                    ( { model | doom = doom }, effects )
+
+                Nothing ->
+                    ( model, [] )
 
         Audio outputs ->
             -- Sent again after a restart (to a new program, or after a crash) too, so
@@ -781,7 +819,58 @@ keyVolumeUp =
     115
 
 
-{-| A key, for the UI.
+bootInfo : BootInfo.Input -> Model -> ( Model, List Effect )
+bootInfo bootInput model =
+    BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })
+
+
+{-| The game's window has the keyboard: after a click on it, until a click somewhere else.
+-}
+doomFocused : Model -> Bool
+doomFocused model =
+    case model.uiState.focus of
+        Just (DoomUiId id) ->
+            -- Not its text boxes: those are the UI's (`uiKey`).
+            DoomApp.open model.doom && not (DoomApp.isTextInput id)
+
+        _ ->
+            False
+
+
+{-| A mouse button, for the UI.
+-}
+uiButton : Int -> Bool -> Model -> ( Model, List Effect )
+uiButton b down model =
+    case ( b, down ) of
+        ( 0, True ) ->
+            let
+                cursor =
+                    uiMouse model
+            in
+            case Ui.hover cursor (screenUi model) of
+                ( id, { relativePositionToUi, ui } ) :: _ ->
+                    let
+                        ( uiState, maybeModelAndEffects ) =
+                            Ui.onMouseDown (click model) relativePositionToUi cursor id (idToString id) ui model.uiState
+                    in
+                    case maybeModelAndEffects of
+                        Just ( model2, effects ) ->
+                            ( { model2 | selectingText = True }, effects )
+
+                        Nothing ->
+                            ( { model | selectingText = True, uiState = uiState }, [] )
+
+                [] ->
+                    ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        ( 0, False ) ->
+            ( { model | pressed = False, selectingText = False }, [] )
+
+        _ ->
+            ( { model | pressed = down }, [] )
+
+
+{-| A key, for the UI (Doom has its own, `DoomApp.key`).
 -}
 uiKey : Int -> Bool -> Bool -> Model -> ( Model, List Effect )
 uiKey code down repeat model =
@@ -807,6 +896,14 @@ uiKey code down repeat model =
 
     else if model.uiState.focus == Just EditorInput then
         ( editorKey pressed model, [] )
+
+    else if Maybe.map doomTextInput model.uiState.focus == Just True then
+        case model.uiState.focus of
+            Just (DoomUiId id) ->
+                doomTypeKey id pressed model
+
+            _ ->
+                ( model, [] )
 
     else if calculatorFocused model then
         case ( model.ctrl, Calculator.fromKeyboard pressed ) of
@@ -1103,6 +1200,29 @@ click model id uiState =
         CalculatorUiId Calculator.Panel ->
             ( { model | uiState = Ui.setFocus (Just (CalculatorUiId Calculator.Panel)) uiState }, [] )
 
+        DoomButton ->
+            DoomApp.focusOn model.doom
+                |> Tuple.mapFirst
+                    (\doom ->
+                        { model
+                            | doom = doom
+                            , uiState =
+                                Ui.setFocus
+                                    (if DoomApp.open doom then
+                                        Just (DoomUiId DoomApp.Panel)
+
+                                     else
+                                        Nothing
+                                    )
+                                    uiState
+                        }
+                    )
+
+        DoomUiId doomId ->
+            -- A click anywhere on the window gives it the keyboard.
+            DoomApp.click doomId model.doom
+                |> Tuple.mapFirst (\doom -> { model | doom = doom, uiState = Ui.setFocus (Just (DoomUiId DoomApp.Panel)) uiState })
+
         NewsUiId _ ->
             ( model, [] )
 
@@ -1226,6 +1346,77 @@ typeKey key model =
             )
 
 
+doomTextInput : UiId -> Bool
+doomTextInput id =
+    case id of
+        DoomUiId doomId ->
+            DoomApp.isTextInput doomId
+
+        _ ->
+            False
+
+
+{-| A key in one of the Doom window's text boxes (its WADs' addresses): typed into it,
+and the address changes as it is typed. Enter does what the box is for, Esc leaves it.
+-}
+doomTypeKey : DoomApp.UiId -> Key -> Model -> ( Model, List Effect )
+doomTypeKey id key model =
+    let
+        idString =
+            idToString (DoomUiId id)
+
+        state =
+            DoomApp.inputState id (doomInput model id) model.doom
+
+        typed newState clipboard =
+            ( { model
+                | uiState = Ui.insertElement idString (TextInputState newState) model.uiState
+                , clipboard = clipboard
+                , doom = DoomApp.edited id newState.current.text model.doom
+              }
+            , []
+            )
+
+        panel =
+            Ui.setFocus (Just (DoomUiId DoomApp.Panel)) model.uiState
+    in
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
+            DoomApp.entered id model.doom |> Tuple.mapFirst (\doom -> { model | doom = doom, uiState = panel })
+
+        ( False, Keyboard.Escape ) ->
+            ( { model | uiState = panel }, [] )
+
+        ( True, Keyboard.Character "v" ) ->
+            typed (TextInput.paste model.clipboard state) model.clipboard
+
+        _ ->
+            let
+                ( newState, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key state
+            in
+            typed newState
+                (case outMsg of
+                    TextInput.CopyText text ->
+                        text
+
+                    TextInput.NoOutMsg ->
+                        model.clipboard
+                )
+
+
+{-| What Main keeps of a Doom text box (the cursor, what to undo).
+-}
+doomInput : Model -> DoomApp.UiId -> Maybe TextInput.Model
+doomInput model id =
+    case Dict.get (idToString (DoomUiId id)) model.uiState.uiState of
+        Just (TextInputState state) ->
+            Just state
+
+        _ ->
+            Nothing
+
+
 {-| The mouse moved with its button down after going down in the text box `focus`, at
 `position` on the screen: select from there to the mouse.
 -}
@@ -1337,6 +1528,12 @@ dragSelect focus position model =
             model
 
         CalculatorUiId _ ->
+            model
+
+        DoomButton ->
+            model
+
+        DoomUiId _ ->
             model
 
         EditorButton ->
@@ -1463,20 +1660,26 @@ view model =
     in
     Scene.append
         (Ui.view (uiScale model) model.showUiBorders hovered model.uiState.focus model.screenSize ui)
-        [ Scene.Triangles
-            (Sprite.cursor
-                (if Maybe.map .hardwareCursor model.renderer == Just True then
-                    -- The host moves the real cursor; this orange one trails it by however
-                    -- long a frame takes to get from the mouse to the screen.
-                    Color.rgb255 255 150 40
+        (if DoomApp.captured model.doom then
+            -- The game has the pointer, which is hidden meanwhile.
+            []
 
-                 else
-                    cursorColor model
+         else
+            [ Scene.Triangles
+                (Sprite.cursor
+                    (if Maybe.map .hardwareCursor model.renderer == Just True then
+                        -- The host moves the real cursor; this orange one trails it by however
+                        -- long a frame takes to get from the mouse to the screen.
+                        Color.rgb255 255 150 40
+
+                     else
+                        cursorColor model
+                    )
+                    (uiScale model)
+                    model.mouse
                 )
-                (uiScale model)
-                model.mouse
-            )
-        ]
+            ]
+        )
 
 
 {-| Device pixels per UI pixel: 2 on screens at least 2000 pixels wide, otherwise 1.
@@ -1536,6 +1739,12 @@ screenUi model =
             [ overlay model, networkPanel model, toolbar model, sound ]
                 ++ (if model.editorOpen then
                         [ editorWindow model ]
+
+                    else
+                        []
+                   )
+                ++ (if DoomApp.open model.doom then
+                        [ doomWindow model ]
 
                     else
                         []
@@ -2543,6 +2752,7 @@ toolbar model =
                     [ Ui.selectableButton { id = AboutButton, padding = small } model.aboutOpen (t "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } model.newsOpen (t "News")
                     , Ui.selectableButton { id = CalculatorButton, padding = small } model.calculatorOpen (t "Calculator")
+                    , Ui.selectableButton { id = DoomButton, padding = small } (DoomApp.open model.doom) (t "Doom")
                     , Ui.selectableButton { id = EditorButton, padding = small } model.editorOpen (t "Text editor")
                     , Ui.button { id = RestartButton, padding = small } (t "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
@@ -2564,6 +2774,29 @@ calculatorWindow model =
             }
             (Calculator.view (calculatorFocused model) model.calculator |> Ui.map CalculatorUiId)
         )
+
+
+{-| Doom's window, under the toolbar in the middle.
+-}
+doomWindow : Model -> Ui.Element UiId
+doomWindow model =
+    let
+        top =
+            toolbarHeight + 8
+
+        window =
+            DoomApp.view (uiScale model) model.screenSize top (doomFocused model || Maybe.map doomTextInput model.uiState.focus == Just True) (doomInput model) model.doom
+                |> Ui.map DoomUiId
+    in
+    Ui.el
+        { padding =
+            { topLeft = Coord.xy (max 0 ((Coord.xRaw (uiSize model) - Coord.xRaw (Ui.size window)) // 2)) top
+            , bottomRight = Coord.origin
+            }
+        , inFront = []
+        , borderAndFill = Ui.NoBorderOrFill
+        }
+        window
 
 
 {-| The toolbar's buttons and the gap above them, in UI pixels.

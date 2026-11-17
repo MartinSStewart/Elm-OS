@@ -4,6 +4,7 @@
 #   make run        boot it in QEMU in a window, 1920 x 1080 (QEMU_RES=WxH to change)
 #   make test       boot headless, inject input, check a screenshot (CPU fallback)
 #   make test-gpu   the same on QEMU's virgl GPU, drawn by the GPU renderer
+#   make test-doom  open Doom, download its WAD, check its title screen against elm-doom's headless host, play it
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make test-persist  boot twice with a power cut between: the Model must come back
 #   make test-switch   switch to another build of the Elm program without restarting
@@ -90,7 +91,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests mixer-tests check all run run-cpu test test-gpu clean kernel-src check-deps check-run-deps \
+.PHONY: FORCE eco atlas migration check-migration review review-fix review-tests elm-tests test-wire protocol-tests mixer-tests check all run run-cpu test test-gpu test-doom clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-update release measure-frames
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -304,7 +305,8 @@ test-wire: $(BUILD)/wire-tool | check-deps
 	cd $(BUILD)/wire-test && $(ECO) make src/ElmOs.elm --output=/dev/null && \
 	  npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
 
-$(BUILD)/wire-tool: $(BUILD)/wire-tool.o
+# Links an eco/system program (tools/wire, elm-doom's headless host) from its object.
+define ECO_TOOL_LINK
 	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
 	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
 	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
@@ -317,6 +319,36 @@ $(BUILD)/wire-tool: $(BUILD)/wire-tool.o
 	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libcurl.a $(RT)/libssl.a $(RT)/libcrypto.a \
 	  $(RT)/libzip.a $(RT)/libz.a $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
 	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
+endef
+
+$(BUILD)/wire-tool: $(BUILD)/wire-tool.o
+	$(ECO_TOOL_LINK)
+
+# elm-doom's source at the release elm/elm.json depends on (versions.mk pins it and the
+# SHA-256 of its archive), for its headless host: the Doom package run without a
+# screen, as elm-doom runs it to compare with the C original. It is linked like
+# tools/wire, and make test-doom compares a frame of it with what Elm OS shows.
+$(BUILD)/src/elm-doom-$(ELM_DOOM_VER).tar.gz:
+	@mkdir -p $(BUILD)/src
+	curl -fsSL -o $@.tmp https://github.com/sjalq/elm-doom/archive/refs/tags/$(ELM_DOOM_VER).tar.gz
+	mv $@.tmp $@
+
+$(BUILD)/elm-doom/.done: $(BUILD)/src/elm-doom-$(ELM_DOOM_VER).tar.gz versions.mk elm/elm.json
+	grep -q '"sjalq/elm-doom": "$(ELM_DOOM_VER)"' elm/elm.json || { echo "elm/elm.json doesn't depend on elm-doom $(ELM_DOOM_VER), the version versions.mk pins"; exit 1; }
+	echo "$(ELM_DOOM_SHA256)  $<" | sha256sum -c --quiet || { echo "$< doesn't match its SHA-256 in versions.mk"; exit 1; }
+	rm -rf $(BUILD)/elm-doom && mkdir -p $(BUILD)/elm-doom
+	tar -xzf $< -C $(BUILD)/elm-doom --strip-components=1
+	touch $@
+
+$(BUILD)/doom-headless.o: $(BUILD)/elm-doom/.done $(BUILD)/eco-setting | check-deps
+	cd $(BUILD)/elm-doom/hosts/headless && $(ECO) make src/Main.elm --output=$(abspath $@)
+
+$(BUILD)/doom-headless: $(BUILD)/doom-headless.o
+	$(ECO_TOOL_LINK)
+
+# The title screen's second frame, as elm-doom's headless host draws it from Freedoom.
+$(BUILD)/doom-title.frames: $(BUILD)/doom-headless $(BUILD)/freedoom/.done
+	$(BUILD)/doom-headless -full -iwad $(BUILD)/freedoom/freedoom1.wad -frames $@ -framesfrom 1 -framesto 1 -iterations 3
 
 # SOURCE_DATE_EPOCH and the kernels' timestamp, so what stamps them in (the cpio
 # archives, the kernels) is rebuilt when they change, not only when their other inputs
@@ -452,6 +484,24 @@ $(BUILD)/wpa_supplicant $(BUILD)/hostapd: $(BUILD)/%: $(BUILD)/src/%-$(HOSTAP_VE
 	PKG_CONFIG_LIBDIR=$(abspath $(LIBNL)/root/usr/lib/pkgconfig) PKG_CONFIG_SYSROOT_DIR=$(abspath $(LIBNL)/root) \
 	  $(MAKE) -C $(BUILD)/hostap-$*/$* $*
 	strip -o $@ $(BUILD)/hostap-$*/$*/$*
+
+# ---- A WAD for the Doom tests: Freedoom Phase 1 (BSD licensed, freedoom.github.io),
+# the release versions.mk pins, checked against its SHA-256. The image has no WAD: the
+# Doom app downloads them (elm/src/DoomApp.elm). make test-doom serves this zip for
+# the app to download, and doom-title.frames is drawn from its freedoom1.wad.
+
+$(BUILD)/src/freedoom-$(FREEDOOM_VER).zip:
+	@mkdir -p $(BUILD)/src
+	curl -fsSL -o $@.tmp https://github.com/freedoom/freedoom/releases/download/v$(FREEDOOM_VER)/freedoom-$(FREEDOOM_VER).zip
+	mv $@.tmp $@
+
+$(BUILD)/freedoom/.done: $(BUILD)/src/freedoom-$(FREEDOOM_VER).zip versions.mk
+	echo "$(FREEDOOM_SHA256)  $<" | sha256sum -c --quiet || { echo "$< doesn't match its SHA-256 in versions.mk"; exit 1; }
+	rm -rf $(BUILD)/freedoom && mkdir -p $(BUILD)/freedoom
+	python3 -I -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); \
+	  [open(sys.argv[2] + "/" + n.split("/")[-1], "wb").write(z.read(n)) for n in z.namelist() if n.endswith(("/freedoom1.wad", "/COPYING.txt"))]' \
+	  $< $(BUILD)/freedoom
+	touch $@
 
 INITRAMFS_DEPS := $(BUILD)/init $(BUILD)/elm $(BUILD)/wpa_supplicant $(if $(filter 1,$(GPU)),$(BUILD)/elmos-gpu $(BUILD)/llvm-stub/.done)
 
@@ -594,6 +644,14 @@ test: all $(BUILD)/data-empty.img | check-run-deps
 
 test-gpu: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-qemu.py --gpu
+
+# Doom: open it from the toolbar, download Freedoom in its WADs panel (from a server
+# here), check its title screen against elm-doom's headless host's, play it with the
+# keyboard and mouse, and see it come back after a restart (see the script).
+# DOOM_GPU=1 on the GPU; DOOM_MEASURE=SECONDS also measures its frame rate.
+test-doom: all $(BUILD)/data-empty.img $(BUILD)/doom-title.frames $(BUILD)/freedoom/.done | check-run-deps
+	python3 scripts/test-doom.py --reference $(BUILD)/doom-title.frames \
+	  $(if $(filter 1,$(DOOM_GPU)),--gpu) $(if $(DOOM_MEASURE),--measure $(DOOM_MEASURE))
 
 test-persist: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-persist.py

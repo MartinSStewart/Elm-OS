@@ -23,7 +23,8 @@ You need Linux on x86_64 with:
 - `musl-gcc`, the kernel build tools, `curl`, `sha256sum`, `cpio`, `python3`, `readelf` and `qemu-system-x86_64`
   (plus `qemu-system-modules-opengl` for the GPU in QEMU)
 - network access on the first build: `git.kernel.org`, `dl-cdn.alpinelinux.org` (Mesa, libnl),
-  `w1.fi` (`wpa_supplicant` and `hostapd` sources) and crates.io
+  `w1.fi` (`wpa_supplicant` and `hostapd` sources), `github.com` (Freedoom, the WAD
+  `make test-doom` has Doom download) and crates.io
 
 `make` checks for these first and prints an `apt install` line for anything missing
 (`make check-deps` checks without building).
@@ -34,6 +35,7 @@ make run          # QEMU window, drawn on the GPU (virgl)
 make run-cpu      # QEMU window, drawn on the CPU
 make test         # headless boot test, saves build/screenshot.png
 make test-gpu     # the same test on the GPU
+make test-doom    # open Doom, download a WAD, check its title screen pixel for pixel, play it, restart
 make test-persist # power cuts and a restart: the Model must come back
 make test-wire    # the encoder/decoder generator (tools/wire) on every kind of type
 make check        # every test that doesn't boot: elm-review, Elm unit tests, test-wire, protocol
@@ -136,6 +138,7 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
 | `host/synth/` | The music: an emulated OPL3 FM chip playing MIDI as DOS Doom's DMX library did |
 | `host/gpu/` | GPU renderer (`/usr/bin/elmos-gpu`): EGL + OpenGL ES 2 on GBM/KMS |
 | `host/common/` | Shared by both: the texture atlas (pixel font, Noto Sans glyphs), DRM/KMS ioctls |
+| `elm/src/DoomApp.elm` | Doom: the app (a window, keys and mouse, saves, WADs) around the Doom package, `sjalq/elm-doom` (see Doom below) |
 | `host/protocol/` | Every message between Elm and the host as Rust types, with an example of each (`examples.json`) that both sides are tested against |
 | `hostap/` | Build configs for `wpa_supplicant` and `hostapd` (internal crypto, no OpenSSL) |
 | `versions.mk` | Pinned kernel and hostap versions, updated by `make refresh` |
@@ -336,6 +339,31 @@ to read the source, eco's `eco/system` for files), compiled natively with eco.
   program can do without after a restart.
 - `make test-wire` checks it on a program with all of those (`tools/wire/test`): the generated
   code must compile and read back what it writes. `make elm-tests` also runs on `build/wire`.
+
+### Doom (`elm/src/DoomApp.elm`)
+
+The game is the Elm package [`sjalq/elm-doom`](https://package.elm-lang.org/packages/sjalq/elm-doom/latest/):
+DOS Doom v1.9 as a pure Elm program, frame for frame the original. Its repository
+(github.com/sjalq/elm-doom) has the checks against the C original, a browser host
+(playable at <https://sjalq.github.io/elm-doom/>) and a headless one.
+
+- `elm/elm.json` depends on it like any other package, and `DoomApp.elm` is all of
+  Doom in Elm OS: its window, keys and mouse, sound and music, saves and WADs.
+- `make test-doom` builds elm-doom's headless host, from the source of the release
+  `versions.mk` pins, for the title frame it compares Elm OS's Doom with, pixel for
+  pixel.
+- No WAD comes with the image. The Doom window's WADs panel downloads them
+  (`Effect.Download`, which saves to the data disk without the file passing through
+  Elm, and unpacks a zip as it arrives) into `/data/doom/`: shareware Doom (id's 1995
+  zip, as the Internet Archive keeps it), Doom with Evan Czaplicki on the status bar and
+  the C# logo at the end of E1M8 (a 50 KB patch from elm-doom's `mods-1` release that
+  `Doom.Wad.patch` puts into the shareware WAD on the computer, since the shareware
+  licence lets nobody hand out a changed DOOM1.WAD), and Freedoom Phase 1. Each has an
+  address the player can change (a download from its usual address must have its
+  SHA-256), and the player can add a WAD, or a zip with one, from any address. A
+  `*.wad` put in `/data/doom/` by hand is offered too.
+- To move to a newer elm-doom: its version in `elm/elm.json`, and `ELM_DOOM_VER` and
+  `ELM_DOOM_SHA256` in `versions.mk`.
 
 ## Known limits
 

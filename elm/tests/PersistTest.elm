@@ -101,7 +101,11 @@ bootWith httpInFlight disk messages =
 -}
 direct : List HostIn -> Main.Model
 direct messages =
-    List.foldl (\message model -> Tuple.first (Main.persistConfig.update (hostMsg message) model)) Main.persistConfig.init messages
+    -- The program gets the data disk message too (Persist passes it on), before the
+    -- others here, as in `boot`.
+    List.foldl (\message model -> Tuple.first (Main.persistConfig.update (hostMsg message) model))
+        Main.persistConfig.init
+        (Ok (HostMessage.DataDisk (Just "/data") []) :: messages)
 
 
 restored : Disk -> Main.Model

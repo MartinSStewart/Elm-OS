@@ -14,5 +14,16 @@ HOSTAPD_SHA256 := f43502561c28ba47ab77e18e1a973d07361c68cc8b14178e619bd5796b70ea
 ECO_VER := 0.2.0-rc3
 ECO_SHA256 := 02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca
 
+# Freedoom (Phase 1 is the WAD make test-doom plays, see the Makefile): the release zip,
+# and its SHA-256. `make refresh` doesn't move it: change both lines by hand.
+FREEDOOM_VER := 0.13.0
+FREEDOOM_SHA256 := 3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59
+
+# elm-doom (the Doom package, github.com/sjalq/elm-doom): the release elm/elm.json
+# depends on, whose source make test-doom builds the headless host from, and the
+# SHA-256 of GitHub's archive of it. Change all three together, by hand.
+ELM_DOOM_VER := 1.0.0
+ELM_DOOM_SHA256 := 35eb80130adaca89db918b51b84000d8ec18354fac8c09891b20d8e01832b18a
+
 # When `make refresh` last ran (seconds since 1970). `make` warns when it's 30 days old.
 REFRESHED := 1793970461
