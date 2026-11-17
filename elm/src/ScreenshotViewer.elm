@@ -99,11 +99,11 @@ buttonPadding =
     4
 
 
-{-| The list of previews is this wide, scroll bar room and all.
+{-| The list of previews is this wide, its viewport's outline and scroll bar and all.
 -}
 listWidth : Int
 listWidth =
-    Coord.xRaw previewSize + 2 * buttonPadding
+    Coord.xRaw previewSize + 2 * buttonPadding + Ui.viewportFrameWidth
 
 
 headerHeight : Int

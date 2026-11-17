@@ -10,10 +10,15 @@ import Ui
 import Units
 
 
-{-| A viewport 100 UI pixels tall onto 1000 pixels of content.
+{-| A viewport 100 UI pixels tall (98 inside its outline) onto 1000 pixels of content.
 -}
 viewport : Ui.Model () -> Ui.Element ()
 viewport model =
+    viewportOnto 1000 model
+
+
+viewportOnto : Int -> Ui.Model () -> Ui.Element ()
+viewportOnto contentHeight model =
     Ui.viewport
         { id = ()
         , viewportHeight = Units.uiPixels 100
@@ -25,7 +30,7 @@ viewport model =
                 _ ->
                     Ui.initViewportModel
         }
-        (Ui.quads { size = Coord.xy 10 1000, triangles = [] })
+        (Ui.quads { size = Coord.xy 10 contentHeight, triangles = [] })
 
 
 scroll : Ui.ScrollBy -> Ui.Model () -> Ui.Model ()
@@ -82,7 +87,48 @@ suite =
             )
         , test "a glide stops at the end of the content"
             (\_ ->
-                Ui.init |> scroll (Ui.Momentum -8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -900
+                Ui.init |> scroll (Ui.Momentum -8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -902
+            )
+        , test "content shorter than the viewport doesn't scroll"
+            (\_ ->
+                let
+                    short : Ui.Model () -> Ui.Model ()
+                    short model =
+                        Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels -40)) (viewportOnto 50 model) model
+                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels 40)) (viewportOnto 50 m) m)
+                            |> (\m -> Ui.onWheel () (Ui.WheelClicks -3) (viewportOnto 50 m) m)
+                            |> (\m -> Ui.onWheel () (Ui.Momentum -500) (viewportOnto 50 m) m)
+                            |> frames 100
+                in
+                Ui.init |> short |> offset |> Expect.within (Expect.Absolute 1.0e-9) 0
+            )
+        , test "a viewport is its content's width plus its outline and scroll bar"
+            (\_ ->
+                Ui.size (viewport Ui.init) |> Expect.equal (Coord.xy (10 + Ui.viewportFrameWidth) 100)
+            )
+        , test "dragging the scroll bar thumb to the bottom scrolls to the end"
+            (\_ ->
+                let
+                    pressed : Ui.Model ()
+                    pressed =
+                        -- Press the top of the thumb, in the scroll bar to the right of the content.
+                        Ui.onMouseDown (\_ m -> m) Coord.origin (Coord.xy 15 3) () (viewport Ui.init) Ui.init
+                            |> Tuple.first
+
+                    dragged : Ui.Model ()
+                    dragged =
+                        Ui.dragScrollbar
+                            ()
+                            (Coord.xy 15 2000)
+                            { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 }
+                            pressed
+                in
+                Expect.all
+                    [ \_ -> offset pressed |> Expect.within (Expect.Absolute 1.0e-9) 0
+                    , \_ -> offset dragged |> Expect.within (Expect.Absolute 1.0e-9) -902
+                    , \_ -> offset (Ui.dragScrollbar () (Coord.xy 15 2000) { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 } (Ui.onMouseUp pressed)) |> Expect.within (Expect.Absolute 1.0e-9) 0
+                    ]
+                    ()
             )
         , test "stopMomentum stops it"
             (\_ ->

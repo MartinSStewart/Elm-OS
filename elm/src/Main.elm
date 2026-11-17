@@ -658,6 +658,11 @@ step event model =
                                 Just ( _, Ui.ButtonType _ ) ->
                                     ( model2, [] )
 
+                                Just ( display, Ui.ViewportType viewport ) ->
+                                    ( { model2 | uiState = Ui.dragScrollbar focus (uiMouseOn display model2.mouse) viewport model2.uiState }
+                                    , []
+                                    )
+
                                 Nothing ->
                                     ( model2, [] )
 
@@ -740,6 +745,7 @@ step event model =
             ( { model
                 | pressed = False
                 , selectingText = False
+                , uiState = Ui.onMouseUp model.uiState
                 , screenshotViewer = ScreenshotViewer.stopDragging model.screenshotViewer
               }
             , []
