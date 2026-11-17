@@ -1616,7 +1616,7 @@ connect model =
                             Err error ->
                                 ( { model
                                     | wifiStatus =
-                                        { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = error }
+                                        { state = Wifi.Failed, ssid = network.ssid, ip = Nothing, error = error }
                                   }
                                 , []
                                 )
@@ -3187,13 +3187,6 @@ passwordInput model =
         { id = PasswordInput
         , style = passwordStyle model
         , isValid = True
-        , state =
-            case SeqDict.get PasswordInput model.uiState.uiState of
-                Just (TextInputState textInput) ->
-                    textInput
-
-                _ ->
-                    TextInput.init
         }
 
 

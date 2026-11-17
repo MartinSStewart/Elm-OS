@@ -116,14 +116,6 @@ type alias ButtonData id lazy =
     }
 
 
-type alias TextInputData id =
-    { id : id
-    , style : TextInput.Style
-    , isValid : Bool
-    , state : TextInput.Model
-    }
-
-
 type alias TextInputMultilineData id =
     { id : id
     , style : TextInputMultiline.Style
@@ -140,7 +132,7 @@ type alias Screenshot =
 
 
 type ElementFull id lazy
-    = TextInput (TextInputData id)
+    = TextInput { id : id, style : TextInput.Style, isValid : Bool }
     | TextInputMultiline (TextInputMultilineData id)
     | Text
         { fontSize : Sprite.FontSize
@@ -218,12 +210,7 @@ elementToScreenshotHelper : ElementFull id lazy -> ElementFull () ()
 elementToScreenshotHelper element =
     case element of
         TextInput data ->
-            TextInput
-                { id = ()
-                , style = data.style
-                , isValid = data.isValid
-                , state = data.state
-                }
+            TextInput { id = (), style = data.style, isValid = data.isValid }
 
         TextInputMultiline data ->
             TextInputMultiline
@@ -378,6 +365,16 @@ getViewport id model =
 
         _ ->
             initViewportModel
+
+
+getTextInput : id -> Model id -> TextInput.Model
+getTextInput id model =
+    case SeqDict.get id model.uiState of
+        Just (TextInputState data) ->
+            data
+
+        _ ->
+            TextInput.init
 
 
 {-| A frame went by. `hovered` is what `hoverIdOnly` gives for the mouse, at `mouse`: the
@@ -1175,7 +1172,7 @@ customTextWrapped fontSize maxWidth segments =
 -- TEXT INPUTS
 
 
-textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.Model } -> Element id
+textInput : { id : id, style : TextInput.Style, isValid : Bool } -> Element id
 textInput data =
     TextInput data |> Element
 
@@ -1916,7 +1913,7 @@ viewList model scale showUiBorder maybeHover viewport2 position element =
         Just viewport3 ->
             case element of
                 TextInput data ->
-                    TextInput.view scale viewport3 data.style position (model.focus == Just data.id) data.isValid data.state.current
+                    TextInput.view scale viewport3 data.style position (model.focus == Just data.id) data.isValid (getTextInput data.id model).current
 
                 TextInputMultiline data ->
                     TextInputMultiline.view

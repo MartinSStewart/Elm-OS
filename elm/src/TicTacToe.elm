@@ -110,7 +110,16 @@ press i model =
         Playing ->
             case List.drop i model.squares |> List.head of
                 Just Nothing ->
-                    { squares = List.indexedMap (\j square -> if j == i then Just model.next else square) model.squares
+                    { squares =
+                        List.indexedMap
+                            (\j square ->
+                                if j == i then
+                                    Just model.next
+
+                                else
+                                    square
+                            )
+                            model.squares
                     , next = other model.next
                     }
 
@@ -170,7 +179,7 @@ view model =
     let
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text "Noughts and crosses")
+                (Ui.text "Tic Tac Toe")
                 (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
 
         board =
