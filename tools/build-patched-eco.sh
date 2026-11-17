@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build eco with the patches in tools/eco-patched (eco/containers: SeqDict's reserved constructor
-# tag, `==` on SeqDicts, and eco/containers bundled like eco/kernel), for `make ECO_PATCHED=1`.
+# Build eco with the patches in tools/eco-patched (0001: eco/containers: SeqDict's reserved constructor
+# tag, `==` on SeqDicts, and eco/containers bundled like eco/kernel; 0002: hot-path speedups in the
+# runtime, kernels and bytes fusion), for `make ECO_PATCHED=1`.
 # Until an eco release has them, this is how Elm OS gets an eco that eco/containers works with.
 #
 #   usage: tools/build-patched-eco.sh STOCK_DIR DIR
@@ -15,10 +16,13 @@
 # LLVM/MLIR 21.1.8 packages from apt.llvm.org (`sudo tools/build-patched-eco.sh --install-deps`
 # installs them on Debian or Ubuntu). The result runs only where those packages are installed.
 #
-# The runtime is the stock one with two changes: libElmKernel_Utils.a's Utils.cpp is rebuilt from the
-# patched source (for `==`), and libEcoContainers.a holds eco/containers' kernel (eco-containers/src/
-# eco-containers). Both are compiled with g++ against the patched eco's headers; Makefile's link line
-# picks up every archive in lib/eco-runtime/project, so it needs no change.
+# The runtime is the stock one with these changes: libElmKernel_Utils.a's Utils.cpp is rebuilt from the
+# patched source (for `==` and faster tuple compare), and libEcoContainers.a holds eco/containers'
+# kernel (eco-containers/src/eco-containers), both compiled with g++ against the patched eco's
+# headers. libEcoRuntimeStatic.a's RuntimeExports.cpp and libElmKernel_String.a's StringExports.cpp
+# are rebuilt too (0002-hot-path.patch), with clang++ against libc++ for musl as eco builds them,
+# because they share C++ library types with the rest of the runtime. Makefile's link line picks up
+# every archive in lib/eco-runtime/project, so it needs no change.
 #
 # Messages go to stderr: the Makefile runs this inside $(shell). Reruns are quick: the eco build is
 # redone only when the patches change, and the runtime part only when eco-containers/ does.
@@ -114,7 +118,26 @@ if [ "$(cat "$dir/.runtime-built" 2>/dev/null)" != "$patch_hash $containers_hash
     for f in "$repo"/eco-containers/src/eco-containers/*.cpp; do
         cxx "$f" "$obj/$(basename "$f").o"
     done
+    # As eco's release preset builds the runtime: clang++ with libc++ for musl, x86-64-v3, no GC stats.
+    # libc++'s headers come from libc++-21-dev, set up for musl; musl's from musl-dev.
+    mkdir -p "$obj/libcxx"
+    cp -r "$LLVM/include/c++/v1" "$obj/libcxx/v1"
+    sed -i 's/^#define _LIBCPP_HAS_MUSL_LIBC 0$/#define _LIBCPP_HAS_MUSL_LIBC 1/' "$obj/libcxx/v1/__config_site"
+    cxxrt() { "$LLVM/bin/clang++" --target=x86_64-linux-musl -std=gnu++20 -O2 -DNDEBUG -march=x86-64-v3 \
+                -mtune=generic -fPIC -fexceptions -funwind-tables -ffunction-sections -fdata-sections \
+                -DENABLE_GC_PHASE_TIMERS=0 -DENABLE_GC_STATS=0 -DENABLE_P1_CENSUS=0 \
+                -nostdinc -nostdinc++ -isystem "$obj/libcxx/v1" -isystem "$LLVM/lib/clang/21/include" \
+                -isystem /usr/include/x86_64-linux-musl -I"$src/runtime/src" -I"$src/runtime/src/allocator" \
+                -I"$src/runtime/src/platform" -I"$src/runtime/include" -I"$src/elm-kernel-cpp/src" \
+                -c "$1" -o "$2"; }
+    mkdir -p "$obj/rt"
+    cxxrt "$src/runtime/src/allocator/RuntimeExports.cpp" "$obj/rt/RuntimeExports.cpp.o"
+    cxxrt "$src/elm-kernel-cpp/src/core/StringExports.cpp" "$obj/rt/StringExports.cpp.o"
+    # libc++ 21's std::hash calls std::__hash_memory, which the bundle's older libc++.a lacks.
+    cxxrt "$repo/tools/eco-patched/hash-memory-shim.cpp" "$obj/rt/hash-memory-shim.cpp.o"
     project=$tmp/lib/eco-runtime/project
+    (cd "$obj/rt" && ar r "$project/libEcoRuntimeStatic.a" RuntimeExports.cpp.o hash-memory-shim.cpp.o \
+        && ar r "$project/libElmKernel_String.a" StringExports.cpp.o)
     (cd "$obj" && ar x "$project/libElmKernel_Utils.a" UtilsExports.cpp.o)
     rm "$project/libElmKernel_Utils.a"
     ar rcs "$project/libElmKernel_Utils.a" "$obj/Utils.cpp.o" "$obj/UtilsExports.cpp.o" "$obj/cxx-shims.cpp.o"

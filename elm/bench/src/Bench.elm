@@ -133,11 +133,11 @@ frame screen model =
             Units.scaleFor (Coord.x screen)
 
         element () =
-            HackerNews.view Ui.noLazyCache Ui.init (Coord.toUi scale screen) model
+            HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) model
 
         -- The next frame's, with the `Ui.lazy` elements of this one.
         elementAgain lastFrame () =
-            HackerNews.view (Ui.lazyCache [ lastFrame ]) Ui.init (Coord.toUi scale screen) model
+            HackerNews.view (Ui.lazyCache [ lastFrame ]) (Coord.toUi scale screen) model
 
         named label =
             String.fromInt (Units.scaleInt scale) ++ "x " ++ label
@@ -154,16 +154,16 @@ frame screen model =
                 let
                     _ =
                         Debug.log (named "after collapsing, Ui.lazy draws the same triangles")
-                            (Ui.view scale False Nothing Nothing screen (HackerNews.view (Ui.lazyCache [ ui ]) Ui.init (Coord.toUi scale screen) collapsed)
-                                == Ui.view scale False Nothing Nothing screen (HackerNews.view Ui.noLazyCache Ui.init (Coord.toUi scale screen) collapsed)
+                            (Ui.view Ui.init scale False Nothing screen (HackerNews.view (Ui.lazyCache [ ui ]) (Coord.toUi scale screen) collapsed)
+                                == Ui.view Ui.init scale False Nothing screen (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) collapsed)
                             )
                 in
                 timed (named "view after collapsing the first comment (Ui.lazy)")
-                    (\() -> HackerNews.view (Ui.lazyCache [ ui ]) Ui.init (Coord.toUi scale screen) collapsed)
+                    (\() -> HackerNews.view (Ui.lazyCache [ ui ]) (Coord.toUi scale screen) collapsed)
                     |> Task.map (\_ -> ui)
             )
-        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
+        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init scale False Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
@@ -178,7 +178,7 @@ frame screen model =
                     _ =
                         Debug.log "render bytes" bytes
                 in
-                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen (element ()) } ]) ] |> Bytes.width)
+                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init scale False Nothing screen (element ()) } ]) ] |> Bytes.width)
             )
         |> Task.andThen
             (\_ ->
@@ -188,7 +188,7 @@ frame screen model =
 
                     _ =
                         Debug.log (named "Ui.lazy draws the same triangles")
-                            (Ui.view scale False Nothing Nothing screen (elementAgain first ()) == Ui.view scale False Nothing Nothing screen first)
+                            (Ui.view Ui.init scale False Nothing screen (elementAgain first ()) == Ui.view Ui.init scale False Nothing screen first)
                 in
                 timed (named "whole frame, nothing changed (Ui.lazy)")
                     (\() ->
@@ -196,9 +196,9 @@ frame screen model =
                             ui =
                                 elementAgain first ()
                         in
-                        ( Ui.hover (Coord.xy 400 300) ui |> List.length
+                        ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
                         , Ui.lazyCache [ ui ]
-                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen ui } ]) ] |> Bytes.width
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init scale False Nothing screen ui } ]) ] |> Bytes.width
                         )
                     )
             )
@@ -221,8 +221,9 @@ screenshotViewer count model =
             Coord.xy 1000 700
 
         shot =
-            { uiScale = scale
-            , screenshot = Ui.elementToScreenshot (HackerNews.view Ui.noLazyCache Ui.init (Coord.toUi scale screen) model)
+            { uiState = Ui.init
+            , uiScale = scale
+            , screenshot = Ui.elementToScreenshot (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) model)
             }
 
         shots =
@@ -233,7 +234,7 @@ screenshotViewer count model =
                 |> ScreenshotViewer.onClick scale (ScreenshotViewer.areaSize window) shots (ScreenshotViewer.Types.Preview 0)
 
         element () =
-            ScreenshotViewer.view scale window Ui.init shots viewer
+            ScreenshotViewer.view scale window shots viewer
 
         named label =
             String.fromInt count ++ " screenshots: " ++ label
@@ -255,8 +256,8 @@ screenshotViewer count model =
                     )
             )
         |> Task.andThen (\_ -> timed (named "ScreenshotViewer.view (build the Element)") (\() -> element ()))
-        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view scale False Nothing Nothing screen ui))
+        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init scale False Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
@@ -273,8 +274,8 @@ screenshotViewer count model =
                             ui =
                                 element ()
                         in
-                        ( Ui.hover (Coord.xy 400 300) ui |> List.length
-                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view scale False Nothing Nothing screen ui } ]) ] |> Bytes.width
+                        ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init scale False Nothing screen ui } ]) ] |> Bytes.width
                         )
                     )
             )
