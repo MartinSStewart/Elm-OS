@@ -34,7 +34,8 @@ import Ipv4
 import Json.Decode as D
 import Keyboard exposing (Key(..))
 import Layout
-import News exposing (NewsState(..))
+import News
+import News.Types exposing (NewsState(..))
 import Nonempty
 import Persist
 import Quantity exposing (Quantity)
@@ -2335,7 +2336,7 @@ appLimits app model =
         NewsApp ->
             let
                 width =
-                    Coord.xRaw (Ui.size (News.view model.uiState (Units.uiPixels 300) model.news))
+                    Coord.xRaw (Ui.size (News.view model.lazyCache model.uiState (Units.uiPixels 300) model.news))
             in
             { min = Coord.xy width 300, preferred = Coord.xy width 1100, max = Coord.xy width 100000 }
 
@@ -2380,7 +2381,7 @@ appView app size model =
             aboutPage model
 
         NewsApp ->
-            News.view model.uiState (Coord.y size) model.news
+            News.view model.lazyCache model.uiState (Coord.y size) model.news
 
         HackerNewsApp ->
             HackerNews.view model.lazyCache model.uiState size model.hackerNews

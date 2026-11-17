@@ -1,10 +1,5 @@
 module News exposing
-    ( Day
-    , Inline(..)
-    , Item(..)
-    , NewsState(..)
-    , Topic
-    , decoder
+    ( decoder
     , lastDays
     , parseWikitext
     , request
@@ -35,7 +30,7 @@ import Date exposing (Date)
 import Duration
 import Effect
 import Json.Decode as D
-import News.Types
+import News.Types exposing (Day, Inline(..), Item(..), NewsState(..), Topic)
 import Quantity exposing (Quantity)
 import SeqDict
 import Sprite
@@ -45,44 +40,10 @@ import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
 
 
-type alias Day =
-    { date : Date, topics : List Topic }
-
-
-{-| A section of a day, like "Armed conflicts and attacks" or "Sports".
--}
-type alias Topic =
-    { heading : String, items : List Item }
-
-
-{-| One bullet. Stories are usually filed under the article about the ongoing event
-they are part of, so a bullet like "Russian invasion of Ukraine" has the news as its
-`children`; a one-off story is a bullet with no children.
--}
-type Item
-    = Item { content : List Inline, children : List Item }
-
-
-type Inline
-    = Text String
-      -- To another Wikipedia article: `article` is its title, as in
-      -- https://en.wikipedia.org/wiki/<article>.
-    | WikiLink { article : String, label : String }
-      -- To a news site: the story's source, with a label like "(Reuters)".
-    | ExternalLink { url : String, label : String }
-
-
-type NewsState
-    = NewsNotRequested
-    | LoadingNews (Maybe (List Day))
-    | LoadedNews (List Day)
-    | NewsFailed Effect.HttpError
-
-
 {-| The window, this tall (UI pixels): the days scroll inside it.
 -}
-view : Ui.Model UiId -> Quantity Int UiPixels -> NewsState -> Element UiId
-view uiState height news =
+view : Ui.LazyCache UiId -> Ui.Model UiId -> Quantity Int UiPixels -> NewsState -> Element UiId
+view lazyCache uiState height news =
     let
         viewportHeight =
             height |> Quantity.minus (Quantity.plus (Units.uiPixels (2 * 10 + 4)) (Sprite.lineHeight Sprite.Small))
@@ -102,13 +63,13 @@ view uiState height news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            daysView uiState viewportHeight days
+                            Ui.lazy3 lazyCache daysView uiState viewportHeight days
 
                         Nothing ->
                             Ui.customText Sprite.Small [ { text = "Loading...", color = Color.black, font = Sprite.Sans Sprite.Italic } ]
 
                 LoadedNews days ->
-                    daysView uiState viewportHeight days
+                    Ui.lazy3 lazyCache daysView uiState viewportHeight days
 
                 NewsFailed string ->
                     Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.black, font = Sprite.Sans Sprite.Italic } ]

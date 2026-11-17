@@ -1039,7 +1039,7 @@ overScrollbar point data child =
 -}
 minThumbHeight : Int
 minThumbHeight =
-    20
+    40
 
 
 {-| Where the scroll bar thumb is, from the top of the track, and how tall it is, or
@@ -1728,78 +1728,45 @@ hoverHelper :
     -> ElementFull id lazy
     -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
 hoverHelper hovers point position element =
-    -- Nothing outside an element is drawn (Ui.view clips its children to it), so
-    -- nothing outside it can be hovered: skipping it saves walking the rest of a long
-    -- page, such as every other comment of a Hacker News thread.
     if contains point position (sizeHelper element) then
-        hoverInside hovers point position element
-
-    else
-        hovers
-
-
-hoverInside :
-    List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
-    -> Coord UiPixels
-    -> Coord UiPixels
-    -> ElementFull id lazy
-    -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
-hoverInside hovers point position element =
-    case element of
-        TextInput data ->
-            if contains point position (TextInput.size data.style) then
+        case element of
+            TextInput data ->
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-            else
-                hovers
-
-        TextInputMultiline data ->
-            if contains point position (TextInputMultiline.size data.style) then
+            TextInputMultiline data ->
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-            else
-                hovers
-
-        Button data _ ->
-            if contains point position data.cachedSize then
+            Button data _ ->
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-            else
-                hovers
+            Row data children ->
+                childPositions True data position children
+                    |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
 
-        Row data children ->
-            childPositions True data position children
-                |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
+            Column data children ->
+                childPositions False data position children
+                    |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
 
-        Column data children ->
-            childPositions False data position children
-                |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
-
-        Single data child ->
-            let
-                hovers2 =
-                    if contains point position data.cachedSize then
+            Single data child ->
+                let
+                    hovers2 =
                         ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-                    else
-                        hovers
+                    hovers3 =
+                        hoverHelper hovers2 point (Coord.plus data.padding.topLeft position) child
+                in
+                List.foldr (\inFront acc -> hoverHelper acc point position inFront) hovers3 data.inFront
 
-                hovers3 =
-                    hoverHelper hovers2 point (Coord.plus data.padding.topLeft position) child
-            in
-            List.foldr (\inFront acc -> hoverHelper acc point position inFront) hovers3 data.inFront
+            Text _ ->
+                ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
 
-        Text _ ->
-            hovers
+            Quads _ ->
+                ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
 
-        Quads _ ->
-            hovers
+            Empty ->
+                hovers
 
-        Empty ->
-            hovers
-
-        Viewport data child ->
-            if contains point position (viewportSize data child) then
+            Viewport data child ->
                 let
                     inside : Bounds UiPixels
                     inside =
@@ -1818,11 +1785,11 @@ hoverInside hovers point position element =
                 else
                     hovers2
 
-            else
-                hovers
+            Lazy _ _ child ->
+                hoverHelper hovers point position child
 
-        Lazy _ _ child ->
-            hoverHelper hovers point position child
+    else
+        hovers
 
 
 type InputType id
