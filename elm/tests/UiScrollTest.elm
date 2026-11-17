@@ -50,7 +50,7 @@ offset model =
 
 frames : Int -> Ui.Model () -> Ui.Model ()
 frames n model =
-    List.foldl (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) m) model (List.range 1 n)
+    List.foldl (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) Coord.origin [] m) model (List.range 1 n)
 
 
 suite : Test
@@ -112,21 +112,68 @@ suite =
                     pressed : Ui.Model ()
                     pressed =
                         -- Press the top of the thumb, in the scroll bar to the right of the content.
-                        Ui.onMouseDown (\_ m -> m) Coord.origin (Coord.xy 15 3) () (viewport Ui.init) Ui.init
+                        Ui.onMouseDown (\_ m -> m) Coord.origin (Coord.xy 8 3) () (viewport Ui.init) Ui.init
                             |> Tuple.first
 
                     dragged : Ui.Model ()
                     dragged =
                         Ui.dragScrollbar
                             ()
-                            (Coord.xy 15 2000)
+                            (Coord.xy 8 2000)
                             { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 }
                             pressed
                 in
                 Expect.all
                     [ \_ -> offset pressed |> Expect.within (Expect.Absolute 1.0e-9) 0
                     , \_ -> offset dragged |> Expect.within (Expect.Absolute 1.0e-9) -902
-                    , \_ -> offset (Ui.dragScrollbar () (Coord.xy 15 2000) { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 } (Ui.onMouseUp pressed)) |> Expect.within (Expect.Absolute 1.0e-9) 0
+                    , \_ -> offset (Ui.dragScrollbar () (Coord.xy 8 2000) { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 } (Ui.onMouseUp pressed)) |> Expect.within (Expect.Absolute 1.0e-9) 0
+                    ]
+                    ()
+            )
+        , test "the scroll bar fades in over the viewport and widens over the scroll bar"
+            (\_ ->
+                let
+                    -- 100 wide content, so the viewport is 102 wide and its scroll bar is
+                    -- the 24 px strip from x = 77 to 101.
+                    wide : Ui.Model () -> Ui.Element ()
+                    wide model =
+                        Ui.viewport
+                            { id = ()
+                            , viewportHeight = Units.uiPixels 100
+                            , model =
+                                case SeqDict.get () model.uiState of
+                                    Just (Ui.ViewportState state) ->
+                                        state
+
+                                    _ ->
+                                        Ui.initViewportModel
+                            }
+                            (Ui.quads { size = Coord.xy 100 1000, triangles = [] })
+
+                    after : Int -> Coord.Coord Units.UiPixels -> Ui.Model () -> Ui.Model ()
+                    after n mouse model =
+                        List.foldl
+                            (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) mouse (Ui.hoverIdOnly mouse (wide m)) m)
+                            model
+                            (List.range 1 n)
+
+                    scrollbar : Ui.Model () -> ( Float, Float )
+                    scrollbar model =
+                        case SeqDict.get () model.uiState of
+                            Just (Ui.ViewportState state) ->
+                                ( state.scrollbarShown, state.scrollbarWidened )
+
+                            _ ->
+                                ( 0, 0 )
+
+                    overBar =
+                        after 30 (Coord.xy 90 50) Ui.init
+                in
+                Expect.all
+                    [ \_ -> scrollbar (after 30 (Coord.xy 20 50) Ui.init) |> Expect.equal ( 1, 0 )
+                    , \_ -> scrollbar overBar |> Expect.equal ( 1, 1 )
+                    , \_ -> scrollbar (after 60 (Coord.xy 500 50) overBar) |> Expect.equal ( 0, 0 )
+                    , \_ -> scrollbar (after 30 (Coord.xy 20 50) overBar) |> Expect.equal ( 1, 0 )
                     ]
                     ()
             )

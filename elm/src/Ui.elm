@@ -166,7 +166,14 @@ type ElementFull id lazy
 
 
 type alias ViewportData id =
-    { id : id, viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels }
+    { id : id
+    , viewportHeight : Quantity Int UiPixels
+    , scrollOffset : Quantity Float UiPixels
+
+    -- How far the scroll bar has faded in and widened (0 to 1), from its ViewportModel.
+    , scrollbarShown : Float
+    , scrollbarWidened : Float
+    }
 
 
 type ElementState
@@ -197,6 +204,11 @@ type alias ViewportModel =
 
     -- While the mouse drags the scroll bar: how far below the top of the thumb it holds it.
     , grab : Maybe Int
+
+    -- The scroll bar fades in (0 to 1) while the mouse is over the viewport, and widens
+    -- (0 to 1) to the width it can be pressed in while the mouse is over that.
+    , scrollbarShown : Float
+    , scrollbarWidened : Float
     }
 
 
@@ -265,6 +277,8 @@ elementToScreenshotHelper element =
                 { id = ()
                 , viewportHeight = data.viewportHeight
                 , scrollOffset = data.scrollOffset
+                , scrollbarShown = 0
+                , scrollbarWidened = 0
                 }
                 (elementToScreenshotHelper child)
 
@@ -362,12 +376,53 @@ setFocus maybe model =
     { model | focus = maybe }
 
 
-onAnimationFrame : Duration -> Model id -> Model id
-onAnimationFrame timeElapsed model =
+{-| A frame went by. `hovered` is what `hoverIdOnly` gives for the mouse, at `mouse`: the
+scroll bars of the viewports under it fade in, and widen if it is over them.
+-}
+onAnimationFrame :
+    Duration
+    -> Coord UiPixels
+    -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+    -> Model id
+    -> Model id
+onAnimationFrame timeElapsed mouse hovered model =
+    let
+        -- The hovered viewports, and whether the mouse is over their scroll bar.
+        hoveredViewports : SeqDict id Bool
+        hoveredViewports =
+            List.foldl
+                (\( _, { relativePositionToUi, ui } ) dict ->
+                    case ui of
+                        Element (Viewport data child) ->
+                            SeqDict.insert
+                                data.id
+                                (overScrollbar (Coord.minus relativePositionToUi mouse) data child)
+                                dict
+
+                        Element _ ->
+                            dict
+                )
+                SeqDict.empty
+                hovered
+
+        withHovered : SeqDict id ElementState
+        withHovered =
+            SeqDict.foldl
+                (\id _ dict ->
+                    case SeqDict.get id dict of
+                        Just _ ->
+                            dict
+
+                        Nothing ->
+                            SeqDict.insert id (ViewportState initViewportModel) dict
+                )
+                model.uiState
+                hoveredViewports
+    in
     { model
         | uiState =
             SeqDict.map
-                (\_ value ->
+                (\id value ->
                     case value of
                         TextInputState _ ->
                             value
@@ -376,13 +431,44 @@ onAnimationFrame timeElapsed model =
                             value
 
                         ViewportState viewport2 ->
-                            if viewport2.momentum /= 0 then
-                                glide timeElapsed viewport2 |> ViewportState
+                            (if viewport2.momentum /= 0 then
+                                glide timeElapsed viewport2
 
-                            else
-                                ease timeElapsed viewport2 |> ViewportState
+                             else
+                                ease timeElapsed viewport2
+                            )
+                                |> fadeScrollbar timeElapsed (SeqDict.get id hoveredViewports)
+                                |> ViewportState
                 )
-                model.uiState
+                withHovered
+    }
+
+
+{-| A frame of the scroll bar fading in or out and widening or narrowing. `hovered` is
+Nothing if the mouse isn't over the viewport, else whether it is over the scroll bar.
+-}
+fadeScrollbar : Duration -> Maybe Bool -> ViewportModel -> ViewportModel
+fadeScrollbar timeElapsed hovered model =
+    let
+        seconds : Float
+        seconds =
+            Duration.inSeconds timeElapsed
+
+        dragging : Bool
+        dragging =
+            model.grab /= Nothing
+
+        towards : Bool -> Float -> Float -> Float -> Float
+        towards on inSeconds outSeconds value =
+            if on then
+                min 1 (value + seconds / inSeconds)
+
+            else
+                max 0 (value - seconds / outSeconds)
+    in
+    { model
+        | scrollbarShown = towards (dragging || hovered /= Nothing) 0.15 0.4 model.scrollbarShown
+        , scrollbarWidened = towards (dragging || hovered == Just True) 0.1 0.2 model.scrollbarWidened
     }
 
 
@@ -499,7 +585,7 @@ onMouseDownHelper onClick relativePositionToUi cursor id element model =
             in
             case scrollbarThumb data.viewportHeight childSize data.scrollOffset of
                 Just thumb ->
-                    if Coord.xRaw local >= viewportOutline + Coord.xRaw childSize then
+                    if overScrollbar local data child then
                         let
                             -- Pressing the thumb holds it where it was pressed; pressing the
                             -- track beside it moves its middle under the mouse.
@@ -725,7 +811,14 @@ scrolls (Element element) =
 
 initViewportModel : ViewportModel
 initViewportModel =
-    { offset = Quantity.zero, target = Quantity.zero, momentum = 0, bottom = Quantity.zero, grab = Nothing }
+    { offset = Quantity.zero
+    , target = Quantity.zero
+    , momentum = 0
+    , bottom = Quantity.zero
+    , grab = Nothing
+    , scrollbarShown = 0
+    , scrollbarWidened = 0
+    }
 
 
 {-| A frame of easing towards where the wheel scrolled to.
@@ -821,6 +914,8 @@ scroll scrollBy size2 data model =
             , momentum = 0
             , bottom = model.bottom
             , grab = model.grab
+            , scrollbarShown = model.scrollbarShown
+            , scrollbarWidened = model.scrollbarWidened
             }
 
         Momentum velocity ->
@@ -853,12 +948,12 @@ insideHeight viewportHeight =
     viewportHeight |> Quantity.minus (Units.uiPixels (2 * viewportOutline)) |> Quantity.max Quantity.zero
 
 
-{-| How much wider a viewport is than its content: its outline on both sides and its
-scroll bar (UI pixels).
+{-| How much wider a viewport is than its content: its outline on both sides (UI
+pixels). The scroll bar lies over the content.
 -}
 viewportFrameWidth : Int
 viewportFrameWidth =
-    2 * viewportOutline + scrollbarWidth
+    2 * viewportOutline
 
 
 {-| How thick a viewport's outline is (UI pixels).
@@ -868,12 +963,50 @@ viewportOutline =
     1
 
 
-{-| How wide a viewport's scroll bar is (UI pixels). It is always there, so that the
-viewport doesn't change width when its content grows taller than it.
+{-| How wide the strip down the right of a viewport's inside is that the scroll bar can
+be pressed in, and how wide the thumb grows while the mouse is over it (UI pixels).
 -}
 scrollbarWidth : Int
 scrollbarWidth =
-    10
+    24
+
+
+{-| How wide the thumb is while the mouse isn't over the scroll bar, and its gap from
+the right edge then (UI pixels).
+-}
+thinThumbWidth : Int
+thinThumbWidth =
+    6
+
+
+thinThumbMargin : Int
+thinThumbMargin =
+    3
+
+
+{-| Whether a point (from the viewport's top left) is on the scroll bar: in the strip
+down the right of its inside, when its content scrolls. The scroll bar lies over the
+content there.
+-}
+overScrollbar : Coord UiPixels -> { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> ElementFull id lazy -> Bool
+overScrollbar point data child =
+    let
+        childSize : Coord UiPixels
+        childSize =
+            sizeHelper child
+
+        rightEdge : Int
+        rightEdge =
+            viewportOutline + Coord.xRaw childSize
+
+        ( x, y ) =
+            Coord.toTuple point
+    in
+    (scrollbarThumb data.viewportHeight childSize data.scrollOffset /= Nothing)
+        && (x >= rightEdge - scrollbarWidth)
+        && (x < rightEdge)
+        && (y >= viewportOutline)
+        && (y < viewportOutline + Quantity.unwrap (insideHeight data.viewportHeight))
 
 
 {-| The shortest a scroll bar thumb gets, so that it stays easy to grab (UI pixels).
@@ -1184,6 +1317,8 @@ viewport { id, viewportHeight, model } (Element child) =
     Viewport
         { id = id
         , viewportHeight = viewportHeight
+        , scrollbarShown = model.scrollbarShown
+        , scrollbarWidened = model.scrollbarWidened
 
         -- Content that got shorter (or a viewport that got taller) since it scrolled
         -- doesn't leave a gap below it.
@@ -1630,8 +1765,11 @@ hoverHelper hovers point position element =
                     hovers2 =
                         ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
                 in
-                -- Content scrolled out of sight can't be hovered.
-                if contains point inside.topLeft (Coord.minus inside.topLeft inside.bottomRight) then
+                -- Content scrolled out of sight, or under the scroll bar, can't be hovered.
+                if
+                    contains point inside.topLeft (Coord.minus inside.topLeft inside.bottomRight)
+                        && not (overScrollbar (Coord.minus position point) data child)
+                then
                     hoverHelper hovers2 point (Coord.plus (contentPosition data) position) child
 
                 else
@@ -1851,13 +1989,30 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         childSize =
                             sizeHelper child
 
+                        -- The scroll bar's strip, over the right of the content.
                         trackPosition : Coord UiPixels
                         trackPosition =
-                            Coord.plus (Coord.xy (viewportOutline + Coord.xRaw childSize) viewportOutline) position
+                            Coord.plus (Coord.xy (viewportOutline + Coord.xRaw childSize - scrollbarWidth) viewportOutline) position
 
                         track : Int
                         track =
                             Quantity.unwrap (insideHeight data.viewportHeight)
+
+                        between : Int -> Int -> Int
+                        between thin wide =
+                            thin + round (toFloat (wide - thin) * data.scrollbarWidened)
+
+                        thumbWidth : Int
+                        thumbWidth =
+                            between thinThumbWidth scrollbarWidth
+
+                        thumbMargin : Int
+                        thumbMargin =
+                            between thinThumbMargin 0
+
+                        alpha : Float -> Int
+                        alpha opaque =
+                            round (opaque * data.scrollbarShown)
                     in
                     borderAndFillView
                         scale
@@ -1865,20 +2020,6 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         position
                         (BorderOnly { borderWidth = viewportOutline, borderColor = Color.outlineColor })
                         (viewportSize data child)
-                        ++ (Sprite.rectangle Color.fillColor2 viewport3 trackPosition (Coord.xy scrollbarWidth track)
-                                ++ (case scrollbarThumb data.viewportHeight childSize data.scrollOffset of
-                                        Just thumb ->
-                                            Sprite.rectangle
-                                                Color.outlineColor
-                                                viewport3
-                                                (Coord.plus (Coord.xy 2 (thumb.top + 1)) trackPosition)
-                                                (Coord.xy (scrollbarWidth - 4) (thumb.height - 2))
-
-                                        Nothing ->
-                                            []
-                                   )
-                                |> Sprite.toDevice scale
-                           )
                         ++ (case Bounds.intersection viewport3 (viewportInside position data child) of
                                 Just inside ->
                                     viewList
@@ -1889,6 +2030,35 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                                         inside
                                         (Coord.plus (contentPosition data) position)
                                         child
+
+                                Nothing ->
+                                    []
+                           )
+                        ++ (case scrollbarThumb data.viewportHeight childSize data.scrollOffset of
+                                Just thumb ->
+                                    if data.scrollbarShown > 0 then
+                                        (if data.scrollbarWidened > 0 then
+                                            Sprite.rectangle
+                                                (Color.rgba255 60 50 45 (alpha (40 * data.scrollbarWidened)))
+                                                viewport3
+                                                trackPosition
+                                                (Coord.xy scrollbarWidth track)
+
+                                         else
+                                            []
+                                        )
+                                            ++ Sprite.rectangle
+                                                (Color.rgba255 60 50 45 (alpha 150))
+                                                viewport3
+                                                (Coord.plus
+                                                    (Coord.xy (scrollbarWidth - thumbMargin - thumbWidth) (thumb.top + 1))
+                                                    trackPosition
+                                                )
+                                                (Coord.xy thumbWidth (thumb.height - 2))
+                                            |> Sprite.toDevice scale
+
+                                    else
+                                        []
 
                                 Nothing ->
                                     []

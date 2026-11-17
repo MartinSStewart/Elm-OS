@@ -546,7 +546,12 @@ step event model =
 
                                 Nothing ->
                                     model.frameIntervals
-                        , uiState = Ui.onAnimationFrame elapsedTime model.uiState
+                        , uiState =
+                            Ui.onAnimationFrame
+                                elapsedTime
+                                (uiMouse model)
+                                (hover model)
+                                model.uiState
                     }
             in
             -- `draw` draws it, unless the message is being replayed.
