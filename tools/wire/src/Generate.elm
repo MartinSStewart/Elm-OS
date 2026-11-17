@@ -366,7 +366,7 @@ lazyTypeText modules { caller, qualifier } annotation =
                             []
 
                 ref ( moduleName, name ) =
-                    if List.member moduleName bareModules then
+                    if List.member moduleName bareModules || qualifier moduleName == "" then
                         name
 
                     else

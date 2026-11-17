@@ -215,8 +215,14 @@ rewriteAll typeText files ( keySource, keyFile ) callers =
                 |> List.map (\( _, file ) -> ( moduleName file, List.map (\i -> String.join "." (Node.value (Node.value i).moduleName)) file.imports ))
                 |> Dict.fromList
 
+        -- The key's own module's types, such as UiId when an argument is a `Ui.Model UiId`,
+        -- are written there without a qualifier ("").
         keyQualifier m =
-            importedAs keyFile m |> Maybe.withDefault m
+            if m == keyModule then
+                ""
+
+            else
+                importedAs keyFile m |> Maybe.withDefault m
 
         generated =
             List.map (\caller -> ( caller, List.map (generate typeText keyModule keyQualifier caller) caller.uses )) callers
