@@ -40,7 +40,9 @@ SUBPIXELS = 4
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_W, ATLAS_H = 2048, 4096
-# The pixel font, cursor and solid block live in the top left 256 x 256.
+# The pixel font, cursor and solid block live in the top left RESERVED_W x RESERVED_H
+# (host/common/src/atlas.rs).
+RESERVED_W, RESERVED_H = 304, 256
 SIZES = [16, 24, 32, 48]
 CHARS = (
     list(range(33, 127))
@@ -50,7 +52,9 @@ CHARS = (
 # Kerning is measured once, at a big size, between these, and stored in 1/1000 em.
 KERN_CHARS = list(range(33, 127))
 KERN_SIZE = 1000
-GAP = 1
+# Every glyph copy has its edge pixels copied once more around it (see `bleed`), so
+# there are two pixels between copies: one for each copy's border.
+GAP = 2
 
 # Name in Elm, file, sha256.
 FONTS = [
@@ -83,7 +87,7 @@ def glyph_image(face, ch, shift):
 
 def glyph_copies(face, ch):
     """The glyph's SUBPIXELS copies side by side, each in a cell of the same size, GAP
-    apart, and where a cell's top left is from the pen (on the baseline) when the
+    apart (room for each one's border, see `bleed`), and where a cell's top left is from the pen (on the baseline) when the
     copy is the one to draw."""
     drawn = [glyph_image(face, ch, k * 64 // SUBPIXELS) for k in range(SUBPIXELS)]
     drawn = [d for d in drawn if d[0] is not None]
@@ -99,8 +103,23 @@ def glyph_copies(face, ch):
     return strip, left, top
 
 
-# Shelf packing, tallest first, into the free parts of the atlas.
-regions = [[256, 0, ATLAS_W, 256], [0, 256, ATLAS_W, ATLAS_H]]  # x0, y0, x1, y1
+def bleed(x, y, w, h):
+    """Copies the edge pixels of the atlas's rectangle at x, y (w x h) out by one pixel all
+    round, corners too. A triangle sampled bilinearly (Sprite.Linear) blends in the pixels
+    just outside what it shows; these make those the shape's own edge, so it doesn't fade
+    out or pick up a neighbour at its edges."""
+    atlas.paste(atlas.crop((x, y, x + 1, y + h)), (x - 1, y))
+    atlas.paste(atlas.crop((x + w - 1, y, x + w, y + h)), (x + w, y))
+    atlas.paste(atlas.crop((x - 1, y, x + w + 1, y + 1)), (x - 1, y - 1))
+    atlas.paste(atlas.crop((x - 1, y + h - 1, x + w + 1, y + h)), (x - 1, y + h))
+
+
+# Shelf packing, tallest first, into the free parts of the atlas, which keep a pixel
+# clear inside their edges for the borders `bleed` draws.
+regions = [  # x0, y0, x1, y1
+    [RESERVED_W + 1, 1, ATLAS_W - 1, RESERVED_H - 1],
+    [1, RESERVED_H + 1, ATLAS_W - 1, ATLAS_H - 1],
+]
 shelves = []  # [region index, y, height, next x]
 
 
@@ -160,6 +179,8 @@ for h, w, g, im in sorted(work, key=lambda g: (-g[0], -g[1])):
     x, y = place(w, h)
     atlas.paste(im, (x, y))
     g[0:4] = [x, y, (w - (SUBPIXELS - 1) * GAP) // SUBPIXELS, h]
+    for k in range(SUBPIXELS):
+        bleed(x + k * (g[2] + GAP), y, g[2], h)
 
 # Run-length coding: a 0 byte is followed by how many 0s (1-255) it stands for; any
 # other byte is itself.
@@ -195,7 +216,8 @@ lines = [
     f"A glyph is drawn {SUBPIXELS} times, shifted right by 0, 1/{SUBPIXELS}, ... of a pixel; copy k is the rectangle",
     f"`x + k * (w + {GAP})`, `y`, `w`, `h` of the atlas, drawn `left` pixels right of the pen (rounded to",
     "the nearest copy) and `top` pixels below the baseline (so usually negative). `advance` is",
-    "unhinted, in font units (1/1000 em), the same at every size.",
+    "unhinted, in font units (1/1000 em), the same at every size. Each copy's edge pixels are",
+    "repeated once more around it in the atlas, for bilinear sampling.",
     "",
     "-}",
     "",

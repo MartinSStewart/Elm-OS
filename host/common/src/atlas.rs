@@ -4,14 +4,21 @@
 //! 2048 x 4096 pixels, one byte each: how much of the pixel is covered, 0 to 255.
 //! A triangle's colour is multiplied by it, so the atlas only holds shapes:
 //!
-//!   x 0-250, y 0-180     town-collab's 10 x 18 pixel font, 25 glyphs to a row
-//!   x 0-12, y 184-203    the mouse cursor's outline (12 x 19, tip at the top left)
-//!   x 16-28, y 184-203   the mouse cursor's fill; Elm draws the two in different colours
+//!   x 0-300, y 0-200     town-collab's 10 x 18 pixel font, 25 glyphs to a row, each
+//!                        in a 12 x 20 cell, at 1, 1 in it (`mono_glyph`)
+//!   x 1-13, y 204-223    the mouse cursor's outline (12 x 19, tip at the top left)
+//!   x 17-29, y 204-223   the mouse cursor's fill; Elm draws the two in different colours
 //!   x 248-256, y 248-256 solid, for flat colours
 //!   everywhere else      Noto Sans (regular, bold, italic, bold italic) at a few
 //!                        sizes, antialiased, each glyph at four quarter-pixel
-//!                        offsets (tools/make-noto-sans.py; elm/src/NotoSans.elm
-//!                        says where each glyph is)
+//!                        offsets (tools/make-noto-sans.py, which keeps clear of the
+//!                        top left 304 x 256; elm/src/NotoSans.elm says where each
+//!                        glyph is)
+//!
+//! Every glyph and cursor image has its edge pixels repeated once more around it (the
+//! pixel font's and cursor's by `bleed` here, Noto Sans's by make-noto-sans.py). A
+//! triangle sampled bilinearly (`Tri::linear`) blends in the pixels just outside what it
+//! shows, and these make those the image's own edge rather than a neighbour or nothing.
 //!
 //! Elm has the atlas's layout compiled in (NotoSans.elm), so the atlas is part of the
 //! host version (tools/host-version.sh): a build made for another atlas would draw the
@@ -28,8 +35,32 @@ static NOTO_SANS: &[u8] = include_bytes!("noto_sans.rle");
 
 const CURSOR_W: usize = 12;
 const CURSOR_H: usize = 19;
-const CURSOR_Y: usize = 184;
-const CURSOR_FILL_X: usize = 16;
+const CURSOR_Y: usize = 204;
+const CURSOR_OUTLINE_X: usize = 1;
+const CURSOR_FILL_X: usize = 17;
+
+/// The pixel font's glyphs, in town-collab's image (font.rs): 10 x 18, 25 to a row.
+const MONO_W: usize = 10;
+const MONO_H: usize = 18;
+const MONO_PER_ROW: usize = 25;
+
+/// Where the pixel font's glyph with this index (its place in font.rs, and in
+/// asciiChars in elm/src/Sprite.elm) has its top left corner in the atlas: glyphs are
+/// 2 pixels further apart than in the font's image, for their borders.
+pub fn mono_glyph(index: usize) -> (usize, usize) {
+    (index % MONO_PER_ROW * (MONO_W + 2) + 1, index / MONO_PER_ROW * (MONO_H + 2) + 1)
+}
+
+/// Copies the edge pixels of the atlas's w x h rectangle at x, y out by one pixel all
+/// round, corners too (see the top of this file).
+fn bleed(a: &mut [u8], x: usize, y: usize, w: usize, h: usize) {
+    for row in y..y + h {
+        a[row * ATLAS_W + x - 1] = a[row * ATLAS_W + x];
+        a[row * ATLAS_W + x + w] = a[row * ATLAS_W + x + w - 1];
+    }
+    a.copy_within(y * ATLAS_W + x - 1..y * ATLAS_W + x + w + 1, (y - 1) * ATLAS_W + x - 1);
+    a.copy_within((y + h - 1) * ATLAS_W + x - 1..(y + h - 1) * ATLAS_W + x + w + 1, (y + h) * ATLAS_W + x - 1);
+}
 
 /// X: outline, o: fill.
 const CURSOR: [&[u8; CURSOR_W]; CURSOR_H] = [
@@ -66,23 +97,31 @@ pub fn build() -> Vec<u8> {
         }
     }
     a.resize(ATLAS_W * ATLAS_H, 0);
-    for y in 0..font::FONT_H {
-        for x in 0..font::FONT_W {
-            if font::FONT_BITS[y * font::FONT_STRIDE + x / 8] & (0x80 >> (x % 8)) != 0 {
-                a[y * ATLAS_W + x] = 255;
+    for index in 0..(font::FONT_W / MONO_W) * (font::FONT_H / MONO_H) {
+        let (sx, sy) = (index % MONO_PER_ROW * MONO_W, index / MONO_PER_ROW * MONO_H);
+        let (ax, ay) = mono_glyph(index);
+        for y in 0..MONO_H {
+            for x in 0..MONO_W {
+                let (fx, fy) = (sx + x, sy + y);
+                if font::FONT_BITS[fy * font::FONT_STRIDE + fx / 8] & (0x80 >> (fx % 8)) != 0 {
+                    a[(ay + y) * ATLAS_W + ax + x] = 255;
+                }
             }
         }
+        bleed(&mut a, ax, ay, MONO_W, MONO_H);
     }
     for (y, row) in CURSOR.iter().enumerate() {
         for (x, &c) in row.iter().enumerate() {
             if c == b'X' {
-                a[(CURSOR_Y + y) * ATLAS_W + x] = 255;
+                a[(CURSOR_Y + y) * ATLAS_W + CURSOR_OUTLINE_X + x] = 255;
             }
             if c == b'o' {
                 a[(CURSOR_Y + y) * ATLAS_W + CURSOR_FILL_X + x] = 255;
             }
         }
     }
+    bleed(&mut a, CURSOR_OUTLINE_X, CURSOR_Y, CURSOR_W, CURSOR_H);
+    bleed(&mut a, CURSOR_FILL_X, CURSOR_Y, CURSOR_W, CURSOR_H);
     for y in 248..256 {
         a[y * ATLAS_W + 248..y * ATLAS_W + 256].fill(255);
     }
@@ -151,5 +190,29 @@ mod tests {
         let a = build();
         assert_eq!(a.len(), ATLAS_W * ATLAS_H);
         assert_eq!(a[250 * ATLAS_W + 250], 255);
+    }
+
+    /// Every pixel of a w x h rectangle's border is the rectangle's pixel nearest it.
+    fn bled(a: &[u8], x: usize, y: usize, w: usize, h: usize) -> bool {
+        (y - 1..y + h + 1).all(|by| {
+            (x - 1..x + w + 1).all(|bx| {
+                let (ix, iy) = (bx.clamp(x, x + w - 1), by.clamp(y, y + h - 1));
+                a[by * ATLAS_W + bx] == a[iy * ATLAS_W + ix]
+            })
+        })
+    }
+
+    #[test]
+    fn edges_are_repeated_around_the_pixel_font_and_cursor() {
+        let a = build();
+        for index in 0..250 {
+            let (x, y) = mono_glyph(index);
+            assert!(bled(&a, x, y, MONO_W, MONO_H), "pixel font glyph {index}");
+        }
+        assert!(bled(&a, CURSOR_OUTLINE_X, CURSOR_Y, CURSOR_W, CURSOR_H));
+        assert!(bled(&a, CURSOR_FILL_X, CURSOR_Y, CURSOR_W, CURSOR_H));
+        // 'A' (after 44 box-drawing and shade glyphs and 33 characters from ' ') has ink.
+        let (x, y) = mono_glyph(44 + 33);
+        assert!((0..MONO_H).any(|r| a[(y + r) * ATLAS_W + x..(y + r) * ATLAS_W + x + MONO_W].iter().any(|&p| p != 0)));
     }
 }

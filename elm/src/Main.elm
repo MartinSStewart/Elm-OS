@@ -684,7 +684,7 @@ step event model =
                         ( _, { relativePositionToUi, ui } ) :: _ ->
                             ( { model
                                 | screenshots =
-                                    { uiScale = uiScale model, screenshot = Ui.elementToScreenshot ui }
+                                    { uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot ui }
                                         :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
@@ -695,7 +695,7 @@ step event model =
                         [] ->
                             ( { model
                                 | screenshots =
-                                    { uiScale = uiScale model, screenshot = Ui.elementToScreenshot displayUi2 }
+                                    { uiScale = Display.uiScale display, screenshot = Ui.elementToScreenshot displayUi2 }
                                         :: model.screenshots
                                 , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
                                 , takingScreenshot = Nothing
@@ -1467,6 +1467,7 @@ clickElement model id uiState =
             ( { model
                 | screenshotViewer =
                     ScreenshotViewer.onClick
+                        (Display.uiScale (displayOf ScreenshotViewerApp model))
                         (screenshotViewerArea model)
                         model.screenshots
                         uiId2

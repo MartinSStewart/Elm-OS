@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use common::atlas::Tri;
+use common::atlas::{self, Tri};
 
 const KEY_ENTER: u16 = 28;
 const KEY_KPENTER: u16 = 96;
@@ -130,7 +130,6 @@ pub fn current(w: u32, h: u32) -> Option<Vec<Tri>> {
 
 const CHAR_W: f32 = 10.0;
 const CHAR_H: f32 = 18.0;
-const CHARS_PER_ROW: usize = 25;
 /// The pixel font's characters before ' ' in the atlas (box drawing and shades; see
 /// asciiChars in elm/src/Sprite.elm).
 const BEFORE_SPACE: usize = 44;
@@ -163,7 +162,8 @@ fn text(tris: &mut Vec<Tri>, x: f32, y: f32, scale: f32, line: &str, rgba: u32) 
             continue;
         }
         let index = glyph_index(c);
-        let (u, v) = ((index % CHARS_PER_ROW) as f32 * CHAR_W, (index / CHARS_PER_ROW) as f32 * CHAR_H);
+        let (u, v) = atlas::mono_glyph(index);
+        let (u, v) = (u as f32, v as f32);
         let x0 = x + i as f32 * CHAR_W * scale;
         quad(tris, x0, y, x0 + CHAR_W * scale, y + CHAR_H * scale, u, v, u + CHAR_W, v + CHAR_H, rgba);
     }

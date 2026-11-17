@@ -35,9 +35,9 @@ module Sprite exposing
 Every triangle samples the host's texture atlas (host/common/src/atlas.rs, 2048 x 4096
 pixels) and multiplies the sample by its colour:
 
-  - glyphs of town-collab's 10 x 18 pixel font fill x 0-250, y 0-180, 25 to a row,
-    in the order of `asciiChars` below
-  - the mouse cursor, 12 x 19: its outline at x 0, y 184 and its fill at x 16, y 184
+  - glyphs of town-collab's 10 x 18 pixel font fill x 0-300, y 0-200, 25 to a row,
+    in the order of `asciiChars` below, each at 1, 1 in a 12 x 20 cell
+  - the mouse cursor, 12 x 19: its outline at x 1, y 204 and its fill at x 17, y 204
   - a solid white block at x 248-256, y 248-256, for flat colours
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
@@ -77,8 +77,10 @@ type Triangle units
 {-| How a triangle reads the atlas between its pixels: the nearest pixel (what text and
 UI are drawn with, so they stay sharp), or blended from the four around the point
 (bilinear), which is smoother when shapes are drawn smaller than the atlas has them.
-Blending also pulls in the neighbouring pixels of the atlas, so a shape sampled this
-way can get a faint fringe from whatever sits next to it there.
+Blending also pulls in the pixels just outside a shape in the atlas, so every glyph and
+image there has its edge pixels repeated once around it, and a shape blends with its own
+edge rather than with whatever sits next to it. A triangle showing only part of a glyph
+still blends with the rest of it.
 -}
 type Sampling
     = Nearest
@@ -351,8 +353,8 @@ cursor fill scale position =
         at =
             Coord.toTuple position
     in
-    sprite Color.black at size ( 0, 184 ) ( 12, 19 )
-        ++ sprite fill at size ( 16, 184 ) ( 12, 19 )
+    sprite Color.black at size ( 1, 204 ) ( 12, 19 )
+        ++ sprite fill at size ( 17, 204 ) ( 12, 19 )
 
 
 
@@ -495,7 +497,8 @@ charTexturePosition char =
         index =
             Dict.get char charToInt |> Maybe.withDefault questionMark
     in
-    ( modBy charsPerRow index * Tuple.first charSize, index // charsPerRow * Tuple.second charSize )
+    -- Each glyph's edge pixels are repeated around it in the atlas, so they are 2 pixels apart.
+    ( modBy charsPerRow index * (Tuple.first charSize + 2) + 1, index // charsPerRow * (Tuple.second charSize + 2) + 1 )
 
 
 {-| The Noto Sans file for a style.

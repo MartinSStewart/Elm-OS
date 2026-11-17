@@ -16,10 +16,11 @@ module ScreenshotViewer exposing
 (Main's `screenshots`, newest first), and the one picked, which can be dragged around and
 zoomed.
 
-A screenshot is the UI as it was, so it is drawn again, as a screen with the same UI scale
-would draw it, and then scaled: the picture's pixels are device pixels, and a zoom of 1 puts
-each on one pixel of the screen. Zoomed in, they are sampled by the nearest pixel, so they
-show as the blocks they are; zoomed out, they are blended (`Sprite.Linear`).
+A screenshot is the UI as it was, so it is drawn again, as the screen it was taken on
+drew it (with that screen's UI scale, so with the same glyphs), and then scaled: the
+picture's pixels are that screen's pixels, and a zoom of 1 puts each on one pixel of the
+screen showing it. From 2 up they are sampled by the nearest pixel, so they show as the
+blocks they are; below that, they are blended (`Sprite.Linear`).
 
 -}
 
@@ -39,7 +40,7 @@ type alias Model =
     -- The picture shown: its place in Main's screenshots, newest first.
     , selected : Maybe Int
 
-    -- Screen pixels for each pixel of the picture: 1 is its actual size.
+    -- Pixels of the screen showing it for each pixel of the picture: 1 is its actual size.
     , zoom : Float
 
     -- Where the picture's top left corner is, from the top left corner of its area, in UI pixels.
@@ -131,11 +132,11 @@ screenshotAdded model =
     { model | selected = Maybe.map ((+) 1) model.selected }
 
 
-{-| A click on one of the viewer's buttons. Takes the area the picture is in, and the
-screenshots.
+{-| A click on one of the viewer's buttons. Takes the UI scale of the screen the viewer is
+on, the area the picture is in, and the screenshots.
 -}
-onClick : Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Types.UiId -> Model -> Model
-onClick area screenshots id model =
+onClick : UiScale -> Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Types.UiId -> Model -> Model
+onClick scale area screenshots id model =
     case id of
         Types.OpenButton ->
             { model | isOpen = not model.isOpen, dragging = False }
@@ -149,7 +150,7 @@ onClick area screenshots id model =
         Types.Preview index ->
             case nth index screenshots of
                 Just screenshot ->
-                    fit area screenshot { model | selected = Just index }
+                    fit scale area screenshot { model | selected = Just index }
 
                 Nothing ->
                     model
@@ -169,7 +170,7 @@ onClick area screenshots id model =
         Types.FitButton ->
             case Maybe.andThen (\index -> nth index screenshots) model.selected of
                 Just screenshot ->
-                    fit area screenshot model
+                    fit scale area screenshot model
 
                 Nothing ->
                     model
@@ -223,13 +224,15 @@ dragged by model =
         model
 
 
-{-| Zooms to the whole picture in the area, in the middle.
+{-| Zooms to the whole picture in the area, in the middle, on a screen with the given UI
+scale.
 -}
-fit : Coord UiPixels -> Ui.Screenshot -> Model -> Model
-fit area screenshot model =
+fit : UiScale -> Coord UiPixels -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Model
+fit scale area screenshot model =
     let
+        -- The picture's size in UI pixels of this screen at a zoom of 1.
         ( w, h ) =
-            Coord.toTuple (Ui.screenshotSize screenshot) |> Tuple.mapBoth toFloat toFloat
+            pictureSize screenshot |> Tuple.mapBoth (\x -> x * uiPerScreenPixel scale) (\y -> y * uiPerScreenPixel scale)
 
         ( areaW, areaH ) =
             Coord.toTuple area |> Tuple.mapBoth toFloat toFloat
@@ -241,6 +244,21 @@ fit area screenshot model =
         | zoom = zoom
         , offset = ( toFloat (round ((areaW - w * zoom) / 2)), toFloat (round ((areaH - h * zoom) / 2)) )
     }
+
+
+{-| A screenshot's size in pixels of the screen it was taken on.
+-}
+pictureSize : { uiScale : UiScale, screenshot : Ui.Screenshot } -> ( Float, Float )
+pictureSize screenshot =
+    Coord.toTuple (Ui.screenshotSize screenshot.screenshot)
+        |> Tuple.mapBoth
+            (\w -> toFloat (w * Units.scaleInt screenshot.uiScale))
+            (\h -> toFloat (h * Units.scaleInt screenshot.uiScale))
+
+
+uiPerScreenPixel : UiScale -> Float
+uiPerScreenPixel scale =
+    1 / toFloat (Units.scaleInt scale)
 
 
 centre : Coord UiPixels -> ( Float, Float )
@@ -362,26 +380,30 @@ preview : UiScale -> Model -> Int -> { uiScale : UiScale, screenshot : Ui.Screen
 preview scale model index screenshot =
     let
         ( w, h ) =
-            Coord.toTuple (Ui.screenshotSize screenshot.screenshot) |> Tuple.mapBoth toFloat toFloat
+            pictureSize screenshot
 
+        -- The preview's biggest size in pixels of this screen.
         ( maxW, maxH ) =
-            Coord.toTuple previewSize |> Tuple.mapBoth toFloat toFloat
+            Coord.toTuple previewSize |> Tuple.mapBoth (\x -> toFloat (x * Units.scaleInt scale)) (\y -> toFloat (y * Units.scaleInt scale))
 
         zoom =
             min (maxW / max 1 w) (maxH / max 1 h)
+
+        size =
+            Coord.xy (ceiling (w * zoom * uiPerScreenPixel scale)) (ceiling (h * zoom * uiPerScreenPixel scale))
     in
     Ui.selectableButton
         { id = ScreenshotViewer (Types.Preview index), padding = Ui.paddingXY buttonPadding buttonPadding }
         (model.selected == Just index)
         (Ui.quads
-            { size = Coord.xy (ceiling (w * zoom)) (ceiling (h * zoom))
-            , triangles = pictureTriangles scale zoom ( 0, 0 ) (Coord.xy (ceiling (w * zoom)) (ceiling (h * zoom))) screenshot
+            { size = size
+            , triangles = pictureTriangles scale zoom ( 0, 0 ) size screenshot
             }
         )
 
 
-imageArea : Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
-imageArea area screenshots model =
+imageArea : UiScale -> Coord UiPixels -> List { uiScale : UiScale, screenshot : Ui.Screenshot } -> Model -> Element UiId
+imageArea scale area screenshots model =
     let
         background : List (Triangle UiPixels)
         background =
@@ -395,7 +417,7 @@ imageArea area screenshots model =
                 background
                     ++ (case Maybe.andThen (\index -> nth index screenshots) model.selected of
                             Just screenshot ->
-                                pictureTriangles model.zoom model.offset area screenshot
+                                pictureTriangles scale model.zoom model.offset area screenshot
 
                             Nothing ->
                                 []
@@ -404,24 +426,22 @@ imageArea area screenshots model =
         )
 
 
-{-| A screenshot drawn `zoom` times as big as a screen of this UI scale shows it, with its
-top left corner at the given point of a box of the given size, and cut off at the box.
+{-| A screenshot drawn on a screen with the given UI scale, `zoom` of its pixels for each of
+the picture's, with its top left corner at the given point of a box of the given size, and
+cut off at the box.
 -}
-pictureTriangles : Float -> ( Float, Float ) -> Coord UiPixels -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> List (Triangle UiPixels)
-pictureTriangles zoom offset box screenshot =
+pictureTriangles : UiScale -> Float -> ( Float, Float ) -> Coord UiPixels -> { uiScale : UiScale, screenshot : Ui.Screenshot } -> List (Triangle UiPixels)
+pictureTriangles scale zoom offset box screenshot =
     let
-        -- The picture is in device pixels, the box in UI pixels.
-        uiPerDevice =
-            1 / toFloat (Units.scaleInt screenshot.uiScale)
-
         ( boxW, boxH ) =
             Coord.toTuple box |> Tuple.mapBoth toFloat toFloat
     in
+    -- The picture is in pixels of the screen it was taken on, the box in UI pixels of this one.
     Ui.screenshotView screenshot
-        |> Sprite.scaleAndMove (zoom * uiPerDevice) offset
+        |> Sprite.scaleAndMove (zoom * uiPerScreenPixel scale) offset
         |> Sprite.clipTo { left = 0, top = 0, right = boxW, bottom = boxH }
         |> Sprite.sampled
-            (if zoom >= 1 then
+            (if zoom >= 2 then
                 Nearest
 
              else
