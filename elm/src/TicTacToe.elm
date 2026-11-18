@@ -188,9 +188,9 @@ view model =
         newGame =
             Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, padding = Ui.paddingXY 8 3 } (Ui.text "New game")
     in
-    Ui.elWithId (TicTacToe TicTacToe.Types.Panel)
+    Ui.elWithId
+        (TicTacToe TicTacToe.Types.Panel)
         { padding = Ui.paddingXY 8 8
-        , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
         (Ui.column spacing [ title, Ui.text (message model), board, newGame ])

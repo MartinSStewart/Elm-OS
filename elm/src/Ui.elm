@@ -34,9 +34,10 @@ module Ui exposing
     , getTextInputMultiline
     , hover
     , hoverIdOnly
+    , inFront
     , init
-    , inspect
     , insertElement
+    , inspect
     , lazy
     , lazy2
     , lazy3
@@ -155,7 +156,7 @@ type ElementFull id lazy
         (ElementFull id lazy)
       -- Elements on top of each other at the same place, each drawn over the ones before
       -- it. `cachedSize` is the first one's size: the others can reach outside it.
-    | InFront { cachedSize : Coord UiPixels } (List (ElementFull id lazy))
+    | InFront { cachedSize : Coord UiPixels } (List ( Coord UiPixels, ElementFull id lazy ))
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
     | Viewport (ViewportData id) (ElementFull id lazy)
@@ -293,7 +294,7 @@ elementToScreenshotHelper model element acc =
                 ( acc2, id ) =
                     screenshotId (Just (ButtonState (getButton data.id model))) acc
 
-                ( acc3, inFront ) =
+                ( acc3, inFront2 ) =
                     screenshotList model data.inFront acc2
 
                 ( acc4, child2 ) =
@@ -307,7 +308,7 @@ elementToScreenshotHelper model element acc =
                 , borderAndFillFocus = data.borderAndFillFocus
                 , borderAndFillHover = data.borderAndFillHover
                 , cachedSize = data.cachedSize
-                , inFront = inFront
+                , inFront = inFront2
                 }
                 child2
             )
@@ -342,7 +343,17 @@ elementToScreenshotHelper model element acc =
             )
 
         InFront data children ->
-            screenshotList model children acc |> Tuple.mapSecond (InFront data)
+            List.foldl
+                (\( position, element2 ) ( acc2, done ) ->
+                    let
+                        ( acc3, element3 ) =
+                            elementToScreenshotHelper model element2 acc2
+                    in
+                    ( acc3, ( position, element3 ) :: done )
+                )
+                ( acc, [] )
+                children
+                |> Tuple.mapSecond (\a -> List.reverse a |> InFront data)
 
         Quads data ->
             ( acc, Quads data )
@@ -1448,7 +1459,7 @@ column spacing children =
         |> Element
 
 
-el : { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+el : { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
 el data (Element child) =
     Single
         { padding = data.padding
@@ -1457,14 +1468,13 @@ el data (Element child) =
         , id = Nothing
         }
         child
-        |> withInFront data.inFront
         |> Element
 
 
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId : id -> { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
 elWithId id data (Element child) =
     Single
         { padding = data.padding
@@ -1473,21 +1483,20 @@ elWithId id data (Element child) =
         , id = Just id
         }
         child
-        |> withInFront data.inFront
         |> Element
 
 
-{-| `element` with `inFront` drawn over it, at its top left, or just `element` when there
-are none.
--}
-withInFront : List (Element id) -> ElementFull id (SeqDict id (Element id)) -> ElementFull id (SeqDict id (Element id))
-withInFront inFront element =
-    case inFront of
-        [] ->
-            element
-
-        _ :: _ ->
-            InFront { cachedSize = sizeHelper element } (element :: List.map (\(Element a) -> a) inFront)
+inFront : List ( Coord UiPixels, Element id ) -> Element id
+inFront inFront2 =
+    InFront
+        { cachedSize =
+            List.foldl
+                (\( position, Element a ) coord -> Coord.componentMax coord (Coord.plus position (sizeHelper a)))
+                Coord.origin
+                inFront2
+        }
+        (List.map (\( position, Element a ) -> ( position, a )) inFront2)
+        |> Element
 
 
 viewport : { id : id, viewportHeight : Quantity Int UiPixels } -> Element id -> Element id
@@ -1566,7 +1575,7 @@ lazyParts (Element element) found =
             lazyParts (Element child) found
 
         InFront _ children ->
-            List.foldl lazyParts found (List.map Element children)
+            List.foldl lazyParts found (List.map (\( _, a ) -> Element a) children)
 
         Viewport _ child ->
             lazyParts (Element child) found
@@ -1972,7 +1981,7 @@ inspectHelper model point clip position element found =
                         orItself inChild
 
             InFront _ children ->
-                firstOf (List.reverse (List.map (Tuple.pair position) children))
+                firstOf (List.reverse (List.map (\( coord, child ) -> ( Coord.plus coord position, child )) children))
 
             Viewport data child ->
                 let
@@ -2138,7 +2147,10 @@ hoverHelper model hovers point position element =
 
             InFront _ children ->
                 -- Each is drawn over the ones before it, so it goes nearer the front of the list.
-                List.foldl (\child acc -> hoverHelper model acc point position child) hovers children
+                List.foldl
+                    (\( coord, child ) acc -> hoverHelper model acc point (Coord.plus coord position) child)
+                    hovers
+                    children
 
             Text _ ->
                 ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -2231,7 +2243,7 @@ findInputHelper model id position element =
             findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
 
         InFront _ children ->
-            findFirst (findInputHelper model id position) (List.reverse children)
+            findFirst (\( coord, child ) -> findInputHelper model id (Coord.plus coord position) child) (List.reverse children)
 
         Text _ ->
             Nothing
@@ -2411,7 +2423,19 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
 
                 InFront _ children ->
-                    List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) children
+                    List.concatMap
+                        (\( coord, child ) ->
+                            viewList
+                                model
+                                time
+                                scale
+                                showUiBorder
+                                maybeHover
+                                viewport3
+                                (Coord.plus coord position)
+                                child
+                        )
+                        children
 
                 Quads data ->
                     Sprite.move position data.triangles

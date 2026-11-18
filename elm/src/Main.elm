@@ -2133,7 +2133,7 @@ inspectorList sources =
             List.map (\source -> String.length source.function) sources |> List.maximum |> Maybe.withDefault 0
     in
     Ui.el
-        { padding = Ui.paddingXY 8 6, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
+        { padding = Ui.paddingXY 8 6, borderAndFill = Ui.defaultElBorderAndFill }
         (Ui.column
             4
             [ Ui.text "Clicked element, then the ones it is in:"
@@ -2362,39 +2362,31 @@ notices.
 -}
 displayUi : Model -> Display -> Ui.Element UiId
 displayUi model display =
-    Ui.el
-        { padding = { top = 0, bottom = Coord.yRaw (Display.uiSize display), left = 0, right = Coord.xRaw (Display.uiSize display) }
-        , inFront =
-            toolbar model display
-                :: List.map
-                    (\( app, bounds ) ->
-                        Ui.el
-                            { padding = { top = Coord.yRaw bounds.topLeft, bottom = 0, left = Coord.xRaw bounds.topLeft, right = 0 }
-                            , inFront = []
-                            , borderAndFill = Ui.NoBorderOrFill
-                            }
-                            (appView app (Coord.minus bounds.topLeft bounds.bottomRight) model)
-                    )
-                    (windows model display)
-                ++ (if display.id == (mainDisplay model).id then
-                        case model.upgradingTo of
+    ( Coord.origin, toolbar model display )
+        :: List.map
+            (\( app, bounds ) ->
+                ( bounds.topLeft
+                , appView app (Coord.minus bounds.topLeft bounds.bottomRight) model
+                )
+            )
+            (windows model display)
+        ++ (if display.id == (mainDisplay model).id then
+                case model.upgradingTo of
+                    Just build ->
+                        [ notice model ("Upgrade to " ++ build ++ " in progress") ]
+
+                    Nothing ->
+                        case model.reflashNeeded of
                             Just build ->
-                                [ notice model ("Upgrade to " ++ build ++ " in progress") ]
+                                [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
 
                             Nothing ->
-                                case model.reflashNeeded of
-                                    Just build ->
-                                        [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
+                                []
 
-                                    Nothing ->
-                                        []
-
-                    else
-                        []
-                   )
-        , borderAndFill = Ui.NoBorderOrFill
-        }
-        Ui.empty
+            else
+                []
+           )
+        |> Ui.inFront
 
 
 
@@ -2543,10 +2535,7 @@ smallWindow { title, close, width } rows =
             List.foldl (\row soFar -> Quantity.max (Coord.x (Ui.size row)) soFar) width rows
     in
     Ui.el
-        { padding = Ui.paddingXY 6 6
-        , inFront = []
-        , borderAndFill = Ui.defaultElBorderAndFill
-        }
+        { padding = Ui.paddingXY 6 6, borderAndFill = Ui.defaultElBorderAndFill }
         (Ui.column
             4
             (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
@@ -3053,7 +3042,7 @@ networkPanel model =
                             [ Ui.row
                                 6
                                 [ -- lined up with the text in the box, which is inset by its padding
-                                  Ui.el { padding = Ui.paddingXY 0 4, inFront = [], borderAndFill = Ui.NoBorderOrFill } (t "Password")
+                                  Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (t "Password")
                                 , passwordInput model
                                 , Ui.button { id = ShowPasswordButton, padding = small }
                                     (t
@@ -3116,8 +3105,7 @@ clock room model =
         Just time ->
             let
                 box string =
-                    Ui.el { padding = Ui.paddingXY 6 3, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
-                        (Ui.text string)
+                    Ui.el { padding = Ui.paddingXY 6 3, borderAndFill = Ui.defaultElBorderAndFill } (Ui.text string)
 
                 full =
                     box (Clock.toString model.utcOffsetMinutes time)
@@ -3480,9 +3468,6 @@ toolbar model display =
         openHere app =
             shownOn display app model
 
-        t =
-            Ui.text
-
         small =
             Ui.paddingXY 6 3
 
@@ -3490,11 +3475,8 @@ toolbar model display =
             case model.confirmPower of
                 Just action ->
                     [ Ui.el
-                        { padding = small
-                        , inFront = []
-                        , borderAndFill = Ui.defaultElBorderAndFill
-                        }
-                        (t
+                        { padding = small, borderAndFill = Ui.defaultElBorderAndFill }
+                        (Ui.text
                             (case action of
                                 PowerOff ->
                                     "Power off?"
@@ -3504,7 +3486,7 @@ toolbar model display =
                             )
                         )
                     , -- Cancel first, where the button that asked was, so a double click is harmless.
-                      Ui.button { id = CancelPowerButton, padding = small } (t "Cancel")
+                      Ui.button { id = CancelPowerButton, padding = small } (Ui.text "Cancel")
                     , Ui.customButton
                         { id = ConfirmPowerButton
                         , padding = small
@@ -3513,29 +3495,47 @@ toolbar model display =
                             Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.rgb255 230 150 140 }
                         , borderAndFillFocus = Ui.defaultButtonBorderAndFillFocus
                         }
-                        (t "Yes")
+                        (Ui.text "Yes")
                     ]
 
                 Nothing ->
-                    [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (t "About")
-                    , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (t "Wikipedia")
+                    [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (Ui.text "About")
+                    , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (Ui.text "Wikipedia")
                     , Ui.selectableButton
                         { id = HackerNews HackerNews.Types.OpenButton, padding = small }
                         (openHere HackerNewsApp)
-                        (t "Hacker news")
-                    , Ui.selectableButton { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
-                    , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
-                    , Ui.selectableButton { id = TicTacToeButton, padding = small } (openHere TicTacToeApp) (t "Noughts")
-                    , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
+                        (Ui.text "Hacker news")
+                    , Ui.selectableButton
+                        { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small }
+                        (openHere AsciiCollabApp)
+                        (Ui.text "ASCII collab")
+                    , Ui.selectableButton
+                        { id = CalculatorButton, padding = small }
+                        (openHere CalculatorApp)
+                        (Ui.text "Calculator")
+                    , Ui.selectableButton
+                        { id = TicTacToeButton, padding = small }
+                        (openHere TicTacToeApp)
+                        (Ui.text "Noughts")
+                    , Ui.selectableButton
+                        { id = EditorButton, padding = small }
+                        (openHere EditorApp)
+                        (Ui.text "Text editor")
                     , Ui.selectableButton
                         { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
                         (openHere ScreenshotViewerApp)
-                        (t "Screenshots")
-                    , Ui.selectableButton { id = NetworkAppButton, padding = small } (openHere NetworkApp) (t "Network")
-                    , Ui.selectableButton { id = WeatherAppButton, padding = small } (openHere WeatherApp) (t "Weather")
-                    , Ui.selectableButton { id = DebugButton, padding = small } (openHere DebugApp) (t "Debug")
-                    , Ui.button { id = RestartButton, padding = small } (t "Restart")
-                    , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
+                        (Ui.text "Screenshots")
+                    , Ui.selectableButton
+                        { id = NetworkAppButton, padding = small }
+                        (openHere NetworkApp)
+                        (Ui.text "Network")
+                    , Ui.selectableButton
+                        { id = WeatherAppButton, padding = small }
+                        (openHere WeatherApp)
+                        (Ui.text "Weather")
+                    , Ui.selectableButton { id = DebugButton, padding = small } (openHere DebugApp) (Ui.text "Debug")
+                    , Ui.button { id = RestartButton, padding = small } (Ui.text "Restart")
+                    , Ui.button { id = PowerOffButton, padding = small } (Ui.text "Power off")
                     ]
 
         row =
@@ -3547,7 +3547,7 @@ toolbar model display =
         room =
             width |> Quantity.minus (Coord.x (Ui.size row)) |> Quantity.minus (Units.uiPixels 8)
     in
-    Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+    Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
         (Ui.leftAndRight width row (clock room model))
 
 
@@ -3562,18 +3562,20 @@ toolbarHeight =
 newest build needs the USB stick flashed again. The next program starts without it
 (`Displays`).
 -}
-notice : Model -> String -> Ui.Element UiId
+notice : Model -> String -> ( Coord UiPixels, Ui.Element UiId )
 notice model text =
-    Ui.bottomRight { size = Display.uiSize (mainDisplay model) }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-            (Ui.el
-                { padding = Ui.paddingXY 10 6
-                , inFront = []
-                , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-                }
-                (Ui.text text)
-            )
-        )
+    let
+        element : Ui.Element id
+        element =
+            Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+                (Ui.el
+                    { padding = Ui.paddingXY 10 6
+                    , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+                    }
+                    (Ui.text text)
+                )
+    in
+    ( Display.uiSize (mainDisplay model) |> Coord.minus (Ui.size element), element )
 
 
 aboutPage : Model -> Ui.Element UiId
@@ -3599,7 +3601,6 @@ aboutPage model =
     in
     Ui.el
         { padding = Ui.paddingXY 12 10
-        , inFront = []
         , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
         }
         (Ui.column
@@ -3711,7 +3712,7 @@ editorWindow model =
     in
     Ui.elWithId
         EditorWindow
-        { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
+        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.defaultElBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight style.width

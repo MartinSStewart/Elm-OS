@@ -692,7 +692,6 @@ view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding
-        , inFront = []
         , borderAndFill =
             Ui.BorderAndFill
                 { borderWidth = 2

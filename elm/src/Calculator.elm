@@ -639,7 +639,6 @@ view focused model =
         displayBox =
             Ui.el
                 { padding = Ui.paddingXY displayPadding 4
-                , inFront = []
                 , borderAndFill =
                     Ui.BorderAndFill
                         { borderWidth = 2
@@ -661,7 +660,6 @@ view focused model =
     in
     Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
-        , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
         (Ui.column spacing (title :: displayBox :: List.map (keyRow model) keys))

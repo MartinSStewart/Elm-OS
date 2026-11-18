@@ -308,7 +308,8 @@ view scale window screenshots model =
                     , headerButton Types.ZoomInButton "+"
                     , headerButton Types.ActualSizeButton "100%"
                     , headerButton Types.FitButton "Fit"
-                    , Ui.el { padding = Ui.paddingXY 6 3, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+                    , Ui.el
+                        { padding = Ui.paddingXY 6 3, borderAndFill = Ui.NoBorderOrFill }
                         (text
                             (case model.selected of
                                 Just _ ->
@@ -324,7 +325,6 @@ view scale window screenshots model =
     in
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding
-        , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
         (Ui.column
@@ -357,7 +357,7 @@ previewList scale height screenshots model =
             spacing
             (if List.isEmpty screenshots then
                 [ Ui.el
-                    { padding = Ui.paddingXY buttonPadding buttonPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+                    { padding = Ui.paddingXY buttonPadding buttonPadding, borderAndFill = Ui.NoBorderOrFill }
                     (Ui.customTextWrapped Sprite.Small
                         (Units.uiPixels (Coord.xRaw previewSize))
                         [ { text = "No screenshots yet. Press Print Screen, then click what to capture.", color = Color.black, font = Sprite.Sans Sprite.Regular } ]
@@ -403,8 +403,9 @@ imageArea scale area screenshots model =
         background =
             Sprite.rectangle (Color.rgb255 60 60 60) { topLeft = Coord.origin, bottomRight = area } Coord.origin area
     in
-    Ui.elWithId (ScreenshotViewer Types.ImageArea)
-        { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+    Ui.elWithId
+        (ScreenshotViewer Types.ImageArea)
+        { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
         (Ui.quads
             { size = area
             , triangles =
