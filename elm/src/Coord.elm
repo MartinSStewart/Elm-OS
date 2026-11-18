@@ -1,5 +1,7 @@
 module Coord exposing
     ( Coord
+    , componentMax
+    , componentMin
     , minus
     , origin
     , plus
@@ -88,3 +90,13 @@ toLocal ( Quantity uiX, Quantity uiY ) ( Quantity cursorX, Quantity cursorY ) =
     ( cursorX - uiX |> Quantity
     , cursorY - uiY |> Quantity
     )
+
+
+componentMin : Coord units -> Coord units -> Coord units
+componentMin ( dx, dy ) ( px, py ) =
+    ( Quantity.min dx px, Quantity.min dy py )
+
+
+componentMax : Coord units -> Coord units -> Coord units
+componentMax ( dx, dy ) ( px, py ) =
+    ( Quantity.max dx px, Quantity.max dy py )

@@ -2349,11 +2349,7 @@ appLimits app model =
             Layout.fixed (Ui.size (aboutPage model))
 
         NewsApp ->
-            let
-                width =
-                    Coord.xRaw (Ui.size (News.view model.lazyCache (Units.uiPixels 300) model.news))
-            in
-            { min = Coord.xy width 300, preferred = Coord.xy width 1100, max = Coord.xy width 100000 }
+            { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
 
         HackerNewsApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
@@ -2396,7 +2392,7 @@ appView app size model =
             aboutPage model
 
         NewsApp ->
-            News.view model.lazyCache (Coord.y size) model.news
+            News.view model.lazyCache (Coord.x size) (Coord.y size) model.news
 
         HackerNewsApp ->
             HackerNews.view model.lazyCache size model.hackerNews
@@ -2443,7 +2439,8 @@ smallWindow { title, close, width } rows =
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
-        (Ui.column { spacing = 4, padding = Ui.noPadding }
+        (Ui.column
+            4
             (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
                 :: rows
             )
@@ -2460,13 +2457,15 @@ overlay model =
             Sprite.Mono
 
         line label value =
-            Ui.row { spacing = 0, padding = Ui.noPadding }
+            Ui.row
+                0
                 [ Ui.monoText (String.padRight 10 ' ' label), Ui.monoText value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
-                    Ui.row { spacing = 4, padding = Ui.noPadding }
+                    Ui.row
+                        4
                         [ Ui.monoText (String.padRight 10 ' ' "Renderer")
                         , badge Sprite.Small gpu
                         , Ui.monoText
@@ -2549,7 +2548,8 @@ overlay model =
             fixed 2 (ms / 1000) ++ " s"
     in
     smallWindow { title = Ui.monoText "Elm OS debug", close = CloseDebugButton, width = debugWidth }
-        [ Ui.column { spacing = 3, padding = Ui.noPadding }
+        [ Ui.column
+            3
             (line "Build" (BootInfo.buildText model.bootInfo)
                 :: List.indexedMap
                     (\i display ->
@@ -2942,7 +2942,8 @@ networkPanel model =
 
                     else
                         (if needsPassword selected then
-                            [ Ui.row { spacing = 6, padding = Ui.noPadding }
+                            [ Ui.row
+                                6
                                 [ -- lined up with the text in the box, which is inset by its padding
                                   Ui.el { padding = Ui.paddingXY 0 4, inFront = [], borderAndFill = Ui.NoBorderOrFill } (t "Password")
                                 , passwordInput model
@@ -3145,12 +3146,7 @@ networkRow model network =
     Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY 4 2 }
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
-            (Ui.row
-                { spacing = 6, padding = Ui.noPadding }
-                [ bars
-                , Ui.text (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid))
-                ]
-            )
+            (Ui.row 6 [ bars, Ui.text (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid)) ])
             (Ui.text label)
         )
 
@@ -3255,9 +3251,11 @@ weatherRows model =
             [ Ui.leftAndRight width
                 (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
-            , Ui.row { spacing = 8, padding = Ui.noPadding }
+            , Ui.row
+                8
                 [ weatherIcon 3 forecast.code
-                , Ui.column { spacing = 3, padding = Ui.noPadding }
+                , Ui.column
+                    3
                     [ heading (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
@@ -3269,10 +3267,12 @@ weatherRows model =
                         )
                     ]
                 ]
-            , Ui.column { spacing = 3, padding = Ui.noPadding }
+            , Ui.column
+                3
                 (List.indexedMap
                     (\i day ->
-                        Ui.row { spacing = 6, padding = Ui.noPadding }
+                        Ui.row
+                            6
                             [ weatherIcon 1 day.code
                             , Ui.left (em 6)
                                 (t
@@ -3431,7 +3431,7 @@ toolbar model display =
                     ]
 
         row =
-            Ui.row { spacing = 4, padding = Ui.noPadding } buttons
+            Ui.row 4 buttons
 
         width =
             Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels 16)
@@ -3481,8 +3481,7 @@ aboutPage model =
             em 26
 
         line label value =
-            Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.left (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
+            Ui.row 0 [ Ui.left (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
 
         system =
             model.system
@@ -3495,7 +3494,8 @@ aboutPage model =
         , inFront = []
         , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
         }
-        (Ui.column { spacing = 4, padding = Ui.noPadding }
+        (Ui.column
+            4
             [ heading "Elm OS"
             , t "A Linux kernel that boots straight into one Elm program."
             , t ""
@@ -3601,12 +3601,11 @@ editorWindow model =
                         ", " ++ String.fromInt (abs state.cursorSize) ++ " selected"
                    )
     in
-    Ui.elWithId EditorWindow
-        { padding = Ui.paddingXY 8 8
-        , inFront = []
-        , borderAndFill = Ui.defaultElBorderAndFill
-        }
-        (Ui.column { spacing = 6, padding = Ui.noPadding }
+    Ui.elWithId
+        EditorWindow
+        { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
+        (Ui.column
+            6
             [ Ui.leftAndRight style.width
                 (heading "Text editor")
                 (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))

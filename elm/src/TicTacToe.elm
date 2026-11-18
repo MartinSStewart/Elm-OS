@@ -183,8 +183,7 @@ view model =
                 (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
 
         board =
-            Ui.column { spacing = spacing, padding = Ui.noPadding }
-                (List.map (boardRow model) [ [ 0, 1, 2 ], [ 3, 4, 5 ], [ 6, 7, 8 ] ])
+            Ui.column spacing (List.map (boardRow model) [ [ 0, 1, 2 ], [ 3, 4, 5 ], [ 6, 7, 8 ] ])
 
         newGame =
             Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, padding = Ui.paddingXY 8 3 } (Ui.text "New game")
@@ -194,13 +193,7 @@ view model =
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
-        (Ui.column { spacing = spacing, padding = Ui.noPadding }
-            [ title
-            , Ui.text (message model)
-            , board
-            , newGame
-            ]
-        )
+        (Ui.column spacing [ title, Ui.text (message model), board, newGame ])
 
 
 message : Model -> String
@@ -228,8 +221,7 @@ markName mark =
 
 boardRow : Model -> List Int -> Element UiId
 boardRow model row =
-    Ui.row { spacing = spacing, padding = Ui.noPadding }
-        (List.map (squareView model) row)
+    Ui.row spacing (List.map (squareView model) row)
 
 
 squareView : Model -> Int -> Element UiId

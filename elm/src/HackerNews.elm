@@ -742,10 +742,10 @@ postsView lazyCache windowSize data =
             Ui.customText Small [ { text = "Hacker News", color = Color.black, font = Sans Bold } ]
     in
     Ui.column
-        { spacing = titleSpacing, padding = Ui.noPadding }
+        titleSpacing
         [ title
         , Ui.column
-            { spacing = 0, padding = Ui.noPadding }
+            0
             (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
             |> scrolling (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
         ]
@@ -769,7 +769,7 @@ postView width index { id, title, comments } =
     Ui.leftAndRight
         (Units.uiPixels width)
         (Ui.row
-            { spacing = spacing, padding = Ui.noPadding }
+            spacing
             [ Ui.colorText
                 Color.lightFont
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
@@ -820,9 +820,9 @@ commentsView lazyCache windowSize postId title comments =
             8
     in
     Ui.column
-        { spacing = titleSpacing, padding = Ui.noPadding }
+        titleSpacing
         [ Ui.row
-            { spacing = headerSpacing, padding = Ui.noPadding }
+            headerSpacing
             [ backButton
             , Ui.customText
                 Small
@@ -853,7 +853,7 @@ commentsView lazyCache windowSize postId title comments =
 commentsColumn : Ui.LazyCache UiId -> Int -> List Comment -> Element UiId
 commentsColumn lazyCache width comments =
     Ui.column
-        { spacing = commentSpacing, padding = Ui.noPadding }
+        commentSpacing
         (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache width comment) comments)
 
 
@@ -877,7 +877,7 @@ commentView lazyCache width (Comment comment) =
         text : Element UiId
         text =
             Ui.row
-                { spacing = toggleSpacing, padding = Ui.noPadding }
+                toggleSpacing
                 [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
                 , Ui.customTextWrapped
                     Small
@@ -889,10 +889,10 @@ commentView lazyCache width (Comment comment) =
     in
     if comment.isExpanded then
         Ui.column
-            { spacing = commentSpacing, padding = Ui.noPadding }
+            commentSpacing
             [ text
             , Ui.row
-                { spacing = 0, padding = Ui.noPadding }
+                0
                 [ Ui.left (Units.uiPixels replyIndent) Ui.empty
                 , commentsColumn lazyCache (width - replyIndent) comment.children
                 ]
@@ -900,7 +900,7 @@ commentView lazyCache width (Comment comment) =
 
     else
         Ui.row
-            { spacing = toggleSpacing, padding = Ui.noPadding }
+            toggleSpacing
             [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
             , Ui.customTextWrapped
                 Small

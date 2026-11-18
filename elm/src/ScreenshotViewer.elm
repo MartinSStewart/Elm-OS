@@ -102,7 +102,7 @@ buttonPadding =
 -}
 listWidth : Int
 listWidth =
-    Coord.xRaw previewSize + 2 * buttonPadding + Ui.viewportFrameWidth
+    Coord.xRaw previewSize + 2 * buttonPadding
 
 
 headerHeight : Int
@@ -302,7 +302,8 @@ view scale window screenshots model =
         header =
             Ui.leftAndRight
                 (Units.uiPixels (Coord.xRaw area + listWidth + spacing))
-                (Ui.row { spacing = spacing, padding = Ui.noPadding }
+                (Ui.row
+                    spacing
                     [ headerButton Types.ZoomOutButton "-"
                     , headerButton Types.ZoomInButton "+"
                     , headerButton Types.ActualSizeButton "100%"
@@ -326,12 +327,12 @@ view scale window screenshots model =
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
-        (Ui.column { spacing = spacing, padding = Ui.noPadding }
+        (Ui.column
+            spacing
             [ header
-            , Ui.row { spacing = spacing, padding = Ui.noPadding }
-                [ previewList scale (Coord.yRaw area) screenshots model
-                , imageArea scale area screenshots model
-                ]
+            , Ui.row
+                spacing
+                [ previewList scale (Coord.yRaw area) screenshots model, imageArea scale area screenshots model ]
             ]
         )
 
@@ -352,7 +353,8 @@ previewList scale height screenshots model =
         { id = ScreenshotViewer Types.PreviewList
         , viewportHeight = Units.uiPixels height
         }
-        (Ui.column { spacing = spacing, padding = Ui.noPadding }
+        (Ui.column
+            spacing
             (if List.isEmpty screenshots then
                 [ Ui.el
                     { padding = Ui.paddingXY buttonPadding buttonPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }

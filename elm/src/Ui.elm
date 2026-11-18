@@ -16,10 +16,10 @@ module Ui exposing
     , center
     , colorText
     , column
+    , cursorAt
     , customButton
     , customText
     , customTextWrapped
-    , cursorAt
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , dragScrollbar
@@ -35,6 +35,7 @@ module Ui exposing
     , init
     , insertElement
     , lazy
+    , lazy2
     , lazy3
     , lazyCache
     , lazyKeyed
@@ -66,7 +67,6 @@ module Ui exposing
     , updateElement
     , view
     , viewport
-    , viewportFrameWidth
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -105,7 +105,6 @@ import Units exposing (DevicePixels, UiPixels, UiScale)
 
 type alias RowColumn =
     { spacing : Int
-    , padding : Bounds UiPixels
     , cachedSize : Coord UiPixels
     }
 
@@ -722,7 +721,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
 
                 y : Int
                 y =
-                    Coord.yRaw local - viewportOutline
+                    Coord.yRaw local
 
                 viewportModel =
                     getViewport data.id model
@@ -788,7 +787,7 @@ dragScrollbar id mouse { position, viewportHeight, contentSize } model =
                                         viewportHeight
                                         contentSize
                                         grab
-                                        (Coord.yRaw mouse - Coord.yRaw position - viewportOutline)
+                                        (Coord.yRaw mouse - Coord.yRaw position)
                                         state
                                     )
                                 )
@@ -1082,22 +1081,7 @@ maxScroll viewportHeight contentSize =
 -}
 insideHeight : Quantity Int UiPixels -> Quantity Int UiPixels
 insideHeight viewportHeight =
-    viewportHeight |> Quantity.minus (Units.uiPixels (2 * viewportOutline)) |> Quantity.max Quantity.zero
-
-
-{-| How much wider a viewport is than its content: its outline on both sides (UI
-pixels). The scroll bar lies over the content.
--}
-viewportFrameWidth : Int
-viewportFrameWidth =
-    2 * viewportOutline
-
-
-{-| How thick a viewport's outline is (UI pixels).
--}
-viewportOutline : Int
-viewportOutline =
-    1
+    viewportHeight |> Quantity.max Quantity.zero
 
 
 {-| How wide the strip down the right of a viewport's inside is that the scroll bar can
@@ -1134,7 +1118,7 @@ overScrollbar point viewportHeight scrollOffset child =
 
         rightEdge : Int
         rightEdge =
-            viewportOutline + Coord.xRaw childSize
+            Coord.xRaw childSize
 
         ( x, y ) =
             Coord.toTuple point
@@ -1142,8 +1126,8 @@ overScrollbar point viewportHeight scrollOffset child =
     (scrollbarThumb viewportHeight childSize scrollOffset /= Nothing)
         && (x >= rightEdge - scrollbarWidth)
         && (x < rightEdge)
-        && (y >= viewportOutline)
-        && (y < viewportOutline + Quantity.unwrap (insideHeight viewportHeight))
+        && (y >= 0)
+        && (y < Quantity.unwrap (insideHeight viewportHeight))
 
 
 {-| The shortest a scroll bar thumb gets, so that it stays easy to grab (UI pixels).
@@ -1385,7 +1369,7 @@ paddedSize padding child =
     Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (sizeHelper child)
 
 
-row : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
+row : Int -> List (Element id) -> Element id
 row data children =
     let
         children2 =
@@ -1399,11 +1383,11 @@ row data children =
                 )
                 children
     in
-    Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize data children2 } children2 |> Element
+    Row { spacing = data, cachedSize = rowSize data children2 } children2 |> Element
 
 
-column : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
-column data children =
+column : Int -> List (Element id) -> Element id
+column spacing children =
     let
         children2 =
             List.filterMap
@@ -1416,7 +1400,7 @@ column data children =
                 )
                 children
     in
-    Column { spacing = data.spacing, padding = data.padding, cachedSize = columnSize data children2 } children2
+    Column { spacing = spacing, cachedSize = columnSize spacing children2 } children2
         |> Element
 
 
@@ -1451,12 +1435,7 @@ elWithId id data (Element child) =
 
 viewport : { id : id, viewportHeight : Quantity Int UiPixels } -> Element id -> Element id
 viewport { id, viewportHeight } (Element child) =
-    Viewport
-        { id = id
-        , viewportHeight = viewportHeight
-        }
-        child
-        |> Element
+    Viewport { id = id, viewportHeight = viewportHeight } child |> Element
 
 
 
@@ -1564,6 +1543,11 @@ lazy3 _ f a b c =
     f a b c
 
 
+lazy2 : LazyCache id -> (a -> b -> Element id) -> a -> b -> Element id
+lazy2 _ f a b =
+    f a b
+
+
 lazy : LazyCache id -> (a -> Element id) -> a -> Element id
 lazy _ f a =
     f a
@@ -1633,9 +1617,7 @@ left width (Element child) =
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
 leftAndRight width leftChild (Element rightChild) =
-    row
-        { spacing = 0, padding = noPadding }
-        [ left (width |> Quantity.minus (Coord.x (sizeHelper rightChild))) leftChild, Element rightChild ]
+    row 0 [ left (width |> Quantity.minus (Coord.x (sizeHelper rightChild))) leftChild, Element rightChild ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
@@ -1702,7 +1684,7 @@ sizeHelper element =
 
 viewportSize : { id : id, viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Coord UiPixels
 viewportSize data child =
-    ( Coord.x (sizeHelper child) |> Quantity.plus (Units.uiPixels viewportFrameWidth)
+    ( Coord.x (sizeHelper child)
     , data.viewportHeight
     )
 
@@ -1712,78 +1694,74 @@ moved up by the scroll offset.
 -}
 contentPosition : { a | offset : Quantity Float UiPixels } -> Coord UiPixels
 contentPosition data =
-    Coord.xy viewportOutline (viewportOutline + round (Quantity.unwrap data.offset))
+    Coord.xy 0 (round (Quantity.unwrap data.offset))
 
 
 {-| The inside of a viewport at `position`, which its content shows through.
 -}
 viewportInside : Coord UiPixels -> { a | viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Bounds UiPixels
 viewportInside position data child =
-    { topLeft = Coord.plus (Coord.xy viewportOutline viewportOutline) position
+    { topLeft = position
     , bottomRight =
         Coord.plus
             (Coord.xy
-                (viewportOutline + Coord.xRaw (sizeHelper child))
-                (viewportOutline + Quantity.unwrap (insideHeight data.viewportHeight))
+                (Coord.xRaw (sizeHelper child))
+                (Quantity.unwrap (insideHeight data.viewportHeight))
             )
             position
     }
 
 
-rowSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (ElementFull id lazy) -> Coord UiPixels
-rowSize data children =
+rowSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
+rowSize spacing children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + data.spacing + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + spacing + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
     in
-    Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
-        (Coord.xy
-            (if List.isEmpty children then
-                w
-
-             else
-                w - data.spacing
-            )
-            h
-        )
-
-
-columnSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (ElementFull id lazy) -> Coord UiPixels
-columnSize data children =
-    let
-        ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + data.spacing + y )) ( 0, 0 ) children
-    in
-    Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
-        (Coord.xy
+    Coord.xy
+        (if List.isEmpty children then
             w
-            (if List.isEmpty children then
-                h
 
-             else
-                h - data.spacing
-            )
+         else
+            w - spacing
+        )
+        h
+
+
+columnSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
+columnSize spacing children =
+    let
+        ( w, h ) =
+            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + spacing + y )) ( 0, 0 ) children
+    in
+    Coord.xy
+        w
+        (if List.isEmpty children then
+            h
+
+         else
+            h - spacing
         )
 
 
 {-| Where each child of a row or column goes.
 -}
-childPositions : Bool -> RowColumn -> Coord UiPixels -> List (ElementFull id lazy) -> List ( Coord UiPixels, ElementFull id lazy )
-childPositions isRow data position children =
+childPositions : Bool -> Int -> Coord UiPixels -> List (ElementFull id lazy) -> List ( Coord UiPixels, ElementFull id lazy )
+childPositions isRow spacing position children =
     List.foldl
         (\child ( at, acc ) ->
             ( Coord.plus
                 (if isRow then
-                    Coord.xy (Coord.xRaw (sizeHelper child) + data.spacing) 0
+                    Coord.xy (Coord.xRaw (sizeHelper child) + spacing) 0
 
                  else
-                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + data.spacing)
+                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + spacing)
                 )
                 at
             , ( at, child ) :: acc
             )
         )
-        ( Coord.plus data.padding.topLeft position, [] )
+        ( position, [] )
         children
         |> Tuple.second
         |> List.reverse
@@ -1898,11 +1876,11 @@ hoverHelper model hovers point position element =
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             Row data children ->
-                childPositions True data position children
+                childPositions True data.spacing position children
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Column data children ->
-                childPositions False data position children
+                childPositions False data.spacing position children
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Single data child ->
@@ -1994,10 +1972,10 @@ findInputHelper model id position element =
                 Nothing
 
         Row data children ->
-            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data.spacing position children)
 
         Column data children ->
-            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.spacing position children)
 
         Single data child ->
             case findFirst (findInputHelper model id position) data.inFront of
@@ -2136,7 +2114,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                             (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
                                             (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUiPixels |> min 100)
                                             |> Sprite.move position
-                                            |> Sprite.clipTo (boundsToArea viewport3)
+                                            |> Sprite.clipTo (boundsToArea (Bounds.shrink (Units.uiPixels 2) viewport3))
                                             |> Sprite.toDevice scale
 
                                     else
@@ -2149,11 +2127,11 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
-                    childPositions True data position children
+                    childPositions True data.spacing position children
                         |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Column data children ->
-                    childPositions False data position children
+                    childPositions False data.spacing position children
                         |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Single data child ->
@@ -2199,7 +2177,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         -- The scroll bar's strip, over the right of the content.
                         trackPosition : Coord UiPixels
                         trackPosition =
-                            Coord.plus (Coord.xy (viewportOutline + Coord.xRaw childSize - scrollbarWidth) viewportOutline) position
+                            Coord.plus (Coord.xy (Coord.xRaw childSize - scrollbarWidth) 0) position
 
                         track : Int
                         track =
@@ -2228,7 +2206,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         scale
                         viewport3
                         position
-                        (BorderOnly { borderWidth = viewportOutline, borderColor = Color.outlineColor })
+                        (BorderOnly { borderWidth = 1, borderColor = Color.outlineColor })
                         (viewportSize data child)
                         ++ (case Bounds.intersection viewport3 (viewportInside position data child) of
                                 Just inside ->

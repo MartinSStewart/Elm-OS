@@ -41,21 +41,22 @@ import Units exposing (UiPixels)
 
 {-| The window, this tall (UI pixels): the days scroll inside it.
 -}
-view : Ui.LazyCache UiId -> Quantity Int UiPixels -> NewsState -> Element UiId
-view lazyCache height news =
+view : Ui.LazyCache UiId -> Quantity Int UiPixels -> Quantity Int UiPixels -> NewsState -> Element UiId
+view lazyCache width height news =
     let
         viewportHeight : Quantity Int UiPixels
         viewportHeight =
-            height |> Quantity.minus (Quantity.plus (Units.uiPixels (2 * 10 + 4)) (Sprite.lineHeight Sprite.Small))
+            height |> Quantity.minus (Quantity.plus (Units.uiPixels (10 + 4)) (Sprite.lineHeight Sprite.Small))
     in
     Ui.el
-        { padding = Ui.paddingXY 12 10
+        { padding = { topLeft = Coord.xy 0 10, bottomRight = Coord.origin }
         , inFront = []
         , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
         }
         (Ui.column
-            { spacing = 4, padding = Ui.noPadding }
+            4
             [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.black, font = Sprite.Sans Sprite.Bold } ]
+                |> Ui.el { padding = Ui.paddingXY 12 0, inFront = [], borderAndFill = Ui.NoBorderOrFill }
             , case news of
                 NewsNotRequested ->
                     Ui.empty
@@ -63,14 +64,14 @@ view lazyCache height news =
                 LoadingNews maybeDays ->
                     case maybeDays of
                         Just days ->
-                            Ui.lazy lazyCache daysView days
+                            Ui.lazy2 lazyCache daysView width days
                                 |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                         Nothing ->
                             Ui.customText Sprite.Small [ { text = "Loading...", color = Color.black, font = Sprite.Sans Sprite.Italic } ]
 
                 LoadedNews days ->
-                    Ui.lazy lazyCache daysView days
+                    Ui.lazy2 lazyCache daysView width days
                         |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                 NewsFailed string ->
@@ -83,8 +84,8 @@ view lazyCache height news =
 its key doesn't have the height: Main also builds this view, 300 high, just to measure its
 width, and with the height in the key the two would never share the element.
 -}
-daysView : List Day -> Element UiId
-daysView days =
+daysView : Quantity Int UiPixels -> List Day -> Element UiId
+daysView width days =
     List.map
         (\{ date, topics } ->
             let
@@ -93,42 +94,84 @@ daysView days =
                     List.map
                         (\topic ->
                             Ui.column
-                                { spacing = 8, padding = Ui.noPadding }
+                                8
                                 [ Ui.customText Sprite.Small [ { text = topic.heading, color = Color.black, font = Sprite.Sans Sprite.Bold } ]
                                 , Ui.column
-                                    { spacing = itemSpacing, padding = { topLeft = Coord.xy 6 0, bottomRight = Coord.origin } }
-                                    (List.map (itemView 140) topic.items)
+                                    itemSpacing
+                                    (List.map
+                                        (itemView
+                                            (width
+                                                |> Quantity.minus
+                                                    (Units.uiPixels
+                                                        (viewportPadding * 2 + headerPaddingX)
+                                                    )
+                                            )
+                                        )
+                                        topic.items
+                                    )
                                 ]
                         )
                         topics
-                        |> Ui.column { spacing = 8, padding = Ui.paddingXY 12 4 }
+                        |> Ui.column 8
+                        |> Ui.el
+                            { padding = { topLeft = Coord.xy headerPaddingX 8, bottomRight = Coord.origin }
+                            , inFront = []
+                            , borderAndFill = Ui.NoBorderOrFill
+                            }
+
+                headerPaddingX =
+                    12
             in
             Ui.column
-                { spacing = 0, padding = Ui.noPadding }
+                0
                 [ monthName (Date.month date)
                     ++ " "
                     ++ String.fromInt (Date.day date)
                     ++ ", "
                     ++ String.fromInt (Date.year date)
+                    ++ (case Date.weekday date of
+                            Time.Mon ->
+                                " (Monday)"
+
+                            Time.Tue ->
+                                " (Tuesday)"
+
+                            Time.Wed ->
+                                " (Wednesday)"
+
+                            Time.Thu ->
+                                " (Thursday)"
+
+                            Time.Fri ->
+                                " (Friday)"
+
+                            Time.Sat ->
+                                " (Saturday)"
+
+                            Time.Sun ->
+                                " (Sunday)"
+                       )
                     |> Ui.text
-                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Quantity.unsafe 24))
+                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Units.uiPixels (headerPaddingX * 2)))
                     |> Ui.el
-                        { padding = Ui.paddingXY 12 4
+                        { padding = Ui.paddingXY headerPaddingX 4
                         , inFront = []
                         , borderAndFill = Ui.FillOnly dateColor
                         }
                 , body
                 ]
                 |> Ui.el
-                    { padding = Ui.paddingXY 4 4
+                    { padding = Ui.paddingXY viewportPadding viewportPadding
                     , inFront = []
-                    , borderAndFill =
-                        Ui.BorderAndFill
-                            { borderWidth = 1, borderColor = dateColor, fillColor = Color.fillColor }
+                    , borderAndFill = Ui.NoBorderOrFill
                     }
         )
         days
-        |> Ui.column { spacing = 16, padding = Ui.noPadding }
+        |> Ui.column 16
+
+
+viewportPadding =
+    4
 
 
 dateColor : Color
@@ -141,52 +184,29 @@ itemSpacing =
     6
 
 
-itemView : Int -> Item -> Element id
+itemView : Quantity Int UiPixels -> Item -> Element id
 itemView width (Item item) =
     let
-        inlineText : String
-        inlineText =
-            plainText item.content
+        indentation =
+            12
+
+        spacing =
+            6
     in
     Ui.column
-        { spacing = itemSpacing, padding = Ui.noPadding }
+        itemSpacing
         [ Ui.row
-            { spacing = 6, padding = Ui.noPadding }
+            spacing
             [ Ui.text "•"
-            , String.foldl
-                (\char { lastSpace, lastBreak, index, lines } ->
-                    if index - lastBreak > width then
-                        case lastSpace of
-                            Just lastSpace2 ->
-                                { lastSpace = Nothing
-                                , lastBreak = lastSpace2 + 1
-                                , index = index + 1
-                                , lines = String.slice lastBreak (lastSpace2 + 1) inlineText :: lines
-                                }
-
-                            Nothing ->
-                                { lastSpace = Nothing
-                                , lastBreak = index
-                                , index = index + 1
-                                , lines = String.slice lastBreak index inlineText :: lines
-                                }
-
-                    else if char == ' ' then
-                        { lastSpace = Just index, lastBreak = lastBreak, index = index + 1, lines = lines }
-
-                    else
-                        { lastSpace = lastSpace, lastBreak = lastBreak, index = index + 1, lines = lines }
-                )
-                { lastSpace = Nothing, lastBreak = 0, index = 0, lines = [] }
-                inlineText
-                |> (\a -> String.slice a.lastBreak a.index inlineText :: a.lines)
-                |> List.reverse
-                |> String.join "\n"
-                |> Ui.text
+            , Ui.customTextWrapped
+                Sprite.Small
+                (width |> Quantity.minus (Units.uiPixels spacing))
+                [ { text = plainText item.content, color = Color.black, font = Sprite.Sans Sprite.Regular } ]
             ]
         , Ui.column
-            { spacing = itemSpacing, padding = { topLeft = Coord.xy 12 0, bottomRight = Coord.origin } }
-            (List.map (itemView (width - 2)) item.children)
+            itemSpacing
+            (List.map (itemView (width |> Quantity.minus (Units.uiPixels indentation))) item.children)
+            |> Ui.el { padding = { topLeft = Coord.xy indentation 0, bottomRight = Coord.xy 0 0 }, inFront = [], borderAndFill = Ui.NoBorderOrFill }
         ]
 
 

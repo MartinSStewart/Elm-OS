@@ -1,7 +1,7 @@
-module Bounds exposing (Bounds, fromTopLeftAndSize, intersection)
+module Bounds exposing (Bounds, fix, fromTopLeftAndSize, intersection, shrink)
 
 import Coord exposing (Coord)
-import Quantity
+import Quantity exposing (Quantity)
 
 
 type alias Bounds units =
@@ -49,4 +49,20 @@ fromTopLeftAndSize : Coord units -> Coord units -> Bounds units
 fromTopLeftAndSize topLeft size =
     { topLeft = topLeft
     , bottomRight = Coord.plus size topLeft
+    }
+        |> fix
+
+
+shrink : Quantity Int units -> Bounds units -> Bounds units
+shrink amount { topLeft, bottomRight } =
+    { topLeft = Coord.plus ( amount, amount ) topLeft
+    , bottomRight = bottomRight |> Coord.minus ( amount, amount )
+    }
+        |> fix
+
+
+fix : Bounds units -> Bounds units
+fix { topLeft, bottomRight } =
+    { topLeft = Coord.componentMin topLeft bottomRight
+    , bottomRight = Coord.componentMax topLeft bottomRight
     }

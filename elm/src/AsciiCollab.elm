@@ -849,19 +849,20 @@ view screen focused model =
             Ui.text
     in
     Ui.el
-                { padding = Ui.paddingXY padding padding
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = 6, padding = Ui.noPadding }
-                    [ Ui.leftAndRight (Quantity.Quantity (cols * charWidth))
-                        (t ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
-                        (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-                    , Ui.elWithId (AsciiCollab AsciiCollab.Types.GridArea)
-                        { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-                        (gridView focused cols rows model)
-                    ]
-                )
+        { padding = Ui.paddingXY padding padding
+        , inFront = []
+        , borderAndFill = Ui.defaultElBorderAndFill
+        }
+        (Ui.column
+            6
+            [ Ui.leftAndRight (Quantity.Quantity (cols * charWidth))
+                (t ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
+                (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+            , Ui.elWithId (AsciiCollab AsciiCollab.Types.GridArea)
+                { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+                (gridView focused cols rows model)
+            ]
+        )
 
 
 gridView : Bool -> Int -> Int -> Model -> Ui.Element UiId

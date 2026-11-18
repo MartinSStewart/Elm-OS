@@ -652,9 +652,7 @@ view focused model =
                         , fillColor = Color.white
                         }
                 }
-                (Ui.column { spacing = 0, padding = Ui.noPadding }
-                    [ line Small (Color.rgb255 110 100 90) (expression model), bigLine ]
-                )
+                (Ui.column 0 [ line Small (Color.rgb255 110 100 90) (expression model), bigLine ])
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
@@ -666,12 +664,7 @@ view focused model =
         , inFront = []
         , borderAndFill = Ui.defaultElBorderAndFill
         }
-        (Ui.column { spacing = spacing, padding = Ui.noPadding }
-            (title
-                :: displayBox
-                :: List.map (keyRow model) keys
-            )
-        )
+        (Ui.column spacing (title :: displayBox :: List.map (keyRow model) keys))
 
 
 keys : List (List ( Key, String, Int ))
@@ -688,7 +681,8 @@ keys =
 -}
 keyRow : Model -> List ( Key, String, Int ) -> Element UiId
 keyRow model row =
-    Ui.row { spacing = spacing, padding = Ui.noPadding }
+    Ui.row
+        spacing
         (List.map
             (\( key, label, columns ) ->
                 let
