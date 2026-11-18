@@ -11,7 +11,7 @@ import Ui
 import Units
 
 
-{-| A viewport 100 UI pixels tall (98 inside its outline) onto 1000 pixels of content.
+{-| A viewport 100 UI pixels tall onto 1000 pixels of content.
 -}
 viewport : Ui.Element ()
 viewport =
@@ -81,7 +81,7 @@ suite =
             )
         , test "a glide stops at the end of the content"
             (\_ ->
-                Ui.init |> scroll (Ui.Momentum -8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -902
+                Ui.init |> scroll (Ui.Momentum -8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -900
             )
         , test "content shorter than the viewport doesn't scroll"
             (\_ ->
@@ -96,9 +96,9 @@ suite =
                 in
                 Ui.init |> short |> offset |> Expect.within (Expect.Absolute 1.0e-9) 0
             )
-        , test "a viewport is its content's width plus its outline and scroll bar"
+        , test "a viewport is its content's width (the scroll bar lies over the content)"
             (\_ ->
-                Ui.size viewport |> Expect.equal (Coord.xy (10 + Ui.viewportFrameWidth) 100)
+                Ui.size viewport |> Expect.equal (Coord.xy 10 100)
             )
         , test "dragging the scroll bar thumb to the bottom scrolls to the end"
             (\_ ->
@@ -118,7 +118,7 @@ suite =
                 in
                 Expect.all
                     [ \_ -> offset pressed |> Expect.within (Expect.Absolute 1.0e-9) 0
-                    , \_ -> offset dragged |> Expect.within (Expect.Absolute 1.0e-9) -902
+                    , \_ -> offset dragged |> Expect.within (Expect.Absolute 1.0e-9) -900
                     , \_ -> offset (Ui.dragScrollbar () (Coord.xy 8 2000) { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 } (Ui.onMouseUp pressed)) |> Expect.within (Expect.Absolute 1.0e-9) 0
                     ]
                     ()

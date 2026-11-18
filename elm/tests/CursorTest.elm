@@ -22,7 +22,7 @@ ui : Ui.Element Id
 ui =
     Ui.elWithId Panel
         { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-        (Ui.row { spacing = 0, padding = Ui.noPadding }
+        (Ui.row 0
             [ Ui.textInput { id = Name, style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.uiPixels 200, masked = False }, isValid = True }
             , Ui.button { id = OkButton, padding = Ui.paddingXY 10 10 } (Ui.text "OK")
             ]

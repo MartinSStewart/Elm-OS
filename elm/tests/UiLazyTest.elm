@@ -28,7 +28,7 @@ label text =
 
 labels : Int -> List String -> Ui.Element Id
 labels spacing texts =
-    Ui.column { spacing = spacing, padding = Ui.noPadding } (List.map label texts)
+    Ui.column spacing (List.map label texts)
 
 
 {-| A window with lazy parts, written as the code generator would write the `Ui.lazy`
@@ -37,7 +37,7 @@ calls in it.
 window : Ui.LazyCache Id -> List String -> String -> Ui.Element Id
 window lazyCache texts title =
     Ui.column
-        { spacing = 4, padding = Ui.noPadding }
+        4
         [ Ui.lazyKeyed lazyCache (Lazy (Label title)) (\() -> label title)
         , Ui.lazyKeyed lazyCache (Lazy (Labels 2 texts)) (\() -> labels 2 texts)
         , Ui.button { id = OkButton, padding = Ui.paddingXY 2 2 } (Ui.lazyKeyed lazyCache (Lazy (Label "OK")) (\() -> label "OK"))
