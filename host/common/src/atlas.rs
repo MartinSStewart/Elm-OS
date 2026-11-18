@@ -6,8 +6,6 @@
 //!
 //!   x 0-300, y 0-200     town-collab's 10 x 18 pixel font, 25 glyphs to a row, each
 //!                        in a 12 x 20 cell, at 1, 1 in it (`mono_glyph`)
-//!   x 1-13, y 204-223    the mouse cursor's outline (12 x 19, tip at the top left)
-//!   x 17-29, y 204-223   the mouse cursor's fill; Elm draws the two in different colours
 //!   x 248-256, y 248-256 solid, for flat colours
 //!   everywhere else      Noto Sans (regular, bold, italic, bold italic) at a few
 //!                        sizes, antialiased, each glyph at four quarter-pixel
@@ -15,8 +13,8 @@
 //!                        top left 304 x 256; elm/src/NotoSans.elm says where each
 //!                        glyph is)
 //!
-//! Every glyph and cursor image has its edge pixels repeated once more around it (the
-//! pixel font's and cursor's by `bleed` here, Noto Sans's by make-noto-sans.py). A
+//! Every glyph has its edge pixels repeated once more around it (the
+//! pixel font's by `bleed` here, Noto Sans's by make-noto-sans.py). A
 //! triangle sampled bilinearly (`Tri::linear`) blends in the pixels just outside what it
 //! shows, and these make those the image's own edge rather than a neighbour or nothing.
 //!
@@ -32,12 +30,6 @@ pub const ATLAS_H: usize = 4096;
 /// Noto Sans's glyphs over the whole atlas, run-length coded: a 0 byte is followed by
 /// how many 0s (1-255) it stands for, and any other byte is itself.
 static NOTO_SANS: &[u8] = include_bytes!("noto_sans.rle");
-
-const CURSOR_W: usize = 12;
-const CURSOR_H: usize = 19;
-const CURSOR_Y: usize = 204;
-const CURSOR_OUTLINE_X: usize = 1;
-const CURSOR_FILL_X: usize = 17;
 
 /// The pixel font's glyphs, in town-collab's image (font.rs): 10 x 18, 25 to a row.
 const MONO_W: usize = 10;
@@ -61,29 +53,6 @@ fn bleed(a: &mut [u8], x: usize, y: usize, w: usize, h: usize) {
     a.copy_within(y * ATLAS_W + x - 1..y * ATLAS_W + x + w + 1, (y - 1) * ATLAS_W + x - 1);
     a.copy_within((y + h - 1) * ATLAS_W + x - 1..(y + h - 1) * ATLAS_W + x + w + 1, (y + h) * ATLAS_W + x - 1);
 }
-
-/// X: outline, o: fill.
-const CURSOR: [&[u8; CURSOR_W]; CURSOR_H] = [
-    b"X           ",
-    b"XX          ",
-    b"XoX         ",
-    b"XooX        ",
-    b"XoooX       ",
-    b"XooooX      ",
-    b"XoooooX     ",
-    b"XooooooX    ",
-    b"XoooooooX   ",
-    b"XooooooooX  ",
-    b"XoooooooooX ",
-    b"XooooooXXXXX",
-    b"XoooXooX    ",
-    b"XooXXooX    ",
-    b"XoX  XooX   ",
-    b"XX   XooX   ",
-    b"X     XooX  ",
-    b"      XooX  ",
-    b"       XX   ",
-];
 
 pub fn build() -> Vec<u8> {
     let mut a = Vec::with_capacity(ATLAS_W * ATLAS_H);
@@ -110,47 +79,10 @@ pub fn build() -> Vec<u8> {
         }
         bleed(&mut a, ax, ay, MONO_W, MONO_H);
     }
-    for (y, row) in CURSOR.iter().enumerate() {
-        for (x, &c) in row.iter().enumerate() {
-            if c == b'X' {
-                a[(CURSOR_Y + y) * ATLAS_W + CURSOR_OUTLINE_X + x] = 255;
-            }
-            if c == b'o' {
-                a[(CURSOR_Y + y) * ATLAS_W + CURSOR_FILL_X + x] = 255;
-            }
-        }
-    }
-    bleed(&mut a, CURSOR_OUTLINE_X, CURSOR_Y, CURSOR_W, CURSOR_H);
-    bleed(&mut a, CURSOR_FILL_X, CURSOR_Y, CURSOR_W, CURSOR_H);
     for y in 248..256 {
         a[y * ATLAS_W + 248..y * ATLAS_W + 256].fill(255);
     }
     a
-}
-
-/// The size of a display's cursor plane image.
-pub const CURSOR_PLANE: usize = 64;
-
-/// The cursor as a 64 x 64 ARGB8888 image for a display's cursor plane (a "hardware
-/// cursor", which the display moves without redrawing anything): a black outline
-/// around a fill of the given 0xRRGGBBAA colour, `scale` pixels per atlas pixel.
-pub fn cursor_image(scale: usize, fill: u32) -> Vec<u32> {
-    let a = fill & 255;
-    // premultiplied, as the cursor plane blends it
-    let fill_px =
-        a << 24 | ((fill >> 24) * a / 255) << 16 | ((fill >> 16 & 255) * a / 255) << 8 | ((fill >> 8 & 255) * a / 255);
-    let mut argb = vec![0u32; CURSOR_PLANE * CURSOR_PLANE];
-    let scale = scale.max(1);
-    for y in 0..(CURSOR_H * scale).min(CURSOR_PLANE) {
-        for x in 0..(CURSOR_W * scale).min(CURSOR_PLANE) {
-            match CURSOR[y / scale][x / scale] {
-                b'X' => argb[y * CURSOR_PLANE + x] = 0xff00_0000,
-                b'o' => argb[y * CURSOR_PLANE + x] = fill_px,
-                _ => {}
-            }
-        }
-    }
-    argb
 }
 
 /// One triangle as /init hands it to a renderer: the 13 values Elm sends per triangle,
@@ -203,14 +135,12 @@ mod tests {
     }
 
     #[test]
-    fn edges_are_repeated_around_the_pixel_font_and_cursor() {
+    fn edges_are_repeated_around_the_pixel_font() {
         let a = build();
         for index in 0..250 {
             let (x, y) = mono_glyph(index);
             assert!(bled(&a, x, y, MONO_W, MONO_H), "pixel font glyph {index}");
         }
-        assert!(bled(&a, CURSOR_OUTLINE_X, CURSOR_Y, CURSOR_W, CURSOR_H));
-        assert!(bled(&a, CURSOR_FILL_X, CURSOR_Y, CURSOR_W, CURSOR_H));
         // 'A' (after 44 box-drawing and shade glyphs and 33 characters from ' ') has ink.
         let (x, y) = mono_glyph(44 + 33);
         assert!((0..MONO_H).any(|r| a[(y + r) * ATLAS_W + x..(y + r) * ATLAS_W + x + MONO_W].iter().any(|&p| p != 0)));

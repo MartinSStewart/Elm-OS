@@ -36,6 +36,7 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color exposing (Color)
+import Cursor
 import Duration exposing (Duration)
 import Postcard
 import Sprite exposing (Triangle)
@@ -53,11 +54,13 @@ port fromHost : (Bytes -> msg) -> Sub msg
 type Effect
     = -- What each display shows (by Display.id), in its own pixels.
       Render (() -> List { display : Int, triangles : List (Triangle DevicePixels) })
-      -- The mouse cursor's fill colour and the UI scale. The host draws the cursor on
-      -- the display's cursor plane and moves it as the mouse moves, without waiting
-      -- for a frame. The scale sets the cursor's size and how fast the mouse moves it,
-      -- so moving the mouse the same distance crosses the same amount of UI at 1x and 2x.
-    | SetCursor { color : Color, scale : UiScale }
+      -- The mouse cursor: its picture (Cursor.image), fill colour and the UI scale. The host draws the
+      -- cursor on the display's cursor plane and moves it as the mouse moves, without
+      -- waiting for a frame. The scale sets the cursor's size and how fast the mouse
+      -- moves it, so moving the mouse the same distance crosses the same amount of UI
+      -- at 1x and 2x. Sent with every frame; the host redraws the cursor only when it
+      -- changes.
+    | SetCursor { image : Cursor.Image, color : Color, scale : UiScale }
     | WifiScan
     | WifiConnect { ssid : Ssid, password : Maybe Wpa2Password }
     | WifiDisconnect
@@ -226,8 +229,12 @@ encode effect =
                     (scenes ())
                 ]
 
-        SetCursor { color, scale } ->
-            Postcard.variant 1 [ Postcard.unsigned (Color.toInt color), Postcard.unsigned (Units.scaleInt scale) ]
+        SetCursor { image, color, scale } ->
+            Postcard.variant 1
+                (Postcard.unsigned (Color.toInt color)
+                    :: Postcard.unsigned (Units.scaleInt scale)
+                    :: Cursor.encode image
+                )
 
         WifiScan ->
             Postcard.variant 2 []

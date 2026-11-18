@@ -19,6 +19,7 @@ module Ui exposing
     , customButton
     , customText
     , customTextWrapped
+    , cursorAt
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , dragScrollbar
@@ -91,6 +92,7 @@ import Bounds exposing (Bounds)
 import Button
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Cursor exposing (Cursor)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
 import SeqDict exposing (SeqDict)
@@ -1812,6 +1814,53 @@ hoverIdOnly uiState point element =
                     Nothing
         )
         (hover uiState point element)
+
+
+{-| The mouse cursor for the given point: a hand over a button, an I-beam over a text
+input, and the arrow anywhere else. It goes by the top most element with an id, the one
+`hoverIdOnly` gives first, which is also the one a click goes to and the one drawn
+hovered.
+-}
+cursorAt : Model id -> Coord UiPixels -> Element id -> Cursor
+cursorAt uiState point element =
+    case hoverIdOnly uiState point element of
+        ( _, { ui } ) :: _ ->
+            case ui of
+                Element (Button _ _) ->
+                    Cursor.Pointer
+
+                Element (TextInput _) ->
+                    Cursor.Text
+
+                Element (TextInputMultiline _) ->
+                    Cursor.Text
+
+                Element (Text _) ->
+                    Cursor.Arrow
+
+                Element (Row _ _) ->
+                    Cursor.Arrow
+
+                Element (Column _ _) ->
+                    Cursor.Arrow
+
+                Element (Single _ _) ->
+                    Cursor.Arrow
+
+                Element (Quads _) ->
+                    Cursor.Arrow
+
+                Element Empty ->
+                    Cursor.Arrow
+
+                Element (Viewport _ _) ->
+                    Cursor.Arrow
+
+                Element (Lazy _ _ _) ->
+                    Cursor.Arrow
+
+        [] ->
+            Cursor.Arrow
 
 
 contains : Coord UiPixels -> Coord UiPixels -> Coord UiPixels -> Bool

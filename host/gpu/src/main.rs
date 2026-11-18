@@ -14,8 +14,9 @@
 //!             for each corner, an 0xRRGGBBAA colour as Elm sends them, and whether
 //!             to sample the atlas bilinearly.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
-//!             cursor moves while a frame is drawing: "m X Y" moves it, "c RGBA S"
-//!             redraws it with that fill colour at scale S.
+//!             cursor moves while a frame is drawing: "m CONNECTOR X Y" moves it,
+//!             "c RGBA S W H PIXELS" redraws it with that fill colour at scale S
+//!             (W H PIXELS is the picture, common::cursor::Picture::line).
 //!
 //! Every triangle samples the texture atlas, which we upload once.
 //!
@@ -30,7 +31,8 @@
 
 mod ffi;
 
-use common::atlas::{self, Tri, ATLAS_H, ATLAS_W, CURSOR_PLANE};
+use common::atlas::{self, Tri, ATLAS_H, ATLAS_W};
+use common::cursor::{Picture, PLANE as CURSOR_PLANE};
 use common::drm;
 use ffi::*;
 use std::collections::HashMap;
@@ -247,7 +249,8 @@ struct Cursors {
 unsafe impl Send for Cursors {}
 
 impl CursorPlane {
-    unsafe fn new(gbm: *mut gbm_device, card: &File, out: &drm::Output, scale: usize) -> Option<CursorPlane> {
+    /// Blank until /init sends Elm's cursor.
+    unsafe fn new(gbm: *mut gbm_device, card: &File, out: &drm::Output) -> Option<CursorPlane> {
         let bo = gbm_bo_create(
             gbm,
             CURSOR_PLANE as u32,
@@ -256,15 +259,15 @@ impl CursorPlane {
             GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE,
         );
         let c = CursorPlane { connector: out.connector, crtc: out.crtc, bo };
-        if bo.is_null() || !c.draw(card, 0xffff_ffff, scale) {
+        if bo.is_null() || !c.draw(card, &Picture::default().plane_image(1, 0)) {
             eprintln!("[gpu] no cursor plane on {}", out.name);
             return None;
         }
         Some(c)
     }
 
-    fn draw(&self, card: &File, fill: u32, scale: usize) -> bool {
-        let img = atlas::cursor_image(scale, fill);
+    /// Puts this image (Picture::plane_image) on the plane.
+    fn draw(&self, card: &File, img: &[u32]) -> bool {
         // SAFETY: the buffer is 64 x 64 ARGB, the size of img.
         unsafe {
             if gbm_bo_write(self.bo, img.as_ptr() as *const c_void, img.len() * 4) != 0 {
@@ -282,8 +285,20 @@ impl Cursors {
         let input = BufReader::new(unsafe { File::from_raw_fd(3) });
         for line in input.lines() {
             let Ok(line) = line else { break };
-            let f: Vec<i64> = line.split(' ').skip(1).filter_map(|v| v.parse::<i64>().ok()).collect();
-            match (line.split(' ').next(), f.as_slice()) {
+            let words: Vec<&str> = line.split(' ').collect();
+            if let ["c", fill, scale, picture @ ..] = words.as_slice() {
+                let (Ok(fill), Ok(scale), Some(picture)) = (fill.parse::<u32>(), scale.parse::<usize>(), Picture::parse(picture))
+                else {
+                    continue;
+                };
+                let img = picture.plane_image(scale, fill);
+                for p in &self.planes {
+                    p.draw(&self.card, &img);
+                }
+                continue;
+            }
+            let f: Vec<i64> = words.iter().skip(1).filter_map(|v| v.parse::<i64>().ok()).collect();
+            match (words.first().copied(), f.as_slice()) {
                 (Some("m"), &[connector, x, y]) => {
                     let connector = connector as u32;
                     if connector != self.on {
@@ -295,11 +310,6 @@ impl Cursors {
                     }
                     for p in self.planes.iter().filter(|p| p.connector == connector) {
                         drm::move_cursor(&self.card, p.crtc, x as i32, y as i32);
-                    }
-                }
-                (Some("c"), &[fill, scale]) => {
-                    for p in &self.planes {
-                        p.draw(&self.card, fill as u32, scale.max(1) as usize);
                     }
                 }
                 _ => {}
@@ -626,11 +636,10 @@ fn main() {
             head.out = out;
         }
 
-        // The cursor until Elm sends its UI scale.
-        let first_w = heads[0].out.w();
+        // Blank until Elm sends its cursor.
         let planes: Vec<CursorPlane> = heads
             .iter()
-            .filter_map(|h| CursorPlane::new(gbm, &card, &h.out, if first_w >= 2000 { 2 } else { 1 }))
+            .filter_map(|h| CursorPlane::new(gbm, &card, &h.out))
             .collect();
         let hw_cursor = planes.len() == heads.len();
         if hw_cursor {

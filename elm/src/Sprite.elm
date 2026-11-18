@@ -9,8 +9,8 @@ module Sprite exposing
     , asciiIndex
     , caretPositions
     , circle
+    , block
     , clipTo
-    , cursor
     , customText
     , customTextSize
     , ellipsis
@@ -38,7 +38,6 @@ pixels) and multiplies the sample by its colour:
 
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-300, y 0-200, 25 to a row,
     in the order of `asciiChars` below, each at 1, 1 in a 12 x 20 cell
-  - the mouse cursor, 12 x 19: its outline at x 1, y 204 and its fill at x 17, y 204
   - a solid white block at x 248-256, y 248-256, for flat colours
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
@@ -342,20 +341,11 @@ rectangle color clip position size =
         ( 4, 4 )
 
 
-{-| The mouse cursor with its tip at the given point: a black outline around a fill of
-the given colour, 12 x 19 UI pixels.
+{-| A solid rectangle (x, y, w, h) in one colour.
 -}
-cursor : Color -> UiScale -> Coord DevicePixels -> List (Triangle DevicePixels)
-cursor fill scale position =
-    let
-        size =
-            Coord.toDevice scale (Coord.xy 12 19) |> Coord.toTuple
-
-        at =
-            Coord.toTuple position
-    in
-    sprite Color.black at size ( 1, 204 ) ( 12, 19 )
-        ++ sprite fill at size ( 17, 204 ) ( 12, 19 )
+block : Color -> Coord units -> Coord units -> List (Triangle units)
+block color position size =
+    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 250, 250 ) ( 4, 4 )
 
 
 

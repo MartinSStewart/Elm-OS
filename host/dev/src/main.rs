@@ -17,8 +17,9 @@
 //!   - Keys, the mouse and the wheel come from the window. Keys go to Elm as the same
 //!     Linux key codes a keyboard sends Elm OS. On Wayland, the desktop is asked to
 //!     keep its shortcuts (PrintScreen, say) to itself while a window has the focus,
-//!     as QEMU does (shortcuts.rs). The cursor is your desktop's, as if it were on a
-//!     cursor plane, so Elm draws its orange "frame lag" copy.
+//!     as QEMU does (shortcuts.rs). The cursor is your desktop's, showing Elm's
+//!     picture of it, as if it were on a cursor plane, so Elm draws its orange "frame
+//!     lag" copy.
 //!   - HTTP is real: host/init's http.rs, compiled in as it is.
 //!   - Reading files is real too (host/init's files.rs): the debug overlay shows your
 //!     computer's battery, for instance. Writing kernel settings (writeSys) is ignored.
@@ -78,7 +79,7 @@ use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::scancode::PhysicalKeyExtScancode;
-use winit::window::{Window, WindowId};
+use winit::window::{CustomCursor, Window, WindowId};
 
 use program::{Built, FromProgram, Watch};
 
@@ -204,6 +205,9 @@ struct Runner {
     wheel: f64,
     /// The UI scale, from Elm's Effect::Cursor: touchpad scrolling goes to Elm in UI pixels.
     ui_scale: f64,
+    /// Elm's last Effect::Cursor, and whether the windows show it yet.
+    cursor: Option<(u32, u32, protocol::CursorImage)>,
+    cursor_shown: bool,
     watch: Option<Watch>,
     watched_at: Instant,
     started: Instant,
@@ -418,8 +422,15 @@ impl Runner {
                 }
                 self.shown = scenes;
             }
-            // The cursor is the desktop's.
-            Effect::Cursor { scale, .. } => self.ui_scale = scale.max(1) as f64,
+            // The desktop shows it (show_cursor), when it changes.
+            Effect::Cursor { rgba, scale, image } => {
+                self.ui_scale = scale.max(1) as f64;
+                let cursor = Some((rgba, scale, image));
+                if cursor != self.cursor {
+                    self.cursor = cursor;
+                    self.cursor_shown = false;
+                }
+            }
             Effect::WifiScan => fake::scan(&mut self.timers),
             Effect::WifiConnect { ssid, password } => {
                 let m = fake::connect(&mut self.timers, &ssid, &password);
@@ -699,6 +710,47 @@ impl Screen {
     }
 }
 
+impl Runner {
+    /// Gives the windows Elm's cursor, if it has changed.
+    fn show_cursor(&mut self, event_loop: &ActiveEventLoop) {
+        if self.cursor_shown {
+            return;
+        }
+        self.cursor_shown = true;
+        let Some((rgba, scale, image)) = &self.cursor else { return };
+        let picture = common::cursor::Picture {
+            width: image.width as usize,
+            height: image.height as usize,
+            pixels: image.pixels.clone(),
+        };
+        let s = (*scale).clamp(1, 4) as usize;
+        let (w, h) = ((picture.width * s).min(common::cursor::PLANE), (picture.height * s).min(common::cursor::PLANE));
+        let plane = picture.plane_image(s, *rgba);
+        // Premultiplied ARGB to straight RGBA, cut to the picture's size.
+        let mut bytes = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for &p in &plane[y * common::cursor::PLANE..y * common::cursor::PLANE + w] {
+                let a = p >> 24;
+                let un = |c: u32| if a == 0 { 0 } else { (c * 255 / a).min(255) as u8 };
+                bytes.extend_from_slice(&[un(p >> 16 & 255), un(p >> 8 & 255), un(p & 255), a as u8]);
+            }
+        }
+        let hot = ((image.hot_x as usize * s).min(w.saturating_sub(1)) as u16, (image.hot_y as usize * s).min(h.saturating_sub(1)) as u16);
+        if w == 0 || h == 0 {
+            return;
+        }
+        match CustomCursor::from_rgba(bytes, w as u16, h as u16, hot.0, hot.1) {
+            Ok(source) => {
+                let cursor = event_loop.create_custom_cursor(source);
+                for screen in &self.screens {
+                    screen.window.set_cursor(cursor.clone());
+                }
+            }
+            Err(e) => log!("dev", "can't make Elm's cursor: {e}"),
+        }
+    }
+}
+
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.screens.is_empty() {
@@ -743,6 +795,7 @@ impl ApplicationHandler for Runner {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let next = self.tick();
+        self.show_cursor(event_loop);
         if self.quit {
             event_loop.exit();
         } else {
@@ -819,6 +872,8 @@ fn main() {
         mouse_moved: false,
         wheel: 0.0,
         ui_scale: 1.0,
+        cursor: None,
+        cursor_shown: false,
         watch,
         watched_at: Instant::now(),
         started: Instant::now(),

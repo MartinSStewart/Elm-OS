@@ -23,6 +23,7 @@ import Calculator.Types
 import Clock
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Cursor exposing (Cursor)
 import Date
 import Display exposing (Display)
 import Duration exposing (Duration)
@@ -470,17 +471,7 @@ update msg model =
         GotInput value ->
             case value of
                 Ok event ->
-                    let
-                        ( next, cmd ) =
-                            step event model
-                    in
-                    ( next
-                    , if cursorColor next /= cursorColor model || uiScale next /= uiScale model || isRenderer event then
-                        cmd ++ [ Effect.SetCursor { color = cursorColor next, scale = uiScale next } ]
-
-                      else
-                        cmd
-                    )
+                    step event model
 
                 Err error ->
                     ( model, [ Effect.Log ("couldn't read a message from the host: " ++ error) ] )
@@ -1934,16 +1925,6 @@ limitPassword textInput =
         textInput
 
 
-isRenderer : Input -> Bool
-isRenderer event =
-    case event of
-        Renderer _ ->
-            True
-
-        _ ->
-            False
-
-
 cursorColor : Model -> Color
 cursorColor model =
     if model.pressed then
@@ -1953,14 +1934,37 @@ cursorColor model =
         Color.white
 
 
+{-| The mouse cursor's shape: a crosshair while picking what to screenshot, otherwise
+whatever the UI under the mouse asks for (`Ui.cursorAt`). `uis` is each display's UI, as
+`draw` built them.
+-}
+cursorShape : Model -> List ( Display, Ui.Element UiId ) -> Cursor
+cursorShape model uis =
+    case model.takingScreenshot of
+        Just _ ->
+            Cursor.Crosshair
+
+        Nothing ->
+            let
+                display =
+                    mouseDisplay model
+            in
+            case List.filter (\( d, _ ) -> d.id == display.id) uis of
+                ( _, ui ) :: _ ->
+                    Ui.cursorAt model.uiState (uiMouseOn display (mousePosition model)) ui
+
+                [] ->
+                    Cursor.Arrow
+
+
 
 -- VIEW
 
 
 {-| What one display shows: its part of the UI (`ui`), and the cursor if the mouse is on it.
 -}
-view : Model -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
-view model display ui =
+view : Model -> Cursor -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
+view model cursor display ui =
     let
         hovered : Maybe UiId
         hovered =
@@ -2021,7 +2025,7 @@ view model display ui =
                     []
            )
         ++ (if Display.contains model.mouse display then
-                Sprite.cursor
+                Cursor.view
                     (if Maybe.map .hardwareCursor model.renderer == Just True then
                         -- The host moves the real cursor; this orange one trails it by however
                         -- long a frame takes to get from the mouse to the screen.
@@ -2032,6 +2036,7 @@ view model display ui =
                     )
                     (Display.uiScale display)
                     (Display.local display model.mouse)
+                    cursor
 
             else
                 []
@@ -2703,9 +2708,14 @@ draw msg model =
             let
                 uis =
                     List.map (\display -> ( display, displayUi model display )) model.displays
+
+                cursor =
+                    cursorShape model uis
             in
             ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
-            , [ Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model display ui }) uis) ]
+            , [ Effect.SetCursor { image = Cursor.image cursor, color = cursorColor model, scale = uiScale model }
+              , Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model cursor display ui }) uis)
+              ]
             )
 
         GotInput _ ->
