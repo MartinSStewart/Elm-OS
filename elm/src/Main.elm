@@ -3516,7 +3516,7 @@ toolbar model display =
                     , Ui.selectableButton
                         { id = TicTacToeButton, padding = small }
                         (openHere TicTacToeApp)
-                        (Ui.text "Noughts")
+                        (Ui.text "Tic Tac Toe")
                     , Ui.selectableButton
                         { id = EditorButton, padding = small }
                         (openHere EditorApp)
