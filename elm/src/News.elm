@@ -49,7 +49,7 @@ view lazyCache width height news =
             height |> Quantity.minus (Quantity.plus (Units.uiPixels (10 + 4)) (Sprite.lineHeight Sprite.Small))
     in
     Ui.el
-        { padding = { topLeft = Coord.xy 0 10, bottomRight = Coord.origin }
+        { padding = { top = 10, bottom = 0, left = 0, right = 0 }
         , inFront = []
         , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
         }
@@ -114,7 +114,7 @@ daysView width days =
                         topics
                         |> Ui.column 8
                         |> Ui.el
-                            { padding = { topLeft = Coord.xy headerPaddingX 8, bottomRight = Coord.origin }
+                            { padding = { top = 8, bottom = 0, left = headerPaddingX, right = 0 }
                             , inFront = []
                             , borderAndFill = Ui.NoBorderOrFill
                             }
@@ -170,6 +170,7 @@ daysView width days =
         |> Ui.column 16
 
 
+viewportPadding : Int
 viewportPadding =
     4
 
@@ -192,21 +193,25 @@ itemView width (Item item) =
 
         spacing =
             6
+
+        bullet : Element id
+        bullet =
+            Ui.text "•"
     in
     Ui.column
         itemSpacing
         [ Ui.row
             spacing
-            [ Ui.text "•"
+            [ bullet
             , Ui.customTextWrapped
                 Sprite.Small
-                (width |> Quantity.minus (Units.uiPixels spacing))
+                (width |> Quantity.minus (Quantity.plus (Units.uiPixels spacing) (Coord.x (Ui.size bullet))))
                 [ { text = plainText item.content, color = Color.black, font = Sprite.Sans Sprite.Regular } ]
             ]
         , Ui.column
             itemSpacing
             (List.map (itemView (width |> Quantity.minus (Units.uiPixels indentation))) item.children)
-            |> Ui.el { padding = { topLeft = Coord.xy indentation 0, bottomRight = Coord.xy 0 0 }, inFront = [], borderAndFill = Ui.NoBorderOrFill }
+            |> Ui.el { padding = { top = 0, bottom = 0, left = indentation, right = 0 }, inFront = [], borderAndFill = Ui.NoBorderOrFill }
         ]
 
 

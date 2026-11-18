@@ -6,6 +6,7 @@ module Ui exposing
     , InputType(..)
     , LazyCache
     , Model
+    , Padding
     , RowColumn
     , Screenshot
     , ScrollBy(..)
@@ -111,7 +112,7 @@ type alias RowColumn =
 
 type alias ButtonData id lazy =
     { id : id
-    , padding : Bounds UiPixels
+    , padding : Padding
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     , borderAndFillHover : BorderAndFill
@@ -143,7 +144,7 @@ type ElementFull id lazy
     | Row RowColumn (List (ElementFull id lazy))
     | Column RowColumn (List (ElementFull id lazy))
     | Single
-        { padding : Bounds UiPixels
+        { padding : Padding
         , borderAndFill : BorderAndFill
         , inFront : List (ElementFull id lazy)
         , cachedSize : Coord UiPixels
@@ -1184,14 +1185,29 @@ type BorderAndFill
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
 
 
-noPadding : Bounds UiPixels
+{-| Room left empty around an element's child, on each side (UI pixels).
+-}
+type alias Padding =
+    { top : Int, bottom : Int, left : Int, right : Int }
+
+
+noPadding : Padding
 noPadding =
-    { topLeft = Coord.origin, bottomRight = Coord.origin }
+    { top = 0, bottom = 0, left = 0, right = 0 }
 
 
-paddingXY : Int -> Int -> Bounds UiPixels
+{-| `x` on the left and right, `y` on the top and bottom.
+-}
+paddingXY : Int -> Int -> Padding
 paddingXY x y =
-    { topLeft = Coord.xy x y, bottomRight = Coord.xy x y }
+    { top = y, bottom = y, left = x, right = x }
+
+
+{-| Where the child goes, from the element's top left.
+-}
+paddingTopLeft : Padding -> Coord UiPixels
+paddingTopLeft padding =
+    Coord.xy padding.left padding.top
 
 
 
@@ -1285,7 +1301,7 @@ empty =
     Element Empty
 
 
-button : { id : id, padding : Bounds UiPixels } -> Element id -> Element id
+button : { id : id, padding : Padding } -> Element id -> Element id
 button data child =
     customButton
         { id = data.id
@@ -1319,7 +1335,7 @@ defaultButtonBorderAndFillHover =
 
 customButton :
     { id : id
-    , padding : Bounds UiPixels
+    , padding : Padding
     , inFront : List (Element id)
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
@@ -1340,7 +1356,7 @@ customButton data (Element child) =
         |> Element
 
 
-selectableButton : { id : id, padding : Bounds UiPixels } -> Bool -> Element id -> Element id
+selectableButton : { id : id, padding : Padding } -> Bool -> Element id -> Element id
 selectableButton data isSelected child =
     let
         fill =
@@ -1364,9 +1380,9 @@ selectableButton data isSelected child =
 -- LAYOUT
 
 
-paddedSize : Bounds UiPixels -> ElementFull id lazy -> Coord UiPixels
+paddedSize : Padding -> ElementFull id lazy -> Coord UiPixels
 paddedSize padding child =
-    Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (sizeHelper child)
+    Coord.plus (Coord.xy (padding.left + padding.right) (padding.top + padding.bottom)) (sizeHelper child)
 
 
 row : Int -> List (Element id) -> Element id
@@ -1404,7 +1420,7 @@ column spacing children =
         |> Element
 
 
-el : { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+el : { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
 el data (Element child) =
     Single
         { padding = data.padding
@@ -1420,7 +1436,7 @@ el data (Element child) =
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId : id -> { padding : Padding, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
 elWithId id data (Element child) =
     Single
         { padding = data.padding
@@ -1595,8 +1611,10 @@ align fx fy areaSize child =
     in
     Single
         { padding =
-            { topLeft = Coord.xy left2 top
-            , bottomRight = Coord.xy (sizeX - childX - left2) (sizeY - childY - top)
+            { top = top
+            , bottom = sizeY - childY - top
+            , left = left2
+            , right = sizeX - childX - left2
             }
         , inFront = []
         , borderAndFill = NoBorderOrFill
@@ -1889,7 +1907,7 @@ hoverHelper model hovers point position element =
                         ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
                     hovers3 =
-                        hoverHelper model hovers2 point (Coord.plus data.padding.topLeft position) child
+                        hoverHelper model hovers2 point (Coord.plus (paddingTopLeft data.padding) position) child
                 in
                 List.foldr (\inFront acc -> hoverHelper model acc point position inFront) hovers3 data.inFront
 
@@ -1983,7 +2001,7 @@ findInputHelper model id position element =
                     Just result
 
                 Nothing ->
-                    findInputHelper model id (Coord.plus data.padding.topLeft position) child
+                    findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
 
         Text _ ->
             Nothing
@@ -2123,7 +2141,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 Nothing ->
                                     []
                            )
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
                         ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
@@ -2157,7 +2175,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
                         ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Quads data ->

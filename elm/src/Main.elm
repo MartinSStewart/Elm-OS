@@ -2255,13 +2255,13 @@ notices.
 displayUi : Model -> Display -> Ui.Element UiId
 displayUi model display =
     Ui.el
-        { padding = { topLeft = Coord.origin, bottomRight = Display.uiSize display }
+        { padding = { top = 0, bottom = Coord.yRaw (Display.uiSize display), left = 0, right = Coord.xRaw (Display.uiSize display) }
         , inFront =
             toolbar model display
                 :: List.map
                     (\( app, bounds ) ->
                         Ui.el
-                            { padding = { topLeft = bounds.topLeft, bottomRight = Coord.origin }
+                            { padding = { top = Coord.yRaw bounds.topLeft, bottom = 0, left = Coord.xRaw bounds.topLeft, right = 0 }
                             , inFront = []
                             , borderAndFill = Ui.NoBorderOrFill
                             }
