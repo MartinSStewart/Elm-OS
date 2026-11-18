@@ -337,6 +337,10 @@ type alias Model =
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
+
+    -- The element clicked in the outline mode, and the ones it is in (innermost first),
+    -- listed in the corner of the display it is on.
+    , inspected : Maybe { display : Int, sources : List Ui.Source }
     , screenshotViewer : ScreenshotViewer.Model
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
@@ -442,6 +446,7 @@ init =
     , reflashNeeded = Nothing
     , uiState = Ui.init
     , showUiBorders = False
+    , inspected = Nothing
     , screenshotViewer = ScreenshotViewer.init
     , takingScreenshot = Nothing
     , screenshots = []
@@ -673,85 +678,106 @@ step event model =
                 cursor =
                     uiMouse model
             in
-            case model.takingScreenshot of
-                Just data ->
-                    case model.time of
-                        Just time ->
-                            let
-                                display : Display
-                                display =
-                                    mouseDisplay model
+            if model.showUiBorders then
+                -- The outline mode's inspector: a click shows where the element under the
+                -- mouse was made, and doesn't press it.
+                let
+                    display : Display
+                    display =
+                        mouseDisplay model
+                in
+                ( { model
+                    | inspected =
+                        case Ui.inspect model.uiState cursor (displayUi model display) of
+                            [] ->
+                                Nothing
 
-                                displayUi2 : Ui.Element UiId
-                                displayUi2 =
-                                    displayUi model display
-                            in
-                            case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
-                                ( _, { ui } ) :: _ ->
-                                    ( { model
-                                        | screenshots =
-                                            Ui.elementToScreenshot time (Display.uiScale display) model.uiState ui
-                                                :: model.screenshots
-                                        , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
-                                        , takingScreenshot = Nothing
-                                      }
-                                    , []
-                                    )
+                            found ->
+                                Just { display = display.id, sources = List.map .source found }
+                  }
+                , []
+                )
 
-                                [] ->
-                                    ( { model
-                                        | screenshots =
-                                            Ui.elementToScreenshot time (Display.uiScale display) model.uiState displayUi2
-                                                :: model.screenshots
-                                        , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
-                                        , takingScreenshot = Nothing
-                                      }
-                                    , []
-                                    )
+            else
+                case model.takingScreenshot of
+                    Just data ->
+                        case model.time of
+                            Just time ->
+                                let
+                                    display : Display
+                                    display =
+                                        mouseDisplay model
 
-                        Nothing ->
-                            ( model, [] )
+                                    displayUi2 : Ui.Element UiId
+                                    displayUi2 =
+                                        displayUi model display
+                                in
+                                case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
+                                    ( _, { ui } ) :: _ ->
+                                        ( { model
+                                            | screenshots =
+                                                Ui.elementToScreenshot time (Display.uiScale display) model.uiState ui
+                                                    :: model.screenshots
+                                            , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
+                                            , takingScreenshot = Nothing
+                                          }
+                                        , []
+                                        )
 
-                Nothing ->
-                    case hover model of
-                        ( ScreenshotViewer ScreenshotViewer.Types.ImageArea, _ ) :: _ ->
-                            ( { model
-                                | screenshotViewer = ScreenshotViewer.startDragging model.screenshotViewer
-                                , uiState = Ui.setFocus Nothing model.uiState
-                              }
-                            , []
-                            )
+                                    [] ->
+                                        ( { model
+                                            | screenshots =
+                                                Ui.elementToScreenshot time (Display.uiScale display) model.uiState displayUi2
+                                                    :: model.screenshots
+                                            , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
+                                            , takingScreenshot = Nothing
+                                          }
+                                        , []
+                                        )
 
-                        ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
-                            ( { model
-                                | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
-                                , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
-                              }
-                            , []
-                            )
+                            Nothing ->
+                                ( model, [] )
 
-                        ( id, { relativePositionToUi, ui } ) :: _ ->
-                            let
-                                model2 : Model
-                                model2 =
-                                    { model
-                                        | uiState =
-                                            Ui.onMouseDown
-                                                (Maybe.withDefault (Time.millisToPosix 0) model.time)
-                                                relativePositionToUi
-                                                cursor
-                                                id
-                                                ui
-                                                model.uiState
-                                    }
+                    Nothing ->
+                        case hover model of
+                            ( ScreenshotViewer ScreenshotViewer.Types.ImageArea, _ ) :: _ ->
+                                ( { model
+                                    | screenshotViewer = ScreenshotViewer.startDragging model.screenshotViewer
+                                    , uiState = Ui.setFocus Nothing model.uiState
+                                  }
+                                , []
+                                )
 
-                                ( model3, effects ) =
-                                    click model2 id
-                            in
-                            ( { model3 | selectingText = True }, effects )
+                            ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
+                                ( { model
+                                    | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
+                                    , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
+                                  }
+                                , []
+                                )
 
-                        [] ->
-                            ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
+                            ( id, { relativePositionToUi, ui } ) :: _ ->
+                                let
+                                    model2 : Model
+                                    model2 =
+                                        { model
+                                            | uiState =
+                                                Ui.onMouseDown
+                                                    (Maybe.withDefault (Time.millisToPosix 0) model.time)
+                                                    relativePositionToUi
+                                                    cursor
+                                                    id
+                                                    ui
+                                                    model.uiState
+                                        }
+
+                                    ( model3, effects ) =
+                                        click model2 id
+                                in
+                                ( { model3 | selectingText = True }, effects )
+
+                            [] ->
+                                ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
 
         Button 0 False ->
             ( { model
@@ -808,7 +834,7 @@ step event model =
                 )
 
             else if model.ctrl && model.shift && key == Character "Q" && down then
-                ( { model | showUiBorders = not model.showUiBorders }, [] )
+                ( { model | showUiBorders = not model.showUiBorders, inspected = Nothing }, [] )
 
             else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
@@ -1982,6 +2008,7 @@ view model cursor display ui =
         hovered
         display.size
         ui
+        ++ inspectorView model display ui
         ++ (case model.takingScreenshot of
                 Just data ->
                     let
@@ -2041,6 +2068,87 @@ view model cursor display ui =
             else
                 []
            )
+
+
+{-| The outline mode's inspector (Ctrl+Shift+Q): a blue tint over the element under the
+mouse, and in the bottom right corner the element last clicked on this display and the
+ones it is in, each with where it was made (Ui.inspect).
+-}
+inspectorView : Model -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
+inspectorView model display ui =
+    if model.showUiBorders then
+        let
+            scale : UiScale
+            scale =
+                Display.uiScale display
+
+            hovered : List (Triangle DevicePixels)
+            hovered =
+                if (mouseDisplay model).id == display.id then
+                    case Ui.inspect model.uiState (uiMouseOn display (mousePosition model)) ui of
+                        { bounds } :: _ ->
+                            Sprite.rectangle (Color.rgba255 40 120 255 70) bounds bounds.topLeft (Coord.minus bounds.topLeft bounds.bottomRight)
+                                |> Sprite.toDevice scale
+
+                        [] ->
+                            []
+
+                else
+                    []
+
+            clicked : List (Triangle DevicePixels)
+            clicked =
+                case model.inspected of
+                    Just inspected ->
+                        if inspected.display == display.id then
+                            Ui.view
+                                model.uiState
+                                (Maybe.withDefault (Time.millisToPosix 0) model.time)
+                                scale
+                                False
+                                Nothing
+                                display.size
+                                (Ui.bottomRight { size = Display.uiSize display } (inspectorList inspected.sources))
+
+                        else
+                            []
+
+                    Nothing ->
+                        []
+        in
+        hovered ++ clicked
+
+    else
+        []
+
+
+{-| The clicked element and the ones it is in, innermost first: the Ui function that
+made each, and the module and line it was called on.
+-}
+inspectorList : List Ui.Source -> Ui.Element UiId
+inspectorList sources =
+    let
+        width : Int
+        width =
+            List.map (\source -> String.length source.function) sources |> List.maximum |> Maybe.withDefault 0
+    in
+    Ui.el
+        { padding = Ui.paddingXY 8 6, inFront = [], borderAndFill = Ui.defaultElBorderAndFill }
+        (Ui.column
+            4
+            [ Ui.text "Clicked element, then the ones it is in:"
+            , List.take 40 sources
+                |> List.map
+                    (\source ->
+                        String.padRight (width + 5) ' ' ("Ui." ++ source.function)
+                            ++ source.module_
+                            ++ ":"
+                            ++ String.fromInt source.line
+                    )
+                |> String.join "\n"
+                |> Ui.monoText
+            ]
+        )
 
 
 {-| The main display: the first, with the notices on it, and the apps that haven't been

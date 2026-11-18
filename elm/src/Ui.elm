@@ -10,6 +10,7 @@ module Ui exposing
     , RowColumn
     , Screenshot
     , ScrollBy(..)
+    , Source
     , ViewportData
     , ViewportModel
     , bottomRight
@@ -34,6 +35,7 @@ module Ui exposing
     , hover
     , hoverIdOnly
     , init
+    , inspect
     , insertElement
     , lazy
     , lazy2
@@ -60,6 +62,7 @@ module Ui exposing
     , selectableButton
     , setFocus
     , size
+    , sourced
     , stopMomentum
     , text
     , textInput
@@ -159,6 +162,9 @@ type ElementFull id lazy
       -- What `lazyKeyed` made: its key (which call it was, with the arguments), and
       -- every `Lazy` inside it by key, so that reusing it reuses them too.
     | Lazy id lazy (ElementFull id lazy)
+      -- Where in the source code the element was made: tools/wire puts each element a Ui
+      -- function makes in one (see UiSource.elm), for the outline mode's inspector (`inspect`).
+    | Sourced Source (ElementFull id lazy)
 
 
 type alias ViewportData id =
@@ -355,6 +361,9 @@ elementToScreenshotHelper model element acc =
             ( acc3, Viewport { id = id, viewportHeight = data.viewportHeight } child2 )
 
         Lazy _ _ child ->
+            elementToScreenshotHelper model child acc
+
+        Sourced _ child ->
             elementToScreenshotHelper model child acc
 
 
@@ -767,6 +776,9 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
         Lazy _ _ _ ->
             { model | focus = Nothing }
 
+        Sourced _ child ->
+            onMouseDownHelper time relativePositionToUi cursor id child model
+
 
 {-| The mouse moved with its button down after pressing the scroll bar of the viewport
 `id` (found with `findInput`): move the thumb with it. `mouse` is in the UI pixels of the
@@ -893,6 +905,9 @@ onWheelHelper id scrollBy element model =
         Lazy _ _ _ ->
             model
 
+        Sourced _ child ->
+            onWheelHelper id scrollBy child model
+
         Viewport data element2 ->
             let
                 state3 : ViewportModel
@@ -954,6 +969,9 @@ scrolls (Element element) =
 
         Lazy _ _ _ ->
             False
+
+        Sourced _ child ->
+            scrolls (Element child)
 
 
 initViewportModel : ViewportModel
@@ -1544,6 +1562,9 @@ lazyParts (Element element) found =
         Single _ child ->
             lazyParts (Element child) found
 
+        Sourced _ child ->
+            lazyParts (Element child) found
+
         InFront _ children ->
             List.foldl lazyParts found (List.map Element children)
 
@@ -1727,6 +1748,9 @@ sizeHelper element =
         Lazy _ _ child ->
             sizeHelper child
 
+        Sourced _ child ->
+            sizeHelper child
+
 
 viewportSize : { id : id, viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Coord UiPixels
 viewportSize data child =
@@ -1814,6 +1838,175 @@ childPositions isRow spacing position children =
 
 
 
+-- WHERE ELEMENTS ARE MADE
+
+
+{-| Where an element was made: the module, the line, and the Ui function called there.
+-}
+type alias Source =
+    { module_ : String, line : Int, function : String }
+
+
+{-| `element`, knowing where it was made. Only UiSource.elm calls it, for tools/wire
+(see there).
+-}
+sourced : Source -> Element id -> Element id
+sourced source (Element element) =
+    case element of
+        -- `row` and `column` leave out an `empty`, which they can only see if it's bare.
+        Empty ->
+            Element Empty
+
+        _ ->
+            Element (Sourced source element)
+
+
+{-| For the outline mode's inspector: the elements under `point` that know where they
+were made (see UiSource.elm), innermost first, each with the part of it that can be seen (a
+viewport hides what is scrolled out of it). It finds what can be seen at the point,
+and goes by the element drawn in front where they overlap. An element with nothing at
+the point to see (an `el` with no border or fill, or the gap between a row's children)
+is seen through, as is a viewport's scroll bar.
+-}
+inspect : Model id -> Coord UiPixels -> Element id -> List { source : Source, bounds : Bounds UiPixels }
+inspect model point (Element element) =
+    inspectHelper
+        model
+        point
+        { topLeft = Coord.xy -100000 -100000, bottomRight = Coord.xy 100000 100000 }
+        Coord.origin
+        element
+        []
+        |> Maybe.withDefault []
+
+
+inspectHelper :
+    Model id
+    -> Coord UiPixels
+    -> Bounds UiPixels
+    -> Coord UiPixels
+    -> ElementFull id lazy
+    -> List { source : Source, bounds : Bounds UiPixels }
+    -> Maybe (List { source : Source, bounds : Bounds UiPixels })
+inspectHelper model point clip position element found =
+    let
+        elementSize : Coord UiPixels
+        elementSize =
+            sizeHelper element
+
+        -- What the first of `children` (each at its position) that has something at the
+        -- point found.
+        firstOf : List ( Coord UiPixels, ElementFull id lazy ) -> Maybe (List { source : Source, bounds : Bounds UiPixels })
+        firstOf children =
+            findFirst (\( at, child ) -> inspectHelper model point clip at child found) children
+
+        orItself : Maybe (List { source : Source, bounds : Bounds UiPixels }) -> Maybe (List { source : Source, bounds : Bounds UiPixels })
+        orItself result =
+            case result of
+                Just _ ->
+                    result
+
+                Nothing ->
+                    Just found
+    in
+    if contains point position elementSize then
+        case element of
+            Sourced source child ->
+                inspectHelper
+                    model
+                    point
+                    clip
+                    position
+                    child
+                    (case Bounds.intersection clip { topLeft = position, bottomRight = Coord.plus position elementSize } of
+                        Just visible ->
+                            { source = source, bounds = visible } :: found
+
+                        Nothing ->
+                            found
+                    )
+
+            TextInput _ ->
+                Just found
+
+            TextInputMultiline _ ->
+                Just found
+
+            Text _ ->
+                Just found
+
+            Quads _ ->
+                Just found
+
+            Empty ->
+                Nothing
+
+            Button data child ->
+                -- The ones in front first.
+                firstOf (List.reverse (List.map (Tuple.pair position) data.inFront) ++ [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ])
+                    |> orItself
+
+            Row data children ->
+                firstOf (childPositions True data.spacing position children)
+
+            Column data children ->
+                firstOf (childPositions False data.spacing position children)
+
+            Single data child ->
+                let
+                    inChild =
+                        firstOf [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ]
+                in
+                -- Only a fill can be seen everywhere in it.
+                case data.borderAndFill of
+                    NoBorderOrFill ->
+                        inChild
+
+                    BorderOnly _ ->
+                        inChild
+
+                    FillOnly _ ->
+                        orItself inChild
+
+                    BorderAndFill _ ->
+                        orItself inChild
+
+            InFront _ children ->
+                firstOf (List.reverse (List.map (Tuple.pair position) children))
+
+            Viewport data child ->
+                let
+                    inside : Bounds UiPixels
+                    inside =
+                        viewportInside position data child
+
+                    viewportModel : ViewportModel
+                    viewportModel =
+                        getViewport data.id model
+                in
+                case Bounds.intersection clip inside of
+                    Just clip2 ->
+                        if
+                            contains point inside.topLeft (Coord.minus inside.topLeft inside.bottomRight)
+                                && not (overScrollbar (Coord.minus position point) data.viewportHeight viewportModel.offset child)
+                        then
+                            inspectHelper model point clip2 (Coord.plus (contentPosition viewportModel) position) child found
+                                |> orItself
+
+                        else
+                            Just found
+
+                    Nothing ->
+                        Just found
+
+            Lazy _ _ child ->
+                inspectHelper model point clip position child found
+
+    else
+        Nothing
+
+
+
 -- HOVER AND FOCUS
 
 
@@ -1884,6 +2077,9 @@ cursorAt uiState point element =
                     Cursor.Arrow
 
                 Element (Lazy _ _ _) ->
+                    Cursor.Arrow
+
+                Element (Sourced _ _) ->
                     Cursor.Arrow
 
         [] ->
@@ -1978,6 +2174,9 @@ hoverHelper model hovers point position element =
             Lazy _ _ child ->
                 hoverHelper model hovers point position child
 
+            Sourced _ child ->
+                hoverHelper model hovers point position child
+
     else
         hovers
 
@@ -2051,6 +2250,9 @@ findInputHelper model id position element =
                 findInputHelper model id (Coord.plus (contentPosition (getViewport data.id model)) position) child
 
         Lazy _ _ child ->
+            findInputHelper model id position child
+
+        Sourced _ child ->
             findInputHelper model id position child
 
 
@@ -2305,6 +2507,9 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                            )
 
                 Lazy _ _ child ->
+                    viewList model time scale showUiBorder maybeHover viewport3 position child
+
+                Sourced _ child ->
                     viewList model time scale showUiBorder maybeHover viewport3 position child
 
         Nothing ->

@@ -33,6 +33,7 @@ import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
 import Freeze
 import Lazy
 import Set exposing (Set)
+import Source
 
 
 type alias Options =
@@ -170,7 +171,13 @@ defaultImports =
 -}
 generate : Options -> List SourceFile -> Result (List String) { files : List SourceFile, warnings : List String }
 generate options files =
-    withModules options files generateWith
+    withModules options
+        files
+        (\options2 modules ->
+            -- Each element told where it was made (Source.elm). Lines stay where they
+            -- were, so `file` still says where everything is, apart from columns.
+            generateWith options2 (Dict.map (\_ m -> { m | source = Source.rewrite m.file m.source }) modules)
+        )
 
 
 {-| What to write when `generate` fails: the source files as they are, and an entry
