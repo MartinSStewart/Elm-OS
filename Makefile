@@ -558,7 +558,7 @@ $(BUILD)/licenses/.done: LICENSE THIRD_PARTY.md $(wildcard licenses/*) host/comm
 	python3 -I tools/rust-licenses.py $(BUILD)/licenses/elmos/rust-crates.txt
 	touch $@
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-libs.sh tools/check-no-shell.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos $(BUILD)/rootfs/usr/share/licenses
 	cp -r $(BUILD)/licenses/elmos $(BUILD)/rootfs/usr/share/licenses/
 	cp $(BUILD)/init $(BUILD)/rootfs/init
@@ -574,6 +574,7 @@ ifeq ($(GPU),1)
 endif
 	mkdir -p $(BUILD)/rootfs/usr/sbin
 	cp $(BUILD)/wpa_supplicant $(BUILD)/rootfs/usr/sbin/
+	tools/check-no-shell.sh $(BUILD)/rootfs
 	tools/mkcpio.sh $(BUILD)/rootfs $@
 
 # QEMU's initramfs: the normal one plus a simulated wifi access point (hostapd and its config).

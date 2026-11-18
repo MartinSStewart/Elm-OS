@@ -24,6 +24,43 @@ pub fn mount_kernel_filesystems() {
     }
 }
 
+/// Takes the kernel's own keyboard handling off the screen's text console, so that no
+/// key reaches Linux rather than Elm. Only as PID 1. By default the kernel reads every
+/// keyboard alongside /init and acts on some keys itself:
+///   - Ctrl+Alt+Del restarts the computer at once, without saving Elm's files;
+///   - Ctrl+S and Scroll Lock pause the console, and then /init's next log line
+///     (sys::log_line, a blocking write to the console) waits forever: Elm OS freezes;
+///   - Alt+Fn, Ctrl+Alt+Fn and Alt+arrows switch to other text consoles;
+///   - and every other key is typed into the console, where nothing reads it.
+/// K_OFF on the text console stops all of that (the kernel ignores the keyboard there;
+/// /init still reads every key through evdev). Ctrl+Alt+Del is also turned off on its
+/// own, and a serial console (QEMU's, a desktop's) loses Ctrl+S/Ctrl+Q flow control.
+/// Elm OS has no shell, terminal or command line, on purpose: this is what keeps the
+/// kernel from offering keys around Elm.
+pub fn lock_console() {
+    if !is_pid1() {
+        return;
+    }
+    const KDSKBMODE: libc::c_ulong = 0x4B45;
+    const K_OFF: libc::c_ulong = 0x04;
+    // SAFETY: plain system calls on a file descriptor we own, or on stderr.
+    unsafe {
+        libc::reboot(libc::RB_DISABLE_CAD);
+        let fd = libc::open(c"/dev/tty1".as_ptr(), libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
+        if fd < 0 || libc::ioctl(fd, KDSKBMODE as _, K_OFF) < 0 {
+            log!("host", "couldn't take the keyboard off the text console: {}", std::io::Error::last_os_error());
+        }
+        if fd >= 0 {
+            libc::close(fd);
+        }
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(2, &mut t) == 0 {
+            t.c_iflag &= !(libc::IXON | libc::IXOFF);
+            libc::tcsetattr(2, libc::TCSANOW, &t);
+        }
+    }
+}
+
 /// Restarts, or powers off, once Elm's files are on the data disk. Only as PID 1:
 /// anywhere else this would be someone's computer.
 pub fn reboot(power_off: bool) {
