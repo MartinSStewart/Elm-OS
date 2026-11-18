@@ -27,7 +27,6 @@ module Ui exposing
     , elementToScreenshot
     , empty
     , findInput
-    , getButton
     , getTextInput
     , getTextInputMultiline
     , hover
@@ -2071,21 +2070,33 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
                         ++ (case state.buttonDown of
                                 Just ( buttonDownAt, buttonDownPos ) ->
-                                    Sprite.circle
-                                        (Color.rgb255 250 190 40)
-                                        1
-                                        (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
-                                        (Duration.from buttonDownAt time |> Quantity.at buttonCircleGrowSpeed |> Units.inUiPixels |> min 100)
-                                        |> Sprite.move position
-                                        |> Sprite.clipTo (boundsToArea viewport3)
-                                        |> Sprite.toDevice scale
+                                    let
+                                        timeElapsed : Duration
+                                        timeElapsed =
+                                            Duration.from buttonDownAt time
+
+                                        opacity =
+                                            200 - round (Duration.inSeconds timeElapsed * 350)
+                                    in
+                                    if opacity > 0 then
+                                        Sprite.circle
+                                            (Color.rgba255 251 241 233 opacity)
+                                            1
+                                            (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
+                                            (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUiPixels |> min 100)
+                                            |> Sprite.move position
+                                            |> Sprite.clipTo (boundsToArea viewport3)
+                                            |> Sprite.toDevice scale
+
+                                    else
+                                        []
 
                                 Nothing ->
                                     []
                            )
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus data.padding.topLeft position) child
                         ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
@@ -2224,7 +2235,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
 
 buttonCircleGrowSpeed : Quantity Float (Rate UiPixels Seconds)
 buttonCircleGrowSpeed =
-    Quantity.rate (Units.uiPixels 100) Duration.second
+    Quantity.rate (Units.uiPixels 250) Duration.second
 
 
 borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
