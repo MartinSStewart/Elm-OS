@@ -40,6 +40,7 @@ import Review.Rule exposing (Rule)
 import ReviewPipelineStyles
 import ReviewPipelineStyles.Fixes
 import Simplify
+import SimplifyUi
 
 
 config : List Rule
@@ -97,4 +98,5 @@ rules =
     , NoMissingTypeConstructor.rule
     , NoUnused.Variables.rule
     , EncoderDecoderNaming.rule
+    , SimplifyUi.rule
     ]
