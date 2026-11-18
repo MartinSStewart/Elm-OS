@@ -41,6 +41,10 @@ type UiId
     | EditorInput
     | EditorWindow
     | CloseEditorButton
+    | EditorOpenButton
+    | EditorModulesViewport
+      -- A module in the editor's Open list, by its name.
+    | EditorModuleButton String
     | DebugButton
     | CloseDebugButton
     | NetworkAppButton

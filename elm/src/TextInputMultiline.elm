@@ -8,6 +8,7 @@ module TextInputMultiline exposing
     , mouseDownMove
     , paste
     , size
+    , withText
     , view
     , scrollPixels
     , wheel
@@ -59,6 +60,13 @@ type alias Style =
 init : Model
 init =
     { input = TextInput.init, scroll = 0, scrollRemainder = 0, goalX = Nothing }
+
+
+{-| A box holding `text`, the cursor at its start.
+-}
+withText : String -> Model
+withText text =
+    { init | input = { current = { cursorPosition = 0, cursorSize = 0, text = text }, undoHistory = [], redoHistory = [] } }
 
 
 {-| How many undo steps are kept. Every key that changes the text is one, and each holds

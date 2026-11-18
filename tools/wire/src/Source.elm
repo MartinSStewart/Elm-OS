@@ -1,4 +1,4 @@
-module Source exposing (rewrite)
+module Source exposing (rewrite, sourceCodeModule)
 
 {-| Tells each UI element where in the source it was made, for the outline mode's
 inspector (Ui.inspect, Main): each mention of a Ui function that makes an element
@@ -317,3 +317,94 @@ applyEdits edits source =
                     sorted
         in
         String.concat (List.reverse (String.dropLeft last source :: pieces))
+
+
+{-| The text of elm/src/SourceCode.elm with every module's source in it: each path
+(relative to the source directory) with its file's text. Written for the text
+editor's Open button. Left out: SourceCode itself (it would hold itself) and the
+frozen modules under Evergreen/ (old copies, not code anybody edits).
+
+Each module is a single line, so the generated file's line numbers don't mean much.
+
+-}
+sourceCodeModule : List ( String, String ) -> String
+sourceCodeModule files =
+    let
+        wanted ( path, _ ) =
+            path /= "SourceCode.elm" && not (String.startsWith "Evergreen/" path)
+
+        entry prefix ( path, source ) =
+            "        " ++ prefix ++ "( " ++ stringLiteral (moduleNameOf path) ++ ", " ++ stringLiteral source ++ " )"
+    in
+    String.join "\n"
+        [ "module SourceCode exposing (sourceCode)"
+        , ""
+        , "import SeqDict exposing (SeqDict)"
+        , ""
+        , ""
+        , "{-| Key is module names and value is module contents (written by tools/wire)"
+        , "-}"
+        , "sourceCode : SeqDict String String"
+        , "sourceCode ="
+        , "    SeqDict.fromList"
+        , String.join "\n" (List.indexedMap (\i f -> entry (if i == 0 then "[ " else ", ") f) (List.filter wanted files))
+        , "        ]"
+        , ""
+        ]
+
+
+moduleNameOf : String -> String
+moduleNameOf path =
+    String.replace "/" "." (String.dropRight 4 path)
+
+
+{-| An Elm string literal: ASCII as it is, except what needs escaping, and everything
+else as \u{...}.
+-}
+stringLiteral : String -> String
+stringLiteral text =
+    "\"" ++ String.foldr (\c acc -> escapeChar c ++ acc) "" text ++ "\""
+
+
+escapeChar : Char -> String
+escapeChar c =
+    case c of
+        '"' ->
+            "\\\""
+
+        '\\' ->
+            "\\\\"
+
+        '\n' ->
+            "\\n"
+
+        '\u{000D}' ->
+            "\\r"
+
+        '\t' ->
+            "\\t"
+
+        _ ->
+            let
+                code =
+                    Char.toCode c
+            in
+            if code >= 32 && code < 127 then
+                String.fromChar c
+
+            else
+                "\\u{" ++ String.padLeft 4 '0' (toHex code) ++ "}"
+
+
+toHex : Int -> String
+toHex n =
+    if n < 16 then
+        hexDigit n
+
+    else
+        toHex (n // 16) ++ hexDigit (modBy 16 n)
+
+
+hexDigit : Int -> String
+hexDigit n =
+    String.slice n (n + 1) "0123456789abcdef"

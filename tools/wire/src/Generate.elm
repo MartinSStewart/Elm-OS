@@ -173,10 +173,26 @@ generate : Options -> List SourceFile -> Result (List String) { files : List Sou
 generate options files =
     withModules options
         files
-        (\options2 modules ->
+        (\options2 modules modelKey msgKey configKey ->
             -- Each element told where it was made (Source.elm). Lines stay where they
             -- were, so `file` still says where everything is, apart from columns.
-            generateWith options2 (Dict.map (\_ m -> { m | source = Source.rewrite m.file m.source }) modules)
+            generateWith options2 (Dict.map (\_ m -> { m | source = Source.rewrite m.file m.source }) modules) modelKey msgKey configKey
+                |> Result.map
+                    (\result ->
+                        -- SourceCode.elm holding every module's text, as it was written.
+                        { result
+                            | files =
+                                List.map
+                                    (\f ->
+                                        if f.path == "SourceCode.elm" then
+                                            { f | source = Source.sourceCodeModule (List.map (\s -> ( s.path, s.source )) files) }
+
+                                        else
+                                            f
+                                    )
+                                    result.files
+                        }
+                    )
         )
 
 

@@ -43,6 +43,7 @@ import Quantity exposing (Quantity)
 import ScreenshotViewer
 import ScreenshotViewer.Types
 import SeqDict exposing (SeqDict)
+import SourceCode
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -330,6 +331,9 @@ type alias Model =
     , ticTacToeOpen : Bool
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
+
+    -- The editor's Open button was pressed: the list of modules shows instead of the text.
+    , editorPicking : Bool
     , debugOpen : Bool
     , networkOpen : Bool
     , weatherOpen : Bool
@@ -439,6 +443,7 @@ init =
     , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
+    , editorPicking = False
     , debugOpen = True
     , networkOpen = True
     , weatherOpen = True
@@ -1248,6 +1253,15 @@ appButton id =
         CloseEditorButton ->
             Nothing
 
+        EditorOpenButton ->
+            Nothing
+
+        EditorModulesViewport ->
+            Nothing
+
+        EditorModuleButton _ ->
+            Nothing
+
         News _ ->
             Nothing
 
@@ -1367,6 +1381,7 @@ clickElement model id =
         EditorButton ->
             ( { model
                 | editorOpen = not model.editorOpen
+                , editorPicking = False
                 , uiState =
                     Ui.setFocus
                         (if model.editorOpen then
@@ -1384,11 +1399,37 @@ clickElement model id =
             ( model, [] )
 
         EditorWindow ->
-            -- A click on the window around the text still types into it.
-            ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
+            -- A click on the window around the text still types into it (unless the
+            -- list of modules is showing instead).
+            if model.editorPicking then
+                ( model, [] )
+
+            else
+                ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
 
         CloseEditorButton ->
-            ( { model | editorOpen = False }, [] )
+            ( { model | editorOpen = False, editorPicking = False }, [] )
+
+        EditorOpenButton ->
+            ( { model | editorPicking = not model.editorPicking, uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        EditorModulesViewport ->
+            ( model, [] )
+
+        EditorModuleButton name ->
+            case SeqDict.get name SourceCode.sourceCode of
+                Just source ->
+                    ( { model
+                        | editorPicking = False
+                        , uiState =
+                            Ui.insertElement EditorInput (TextInputMultilineState (TextInputMultiline.withText source)) model.uiState
+                                |> Ui.setFocus (Just EditorInput)
+                      }
+                    , []
+                    )
+
+                Nothing ->
+                    ( model, [] )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
@@ -1844,6 +1885,15 @@ dragSelect focus mouse position model =
             model
 
         CloseEditorButton ->
+            model
+
+        EditorOpenButton ->
+            model
+
+        EditorModulesViewport ->
+            model
+
+        EditorModuleButton _ ->
             model
 
         DebugButton ->
@@ -3717,11 +3767,30 @@ editorWindow model =
             6
             [ Ui.leftAndRight style.width
                 (heading "Text editor")
-                (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-            , Ui.textInputMultiline
-                { id = EditorInput
-                , style = style
-                }
+                (Ui.row
+                    6
+                    [ Ui.button { id = EditorOpenButton, padding = Ui.paddingXY 6 3 } (t "Open")
+                    , Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close")
+                    ]
+                )
+            , if model.editorPicking then
+                Ui.viewport
+                    { id = EditorModulesViewport
+                    , viewportHeight = Units.uiPixels (Coord.yRaw (TextInputMultiline.size style))
+                    }
+                    (Ui.column
+                        4
+                        (List.map
+                            (\name -> Ui.button { id = EditorModuleButton name, padding = Ui.paddingXY 6 3 } (t name))
+                            (SeqDict.keys SourceCode.sourceCode)
+                        )
+                    )
+
+              else
+                Ui.textInputMultiline
+                    { id = EditorInput
+                    , style = style
+                    }
             , Ui.leftAndRight style.width
                 (t status)
                 (Ui.customText bodySize
