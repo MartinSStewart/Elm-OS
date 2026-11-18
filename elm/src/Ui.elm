@@ -146,11 +146,13 @@ type ElementFull id lazy
     | Single
         { padding : Padding
         , borderAndFill : BorderAndFill
-        , inFront : List (ElementFull id lazy)
         , cachedSize : Coord UiPixels
         , id : Maybe id
         }
         (ElementFull id lazy)
+      -- Elements on top of each other at the same place, each drawn over the ones before
+      -- it. `cachedSize` is the first one's size: the others can reach outside it.
+    | InFront { cachedSize : Coord UiPixels } (List (ElementFull id lazy))
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
     | Viewport (ViewportData id) (ElementFull id lazy)
@@ -320,22 +322,21 @@ elementToScreenshotHelper model element acc =
                         Nothing ->
                             ( acc, Nothing )
 
-                ( acc3, inFront ) =
-                    screenshotList model data.inFront acc2
-
-                ( acc4, child2 ) =
-                    elementToScreenshotHelper model child acc3
+                ( acc3, child2 ) =
+                    elementToScreenshotHelper model child acc2
             in
-            ( acc4
+            ( acc3
             , Single
                 { padding = data.padding
                 , borderAndFill = data.borderAndFill
-                , inFront = inFront
                 , cachedSize = data.cachedSize
                 , id = maybeId
                 }
                 child2
             )
+
+        InFront data children ->
+            screenshotList model children acc |> Tuple.mapSecond (InFront data)
 
         Quads data ->
             ( acc, Quads data )
@@ -704,6 +705,9 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
         Single _ _ ->
             { model | focus = Nothing }
 
+        InFront _ _ ->
+            { model | focus = Nothing }
+
         Quads _ ->
             { model | focus = Nothing }
 
@@ -877,6 +881,9 @@ onWheelHelper id scrollBy element model =
         Single _ _ ->
             model
 
+        InFront _ _ ->
+            model
+
         Quads _ ->
             model
 
@@ -934,6 +941,9 @@ scrolls (Element element) =
             False
 
         Single _ _ ->
+            False
+
+        InFront _ _ ->
             False
 
         Quads _ ->
@@ -1425,11 +1435,11 @@ el data (Element child) =
     Single
         { padding = data.padding
         , borderAndFill = data.borderAndFill
-        , inFront = List.map (\(Element a) -> a) data.inFront
         , cachedSize = paddedSize data.padding child
         , id = Nothing
         }
         child
+        |> withInFront data.inFront
         |> Element
 
 
@@ -1441,12 +1451,25 @@ elWithId id data (Element child) =
     Single
         { padding = data.padding
         , borderAndFill = data.borderAndFill
-        , inFront = List.map (\(Element a) -> a) data.inFront
         , cachedSize = paddedSize data.padding child
         , id = Just id
         }
         child
+        |> withInFront data.inFront
         |> Element
+
+
+{-| `element` with `inFront` drawn over it, at its top left, or just `element` when there
+are none.
+-}
+withInFront : List (Element id) -> ElementFull id (SeqDict id (Element id)) -> ElementFull id (SeqDict id (Element id))
+withInFront inFront element =
+    case inFront of
+        [] ->
+            element
+
+        _ :: _ ->
+            InFront { cachedSize = sizeHelper element } (element :: List.map (\(Element a) -> a) inFront)
 
 
 viewport : { id : id, viewportHeight : Quantity Int UiPixels } -> Element id -> Element id
@@ -1518,8 +1541,11 @@ lazyParts (Element element) found =
         Column _ children ->
             List.foldl lazyParts found (List.map Element children)
 
-        Single data child ->
-            List.foldl lazyParts (lazyParts (Element child) found) (List.map Element data.inFront)
+        Single _ child ->
+            lazyParts (Element child) found
+
+        InFront _ children ->
+            List.foldl lazyParts found (List.map Element children)
 
         Viewport _ child ->
             lazyParts (Element child) found
@@ -1616,7 +1642,6 @@ align fx fy areaSize child =
             , left = left2
             , right = sizeX - childX - left2
             }
-        , inFront = []
         , borderAndFill = NoBorderOrFill
         , cachedSize = areaSize
         , id = Nothing
@@ -1685,6 +1710,9 @@ sizeHelper element =
             data.cachedSize
 
         Single data _ ->
+            data.cachedSize
+
+        InFront data _ ->
             data.cachedSize
 
         Quads data ->
@@ -1843,6 +1871,9 @@ cursorAt uiState point element =
                 Element (Single _ _) ->
                     Cursor.Arrow
 
+                Element (InFront _ _) ->
+                    Cursor.Arrow
+
                 Element (Quads _) ->
                     Cursor.Arrow
 
@@ -1902,14 +1933,16 @@ hoverHelper model hovers point position element =
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Single data child ->
-                let
-                    hovers2 =
-                        ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+                hoverHelper
+                    model
+                    (( data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
+                    point
+                    (Coord.plus (paddingTopLeft data.padding) position)
+                    child
 
-                    hovers3 =
-                        hoverHelper model hovers2 point (Coord.plus (paddingTopLeft data.padding) position) child
-                in
-                List.foldr (\inFront acc -> hoverHelper model acc point position inFront) hovers3 data.inFront
+            InFront _ children ->
+                -- Each is drawn over the ones before it, so it goes nearer the front of the list.
+                List.foldl (\child acc -> hoverHelper model acc point position child) hovers children
 
             Text _ ->
                 ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -1996,12 +2029,10 @@ findInputHelper model id position element =
             findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.spacing position children)
 
         Single data child ->
-            case findFirst (findInputHelper model id position) data.inFront of
-                Just result ->
-                    Just result
+            findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
 
-                Nothing ->
-                    findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
+        InFront _ children ->
+            findFirst (findInputHelper model id position) (List.reverse children)
 
         Text _ ->
             Nothing
@@ -2176,7 +2207,9 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         )
                         data.cachedSize
                         ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
-                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
+
+                InFront _ children ->
+                    List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) children
 
                 Quads data ->
                     Sprite.move position data.triangles
