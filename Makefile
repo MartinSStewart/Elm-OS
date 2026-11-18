@@ -63,8 +63,10 @@ include versions.mk
 # By default that release is then patched for eco/containers (tools/eco-patched,
 # eco-containers/README.md), which elm/elm.json depends on: tools/build-patched-eco.sh builds it
 # from source into ECO_PATCHED_DIR (about 10 minutes the first time; it needs LLVM/MLIR 21 from
-# apt.llvm.org: sudo tools/build-patched-eco.sh --install-deps). `make ECO_PATCHED=0` skips that
-# and uses the release as it is, until eco has eco/containers itself.
+# apt.llvm.org: sudo tools/build-patched-eco.sh --install-deps). Where /mnt/project-files exists
+# (Claude's cloud threads) a finished build is shared through /mnt/project-files/eco-cache, so only
+# the first checkout of a given set of patches builds it (ECO_PATCHED_CACHE, see that script).
+# `make ECO_PATCHED=0` skips all that and uses the release as it is, until eco has eco/containers itself.
 ECO_PATCHED ?= 1
 ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)
 ECO_PATCHED_DIR ?= $(ECO_DIR)-patched
