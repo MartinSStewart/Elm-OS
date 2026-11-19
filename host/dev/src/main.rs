@@ -74,6 +74,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use common::atlas::{self, Tri};
+use common::images;
 use common::raster;
 use protocol::{Display, Effect, PowerAction, Scene, ToElm, WifiState};
 use winit::application::ApplicationHandler;
@@ -177,6 +178,8 @@ struct Runner {
     /// A window for each display, in the order of `o.sizes`; display i + 1 is screens[i].
     screens: Vec<Screen>,
     atlas: Vec<u8>,
+    /// The image texture (common/src/images.rs), as Elm wrote it.
+    images: Vec<u8>,
     data: PathBuf,
     run_dir: PathBuf,
     tx: Sender<FromProgram>,
@@ -417,7 +420,7 @@ impl Runner {
                     }
                     match protocol::read_render(bytes) {
                         Some(tris) => {
-                            screen.scene = Some(tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba, linear: t.linear, tile: t.tile }).collect())
+                            screen.scene = Some(tris.into_iter().map(|t| Tri::from_render(t.corners, t.rgba, t.linear != 0, t.image != 0, t.tile)).collect())
                         }
                         None => log!("dev", "couldn't read Elm's scene: {} bytes", bytes.len()),
                     }
@@ -458,6 +461,13 @@ impl Runner {
             Effect::TlsOpen { id, host, port } => tls_socket::open(id, host, port),
             Effect::TlsSend { id, data } => tls_socket::send(&id, data),
             Effect::TlsClose { id } => tls_socket::close(&id),
+            Effect::WriteImage { left, top, width, pixels } => {
+                if let Some(write) = (images::Write { left, top, width, pixels }).clipped() {
+                    write.apply(&mut self.images);
+                    // The next scene is drawn even if its triangles are the same.
+                    self.shown.clear();
+                }
+            }
             Effect::ListDir { path } => files::request(elm::program(), files::Request::ListDir { path }),
             Effect::ReadFiles { id, paths } => files::request(elm::program(), files::Request::ReadFiles { id, paths }),
             Effect::ReadBytes { path, offset, length } => {
@@ -556,7 +566,7 @@ impl Runner {
         }
         let start = Instant::now();
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) as u32;
-        let atlas = &self.atlas;
+        let textures = raster::Textures { atlas: &self.atlas, images: &self.images };
         for screen in &mut self.screens {
             let Some(tris) = screen.scene.take() else { continue };
             // In bands, a thread each: one thread is too slow for a big window.
@@ -569,7 +579,7 @@ impl Runner {
                         band.fill(0);
                         let y0 = i as u32 * rows;
                         for t in tris {
-                            raster::fill_triangle_rows(band, w as usize, w, y0, (y0 + rows).min(h), atlas, t);
+                            raster::fill_triangle_rows(band, w as usize, w, y0, (y0 + rows).min(h), textures, t);
                         }
                     });
                 }
@@ -857,6 +867,7 @@ fn main() {
         o,
         screens: Vec::new(),
         atlas: atlas::shared().to_vec(),
+        images: images::empty(),
         data,
         run_dir,
         tx,

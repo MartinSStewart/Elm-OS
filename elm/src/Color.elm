@@ -16,6 +16,7 @@ module Color exposing
     , highlightColor
     , linkColor
     , outlineColor
+    , paintPalette
     , pressColor
     , rgb
     , rgb255
@@ -211,3 +212,23 @@ scrollbarColor alpha =
 pressColor : Int -> Color
 pressColor alpha =
     rgba255 232 226 220 alpha
+
+
+{-| The paint program's colours, in the order its palette shows them. The canvas starts
+white (the second).
+-}
+paintPalette : List Color
+paintPalette =
+    [ black
+    , white
+    , rgb255 128 128 128
+    , rgb255 200 30 40
+    , rgb255 245 130 30
+    , rgb255 250 215 40
+    , rgb255 60 170 70
+    , rgb255 40 170 200
+    , rgb255 40 80 200
+    , rgb255 130 60 170
+    , rgb255 240 130 180
+    , rgb255 120 75 40
+    ]

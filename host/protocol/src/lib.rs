@@ -37,6 +37,10 @@ pub struct RenderTriangle {
     /// atlas pixels: u, v outside it wrap round into it, so the triangle shows the
     /// rectangle tiled (a pattern). Width 0 for none: u, v are used as they are.
     pub tile: [u16; 4],
+    /// 1 to sample the image texture (common/src/images.rs, `Effect::WriteImage`)
+    /// instead of the atlas: then u, v and the tile are in its pixels, and its colour
+    /// multiplies the triangle's.
+    pub image: u32,
 }
 
 /// How many bytes each triangle takes in `Effect::Render`.
@@ -45,9 +49,9 @@ pub const RENDER_TRIANGLE_BYTES: usize = 60;
 /// Reads the scene in `Effect::Render`: 60 bytes a triangle, all little-endian. First
 /// the 12 numbers of its corners as 32-bit floats, then three unsigned 32-bit integers:
 /// its colour; its tile's left (low 16 bits) and top (high 16 bits); and its tile's
-/// width (bits 0-15), height (bits 16-30) and whether it samples the atlas bilinearly
-/// (bit 31 set) or by the nearest pixel. None if the length isn't a whole number of
-/// triangles.
+/// width (bits 0-15), height (bits 16-29), whether it samples the image texture rather
+/// than the atlas (bit 30 set), and whether it samples bilinearly (bit 31 set) or by the
+/// nearest pixel. None if the length isn't a whole number of triangles.
 pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
     if bytes.len() % RENDER_TRIANGLE_BYTES != 0 {
         return None;
@@ -63,8 +67,9 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
                 }
                 t.rgba = u32::from_le_bytes(word(b, 12));
                 let (at, size) = (u32::from_le_bytes(word(b, 13)), u32::from_le_bytes(word(b, 14)));
-                t.tile = [at as u16, (at >> 16) as u16, size as u16, (size >> 16) as u16 & 0x7fff];
+                t.tile = [at as u16, (at >> 16) as u16, size as u16, (size >> 16) as u16 & 0x3fff];
                 t.linear = size >> 31;
+                t.image = (size >> 30) & 1;
                 t
             })
             .collect(),
@@ -181,6 +186,18 @@ pub enum Effect {
     },
     /// Closes a TLS connection; `ToElm::TlsClosed` follows.
     TlsClose { id: String },
+    /// Writes RGBA pixels (4 bytes each, red first, not premultiplied) into the image
+    /// texture (common/src/images.rs), `width` to a row, as many rows as `pixels` holds,
+    /// with the top left one at left, top. What falls outside the texture is dropped.
+    /// The texture starts transparent at every boot, so Elm writes its pictures again
+    /// each time it starts. No answer.
+    WriteImage {
+        left: u32,
+        top: u32,
+        width: u32,
+        #[serde(with = "serde_bytes")]
+        pixels: Vec<u8>,
+    },
 }
 
 /// A mouse cursor's picture, `width` x `height` device pixels of the texture atlas: the
@@ -509,6 +526,7 @@ pub fn effect_name(effect: &Effect) -> &'static str {
         Effect::TlsOpen { .. } => "TlsOpen",
         Effect::TlsSend { .. } => "TlsSend",
         Effect::TlsClose { .. } => "TlsClose",
+        Effect::WriteImage { .. } => "WriteImage",
     }
 }
 
@@ -577,9 +595,10 @@ mod tests {
             Effect::TlsOpen { .. } => "tlsOpen",
             Effect::TlsSend { .. } => "tlsSend",
             Effect::TlsClose { .. } => "tlsClose",
+            Effect::WriteImage { .. } => "writeImage",
         }
     }
-    const EFFECT_TAGS: usize = 25;
+    const EFFECT_TAGS: usize = 26;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -631,7 +650,7 @@ mod tests {
         assert_eq!(read_render(&scenes[1].triangles), Some(vec![]));
         let bytes = &scenes[0].triangles;
         let at = |x: f32, y: f32| [x, y, 4.0 + x, 3588.0 + y];
-        let tri = |corners| RenderTriangle { corners, rgba: 0xffff_ffff, linear: 0, tile: [0; 4] };
+        let tri = |corners| RenderTriangle { corners, rgba: 0xffff_ffff, linear: 0, tile: [0; 4], image: 0 };
         let (tl, tr, br, bl) = (at(0.0, 0.0), at(10.0, 0.0), at(10.0, 10.0), at(0.0, 10.0));
         assert_eq!(read_render(bytes), Some(vec![tri([tl, tr, br]), tri([tl, br, bl])]));
         assert_eq!(read_render(&bytes[1..]), None);
@@ -645,6 +664,12 @@ mod tests {
         bytes.extend((16u32 + 20 * 65536 + (1 << 31)).to_le_bytes());
         let t = read_render(&bytes).unwrap()[0];
         assert_eq!((t.tile, t.linear), ([256, 224, 16, 20], 1));
+        // Bit 30: the image texture.
+        let mut bytes = vec![0u8; 52];
+        bytes.extend((3u32 + 4 * 65536).to_le_bytes());
+        bytes.extend((600u32 + 400 * 65536 + (1 << 30)).to_le_bytes());
+        let t = read_render(&bytes).unwrap()[0];
+        assert_eq!((t.tile, t.linear, t.image), ([3, 4, 600, 400], 0, 1));
     }
 
     #[test]

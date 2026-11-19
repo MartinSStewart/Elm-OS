@@ -114,6 +114,12 @@ type Effect
     | TlsOpen { id : String, host : String, portNumber : Int }
     | TlsSend { id : String, data : Bytes }
     | TlsClose String
+      -- RGBA pixels (4 bytes each, red first, not premultiplied) into the image
+      -- texture (2048 x 2048, see Sprite.InImage), `width` to a row, as many rows as
+      -- `pixels` holds, with the top left one at left, top. It is empty at every boot,
+      -- so whatever an app keeps there is written again when the program starts (an
+      -- app's `started`).
+    | WriteImage { left : Int, top : Int, width : Int, pixels : Bytes }
 
 
 type PowerAction
@@ -212,10 +218,7 @@ message effects =
     BE.encode (Postcard.list encode effects)
 
 
-{-| 56 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
-x, y, u, v of each corner as 32-bit floats (screen pixels, atlas pixels), then the
-colour as an unsigned 32-bit 0xRRGGBBAA, then 0 to sample the atlas by the nearest pixel
-or 1 to blend the four around the point (`Sprite.Sampling`).
+{-| 60 bytes per triangle, as host/protocol's `read_render` reads them (`Sprite.encoder`).
 -}
 renderBytes : List (Triangle DevicePixels) -> Bytes
 renderBytes triangles =
@@ -345,3 +348,6 @@ encode effect =
 
         TlsClose id ->
             Postcard.variant 24 [ Postcard.string id ]
+
+        WriteImage { left, top, width, pixels } ->
+            Postcard.variant 25 [ Postcard.unsigned left, Postcard.unsigned top, Postcard.unsigned width, Postcard.bytes pixels ]

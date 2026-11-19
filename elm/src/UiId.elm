@@ -16,6 +16,7 @@ import Calculator.Types
 import Email.Types
 import HackerNews.Types
 import News.Types
+import Paint.Types
 import ScreenshotViewer.Types
 import TicTacToe.Types
 import WebViewer.Types
@@ -60,6 +61,7 @@ type UiId
     | CloseFindButton
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
+    | Paint Paint.Types.UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId

@@ -49,6 +49,8 @@ import SourceCode
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
+import Paint
+import Paint.Types
 import TicTacToe
 import TicTacToe.Types
 import Time
@@ -100,6 +102,9 @@ type Input
       -- restart (Persist.elm); one has opened, with the server's headers; a message
       -- on one; one has closed, and why.
     | WebSocketsOpen (List String)
+      -- The program has started (Persist.elm's `started`): what lived only in the host,
+      -- such as the paint program's canvas in the image texture, is written again.
+    | Started
     | WebSocketOpened String (List ( String, String ))
     | WebSocketMessage String Bytes
     | WebSocketClosed String String
@@ -348,6 +353,7 @@ type alias Model =
     , calculatorOpen : Bool
     , ticTacToe : TicTacToe.Model
     , ticTacToeOpen : Bool
+    , paint : Paint.Model
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
 
@@ -396,6 +402,7 @@ type App
     | AsciiCollabApp
     | CalculatorApp
     | TicTacToeApp
+    | PaintApp
     | EditorApp
     | ScreenshotViewerApp
     | DebugApp
@@ -407,7 +414,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, ScreenshotViewerApp ]
 
 
 type WeatherState
@@ -468,6 +475,7 @@ init =
     , calculator = Calculator.init
     , calculatorOpen = False
     , ticTacToe = TicTacToe.init
+    , paint = Paint.init
     , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
@@ -688,34 +696,38 @@ step event model =
                 modelOld =
                     model
 
-                model2 =
+                ( model2, paintEffects ) =
                     dragScreenshot model { model | mouse = Coord.xy x y }
+                        |> paintStroke model
+
+                ( model3, effects ) =
+                    case model2.takingScreenshot of
+                        Just data ->
+                            updateScreenshotPreview data model2
+
+                        Nothing ->
+                            case ( model2.selectingText, model2.uiState.focus ) of
+                                ( True, Just focus ) ->
+                                    case findInput focus modelOld of
+                                        Just ( display, Ui.TextInputType { position } ) ->
+                                            -- The mouse in that display's UI pixels, even once it has left it.
+                                            ( dragSelect focus (uiMouseOn display model2.mouse) position model2, [] )
+
+                                        Just ( _, Ui.ButtonType _ ) ->
+                                            ( model2, [] )
+
+                                        Just ( display, Ui.ViewportType viewport ) ->
+                                            ( { model2 | uiState = Ui.dragScrollbar focus (uiMouseOn display model2.mouse) viewport model2.uiState }
+                                            , []
+                                            )
+
+                                        Nothing ->
+                                            ( model2, [] )
+
+                                _ ->
+                                    ( model2, [] )
             in
-            case model2.takingScreenshot of
-                Just data ->
-                    updateScreenshotPreview data model2
-
-                Nothing ->
-                    case ( model2.selectingText, model2.uiState.focus ) of
-                        ( True, Just focus ) ->
-                            case findInput focus modelOld of
-                                Just ( display, Ui.TextInputType { position } ) ->
-                                    -- The mouse in that display's UI pixels, even once it has left it.
-                                    ( dragSelect focus (uiMouseOn display model2.mouse) position model2, [] )
-
-                                Just ( _, Ui.ButtonType _ ) ->
-                                    ( model2, [] )
-
-                                Just ( display, Ui.ViewportType viewport ) ->
-                                    ( { model2 | uiState = Ui.dragScrollbar focus (uiMouseOn display model2.mouse) viewport model2.uiState }
-                                    , []
-                                    )
-
-                                Nothing ->
-                                    ( model2, [] )
-
-                        _ ->
-                            ( model2, [] )
+            ( model3, paintEffects ++ effects )
 
         Button 0 True ->
             let
@@ -792,6 +804,13 @@ step event model =
                                 , []
                                 )
 
+                            ( Paint Paint.Types.Canvas, { relativePositionToUi } ) :: _ ->
+                                let
+                                    ( paint, effects ) =
+                                        Paint.startStroke (Coord.minus relativePositionToUi cursor) model.paint
+                                in
+                                ( { model | paint = paint, uiState = Ui.setFocus Nothing model.uiState }, effects )
+
                             ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
                                 ( { model
                                     | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
@@ -841,6 +860,7 @@ step event model =
                 , selectingText = False
                 , uiState = Ui.onMouseUp model.uiState
                 , screenshotViewer = ScreenshotViewer.stopDragging model.screenshotViewer
+                , paint = Paint.endStroke model.paint
               }
             , []
             )
@@ -980,6 +1000,9 @@ step event model =
 
         WebSocketsOpen ids ->
             webSocketInput (WebSocketsOpen ids) model
+
+        Started ->
+            ( model, Paint.writeAll model.paint )
 
         WebSocketOpened id headers ->
             webSocketInput (WebSocketOpened id headers) model
@@ -1210,6 +1233,26 @@ appButton id =
         TicTacToeButton ->
             Just TicTacToeApp
 
+        Paint id2 ->
+            case id2 of
+                Paint.Types.OpenButton ->
+                    Just PaintApp
+
+                Paint.Types.CloseButton ->
+                    Nothing
+
+                Paint.Types.ClearButton ->
+                    Nothing
+
+                Paint.Types.Canvas ->
+                    Nothing
+
+                Paint.Types.ColorButton _ ->
+                    Nothing
+
+                Paint.Types.BrushButton _ ->
+                    Nothing
+
         EditorButton ->
             Just EditorApp
 
@@ -1400,6 +1443,9 @@ appIsOpen app model =
 
         TicTacToeApp ->
             model.ticTacToeOpen
+
+        PaintApp ->
+            model.paint.isOpen
 
         EditorApp ->
             model.editorOpen
@@ -1689,6 +1735,13 @@ clickElement model id =
 
         WebViewer uiId2 ->
             webViewerClick uiId2 model
+
+        Paint uiId2 ->
+            let
+                ( paint, effects ) =
+                    Paint.onClick uiId2 model.paint
+            in
+            ( { model | paint = paint }, effects )
 
         ScreenshotViewer uiId2 ->
             ( { model
@@ -2616,6 +2669,9 @@ dragSelect focus mouse position model =
         ScreenshotViewer _ ->
             model
 
+        Paint _ ->
+            model
+
         Lazy _ ->
             model
 
@@ -3045,6 +3101,29 @@ dragScreenshot before after =
     }
 
 
+{-| The mouse moved from where `before` has it to where `after` has it: paints along the
+way if a stroke is being drawn.
+-}
+paintStroke : Model -> Model -> ( Model, List Effect )
+paintStroke before after =
+    case after.paint.stroke of
+        Just _ ->
+            let
+                display : Display
+                display =
+                    displayOf PaintApp after
+
+                ( paint, effects ) =
+                    Paint.strokeBy
+                        (Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse))
+                        after.paint
+            in
+            ( { after | paint = paint }, effects )
+
+        Nothing ->
+            ( after, [] )
+
+
 {-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
 the mouse scrolls.
 -}
@@ -3353,6 +3432,9 @@ appLimits app model =
         TicTacToeApp ->
             Layout.fixed (Ui.size (TicTacToe.view model.ticTacToe))
 
+        PaintApp ->
+            Layout.fixed (Ui.size (Paint.view model.paint))
+
         EditorApp ->
             { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
             , preferred = Coord.xy (Quantity.unwrap (em 40) + 16) (editorChrome + 24 * Quantity.unwrap (Sprite.lineHeight bodySize))
@@ -3401,6 +3483,9 @@ appView app size model =
 
         TicTacToeApp ->
             TicTacToe.view model.ticTacToe
+
+        PaintApp ->
+            Paint.view model.paint
 
         EditorApp ->
             editorWindow model
@@ -3686,6 +3771,7 @@ persistConfig =
     , httpAnswered = httpAnswered
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     , webSocketsOpen = \ids -> GotInput (Ok (WebSocketsOpen ids))
+    , started = GotInput (Ok Started)
     , draw = draw
     }
 
@@ -4463,6 +4549,10 @@ toolbar model display =
                         { id = TicTacToeButton, padding = small }
                         (openHere TicTacToeApp)
                         (Ui.text "Tic Tac Toe")
+                    , Ui.selectableButton
+                        { id = Paint Paint.Types.OpenButton, padding = small }
+                        (openHere PaintApp)
+                        (Ui.text "Paint")
                     , Ui.selectableButton
                         { id = EditorButton, padding = small }
                         (openHere EditorApp)

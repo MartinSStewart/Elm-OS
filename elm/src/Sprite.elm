@@ -17,6 +17,7 @@ module Sprite exposing
     , customTextSize
     , findMatches
     , foundText
+    , image
     , dotGrid
     , ellipsis
     , encoder
@@ -95,6 +96,10 @@ picture.
 type UvSpace
     = AtlasPixels
     | InSprite Sprites.Name
+      -- Pixels of the image texture rather than the atlas: 2048 x 2048 colour pixels
+      -- that apps write into (Effect.WriteImage), such as a paint program's canvas. The
+      -- triangle's colour multiplies the image's (white shows it as it is).
+    | InImage
 
 
 {-| The triangle sampling atlas pixels, from the sprite's picture for this UI scale if
@@ -104,6 +109,9 @@ inAtlas : Int -> Triangle a -> Triangle a
 inAtlas scale (Triangle t) =
     case t.uvSpace of
         AtlasPixels ->
+            Triangle t
+
+        InImage ->
             Triangle t
 
         InSprite name ->
@@ -171,7 +179,8 @@ type Sampling
 {-| A triangle as Effect.renderBytes sends it (60 bytes, host/protocol/src/lib.rs
 read\_render): x, y, u, v of each corner as 32-bit floats, then as unsigned 32-bit
 integers the colour (0xRRGGBBAA), the tile's left + top \* 2^16, and its width +
-height \* 2^16 + 2^31 if `Linear`; all little-endian. No tile is all 0s.
+height \* 2^16 + 2^30 if it samples the image texture (`InImage`) + 2^31 if `Linear`;
+all little-endian. No tile is all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
 encoder (Triangle t) =
@@ -209,6 +218,16 @@ encoder (Triangle t) =
 
                     Linear ->
                         2147483648
+                  )
+                + (case t.uvSpace of
+                    InImage ->
+                        1073741824
+
+                    AtlasPixels ->
+                        0
+
+                    InSprite _ ->
+                        0
                   )
             )
         ]
@@ -421,6 +440,16 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest, tile = Nothing, uvSpace = AtlasPixels }
     , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest, tile = Nothing, uvSpace = AtlasPixels }
     ]
+
+
+{-| A rectangle of the image texture (`InImage`) at the given place and size, as it is
+there: `image ( x, y ) ( w, h ) ( left, top )` shows the w x h pixels whose top left
+one is at left, top in the texture.
+-}
+image : ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> List (Triangle units)
+image position size texturePosition =
+    sprite Color.white position size texturePosition size
+        |> List.map (\(Triangle t) -> Triangle { t | uvSpace = InImage })
 
 
 rectangle : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)

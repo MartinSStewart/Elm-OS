@@ -18,7 +18,7 @@
 //!
 //! Every glyph has its edge pixels repeated once more around it (the
 //! pixel font's by `bleed` here, Noto Sans's by make-noto-sans.py). A
-//! triangle sampled bilinearly (`Tri::linear`) blends in the pixels just outside what it
+//! triangle sampled bilinearly (`Tri::LINEAR`) blends in the pixels just outside what it
 //! shows, and these make those the image's own edge rather than a neighbour or nothing.
 //!
 //! Elm has the atlas's layout compiled in (NotoSans.elm), so the atlas is part of the
@@ -101,22 +101,32 @@ pub fn solid() -> [f32; 2] {
 
 /// One triangle as /init hands it to a renderer: what Elm sends per triangle
 /// (protocol::RenderTriangle), x, y, u, v for each corner (screen and atlas pixels),
-/// the colour as 0xRRGGBBAA, the sampling and the tile. elmos-gpu reads these from a
+/// the colour as 0xRRGGBBAA, its flags and the tile. elmos-gpu reads these from a
 /// pipe, so the layout is fixed (64 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Tri {
     pub p: [[f32; 4]; 3],
     pub rgba: u32,
-    /// 1 to sample the atlas with bilinear filtering, 0 for the nearest pixel (`Scene::linear`).
-    pub linear: u32,
-    /// Left, top, width, height of the atlas rectangle that u, v wrap round into, so
+    /// `LINEAR` and `IMAGE`, or'd together.
+    pub flags: u32,
+    /// Left, top, width, height of the texture rectangle that u, v wrap round into, so
     /// the triangle shows it repeated; width 0 for none (`RenderTriangle::tile`).
     pub tile: [u16; 4],
 }
 
 impl Tri {
     pub const SIZE: usize = std::mem::size_of::<Tri>();
+    /// Sample with bilinear filtering, rather than the nearest pixel.
+    pub const LINEAR: u32 = 1;
+    /// Sample the image texture (images.rs) rather than the atlas: u, v and the tile
+    /// are in its pixels, and its colour multiplies the triangle's.
+    pub const IMAGE: u32 = 2;
+
+    /// What Elm sent.
+    pub fn from_render(p: [[f32; 4]; 3], rgba: u32, linear: bool, image: bool, tile: [u16; 4]) -> Tri {
+        Tri { p, rgba, flags: (linear as u32) * Tri::LINEAR | (image as u32) * Tri::IMAGE, tile }
+    }
 
     pub fn as_bytes(tris: &[Tri]) -> &[u8] {
         // SAFETY: Tri is repr(C), made of f32s, u32s and u16s with no padding.
