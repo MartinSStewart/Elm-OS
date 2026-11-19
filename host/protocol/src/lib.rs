@@ -450,9 +450,66 @@ impl ToElm {
     }
 }
 
-/// Reads one message from Elm: its effects, in order.
+/// Reads one message from Elm: its effects, in order. If it can't, the error says which
+/// effect it couldn't read (its place in the list and its variant number), at which
+/// byte, and shows the bytes from there, so a log line is enough to find the encoder
+/// in elm/src/Effect.elm that disagrees with `Effect`.
 pub fn read_effects(bytes: &[u8]) -> Result<Vec<Effect>, String> {
-    postcard::from_bytes(bytes).map_err(|e| e.to_string())
+    let (count, mut rest) = postcard::take_from_bytes::<u32>(bytes).map_err(|e| format!("{e}, in the effect count"))?;
+    let mut effects = Vec::with_capacity(count.min(1024) as usize);
+    for i in 0..count {
+        match postcard::take_from_bytes::<Effect>(rest) {
+            Ok((effect, after)) => {
+                effects.push(effect);
+                rest = after;
+            }
+            Err(e) => {
+                let at = bytes.len() - rest.len();
+                let variant = postcard::take_from_bytes::<u32>(rest).map_or("?".to_owned(), |(v, _)| v.to_string());
+                let shown: Vec<String> = rest.iter().take(48).map(|b| format!("{b:02x}")).collect();
+                let read: Vec<&str> = effects.iter().map(effect_name).collect();
+                return Err(format!(
+                    "{e}, in effect {} of {count} (variant {variant}), at byte {at} of {}; after [{}]; bytes from there: {}",
+                    i + 1,
+                    bytes.len(),
+                    read.join(", "),
+                    shown.join(" ")
+                ));
+            }
+        }
+    }
+    Ok(effects)
+}
+
+/// The effect's variant name, for logs.
+pub fn effect_name(effect: &Effect) -> &'static str {
+    match effect {
+        Effect::Render(_) => "Render",
+        Effect::Cursor { .. } => "Cursor",
+        Effect::WifiScan => "WifiScan",
+        Effect::WifiConnect { .. } => "WifiConnect",
+        Effect::WifiDisconnect => "WifiDisconnect",
+        Effect::Power { .. } => "Power",
+        Effect::Http(_) => "Http",
+        Effect::ListDir { .. } => "ListDir",
+        Effect::ReadFiles { .. } => "ReadFiles",
+        Effect::ReadBytes { .. } => "ReadBytes",
+        Effect::Sha256 { .. } => "Sha256",
+        Effect::WriteSys { .. } => "WriteSys",
+        Effect::AppendFile { .. } => "AppendFile",
+        Effect::WriteFile { .. } => "WriteFile",
+        Effect::Log { .. } => "Log",
+        Effect::SwitchReady => "SwitchReady",
+        Effect::ReadSnapshot => "ReadSnapshot",
+        Effect::WriteSnapshot { .. } => "WriteSnapshot",
+        Effect::ReplayLog { .. } => "ReplayLog",
+        Effect::WebSocketOpen { .. } => "WebSocketOpen",
+        Effect::WebSocketSend { .. } => "WebSocketSend",
+        Effect::WebSocketClose { .. } => "WebSocketClose",
+        Effect::TlsOpen { .. } => "TlsOpen",
+        Effect::TlsSend { .. } => "TlsSend",
+        Effect::TlsClose { .. } => "TlsClose",
+    }
 }
 
 /// What Elm sends for these effects (for the tests, and protocol-examples).
@@ -635,6 +692,12 @@ mod tests {
         // Variant 2 (Mouse), zigzagged -1 and 300.
         assert_eq!(ToElm::Mouse { x: -1, y: 300 }.to_bytes(), vec![2, 1, 0xd8, 0x04]);
         assert!(read_effects(&[1, 99]).is_err());
+        // The error says which effect couldn't be read, and shows its bytes.
+        let bad = [2, 2, 3, 5, 0xff, 0xff];
+        assert_eq!(
+            read_effects(&bad),
+            Err("Hit the end of buffer, expected more data, in effect 2 of 2 (variant 3), at byte 2 of 6; after [WifiScan]; bytes from there: 03 05 ff ff".to_owned())
+        );
     }
 
     #[test]
