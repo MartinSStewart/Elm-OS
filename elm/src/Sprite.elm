@@ -18,6 +18,7 @@ module Sprite exposing
     , dotGrid
     , ellipsis
     , encoder
+    , inAtlas
     , lineHeight
     , monoChar
     , move
@@ -170,11 +171,10 @@ integers the colour (0xRRGGBBAA), the tile's left + top \* 2^16, and its width +
 height \* 2^16 + 2^31 if `Linear`; all little-endian. No tile is all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
-encoder triangle_ =
+encoder (Triangle t) =
+    -- Its u, v must already be atlas pixels (`inAtlas`); Effect.renderBytes does that.
+    -- Calling inAtlas here instead makes eco's bytes fusion compute it once per field.
     let
-        (Triangle t) =
-            inAtlas 1 triangle_
-
         f =
             BE.float32 LE
 

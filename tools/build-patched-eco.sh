@@ -2,7 +2,7 @@
 # Build eco with the patches in tools/eco-patched (0001: eco/containers: SeqDict's reserved constructor
 # tag, `==` on SeqDicts, and eco/containers bundled like eco/kernel; 0002: hot-path speedups in the
 # runtime, kernels and bytes fusion; 0003: String search without copies, and fold kernels calling their
-# step closure directly), for `make ECO_PATCHED=1`.
+# step closure directly; 0004: a fix to the lets in 0002's fused encoders), for `make ECO_PATCHED=1`.
 # Until an eco release has them, this is how Elm OS gets an eco that eco/containers works with.
 #
 #   usage: tools/build-patched-eco.sh STOCK_DIR DIR

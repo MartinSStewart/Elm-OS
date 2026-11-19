@@ -219,7 +219,12 @@ or 1 to blend the four around the point (`Sprite.Sampling`).
 -}
 renderBytes : List (Triangle DevicePixels) -> Bytes
 renderBytes triangles =
-    BE.encode (BE.sequence (List.map Sprite.encoder triangles))
+    let
+        -- A local list, so eco fuses the encoder into one loop over it.
+        inAtlas =
+            List.map (Sprite.inAtlas 1) triangles
+    in
+    BE.encode (BE.sequence (List.map Sprite.encoder inAtlas))
 
 
 {-| One Effect, as protocol::Effect: its variant's number there, then its fields.
