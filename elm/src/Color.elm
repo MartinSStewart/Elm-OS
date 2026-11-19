@@ -11,6 +11,7 @@ module Color exposing
     , focusedInputColor
     , findMatchColor
     , findMatchTextColor
+    , findOtherMatchColor
     , focusedUiColor
     , highlightColor
     , linkColor
@@ -168,7 +169,7 @@ selectionColor =
     rgb255 40 75 140
 
 
-{-| Behind text that matches what the find bar (Ctrl+F) is looking for: yellow, as
+{-| Behind the selected match of what the find bar (Ctrl+F) is looking for: yellow, as
 browsers do it.
 -}
 findMatchColor : Color
@@ -176,7 +177,14 @@ findMatchColor =
     rgb255 255 214 60
 
 
-{-| Text that matches the find bar's text, on `findMatchColor`: dark, as light text on
+{-| Behind the other matches: a fainter yellow, which the text keeps its own colour on.
+-}
+findOtherMatchColor : Color
+findOtherMatchColor =
+    rgba255 255 214 60 90
+
+
+{-| The selected match's text, on `findMatchColor`: dark, as light text on
 yellow can't be read.
 -}
 findMatchTextColor : Color

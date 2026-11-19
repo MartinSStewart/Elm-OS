@@ -1021,12 +1021,16 @@ findKey string =
         string
 
 
-{-| `customText` with each match of `query` (see `findMatches`) on a `background`
-rectangle as tall as the line, in `color`. With no matches it's just `customText`.
+{-| `customText` with each match of `query` (see `findMatches`) on an `otherBackground`
+rectangle as tall as the line, except the `selected` one (an index into `findMatches`),
+which is on `background`, in `color`. With no matches it's just `customText`.
 The matched characters are laid out as segments of their own, so there is no kerning
 between them and the characters next to them.
 -}
-foundText : UiScale -> { query : String, background : Color, color : Color } -> FontSize -> Bounds UiPixels -> List Segment -> Coord UiPixels -> List (Triangle DevicePixels)
+foundText :
+    UiScale
+    -> { query : String, selected : Maybe Int, background : Color, color : Color, otherBackground : Color }
+    -> FontSize -> Bounds UiPixels -> List Segment -> Coord UiPixels -> List (Triangle DevicePixels)
 foundText uiScale found fontSize clip segments position =
     case findMatches found.query segments of
         [] ->
@@ -1034,7 +1038,7 @@ foundText uiScale found fontSize clip segments position =
 
         matches ->
             let
-                pieces : List ( Bool, Segment )
+                pieces : List ( Maybe Int, Segment )
                 pieces =
                     splitAtMatches matches segments
 
@@ -1067,8 +1071,8 @@ foundText uiScale found fontSize clip segments position =
                                     List.map Tuple.first placed
                             in
                             List.map3
-                                (\( isMatch, _ ) start next ->
-                                    if isMatch && next > start then
+                                (\( match, _ ) start next ->
+                                    if match /= Nothing && next > start then
                                         let
                                             left =
                                                 ((x * 64 + start) * s + 32) // 64
@@ -1076,7 +1080,14 @@ foundText uiScale found fontSize clip segments position =
                                             right =
                                                 ((x * 64 + next) * s + 32) // 64
                                         in
-                                        clippedSprite found.background deviceClip ( left, (y + lineIndex * height) * s ) ( right - left, height * s ) ( 2, 2 ) ( 4, 4 )
+                                        clippedSprite
+                                            (if match == found.selected then
+                                                found.background
+
+                                             else
+                                                found.otherBackground
+                                            )
+                                            deviceClip ( left, (y + lineIndex * height) * s ) ( right - left, height * s ) ( 2, 2 ) ( 4, 4 )
                                             |> fromSprite Sprites.Solid
 
                                     else
@@ -1087,7 +1098,7 @@ foundText uiScale found fontSize clip segments position =
                                 (List.drop 1 starts ++ [ end ])
                                 |> List.concat
                         )
-                        (linesOf (\( _, segment ) -> segment.text) (\part ( isMatch, segment ) -> ( isMatch, { segment | text = part } )) pieces)
+                        (linesOf (\( _, segment ) -> segment.text) (\part ( match, segment ) -> ( match, { segment | text = part } )) pieces)
                         |> List.concat
             in
             backgrounds
@@ -1096,8 +1107,8 @@ foundText uiScale found fontSize clip segments position =
                     fontSize
                     clip
                     (List.map
-                        (\( isMatch, segment ) ->
-                            if isMatch then
+                        (\( match, segment ) ->
+                            if match /= Nothing && match == found.selected then
                                 { segment | color = found.color }
 
                             else
@@ -1109,10 +1120,10 @@ foundText uiScale found fontSize clip segments position =
 
 
 {-| Segments cut where the matches (ranges of their characters, in order, not
-overlapping) start and end, each piece saying whether it is in a match. Empty pieces
-are left out.
+overlapping) start and end, each piece saying which match it is in, if any (counted
+from 0). Empty pieces are left out.
 -}
-splitAtMatches : List ( Int, Int ) -> List Segment -> List ( Bool, Segment )
+splitAtMatches : List ( Int, Int ) -> List Segment -> List ( Maybe Int, Segment )
 splitAtMatches matches segments =
     List.foldl
         (\segment ( offset, remaining, acc ) ->
@@ -1125,26 +1136,26 @@ splitAtMatches matches segments =
 
                 -- The pieces from `at` to the segment's end, and the matches left
                 -- for the next segments.
-                cut : Int -> List ( Int, Int ) -> List ( Bool, Segment ) -> ( List ( Int, Int ), List ( Bool, Segment ) )
+                cut : Int -> List ( Int, Int, Int ) -> List ( Maybe Int, Segment ) -> ( List ( Int, Int, Int ), List ( Maybe Int, Segment ) )
                 cut at matches2 pieces =
                     case matches2 of
-                        ( start, end ) :: rest ->
+                        ( index, start, end ) :: rest ->
                             if start >= segmentEnd then
-                                ( matches2, piece False at segmentEnd pieces )
+                                ( matches2, piece Nothing at segmentEnd pieces )
 
                             else if end > segmentEnd then
-                                ( matches2, piece True (max at start) segmentEnd (piece False at (max at start) pieces) )
+                                ( matches2, piece (Just index) (max at start) segmentEnd (piece Nothing at (max at start) pieces) )
 
                             else
-                                cut end rest (piece True (max at start) end (piece False at (max at start) pieces))
+                                cut end rest (piece (Just index) (max at start) end (piece Nothing at (max at start) pieces))
 
                         [] ->
-                            ( [], piece False at segmentEnd pieces )
+                            ( [], piece Nothing at segmentEnd pieces )
 
-                piece : Bool -> Int -> Int -> List ( Bool, Segment ) -> List ( Bool, Segment )
-                piece isMatch from to pieces =
+                piece : Maybe Int -> Int -> Int -> List ( Maybe Int, Segment ) -> List ( Maybe Int, Segment )
+                piece match from to pieces =
                     if to > from then
-                        ( isMatch, { segment | text = String.slice (from - offset) (to - offset) segment.text } ) :: pieces
+                        ( match, { segment | text = String.slice (from - offset) (to - offset) segment.text } ) :: pieces
 
                     else
                         pieces
@@ -1154,7 +1165,7 @@ splitAtMatches matches segments =
             in
             ( segmentEnd, remaining2, acc2 )
         )
-        ( 0, matches, [] )
+        ( 0, List.indexedMap (\index ( start, end ) -> ( index, start, end )) matches, [] )
         segments
         |> (\( _, _, acc ) -> List.reverse acc)
 

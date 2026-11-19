@@ -53,8 +53,10 @@ type UiId
     | CloseNetworkButton
     | WeatherAppButton
     | CloseWeatherButton
-      -- The find bar (Ctrl+F): its text box and close button.
+      -- The find bar (Ctrl+F): its text box and buttons.
     | FindInput
+    | FindPreviousButton
+    | FindNextButton
     | CloseFindButton
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId

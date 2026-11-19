@@ -3,6 +3,8 @@ module Ui exposing
     , Element
     , ElementFull
     , ElementState(..)
+    , Find
+    , FindMatch
     , InputType(..)
     , LazyCache
     , Model
@@ -31,6 +33,7 @@ module Ui exposing
     , elWithId
     , elementToScreenshot
     , empty
+    , findAll
     , findInput
     , getTextInput
     , getTextInputMultiline
@@ -49,6 +52,7 @@ module Ui exposing
     , leftAndRight
     , monoColorText
     , monoText
+    , noFind
     , noLazyCache
     , noPadding
     , onAnimationFrame
@@ -57,6 +61,7 @@ module Ui exposing
     , onWheel
     , paddingXY
     , quads
+    , revealMatch
     , right
     , row
     , screenshotSize
@@ -401,7 +406,7 @@ screenshotView { time, uiState, uiScale, screenshot } =
         uiScale
         False
         Nothing
-        ""
+        noFind
         { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
         Coord.origin
         screenshot
@@ -2259,6 +2264,213 @@ findFirst f list =
 
 
 
+-- FIND (Ctrl+F)
+
+
+{-| What the find bar is looking for: `query` ("" for nothing), and the selected match,
+as the top left of the text element it is in (where `view` draws that element) and
+which of that element's matches it is (see `FindMatch`).
+-}
+type alias Find =
+    { query : String, selected : Maybe ( Coord UiPixels, Int ) }
+
+
+noFind : Find
+noFind =
+    { query = "", selected = Nothing }
+
+
+{-| One match of the find bar's text: the top left of the text element it is in, as
+`view` draws it, which of that element's matches it is (Sprite.findMatches), and for
+each viewport it is in (outermost first) how far down that viewport's content its
+lines start and end, for `revealMatch`.
+-}
+type alias FindMatch id =
+    { at : Coord UiPixels
+    , index : Int
+    , viewports :
+        List
+            { id : id
+            , viewportHeight : Quantity Int UiPixels
+            , contentSize : Coord UiPixels
+            , top : Int
+            , bottom : Int
+            }
+    }
+
+
+{-| Every match of `query` in the text of an element, in the order they come in the
+tree, including the ones scrolled out of sight in a viewport.
+-}
+findAll : Model id -> String -> Element id -> List (FindMatch id)
+findAll model query (Element element) =
+    if String.isEmpty query then
+        []
+
+    else
+        findAllHelper model query Coord.origin [] element [] |> List.reverse
+
+
+{-| `findAll`, adding to `found` (last first). `viewports` are the viewports the
+element is in, innermost first, each with where its content's top is.
+-}
+findAllHelper :
+    Model id
+    -> String
+    -> Coord UiPixels
+    -> List { id : id, viewportHeight : Quantity Int UiPixels, contentSize : Coord UiPixels, contentTop : Int }
+    -> ElementFull id lazy
+    -> List (FindMatch id)
+    -> List (FindMatch id)
+findAllHelper model query position viewports element found =
+    case element of
+        Text data ->
+            let
+                -- How many lines start before a character.
+                lineOf : Int -> Int
+                lineOf index =
+                    String.left index allText |> String.indexes "\n" |> List.length
+
+                allText : String
+                allText =
+                    String.concat (List.map .text data.segments)
+
+                lineHeight : Int
+                lineHeight =
+                    Quantity.unwrap (Sprite.lineHeight data.fontSize)
+            in
+            Sprite.findMatches query data.segments
+                |> List.indexedMap Tuple.pair
+                |> List.foldl
+                    (\( index, ( start, end ) ) found2 ->
+                        let
+                            top =
+                                Coord.yRaw position + lineOf start * lineHeight
+
+                            bottom =
+                                Coord.yRaw position + (lineOf (max start (end - 1)) + 1) * lineHeight
+                        in
+                        { at = position
+                        , index = index
+                        , viewports =
+                            List.foldl
+                                (\around acc ->
+                                    { id = around.id
+                                    , viewportHeight = around.viewportHeight
+                                    , contentSize = around.contentSize
+                                    , top = top - around.contentTop
+                                    , bottom = bottom - around.contentTop
+                                    }
+                                        :: acc
+                                )
+                                []
+                                viewports
+                        }
+                            :: found2
+                    )
+                    found
+
+        Button data child ->
+            List.foldl
+                (\child2 found2 -> findAllHelper model query position viewports child2 found2)
+                (findAllHelper model query (Coord.plus (paddingTopLeft data.padding) position) viewports child found)
+                data.inFront
+
+        Row data children ->
+            List.foldl
+                (\( at, child ) found2 -> findAllHelper model query at viewports child found2)
+                found
+                (childPositions True data.spacing position children)
+
+        Column data children ->
+            List.foldl
+                (\( at, child ) found2 -> findAllHelper model query at viewports child found2)
+                found
+                (childPositions False data.spacing position children)
+
+        Single data child ->
+            findAllHelper model query (Coord.plus (paddingTopLeft data.padding) position) viewports child found
+
+        InFront _ children ->
+            List.foldl
+                (\( coord, child ) found2 -> findAllHelper model query (Coord.plus coord position) viewports child found2)
+                found
+                children
+
+        Viewport data child ->
+            let
+                contentAt : Coord UiPixels
+                contentAt =
+                    Coord.plus (contentPosition (getViewport data.id model)) position
+            in
+            findAllHelper
+                model
+                query
+                contentAt
+                ({ id = data.id, viewportHeight = data.viewportHeight, contentSize = sizeHelper child, contentTop = Coord.yRaw contentAt } :: viewports)
+                child
+                found
+
+        Lazy _ _ child ->
+            findAllHelper model query position viewports child found
+
+        Sourced _ child ->
+            findAllHelper model query position viewports child found
+
+        TextInput _ ->
+            found
+
+        TextInputMultiline _ ->
+            found
+
+        Quads _ ->
+            found
+
+        Empty ->
+            found
+
+
+{-| Scrolls every viewport a match is in so that it can be seen: one that already shows
+it stays where it is, and the others put it in the middle.
+-}
+revealMatch : FindMatch id -> Model id -> Model id
+revealMatch match model =
+    List.foldl
+        (\around model2 ->
+            let
+                state : ViewportModel
+                state =
+                    getViewport around.id model2
+
+                shownTop : Float
+                shownTop =
+                    scrolled state.offset
+
+                height : Int
+                height =
+                    Quantity.unwrap (insideHeight around.viewportHeight)
+            in
+            if toFloat around.top >= shownTop && toFloat around.bottom <= shownTop + toFloat height then
+                model2
+
+            else
+                insertElement
+                    around.id
+                    (ViewportState
+                        (scrollTo
+                            around.viewportHeight
+                            around.contentSize
+                            (toFloat ((around.top + around.bottom - height) // 2))
+                            state
+                        )
+                    )
+                    model2
+        )
+        model
+        match.viewports
+
+
+
 -- DRAWING
 
 
@@ -2266,13 +2478,13 @@ findFirst f list =
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 
-`find` is what the find bar (Ctrl+F) is looking for: every match of it in text gets a
-yellow background (see Sprite.foundText); "" finds nothing. It's done here, while
-drawing, rather than by the apps' views, so that typing in the find bar changes no
-view's arguments and every `lazy` element is reused.
+`find` is what the find bar (Ctrl+F) is looking for (see `Find`): every match of it in
+text gets a yellow background, the selected one a stronger one (see Sprite.foundText).
+It's done here, while drawing, rather than by the apps' views, so that typing in the
+find bar changes no view's arguments and every `lazy` element is reused.
 
 -}
-view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> String -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Find -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
 view uiState time scale showUiBorder maybeHover find screenSize (Element element) =
     viewList
         uiState
@@ -2286,7 +2498,7 @@ view uiState time scale showUiBorder maybeHover find screenSize (Element element
         element
 
 
-viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> String -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Find -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
 viewList model time scale showUiBorder maybeHover find viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
@@ -2319,13 +2531,28 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                      else
                         []
                     )
-                        ++ (if String.isEmpty find then
+                        ++ (if String.isEmpty find.query then
                                 Sprite.customText scale data.fontSize viewport3 data.segments position
 
                             else
                                 Sprite.foundText
                                     scale
-                                    { query = find, background = Color.findMatchColor, color = Color.findMatchTextColor }
+                                    { query = find.query
+                                    , selected =
+                                        case find.selected of
+                                            Just ( at, index ) ->
+                                                if at == position then
+                                                    Just index
+
+                                                else
+                                                    Nothing
+
+                                            Nothing ->
+                                                Nothing
+                                    , background = Color.findMatchColor
+                                    , color = Color.findMatchTextColor
+                                    , otherBackground = Color.findOtherMatchColor
+                                    }
                                     data.fontSize
                                     viewport3
                                     data.segments
