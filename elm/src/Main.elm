@@ -365,6 +365,10 @@ type alias Model =
     -- listed in the corner of the display it is on.
     , inspected : Maybe { display : Int, sources : List Ui.Source }
     , screenshotViewer : ScreenshotViewer.Model
+
+    -- The find bar (Ctrl+F) is open along the bottom of this display (its Display.name;
+    -- the main one if it isn't connected). Its text is in `uiState`, under FindInput.
+    , findBar : Maybe String
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
     }
@@ -476,6 +480,7 @@ init =
     , showUiBorders = False
     , inspected = Nothing
     , screenshotViewer = ScreenshotViewer.init
+    , findBar = Nothing
     , takingScreenshot = Nothing
     , screenshots = []
     }
@@ -886,6 +891,9 @@ step event model =
             else if model.ctrl && model.shift && key == Character "Q" && down then
                 ( { model | showUiBorders = not model.showUiBorders, inspected = Nothing }, [] )
 
+            else if model.ctrl && down && (key == Character "f" || key == Character "F") then
+                openFindBar model
+
             else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
 
@@ -894,6 +902,12 @@ step event model =
 
             else if not down then
                 ( model, [] )
+
+            else if model.uiState.focus == Just FindInput && model.findBar /= Nothing then
+                findBarKey key model
+
+            else if model.uiState.focus == Nothing && model.findBar /= Nothing && key == Keyboard.Escape then
+                ( closeFindBar model, [] )
 
             else if model.uiState.focus == Just PasswordInput then
                 typeKey key model
@@ -1245,6 +1259,12 @@ appButton id =
         CloseWeatherButton ->
             Nothing
 
+        FindInput ->
+            Nothing
+
+        CloseFindButton ->
+            Nothing
+
         HackerNews id2 ->
             case id2 of
                 HackerNews.Types.OpenButton ->
@@ -1548,6 +1568,12 @@ clickElement model id =
 
         CloseWeatherButton ->
             ( { model | weatherOpen = False }, [] )
+
+        FindInput ->
+            ( { model | uiState = Ui.setFocus (Just FindInput) model.uiState }, [] )
+
+        CloseFindButton ->
+            ( closeFindBar model, [] )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -1856,6 +1882,111 @@ dragSelectWebViewer focus mouse position model =
                         |> TextInputState
                         |> Just
                 )
+                model.uiState
+    }
+
+
+{-| Ctrl+F: opens the find bar along the bottom of the display the mouse is on (or moves
+it there), with the keyboard in it and what was typed before selected, so typing
+replaces it.
+-}
+openFindBar : Model -> ( Model, List Effect )
+openFindBar model =
+    let
+        state : TextInput.Model
+        state =
+            Ui.getTextInput FindInput model.uiState
+    in
+    ( { model
+        | findBar = Just (mouseDisplay model).name
+        , uiState =
+            model.uiState
+                |> Ui.insertElement
+                    FindInput
+                    (TextInputState
+                        (TextInput.replaceState
+                            (\current -> { current | cursorPosition = String.length current.text, cursorSize = -(String.length current.text) })
+                            state
+                        )
+                    )
+                |> Ui.setFocus (Just FindInput)
+      }
+    , []
+    )
+
+
+{-| Closes the find bar. What was typed in it is kept for the next Ctrl+F.
+-}
+closeFindBar : Model -> Model
+closeFindBar model =
+    { model
+        | findBar = Nothing
+        , uiState =
+            if model.uiState.focus == Just FindInput then
+                Ui.setFocus Nothing model.uiState
+
+            else
+                model.uiState
+    }
+
+
+{-| What every app's text is searched for: the find bar's text while it is open.
+-}
+findText : Model -> String
+findText model =
+    case model.findBar of
+        Just _ ->
+            (Ui.getTextInput FindInput model.uiState).current.text
+
+        Nothing ->
+            ""
+
+
+{-| A key pressed while the find bar has the keyboard. Escape closes it.
+-}
+findBarKey : Key -> Model -> ( Model, List Effect )
+findBarKey key model =
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Escape ) ->
+            ( closeFindBar model, [] )
+
+        ( True, Keyboard.Character "v" ) ->
+            ( { model
+                | uiState =
+                    Ui.insertElement
+                        FindInput
+                        (TextInputState (TextInput.paste (String.replace "\n" " " model.clipboard) (Ui.getTextInput FindInput model.uiState)))
+                        model.uiState
+              }
+            , []
+            )
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput FindInput model.uiState)
+            in
+            ( { model
+                | uiState = Ui.insertElement FindInput (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+            , []
+            )
+
+
+dragSelectFind : Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectFind mouse position model =
+    { model
+        | uiState =
+            Ui.insertElement
+                FindInput
+                (TextInputState (TextInput.mouseDownMove (findInputStyle (findBarDisplay model)) mouse position (Ui.getTextInput FindInput model.uiState)))
                 model.uiState
     }
 
@@ -2355,6 +2486,12 @@ dragSelect focus mouse position model =
         CloseWeatherButton ->
             model
 
+        FindInput ->
+            dragSelectFind mouse position model
+
+        CloseFindButton ->
+            model
+
         News _ ->
             model
 
@@ -2509,6 +2646,7 @@ view model cursor display ui =
         (Display.uiScale display)
         model.showUiBorders
         hovered
+        (findText model)
         display.size
         ui
         ++ inspectorView model display ui
@@ -2610,6 +2748,7 @@ inspectorView model display ui =
                                 scale
                                 False
                                 Nothing
+                                ""
                                 display.size
                                 (Ui.bottomRight { size = Display.uiSize display } (inspectorList inspected.sources))
 
@@ -2873,6 +3012,12 @@ displayUi model display =
                 )
             )
             (windows model display)
+        ++ (if model.findBar /= Nothing && (findBarDisplay model).id == display.id then
+                [ ( Coord.xy 0 (Coord.yRaw (Display.uiSize display) - findBarHeight display), findBar display ) ]
+
+            else
+                []
+           )
         ++ (if display.id == (mainDisplay model).id then
                 case model.upgradingTo of
                     Just build ->
@@ -2893,6 +3038,66 @@ displayUi model display =
 
 
 
+{-| The display the find bar is on: the one it was opened on, or the main one if that
+isn't connected.
+-}
+findBarDisplay : Model -> Display
+findBarDisplay model =
+    case model.findBar of
+        Just name ->
+            List.filter (\display -> display.name == name) model.displays
+                |> List.head
+                |> Maybe.withDefault (mainDisplay model)
+
+        Nothing ->
+            mainDisplay model
+
+
+{-| The find bar (Ctrl+F), across the bottom of a display: what to look for in every
+app's text. Ui.view does the highlighting, from `findText`.
+-}
+findBar : Display -> Ui.Element UiId
+findBar display =
+    let
+        padding =
+            Ui.paddingXY 8 6
+
+        width =
+            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels (2 * 8))
+    in
+    Ui.el
+        { padding = padding
+        , borderAndFill = Ui.BorderAndFill { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+        }
+        (Ui.leftAndRight
+            width
+            (Ui.row
+                8
+                [ Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.text "Find")
+                , Ui.textInput { id = FindInput, style = findInputStyle display, isValid = True }
+                , Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.colorText Color.dimTextColor "Escape closes")
+                ]
+            )
+            (Ui.button { id = CloseFindButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+        )
+
+
+findInputStyle : Display -> TextInput.Style
+findInputStyle display =
+    { font = sans
+    , fontSize = bodySize
+    , width = Quantity.min (em 20) (Coord.x (Display.uiSize display) |> Quantity.minus (em 14))
+    , masked = False
+    }
+
+
+{-| How tall the find bar is: the windows on its display stop above it.
+-}
+findBarHeight : Display -> Int
+findBarHeight display =
+    Coord.yRaw (Ui.size (findBar display))
+
+
 -- WINDOW LAYOUT
 
 
@@ -2907,8 +3112,15 @@ windows model display =
         areaTopLeft =
             Coord.xy windowGap (toolbarHeight + windowGap)
 
+        bottom =
+            if model.findBar /= Nothing && (findBarDisplay model).id == display.id then
+                findBarHeight display
+
+            else
+                0
+
         area =
-            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap windowGap)) (Display.uiSize display)
+            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap (windowGap + bottom))) (Display.uiSize display)
 
         inOrder =
             List.filter (\app -> not (SeqDict.member app model.appDisplays)) allApps

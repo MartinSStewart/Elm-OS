@@ -401,6 +401,7 @@ screenshotView { time, uiState, uiScale, screenshot } =
         uiScale
         False
         Nothing
+        ""
         { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
         Coord.origin
         screenshot
@@ -2264,22 +2265,29 @@ findFirst f list =
 {-| The triangles that draw the UI in drawing order (back to front), given the hovered and
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
+
+`find` is what the find bar (Ctrl+F) is looking for: every match of it in text gets a
+yellow background (see Sprite.foundText); "" finds nothing. It's done here, while
+drawing, rather than by the apps' views, so that typing in the find bar changes no
+view's arguments and every `lazy` element is reused.
+
 -}
-view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view uiState time scale showUiBorder maybeHover screenSize (Element element) =
+view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> String -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view uiState time scale showUiBorder maybeHover find screenSize (Element element) =
     viewList
         uiState
         time
         scale
         showUiBorder
         maybeHover
+        find
         { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
 
-viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
-viewList model time scale showUiBorder maybeHover viewport2 position element =
+viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> String -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList model time scale showUiBorder maybeHover find viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
@@ -2311,7 +2319,18 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                      else
                         []
                     )
-                        ++ Sprite.customText scale data.fontSize viewport3 data.segments position
+                        ++ (if String.isEmpty find then
+                                Sprite.customText scale data.fontSize viewport3 data.segments position
+
+                            else
+                                Sprite.foundText
+                                    scale
+                                    { query = find, background = Color.findMatchColor, color = Color.findMatchTextColor }
+                                    data.fontSize
+                                    viewport3
+                                    data.segments
+                                    position
+                           )
 
                 Button data child ->
                     let
@@ -2359,16 +2378,16 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 Nothing ->
                                     []
                            )
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
-                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
+                        ++ viewList model time scale showUiBorder maybeHover find viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover find viewport3 position) data.inFront
 
                 Row data children ->
                     childPositions True data.spacing position children
-                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover find viewport3 at child)
 
                 Column data children ->
                     childPositions False data.spacing position children
-                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover find viewport3 at child)
 
                 Single data child ->
                     borderAndFillView
@@ -2396,7 +2415,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ viewList model time scale showUiBorder maybeHover find viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
 
                 InFront _ children ->
                     List.concatMap
@@ -2407,6 +2426,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 scale
                                 showUiBorder
                                 maybeHover
+                                find
                                 viewport3
                                 (Coord.plus coord position)
                                 child
@@ -2444,6 +2464,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                         scale
                                         showUiBorder
                                         maybeHover
+                                        find
                                         inside
                                         (Coord.plus (contentPosition viewportModel) position)
                                         child
@@ -2462,10 +2483,10 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                            )
 
                 Lazy _ _ child ->
-                    viewList model time scale showUiBorder maybeHover viewport3 position child
+                    viewList model time scale showUiBorder maybeHover find viewport3 position child
 
                 Sourced _ child ->
-                    viewList model time scale showUiBorder maybeHover viewport3 position child
+                    viewList model time scale showUiBorder maybeHover find viewport3 position child
 
         Nothing ->
             []

@@ -9,6 +9,8 @@ module Color exposing
     , fillColor2
     , fillColor3
     , focusedInputColor
+    , findMatchColor
+    , findMatchTextColor
     , focusedUiColor
     , highlightColor
     , linkColor
@@ -164,6 +166,22 @@ highlightColor =
 selectionColor : Color
 selectionColor =
     rgb255 40 75 140
+
+
+{-| Behind text that matches what the find bar (Ctrl+F) is looking for: yellow, as
+browsers do it.
+-}
+findMatchColor : Color
+findMatchColor =
+    rgb255 255 214 60
+
+
+{-| Text that matches the find bar's text, on `findMatchColor`: dark, as light text on
+yellow can't be read.
+-}
+findMatchTextColor : Color
+findMatchTextColor =
+    rgb255 28 26 24
 
 
 {-| A button that does something that can't be undone, such as powering off.
