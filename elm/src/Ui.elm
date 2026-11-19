@@ -423,12 +423,13 @@ type ScrollBy
     | Momentum Float
 
 
-{-| How much of its speed a glide keeps after a second: it keeps 0.998 of it a
-millisecond, as on iOS.
+{-| How much of its speed a glide keeps after a second: it keeps 0.997 of it a
+millisecond, so it stops sooner than on iOS (0.998), which glided too far (Martin,
+2026-11-19). A flick goes 1/3 of a second's worth of its speed, not 1/2.
 -}
 momentumKeptPerSecond : Float
 momentumKeptPerSecond =
-    0.998 ^ 1000
+    0.997 ^ 1000
 
 
 {-| Stop every glide (a finger touched the touchpad).
