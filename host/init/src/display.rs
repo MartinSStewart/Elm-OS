@@ -2,7 +2,7 @@
 //! rasteriser draws into, on the first card with a connected screen. Used when there
 //! is no usable GPU.
 
-use common::atlas::CURSOR_PLANE;
+use common::cursor::PLANE as CURSOR_PLANE;
 use common::drm;
 use std::fs::File;
 
@@ -143,20 +143,21 @@ impl CpuDisplay {
     }
 
     /// Puts the cursor on each display's cursor plane. False unless every display has one.
-    pub fn cursor_init(&mut self, scale: usize, fill: u32) -> bool {
+    pub fn cursor_init(&mut self, img: &[u32]) -> bool {
         for o in &mut self.outputs {
             let Some(dumb) = drm::create_dumb(&self.card, CURSOR_PLANE as u32, CURSOR_PLANE as u32) else {
                 return false;
             };
             o.cursor_handle = dumb.handle;
         }
-        self.cursor_draw(scale, fill)
+        self.cursor_draw(img)
     }
 
-    pub fn cursor_draw(&mut self, scale: usize, fill: u32) -> bool {
-        self.outputs.iter().all(|o| {
-            o.cursor_handle != 0 && drm::draw_cursor(&self.card, o.out.crtc, o.cursor_handle, scale, fill)
-        })
+    /// Puts this image (cursor::Picture::plane_image) on every display's cursor plane.
+    pub fn cursor_draw(&mut self, img: &[u32]) -> bool {
+        self.outputs
+            .iter()
+            .all(|o| o.cursor_handle != 0 && drm::draw_cursor(&self.card, o.out.crtc, o.cursor_handle, img))
     }
 
     /// Shows the cursor at (x, y) on output `on`, and hides it on the others.

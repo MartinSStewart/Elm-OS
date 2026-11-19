@@ -23,8 +23,9 @@ import Wired
 type ToElm
     = -- First, to each program: the connected displays, the built-in one (if any) first.
       Displays (List Display)
-      -- Draw a frame now: the host's monotonic clock, in milliseconds.
-    | Frame Float
+      -- Draw a frame now: the host's monotonic clock, in milliseconds (for how long
+      -- since the last frame), and the wall clock (it can jump when NTP sets the clock).
+    | Frame Float Time.Posix
     | Mouse Int Int
     | Button Int Bool
       -- Wheel clicks, positive is up.
@@ -88,9 +89,21 @@ type ToElm
     | WebSocketMessage String Bytes
       -- id, why: it closed, or couldn't open. The id can be used again.
     | WebSocketClosed String String
+      -- id: the TLS connection is open (Effect.TlsOpen).
+    | TlsOpened String
+      -- id, bytes from the server as they came: a chunk can end anywhere.
+    | TlsData String Bytes
+      -- id, why: it closed, or couldn't open. The id can be used again.
+    | TlsClosed String String
       -- A display was plugged in or out: the displays now. Unlike Displays, not the
       -- start of a program.
     | DisplaysChanged (List Display)
+      -- Two fingers on a touchpad moved: UI pixels the content under the pointer
+      -- follows them, positive is down (as for a Wheel click up).
+    | Scroll Float
+      -- The fingers lifted while scrolling: the content keeps going at this many UI
+      -- pixels a second (positive is down), slowing down. 0 stops any glide.
+    | ScrollMomentum Float
 
 
 type HttpFailure
@@ -124,7 +137,7 @@ decoder =
                         BD.map Displays (P.decodeList Display.decoder)
 
                     1 ->
-                        BD.map Frame P.decodeFloat64
+                        BD.map2 (\ms posix -> Frame ms (Time.millisToPosix (round posix))) P.decodeFloat64 P.decodeFloat64
 
                     2 ->
                         BD.map2 Mouse P.decodeInt P.decodeInt
@@ -247,6 +260,21 @@ decoder =
 
                     30 ->
                         BD.map DisplaysChanged (P.decodeList Display.decoder)
+
+                    31 ->
+                        BD.map Scroll P.decodeFloat64
+
+                    32 ->
+                        BD.map ScrollMomentum P.decodeFloat64
+
+                    33 ->
+                        BD.map TlsOpened P.decodeString
+
+                    34 ->
+                        BD.map2 TlsData P.decodeString P.decodeBytes
+
+                    35 ->
+                        BD.map2 TlsClosed P.decodeString P.decodeString
 
                     _ ->
                         BD.fail

@@ -22,6 +22,7 @@
 //!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
 use common::atlas::{self, Tri};
+use common::cursor::Picture;
 use protocol::{Display, PowerAction, ToElm};
 
 use crate::display::CpuDisplay;
@@ -33,6 +34,7 @@ use crate::input::{Area, Inputs};
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
+use crate::tls_socket;
 use crate::websocket;
 use common::raster;
 
@@ -69,6 +71,12 @@ struct Host {
     hw_cursor: bool,
     cursor_scale: usize,
     cursor_fill: u32,
+    /// What Elm last asked for (Effect::Cursor); nothing until it does.
+    cursor_picture: Picture,
+    /// The pixel of `cursor_picture` that goes where the mouse is.
+    cursor_hot: (i32, i32),
+    /// The cursor didn't get to the renderer: draw it again even if it hasn't changed.
+    cursor_stale: bool,
     asked_at: f64,
     awaiting_render: bool,
     in_flight: u32,
@@ -90,7 +98,7 @@ impl Host {
             log!("host", "ELMOS_CURSOR=software: Elm draws the cursor");
             false
         } else {
-            let on_plane = d.cursor_init(self.cursor_scale, self.cursor_fill);
+            let on_plane = d.cursor_init(&self.cursor_picture.plane_image(self.cursor_scale, self.cursor_fill));
             log!(
                 "host",
                 "{}",
@@ -140,7 +148,8 @@ impl Host {
         let (x, y) = (self.inputs.mouse_x, self.inputs.mouse_y);
         let Some(i) = self.area().find(x, y) else { return };
         let d = &self.displays[i];
-        let (id, lx, ly) = (d.id, x - d.x, y - d.y);
+        let s = self.cursor_scale as i32;
+        let (id, lx, ly) = (d.id, x - d.x - self.cursor_hot.0 * s, y - d.y - self.cursor_hot.1 * s);
         match &mut self.renderer {
             Renderer::Gpu(g) => g.cursor_move(id, lx, ly),
             Renderer::Cpu(d, _) => d.cursor_move(i, lx, ly),
@@ -154,20 +163,22 @@ impl Host {
         }
         let (fill, scale) = (self.cursor_fill, self.cursor_scale);
         match &mut self.renderer {
-            Renderer::Gpu(g) => g.cursor_redraw(fill, scale),
+            Renderer::Gpu(g) => self.cursor_stale = !g.cursor_redraw(fill, scale, &self.cursor_picture),
             Renderer::Cpu(d, _) => {
-                if !d.cursor_draw(scale, fill) {
+                if !d.cursor_draw(&self.cursor_picture.plane_image(scale, fill)) {
                     self.hw_cursor = false;
                 }
             }
             Renderer::Nothing => {}
         }
+        // The hot spot may have moved.
+        self.cursor_move();
     }
 
     fn ask_for_frame(&mut self) {
         self.asked_at = now();
         let ms = (self.asked_at * 1e6).round() / 1000.0;
-        elm::send(&ToElm::Frame { time: ms });
+        elm::send(&ToElm::frame_now(ms));
         self.awaiting_render = true;
         self.cpu_next_at = None;
     }
@@ -335,11 +346,28 @@ impl Host {
             match effect {
                 // effects::take turns these into FromElm::Render.
                 Effect::Render(_) => {}
-                Effect::Cursor { rgba, scale } => {
-                    self.cursor_fill = rgba;
-                    self.cursor_scale = scale.clamp(1, 4) as usize;
-                    self.inputs.scale = self.cursor_scale as f64;
-                    cursor_dirty = true;
+                Effect::Cursor { rgba, scale, image } => {
+                    let scale = scale.clamp(1, 4) as usize;
+                    let picture = Picture {
+                        width: image.width as usize,
+                        height: image.height as usize,
+                        pixels: image.pixels,
+                    };
+                    let hot = (image.hot_x.min(64) as i32, image.hot_y.min(64) as i32);
+                    // Elm sends it every frame: only redraw it when it changes.
+                    if self.cursor_stale
+                        || rgba != self.cursor_fill
+                        || scale != self.cursor_scale
+                        || hot != self.cursor_hot
+                        || picture != self.cursor_picture
+                    {
+                        self.cursor_fill = rgba;
+                        self.cursor_scale = scale;
+                        self.cursor_picture = picture;
+                        self.cursor_hot = hot;
+                        self.inputs.scale = scale as f64;
+                        cursor_dirty = true;
+                    }
                 }
                 Effect::WifiScan => net::command(net::Command::Scan),
                 Effect::WifiConnect { ssid, password } => net::command(net::Command::Connect { ssid, password }),
@@ -376,6 +404,9 @@ impl Host {
                 Effect::WebSocketOpen { id, url, headers } => websocket::open(id, url, headers),
                 Effect::WebSocketSend { id, data } => websocket::send(&id, data),
                 Effect::WebSocketClose { id } => websocket::close(&id),
+                Effect::TlsOpen { id, host, port } => tls_socket::open(id, host, port),
+                Effect::TlsSend { id, data } => tls_socket::send(&id, data),
+                Effect::TlsClose { id } => tls_socket::close(&id),
             }
         }
         if cursor_dirty {
@@ -466,6 +497,9 @@ pub fn run() -> ! {
         hw_cursor: false,
         cursor_scale: 1,
         cursor_fill: 0xffff_ffff,
+        cursor_picture: Picture::default(),
+        cursor_hot: (0, 0),
+        cursor_stale: false,
         asked_at: 0.0,
         awaiting_render: false,
         in_flight: 0,

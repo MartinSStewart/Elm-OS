@@ -8,9 +8,11 @@
 //!                 "ok CURSOR RENDERER" once they are up; then "f GPU_NS" for each
 //!                 frame shown, or "d" for one skipped
 //!   its fd 3   <- cursor commands: "m CONNECTOR X Y" shows it at X, Y on that display
-//!                 (and on no other), "c RGBA S" redraws it
+//!                 (and on no other), "c RGBA S W H PIXELS" redraws it: fill colour,
+//!                 scale and the picture (common::cursor::Picture::line)
 
 use common::atlas::Tri;
+use common::cursor::Picture;
 use protocol::Display;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -163,7 +165,7 @@ impl Gpu {
         set_nonblocking(&gpu.cursor);
         if plane && software_cursor {
             for d in &gpu.displays.clone() {
-                gpu.cursor_command(&format!("m {} -200 0\n", d.id)); // hide it off screen
+                let _ = gpu.cursor_command(&format!("m {} -200 0\n", d.id)); // hide it off screen
             }
         }
         log!(
@@ -206,18 +208,21 @@ impl Gpu {
         head.is_empty() || self.frames.write_all(&head).is_ok()
     }
 
-    /// Non-blocking: if the pipe is backed up, skip it (the next move fixes the position).
-    fn cursor_command(&mut self, line: &str) {
-        let _ = self.cursor.write(line.as_bytes());
+    /// Non-blocking: if the pipe is backed up, skip it (the next move fixes the
+    /// position). A line shorter than PIPE_BUF (4096 bytes) goes whole or not at all.
+    /// False if it didn't go.
+    fn cursor_command(&mut self, line: &str) -> bool {
+        self.cursor.write(line.as_bytes()).is_ok_and(|n| n == line.len())
     }
 
     /// Shows the cursor at x, y on display `id` (in its own pixels).
     pub fn cursor_move(&mut self, id: u32, x: i32, y: i32) {
-        self.cursor_command(&format!("m {id} {x} {y}\n"));
+        let _ = self.cursor_command(&format!("m {id} {x} {y}\n"));
     }
 
-    pub fn cursor_redraw(&mut self, fill: u32, scale: usize) {
-        self.cursor_command(&format!("c {fill} {scale}\n"));
+    /// False if the renderer didn't get it (try again later).
+    pub fn cursor_redraw(&mut self, fill: u32, scale: usize, picture: &Picture) -> bool {
+        self.cursor_command(&format!("c {fill} {scale} {}\n", picture.line()))
     }
 
     /// Reads the renderer's "f GPU_NS" (shown) and "d" (skipped) lines. Returns how

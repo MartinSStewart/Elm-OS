@@ -11,10 +11,12 @@
 //!             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
 //!             a frame skipped because a newer one was already waiting.
 //!   stdin  <- frames: u32 n, then n Tri (common/src/atlas.rs): per triangle x, y, u, v
-//!             for each corner and an 0xRRGGBBAA colour, as Elm sends them.
+//!             for each corner, an 0xRRGGBBAA colour as Elm sends them, whether
+//!             to sample the atlas bilinearly, and the atlas rectangle it repeats.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
-//!             cursor moves while a frame is drawing: "m X Y" moves it, "c RGBA S"
-//!             redraws it with that fill colour at scale S.
+//!             cursor moves while a frame is drawing: "m CONNECTOR X Y" moves it,
+//!             "c RGBA S W H PIXELS" redraws it with that fill colour at scale S
+//!             (W H PIXELS is the picture, common::cursor::Picture::line).
 //!
 //! Every triangle samples the texture atlas, which we upload once.
 //!
@@ -29,7 +31,8 @@
 
 mod ffi;
 
-use common::atlas::{self, Tri, ATLAS_H, ATLAS_W, CURSOR_PLANE};
+use common::atlas::{self, Tri, ATLAS_H, ATLAS_W};
+use common::cursor::{Picture, PLANE as CURSOR_PLANE};
 use common::drm;
 use ffi::*;
 use std::collections::HashMap;
@@ -64,18 +67,28 @@ fn open_card() -> Option<(File, Vec<drm::Output>)> {
 const VS: &str = "attribute vec2 pos;
 attribute vec2 uv;
 attribute vec4 col;
+attribute float lin;
+attribute vec4 tile;
 uniform vec2 screen;
 varying vec2 v_uv;
 varying vec4 v_col;
+varying float v_lin;
+varying vec4 v_tile;
 void main() {
     vec2 ndc = pos / screen * 2.0 - 1.0;
     gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0); // y grows downwards in Elm's pixels
-    v_uv = uv / vec2(2048.0, 4096.0); // ATLAS_W, ATLAS_H
+    v_uv = uv; // atlas pixels
     v_col = col;
+    v_lin = lin;
+    v_tile = tile;
 }
 ";
 
 /// The atlas holds coverage only (GL_ALPHA): it scales the colour's alpha.
+///
+/// The shader works in atlas pixels and fetches whole pixels (`at`), so that a triangle
+/// with a tile (`Tri::tile`) can wrap each pixel it reads round into the tile: its
+/// pattern repeats, seamlessly even when blended bilinearly.
 // highp where there is one: mediump can be a texel out across a 2048 pixel atlas (and
 // two across its 4096 rows).
 const FS: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -86,7 +99,31 @@ precision mediump float;
 uniform sampler2D atlas;
 varying vec2 v_uv;
 varying vec4 v_col;
-void main() { gl_FragColor = vec4(v_col.rgb, v_col.a * texture2D(atlas, v_uv).a); }
+varying float v_lin;
+varying vec4 v_tile;
+const vec2 texel = vec2(1.0 / 2048.0, 1.0 / 4096.0); // ATLAS_W, ATLAS_H
+// Atlas pixel i (whole numbers), wrapped into the tile if there is one.
+float at(vec2 i) {
+    if (v_tile.z > 0.5) {
+        i = v_tile.xy + mod(i - v_tile.xy, v_tile.zw);
+    }
+    return texture2D(atlas, (i + 0.5) * texel).a;
+}
+void main() {
+    float cover;
+    if (v_lin > 0.5) {
+        // Bilinear by hand, from four nearest pixels: atlas pixel i is centred at i + 0.5.
+        vec2 p = v_uv - 0.5;
+        vec2 i = floor(p);
+        vec2 f = p - i;
+        float top = mix(at(i), at(i + vec2(1.0, 0.0)), f.x);
+        float bottom = mix(at(i + vec2(0.0, 1.0)), at(i + vec2(1.0, 1.0)), f.x);
+        cover = mix(top, bottom, f.y);
+    } else {
+        cover = at(floor(v_uv));
+    }
+    gl_FragColor = vec4(v_col.rgb, v_col.a * cover);
+}
 ";
 
 unsafe fn compile(kind: GLenum, src: &str) -> GLuint {
@@ -227,7 +264,8 @@ struct Cursors {
 unsafe impl Send for Cursors {}
 
 impl CursorPlane {
-    unsafe fn new(gbm: *mut gbm_device, card: &File, out: &drm::Output, scale: usize) -> Option<CursorPlane> {
+    /// Blank until /init sends Elm's cursor.
+    unsafe fn new(gbm: *mut gbm_device, card: &File, out: &drm::Output) -> Option<CursorPlane> {
         let bo = gbm_bo_create(
             gbm,
             CURSOR_PLANE as u32,
@@ -236,15 +274,15 @@ impl CursorPlane {
             GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE,
         );
         let c = CursorPlane { connector: out.connector, crtc: out.crtc, bo };
-        if bo.is_null() || !c.draw(card, 0xffff_ffff, scale) {
+        if bo.is_null() || !c.draw(card, &Picture::default().plane_image(1, 0)) {
             eprintln!("[gpu] no cursor plane on {}", out.name);
             return None;
         }
         Some(c)
     }
 
-    fn draw(&self, card: &File, fill: u32, scale: usize) -> bool {
-        let img = atlas::cursor_image(scale, fill);
+    /// Puts this image (Picture::plane_image) on the plane.
+    fn draw(&self, card: &File, img: &[u32]) -> bool {
         // SAFETY: the buffer is 64 x 64 ARGB, the size of img.
         unsafe {
             if gbm_bo_write(self.bo, img.as_ptr() as *const c_void, img.len() * 4) != 0 {
@@ -262,8 +300,20 @@ impl Cursors {
         let input = BufReader::new(unsafe { File::from_raw_fd(3) });
         for line in input.lines() {
             let Ok(line) = line else { break };
-            let f: Vec<i64> = line.split(' ').skip(1).filter_map(|v| v.parse::<i64>().ok()).collect();
-            match (line.split(' ').next(), f.as_slice()) {
+            let words: Vec<&str> = line.split(' ').collect();
+            if let ["c", fill, scale, picture @ ..] = words.as_slice() {
+                let (Ok(fill), Ok(scale), Some(picture)) = (fill.parse::<u32>(), scale.parse::<usize>(), Picture::parse(picture))
+                else {
+                    continue;
+                };
+                let img = picture.plane_image(scale, fill);
+                for p in &self.planes {
+                    p.draw(&self.card, &img);
+                }
+                continue;
+            }
+            let f: Vec<i64> = words.iter().skip(1).filter_map(|v| v.parse::<i64>().ok()).collect();
+            match (words.first().copied(), f.as_slice()) {
                 (Some("m"), &[connector, x, y]) => {
                     let connector = connector as u32;
                     if connector != self.on {
@@ -275,11 +325,6 @@ impl Cursors {
                     }
                     for p in self.planes.iter().filter(|p| p.connector == connector) {
                         drm::move_cursor(&self.card, p.crtc, x as i32, y as i32);
-                    }
-                }
-                (Some("c"), &[fill, scale]) => {
-                    for p in &self.planes {
-                        p.draw(&self.card, fill as u32, scale.max(1) as usize);
                     }
                 }
                 _ => {}
@@ -297,6 +342,10 @@ struct Vertex {
     u: f32,
     v: f32,
     rgba: [u8; 4],
+    /// 1.0 to sample the atlas bilinearly (`Tri::linear`), 0.0 for the nearest pixel.
+    linear: f32,
+    /// `Tri::tile`: left, top, width, height in atlas pixels, width 0 for none.
+    tile: [f32; 4],
 }
 
 fn read_u32(input: &mut File) -> Option<u32> {
@@ -480,7 +529,7 @@ fn main() {
         let prog = glCreateProgram();
         glAttachShader(prog, compile(GL_VERTEX_SHADER, VS));
         glAttachShader(prog, compile(GL_FRAGMENT_SHADER, FS));
-        for (i, name) in [c"pos", c"uv", c"col"].iter().enumerate() {
+        for (i, name) in [c"pos", c"uv", c"col", c"lin", c"tile"].iter().enumerate() {
             glBindAttribLocation(prog, i as GLuint, name.as_ptr());
         }
         glLinkProgram(prog);
@@ -489,7 +538,7 @@ fn main() {
         glUniform1i(glGetUniformLocation(prog, c"atlas".as_ptr()), 0);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        for i in 0..3 {
+        for i in 0..5 {
             glEnableVertexAttribArray(i);
         }
         let mut vbo = 0;
@@ -519,6 +568,22 @@ fn main() {
             GL_TRUE,
             stride,
             std::mem::offset_of!(Vertex, rgba) as *const c_void,
+        );
+        glVertexAttribPointer(
+            3,
+            1,
+            GL_FLOAT,
+            GL_FALSE,
+            stride,
+            std::mem::offset_of!(Vertex, linear) as *const c_void,
+        );
+        glVertexAttribPointer(
+            4,
+            4,
+            GL_FLOAT,
+            GL_FALSE,
+            stride,
+            std::mem::offset_of!(Vertex, tile) as *const c_void,
         );
 
         // The atlas, sampled pixel for pixel: Elm puts glyphs on whole pixels.
@@ -596,11 +661,10 @@ fn main() {
             head.out = out;
         }
 
-        // The cursor until Elm sends its UI scale.
-        let first_w = heads[0].out.w();
+        // Blank until Elm sends its cursor.
         let planes: Vec<CursorPlane> = heads
             .iter()
-            .filter_map(|h| CursorPlane::new(gbm, &card, &h.out, if first_w >= 2000 { 2 } else { 1 }))
+            .filter_map(|h| CursorPlane::new(gbm, &card, &h.out))
             .collect();
         let hw_cursor = planes.len() == heads.len();
         if hw_cursor {
@@ -665,6 +729,8 @@ fn main() {
                                 u: p[2],
                                 v: p[3],
                                 rgba,
+                                linear: t.linear as f32,
+                                tile: t.tile.map(|n| n as f32),
                             });
                         }
                     }

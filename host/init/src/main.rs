@@ -46,6 +46,7 @@ mod programs;
 mod update;
 mod stats;
 mod sys;
+mod tls_socket;
 mod websocket;
 
 /// When /init started, in seconds on the monotonic clock (f64 bits).
@@ -79,6 +80,7 @@ fn main() {
     std::panic::set_hook(Box::new(error_screen::panic_hook));
     if sys::is_pid1() {
         sys::mount_kernel_filesystems();
+        sys::lock_console();
     }
     // A dead GPU renderer or Elm program must not take /init with it.
     // SAFETY: ignoring a signal.

@@ -10,6 +10,7 @@ import HackerNews.Types exposing (PostId(..))
 import SeqDict
 import Sprite
 import Test exposing (Test, describe, test)
+import Time
 import Ui
 import UiId exposing (UiId)
 import Units exposing (DevicePixels)
@@ -101,7 +102,7 @@ suite =
                             |> latin1
                 in
                 Expect.all
-                    [ \_ -> Expect.equal True (String.contains "faded text\u{0001}\u{0020}2026-11-13 02:26\u{0000}\u{00D8}\u{0084}" saved)
+                    [ \_ -> Expect.equal True (String.contains "faded text\u{0001} 2026-11-13 02:26\u{0000}Ø\u{0084}" saved)
                     , \_ -> Expect.equal True (String.contains "black text\u{0000}\u{0000}\u{0000}" saved)
                     ]
                     ()
@@ -112,20 +113,39 @@ suite =
                     collapsed =
                         HackerNews.onClick (HackerNews.Types.CommentToggle 0) commentsModel |> Tuple.first
                 in
-                draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) Ui.init uiScreen collapsed)
+                draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) uiScreen collapsed)
                     |> Expect.equal (draw (view Ui.noLazyCache collapsed))
             )
-        , test "an Element with Ui.lazy in it can be saved, and draws the same when loaded"
+        , test "a screenshot of an Element with Ui.lazy in it can be saved, and is the same when loaded"
+            (\() ->
+                let
+                    screenshot : Ui.Screenshot
+                    screenshot =
+                        Ui.elementToScreenshot (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) Ui.init (view Ui.noLazyCache commentsModel)
+                in
+                Ui.w3_encode_Screenshot screenshot
+                    |> Wire.toBytes
+                    |> Wire.fromBytes Ui.w3_decode_Screenshot
+                    |> Expect.equal (Just screenshot)
+            )
+        , test "hovering the second comment's toggle finds it, with the elements around it"
             (\() ->
                 let
                     element =
                         view Ui.noLazyCache commentsModel
+
+                    toggle =
+                        UiId.HackerNews (HackerNews.Types.CommentToggle 1)
                 in
-                Ui.w3_encode_Element UiId.w3_encode_UiId element
-                    |> Wire.toBytes
-                    |> Wire.fromBytes (Ui.w3_decode_Element UiId.w3_decode_UiId)
-                    |> Maybe.map draw
-                    |> Expect.equal (Just (draw element))
+                case Ui.findInput Ui.init toggle element of
+                    Just (Ui.ButtonType { position }) ->
+                        Ui.hoverIdOnly Ui.init (Coord.plus (Coord.xy 1 1) position) element
+                            |> List.head
+                            |> Maybe.map Tuple.first
+                            |> Expect.equal (Just toggle)
+
+                    _ ->
+                        Expect.fail "no toggle button"
             )
         ]
 
@@ -150,12 +170,12 @@ uiScreen =
 
 view : Ui.LazyCache UiId -> HackerNews.Model -> Ui.Element UiId
 view lazyCache model =
-    HackerNews.view lazyCache Ui.init uiScreen model
+    HackerNews.view lazyCache uiScreen model
 
 
 draw : Ui.Element UiId -> List (Sprite.Triangle DevicePixels)
 draw element =
-    Ui.view (Units.scaleFor (Coord.x screen)) False Nothing Nothing screen element
+    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing screen element
 
 
 latin1 : Bytes -> String

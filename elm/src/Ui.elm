@@ -1,61 +1,78 @@
 module Ui exposing
     ( BorderAndFill(..)
-    , ButtonData
-    , Element(..)
+    , Element
+    , ElementFull
     , ElementState(..)
     , InputType(..)
     , LazyCache
     , Model
+    , Padding
     , RowColumn
-    , TextInputData
-    , TextInputMultilineData
+    , Screenshot
+    , ScrollBy(..)
+    , Source
     , ViewportData
     , ViewportModel
-    , bottomLeft
     , bottomRight
     , button
     , center
     , colorText
     , column
+    , cursorAt
     , customButton
     , customText
     , customTextWrapped
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
+    , dragScrollbar
     , el
     , elWithId
+    , elementToScreenshot
+    , empty
     , findInput
+    , getTextInput
+    , getTextInputMultiline
     , hover
+    , hoverIdOnly
+    , inFront
     , init
-    , initViewportModel
     , insertElement
+    , inspect
+    , lazy
+    , lazy2
     , lazy3
     , lazyCache
     , lazyKeyed
     , left
     , leftAndRight
-    , noPadding
+    , monoColorText
+    , monoText
     , noLazyCache
-    , none
+    , noPadding
     , onAnimationFrame
     , onMouseDown
+    , onMouseUp
     , onWheel
     , paddingXY
     , quads
     , right
     , row
+    , screenshotSize
+    , screenshotView
     , scrolls
     , selectableButton
     , setFocus
     , size
+    , sourced
+    , stopMomentum
     , text
     , textInput
     , textInputMultiline
-    , topLeft
     , topRight
     , updateElement
     , view
     , viewport
+    , windowBorderAndFill
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -78,101 +95,380 @@ for now: underlined text and sprites from town-collab's texture.
 -}
 
 import Bounds exposing (Bounds)
+import Button
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Cursor exposing (Cursor)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
+import Scrollbar
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
+import Time
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
 type alias RowColumn =
     { spacing : Int
-    , padding : Bounds UiPixels
     , cachedSize : Coord UiPixels
     }
 
 
-type alias ButtonData id =
+type alias ButtonData id lazy =
     { id : id
-    , padding : Bounds UiPixels
+    , padding : Padding
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     , borderAndFillHover : BorderAndFill
     , cachedSize : Coord UiPixels
-    , inFront : List (Element id)
-    }
-
-
-type alias TextInputData id =
-    { id : id
-    , style : TextInput.Style
-    , isValid : Bool
-    , state : TextInput.Model
-    }
-
-
-type alias TextInputMultilineData id =
-    { id : id
-    , style : TextInputMultiline.Style
-    , state : TextInputMultiline.Model
+    , inFront : List (ElementFull id lazy)
     }
 
 
 type Element id
-    = TextInput (TextInputData id)
-    | TextInputMultiline (TextInputMultilineData id)
+    = Element (ElementFull id (SeqDict id (Element id)))
+
+
+type alias Screenshot =
+    { time : Time.Posix, uiState : Model Int, uiScale : UiScale, screenshot : ElementFull Int () }
+
+
+type ElementFull id lazy
+    = TextInput { id : id, style : TextInput.Style, isValid : Bool }
+    | TextInputMultiline
+        { id : id
+        , style : TextInputMultiline.Style
+        }
     | Text
         { fontSize : Sprite.FontSize
         , segments : List Sprite.Segment
         , cachedSize : Coord UiPixels
         }
-    | Button (ButtonData id) (Element id)
-    | Row RowColumn (List (Element id))
-    | Column RowColumn (List (Element id))
+    | Button (ButtonData id lazy) (ElementFull id lazy)
+    | Row RowColumn (List (ElementFull id lazy))
+    | Column RowColumn (List (ElementFull id lazy))
     | Single
-        { padding : Bounds UiPixels
+        { padding : Padding
         , borderAndFill : BorderAndFill
-        , inFront : List (Element id)
         , cachedSize : Coord UiPixels
         , id : Maybe id
         }
-        (Element id)
+        (ElementFull id lazy)
+      -- Elements on top of each other at the same place, each drawn over the ones before
+      -- it. `cachedSize` is the first one's size: the others can reach outside it.
+    | InFront { cachedSize : Coord UiPixels } (List ( Coord UiPixels, ElementFull id lazy ))
     | Quads { size : Coord UiPixels, triangles : List (Triangle UiPixels) }
     | Empty
-    | Viewport (ViewportData id) (Element id)
+    | Viewport (ViewportData id) (ElementFull id lazy)
       -- What `lazyKeyed` made: its key (which call it was, with the arguments), and
       -- every `Lazy` inside it by key, so that reusing it reuses them too.
-    | Lazy id (SeqDict id (Element id)) (Element id)
+    | Lazy id lazy (ElementFull id lazy)
+      -- Where in the source code the element was made: tools/wire puts each element a Ui
+      -- function makes in one (see UiSource.elm), for the outline mode's inspector (`inspect`).
+    | Sourced Source (ElementFull id lazy)
 
 
 type alias ViewportData id =
-    { id : id, viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels }
+    { id : id
+    , viewportHeight : Quantity Int UiPixels
+    }
 
 
 type ElementState
     = TextInputState TextInput.Model
     | TextInputMultilineState TextInputMultiline.Model
     | ViewportState ViewportModel
+    | ButtonState Button.Model
 
 
 type alias Model id =
     { focus : Maybe id
     , uiState : SeqDict id ElementState
+    , mouseStill : { at : Coord UiPixels, seconds : Duration }
     }
 
 
 init : Model id
 init =
-    { focus = Nothing, uiState = SeqDict.empty }
+    { focus = Nothing, uiState = SeqDict.empty, mouseStill = { at = Coord.origin, seconds = Quantity.zero } }
 
 
 type alias ViewportModel =
     { offset : Quantity Float UiPixels
-    , target : Quantity Int UiPixels
+    , target : Quantity Float UiPixels
+
+    -- Gliding after a touchpad scroll: UI pixels a second (positive is down), slowing
+    -- down, and the lowest offset it can reach (the bottom of the content).
+    , momentum : Float
+    , bottom : Quantity Float UiPixels
+
+    -- While the mouse drags the scroll bar: how far below the top of the thumb it holds it.
+    , grab : Maybe Int
+
+    -- The scroll bar fades in (0 to 1) while the mouse is over the viewport, and widens
+    -- (0 to 1) to the width it can be pressed in while the mouse is over that.
+    , scrollbarShown : Float
+    , scrollbarWidened : Float
+    }
+
+
+{-| A screenshot of an element, taken on a screen with the given UI scale. Its ids become
+Ints, counted from 0 in the order they come in the tree, and the state of each element with
+state (text inputs, viewports, buttons) is copied from `model` to its Int, so that a
+screenshot doesn't hold the app's id types: those can change in a migration, and the
+screenshot would have to change with them. Nothing in it is hovered or focused.
+-}
+elementToScreenshot : Time.Posix -> UiScale -> Model id -> Element id -> Screenshot
+elementToScreenshot time uiScale model (Element element) =
+    let
+        ( acc, screenshot ) =
+            elementToScreenshotHelper model element { next = 0, uiState = SeqDict.empty }
+    in
+    { time = time
+    , uiState = { init | uiState = acc.uiState }
+    , uiScale = uiScale
+    , screenshot = screenshot
+    }
+
+
+{-| The next Int id, and the state of the elements given ids so far.
+-}
+type alias ScreenshotIds =
+    { next : Int, uiState : SeqDict Int ElementState }
+
+
+{-| A new Int id, with the element's state (if it has any) kept under it.
+-}
+screenshotId : Maybe ElementState -> ScreenshotIds -> ( ScreenshotIds, Int )
+screenshotId maybeState acc =
+    ( { next = acc.next + 1
+      , uiState =
+            case maybeState of
+                Just state ->
+                    SeqDict.insert acc.next state acc.uiState
+
+                Nothing ->
+                    acc.uiState
+      }
+    , acc.next
+    )
+
+
+screenshotList : Model id -> List (ElementFull id lazy) -> ScreenshotIds -> ( ScreenshotIds, List (ElementFull Int ()) )
+screenshotList model elements acc =
+    List.foldl
+        (\element ( acc2, done ) ->
+            let
+                ( acc3, element2 ) =
+                    elementToScreenshotHelper model element acc2
+            in
+            ( acc3, element2 :: done )
+        )
+        ( acc, [] )
+        elements
+        |> Tuple.mapSecond List.reverse
+
+
+elementToScreenshotHelper : Model id -> ElementFull id lazy -> ScreenshotIds -> ( ScreenshotIds, ElementFull Int () )
+elementToScreenshotHelper model element acc =
+    case element of
+        TextInput data ->
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (TextInputState (getTextInput data.id model))) acc
+            in
+            ( acc2, TextInput { id = id, style = data.style, isValid = data.isValid } )
+
+        TextInputMultiline data ->
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (TextInputMultilineState (getTextInputMultiline data.id model))) acc
+            in
+            ( acc2, TextInputMultiline { id = id, style = data.style } )
+
+        Text data ->
+            ( acc, Text data )
+
+        Button data child ->
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (ButtonState (getButton data.id model))) acc
+
+                ( acc3, inFront2 ) =
+                    screenshotList model data.inFront acc2
+
+                ( acc4, child2 ) =
+                    elementToScreenshotHelper model child acc3
+            in
+            ( acc4
+            , Button
+                { id = id
+                , padding = data.padding
+                , borderAndFill = data.borderAndFill
+                , borderAndFillFocus = data.borderAndFillFocus
+                , borderAndFillHover = data.borderAndFillHover
+                , cachedSize = data.cachedSize
+                , inFront = inFront2
+                }
+                child2
+            )
+
+        Row data children ->
+            screenshotList model children acc |> Tuple.mapSecond (Row data)
+
+        Column data children ->
+            screenshotList model children acc |> Tuple.mapSecond (Column data)
+
+        Single data child ->
+            let
+                ( acc2, maybeId ) =
+                    case data.id of
+                        Just _ ->
+                            screenshotId Nothing acc |> Tuple.mapSecond Just
+
+                        Nothing ->
+                            ( acc, Nothing )
+
+                ( acc3, child2 ) =
+                    elementToScreenshotHelper model child acc2
+            in
+            ( acc3
+            , Single
+                { padding = data.padding
+                , borderAndFill = data.borderAndFill
+                , cachedSize = data.cachedSize
+                , id = maybeId
+                }
+                child2
+            )
+
+        InFront data children ->
+            List.foldl
+                (\( position, element2 ) ( acc2, done ) ->
+                    let
+                        ( acc3, element3 ) =
+                            elementToScreenshotHelper model element2 acc2
+                    in
+                    ( acc3, ( position, element3 ) :: done )
+                )
+                ( acc, [] )
+                children
+                |> Tuple.mapSecond (\a -> List.reverse a |> InFront data)
+
+        Quads data ->
+            ( acc, Quads data )
+
+        Empty ->
+            ( acc, Empty )
+
+        Viewport data child ->
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (ViewportState (getViewport data.id model))) acc
+
+                ( acc3, child2 ) =
+                    elementToScreenshotHelper model child acc2
+            in
+            ( acc3, Viewport { id = id, viewportHeight = data.viewportHeight } child2 )
+
+        Lazy _ _ child ->
+            elementToScreenshotHelper model child acc
+
+        Sourced _ child ->
+            elementToScreenshotHelper model child acc
+
+
+{-| How big a screenshot is, in UI pixels.
+-}
+screenshotSize : ElementFull Int () -> Coord UiPixels
+screenshotSize screenshot =
+    sizeHelper screenshot
+
+
+{-| What a screenshot looked like, as triangles for a screen with the given UI scale (the
+same ones `view` makes), with its top left corner at 0, 0. Nothing is hovered or focused.
+-}
+screenshotView : Screenshot -> List (Triangle DevicePixels)
+screenshotView { time, uiState, uiScale, screenshot } =
+    viewList
+        uiState
+        time
+        uiScale
+        False
+        Nothing
+        { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
+        Coord.origin
+        screenshot
+
+
+{-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
+UI pixels two fingers moved on a touchpad (positive is down, the content following
+them), which move the content at once, or the speed the fingers lifted at, in UI
+pixels a second (positive is down), at which the content keeps going, slowing down.
+-}
+type ScrollBy
+    = WheelClicks Int
+    | ScrollPixels (Quantity Float UiPixels)
+    | Momentum Float
+
+
+{-| How much of its speed a glide keeps after a second: it keeps 0.998 of it a
+millisecond, as on iOS.
+-}
+momentumKeptPerSecond : Float
+momentumKeptPerSecond =
+    0.998 ^ 1000
+
+
+{-| Stop every glide (a finger touched the touchpad).
+-}
+stopMomentum : Model id -> Model id
+stopMomentum model =
+    { model
+        | uiState =
+            SeqDict.map
+                (\_ value ->
+                    case value of
+                        ViewportState viewport2 ->
+                            ViewportState { viewport2 | momentum = 0 }
+
+                        TextInputState _ ->
+                            value
+
+                        TextInputMultilineState _ ->
+                            value
+
+                        ButtonState _ ->
+                            value
+                )
+                model.uiState
+    }
+
+
+{-| The mouse button went up: let go of any scroll bar (a viewport's or a text editor's).
+-}
+onMouseUp : Model id -> Model id
+onMouseUp model =
+    { model
+        | uiState =
+            SeqDict.map
+                (\_ value ->
+                    case value of
+                        ViewportState viewport2 ->
+                            ViewportState { viewport2 | grab = Nothing }
+
+                        TextInputState _ ->
+                            value
+
+                        TextInputMultilineState multiline ->
+                            TextInputMultilineState (TextInputMultiline.mouseUp multiline)
+
+                        ButtonState _ ->
+                            value
+                )
+                model.uiState
     }
 
 
@@ -181,56 +477,157 @@ setFocus maybe model =
     { model | focus = maybe }
 
 
-onAnimationFrame : Duration -> Model id -> Model id
-onAnimationFrame timeElapsed model =
+getViewport : id -> Model id -> ViewportModel
+getViewport id model =
+    case SeqDict.get id model.uiState of
+        Just (ViewportState viewport2) ->
+            viewport2
+
+        _ ->
+            initViewportModel
+
+
+getTextInput : id -> Model id -> TextInput.Model
+getTextInput id model =
+    case SeqDict.get id model.uiState of
+        Just (TextInputState data) ->
+            data
+
+        _ ->
+            TextInput.init
+
+
+getTextInputMultiline : id -> Model id -> TextInputMultiline.Model
+getTextInputMultiline id model =
+    case SeqDict.get id model.uiState of
+        Just (TextInputMultilineState data) ->
+            data
+
+        _ ->
+            TextInputMultiline.init
+
+
+getButton : id -> Model id -> Button.Model
+getButton id model =
+    case SeqDict.get id model.uiState of
+        Just (ButtonState data) ->
+            data
+
+        _ ->
+            { buttonDown = Nothing }
+
+
+{-| A frame went by. `hovered` is what `hoverIdOnly` gives for the mouse, at `mouse`: the
+scroll bars of the viewports under it fade in, and widen if it is over them.
+-}
+onAnimationFrame :
+    Duration
+    -> Coord UiPixels
+    -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+    -> Model id
+    -> Model id
+onAnimationFrame timeElapsed mouse hovered model =
+    let
+        mouseStill : { at : Coord UiPixels, seconds : Duration }
+        mouseStill =
+            if mouse == model.mouseStill.at then
+                { at = mouse, seconds = Quantity.plus model.mouseStill.seconds timeElapsed }
+
+            else
+                { at = mouse, seconds = Quantity.zero }
+
+        -- The hovered elements with a scroll bar, whether the mouse is over their scroll
+        -- bar, and their state if they don't have one yet.
+        hoveredScrollbars : SeqDict id ( Bool, ElementState )
+        hoveredScrollbars =
+            List.foldl
+                (\( id, { relativePositionToUi, ui } ) dict ->
+                    case ui of
+                        Element (Viewport data child) ->
+                            SeqDict.insert
+                                data.id
+                                ( overScrollbar (Coord.minus relativePositionToUi mouse) data.viewportHeight child
+                                , ViewportState initViewportModel
+                                )
+                                dict
+
+                        Element (TextInputMultiline data) ->
+                            SeqDict.insert
+                                data.id
+                                ( TextInputMultiline.overScrollbar
+                                    data.style
+                                    (Coord.minus relativePositionToUi mouse)
+                                    (getTextInputMultiline id model)
+                                , TextInputMultilineState TextInputMultiline.init
+                                )
+                                dict
+
+                        Element _ ->
+                            dict
+                )
+                SeqDict.empty
+                hovered
+
+        withHovered : SeqDict id ElementState
+        withHovered =
+            SeqDict.foldl
+                (\id ( _, initState ) dict ->
+                    case SeqDict.get id dict of
+                        Just _ ->
+                            dict
+
+                        Nothing ->
+                            SeqDict.insert id initState dict
+                )
+                model.uiState
+                hoveredScrollbars
+
+        -- Nothing if the mouse isn't over the element (or has been still a while), else
+        -- whether it is over its scroll bar.
+        scrollbarHovered : id -> Maybe Bool
+        scrollbarHovered id =
+            if mouseStill.seconds |> Quantity.lessThan mouseStillDuration then
+                SeqDict.get id hoveredScrollbars |> Maybe.map Tuple.first
+
+            else
+                Nothing
+    in
     { model
-        | uiState =
+        | mouseStill = mouseStill
+        , uiState =
             SeqDict.map
-                (\_ value ->
+                (\id value ->
                     case value of
                         TextInputState _ ->
                             value
 
-                        TextInputMultilineState _ ->
+                        TextInputMultilineState multiline ->
+                            Scrollbar.fade timeElapsed (scrollbarHovered id) multiline
+                                |> TextInputMultilineState
+
+                        ButtonState _ ->
                             value
 
                         ViewportState viewport2 ->
-                            let
-                                distance : Quantity Float UiPixels
-                                distance =
-                                    Quantity.plus
-                                        (Quantity.for timeElapsed scrollBaseSpeed)
-                                        (diff
-                                            |> Quantity.minus
-                                                (Quantity.multiplyBy (0.05 ^ Duration.inSeconds timeElapsed) diff)
-                                        )
+                            (if viewport2.momentum /= 0 then
+                                glide timeElapsed viewport2
 
-                                target : Quantity Float UiPixels
-                                target =
-                                    Quantity.toFloatQuantity viewport2.target
-
-                                diff : Quantity Float UiPixels
-                                diff =
-                                    target |> Quantity.minus viewport2.offset |> Quantity.abs
-                            in
-                            { viewport2
-                                | offset =
-                                    -- Also mends an offset that a negative frame time made
-                                    -- NaN (NaN is never less than anything), which a saved
-                                    -- Model may still hold.
-                                    if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
-                                        target
-
-                                    else if viewport2.offset |> Quantity.lessThan target then
-                                        Quantity.plus distance viewport2.offset
-
-                                    else
-                                        viewport2.offset |> Quantity.minus distance
-                            }
+                             else
+                                ease timeElapsed viewport2
+                            )
+                                |> Scrollbar.fade timeElapsed (scrollbarHovered id)
                                 |> ViewportState
                 )
-                model.uiState
+                withHovered
     }
+
+
+{-| Scroll bars fade out once the mouse has been still this many seconds (unless one is
+being dragged).
+-}
+mouseStillDuration : Duration
+mouseStillDuration =
+    Duration.seconds 2
 
 
 insertElement : id -> ElementState -> Model id -> Model id
@@ -244,14 +641,26 @@ updateElement id state model =
 
 
 onMouseDown :
-    (id -> Model id -> a)
+    Time.Posix
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
     -> Element id
     -> Model id
-    -> ( Model id, Maybe a )
-onMouseDown onClick relativePositionToUi cursor id element model =
+    -> Model id
+onMouseDown time relativePositionToUi cursor id (Element element) model =
+    onMouseDownHelper time relativePositionToUi cursor id element model
+
+
+onMouseDownHelper :
+    Time.Posix
+    -> Coord UiPixels
+    -> Coord UiPixels
+    -> id
+    -> ElementFull id lazy
+    -> Model id
+    -> Model id
+onMouseDownHelper time relativePositionToUi cursor id element model =
     case element of
         TextInput textInput2 ->
             let
@@ -260,20 +669,12 @@ onMouseDown onClick relativePositionToUi cursor id element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case SeqDict.get id model.uiState of
-                            Just (TextInputState state2) ->
-                                state2
-
-                            _ ->
-                                TextInput.init
-                        )
+                        (getTextInput id model)
             in
-            ( { model
+            { model
                 | uiState = SeqDict.insert id (TextInputState state3) model.uiState
                 , focus = Just id
-              }
-            , Nothing
-            )
+            }
 
         TextInputMultiline textInput2 ->
             let
@@ -282,51 +683,146 @@ onMouseDown onClick relativePositionToUi cursor id element model =
                         textInput2.style
                         cursor
                         relativePositionToUi
-                        (case SeqDict.get id model.uiState of
-                            Just (TextInputMultilineState state2) ->
-                                state2
-
-                            _ ->
-                                TextInputMultiline.init
-                        )
+                        (getTextInputMultiline id model)
             in
-            ( { model
+            { model
                 | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState
                 , focus = Just id
-              }
-            , Nothing
-            )
+            }
 
         Text _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Button _ _ ->
-            ( { model | focus = Nothing }, onClick id { model | focus = Nothing } |> Just )
+            { model
+                | uiState =
+                    SeqDict.insert id
+                        (Button.mouseDown
+                            time
+                            (Coord.toLocal relativePositionToUi cursor)
+                            (getButton id model)
+                            |> ButtonState
+                        )
+                        model.uiState
+                , focus = Nothing
+            }
 
         Row _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Column _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Single _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
+
+        InFront _ _ ->
+            { model | focus = Nothing }
 
         Quads _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
         Empty ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
 
-        Viewport _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+        Viewport data child ->
+            let
+                childSize : Coord UiPixels
+                childSize =
+                    sizeHelper child
+
+                local : Coord UiPixels
+                local =
+                    Coord.minus relativePositionToUi cursor
+
+                viewportModel =
+                    getViewport data.id model
+            in
+            if overScrollbar local data.viewportHeight child then
+                case Scrollbar.press (viewportGeometry data.viewportHeight childSize) (scrolled viewportModel.offset) (Coord.yRaw local) of
+                    Just pressed ->
+                        { model
+                            | uiState =
+                                SeqDict.insert
+                                    data.id
+                                    (ViewportState (scrollTo data.viewportHeight childSize pressed.scrolled { viewportModel | grab = Just pressed.grab }))
+                                    model.uiState
+                            , focus = Just data.id
+                        }
+
+                    Nothing ->
+                        { model | focus = Nothing }
+
+            else
+                { model | focus = Nothing }
 
         Lazy _ _ _ ->
-            ( { model | focus = Nothing }, Nothing )
+            { model | focus = Nothing }
+
+        Sourced _ child ->
+            onMouseDownHelper time relativePositionToUi cursor id child model
 
 
-onWheel : id -> Int -> Element id -> Model id -> Model id
-onWheel id clicks element model =
+{-| The mouse moved with its button down after pressing the scroll bar of the viewport
+`id` (found with `findInput`): move the thumb with it. `mouse` is in the UI pixels of the
+display the viewport is on.
+-}
+dragScrollbar :
+    id
+    -> Coord UiPixels
+    -> { position : Coord UiPixels, viewportHeight : Quantity Int UiPixels, contentSize : Coord UiPixels }
+    -> Model id
+    -> Model id
+dragScrollbar id mouse { position, viewportHeight, contentSize } model =
+    case SeqDict.get id model.uiState of
+        Just (ViewportState state) ->
+            case state.grab of
+                Just grab ->
+                    { model
+                        | uiState =
+                            SeqDict.insert
+                                id
+                                (ViewportState
+                                    (scrollTo
+                                        viewportHeight
+                                        contentSize
+                                        (Scrollbar.drag
+                                            (viewportGeometry viewportHeight contentSize)
+                                            grab
+                                            (Coord.yRaw mouse - Coord.yRaw position)
+                                        )
+                                        state
+                                    )
+                                )
+                                model.uiState
+                    }
+
+                Nothing ->
+                    model
+
+        _ ->
+            model
+
+
+{-| Scroll the content `pixels` down from its top, at once.
+-}
+scrollTo : Quantity Int UiPixels -> Coord UiPixels -> Float -> ViewportModel -> ViewportModel
+scrollTo viewportHeight contentSize pixels state =
+    let
+        offset : Quantity Float UiPixels
+        offset =
+            Units.uiPixels (negate pixels) |> clampScroll viewportHeight contentSize
+    in
+    { state | offset = offset, target = offset, momentum = 0 }
+
+
+onWheel : id -> ScrollBy -> Element id -> Model id -> Model id
+onWheel id scrollBy (Element element) model =
+    onWheelHelper id scrollBy element { model | mouseStill = { at = model.mouseStill.at, seconds = Quantity.zero } }
+
+
+onWheelHelper : id -> ScrollBy -> ElementFull id lazy -> Model id -> Model id
+onWheelHelper id scrollBy element model =
     case element of
         TextInput _ ->
             model
@@ -334,9 +830,17 @@ onWheel id clicks element model =
         TextInputMultiline textInput2 ->
             let
                 state3 =
-                    TextInputMultiline.wheel
-                        textInput2.style
-                        clicks
+                    (case scrollBy of
+                        WheelClicks clicks ->
+                            TextInputMultiline.wheel textInput2.style clicks
+
+                        ScrollPixels pixels ->
+                            TextInputMultiline.scrollPixels textInput2.style (Quantity.unwrap pixels)
+
+                        Momentum _ ->
+                            -- it moves a whole line at a time, so it doesn't glide
+                            identity
+                    )
                         (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
                                 state2
@@ -363,6 +867,9 @@ onWheel id clicks element model =
         Single _ _ ->
             model
 
+        InFront _ _ ->
+            model
+
         Quads _ ->
             model
 
@@ -372,13 +879,16 @@ onWheel id clicks element model =
         Lazy _ _ _ ->
             model
 
+        Sourced _ child ->
+            onWheelHelper id scrollBy child model
+
         Viewport data element2 ->
             let
                 state3 : ViewportModel
                 state3 =
                     scroll
-                        clicks
-                        (size element2)
+                        scrollBy
+                        (sizeHelper element2)
                         data
                         (case SeqDict.get id model.uiState of
                             Just (ViewportState state2) ->
@@ -396,7 +906,7 @@ innermost hovered element that scrolls, so wheeling over a button inside a viewp
 scrolls the viewport.
 -}
 scrolls : Element id -> Bool
-scrolls element =
+scrolls (Element element) =
     case element of
         Viewport _ _ ->
             True
@@ -422,6 +932,9 @@ scrolls element =
         Single _ _ ->
             False
 
+        InFront _ _ ->
+            False
+
         Quads _ ->
             False
 
@@ -431,19 +944,177 @@ scrolls element =
         Lazy _ _ _ ->
             False
 
+        Sourced _ child ->
+            scrolls (Element child)
+
 
 initViewportModel : ViewportModel
 initViewportModel =
-    { offset = Quantity.zero, target = Quantity.zero }
-
-
-scroll : Int -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
-scroll clicks size2 data model =
-    { model
-        | target =
-            Quantity.plus (Units.uiPixels (clicks * 150)) model.target
-                |> Quantity.clamp (Coord.y size2 |> Quantity.minus data.viewportHeight |> Quantity.negate) Quantity.zero
+    { offset = Quantity.zero
+    , target = Quantity.zero
+    , momentum = 0
+    , bottom = Quantity.zero
+    , grab = Nothing
+    , scrollbarShown = 0
+    , scrollbarWidened = 0
     }
+
+
+{-| A frame of easing towards where the wheel scrolled to.
+-}
+ease : Duration -> ViewportModel -> ViewportModel
+ease timeElapsed viewport2 =
+    let
+        distance : Quantity Float UiPixels
+        distance =
+            Quantity.plus
+                (Quantity.for timeElapsed scrollBaseSpeed)
+                (diff
+                    |> Quantity.minus
+                        (Quantity.multiplyBy (0.05 ^ Duration.inSeconds timeElapsed) diff)
+                )
+
+        target : Quantity Float UiPixels
+        target =
+            viewport2.target
+
+        diff : Quantity Float UiPixels
+        diff =
+            target |> Quantity.minus viewport2.offset |> Quantity.abs
+    in
+    { viewport2
+        | offset =
+            -- Also mends an offset that a negative frame time made
+            -- NaN (NaN is never less than anything), which a saved
+            -- Model may still hold.
+            if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
+                target
+
+            else if viewport2.offset |> Quantity.lessThan target then
+                Quantity.plus distance viewport2.offset
+
+            else
+                viewport2.offset |> Quantity.minus distance
+    }
+
+
+{-| A frame of gliding after a touchpad scroll: move at the speed, then slow down,
+stopping once it is slow or at the top or bottom.
+-}
+glide : Duration -> ViewportModel -> ViewportModel
+glide timeElapsed model =
+    let
+        seconds : Float
+        seconds =
+            Duration.inSeconds timeElapsed
+
+        moved : Quantity Float UiPixels
+        moved =
+            Quantity.plus (Units.uiPixels (model.momentum * seconds)) model.offset
+
+        offset : Quantity Float UiPixels
+        offset =
+            Quantity.clamp model.bottom Quantity.zero moved
+
+        momentum : Float
+        momentum =
+            model.momentum * (momentumKeptPerSecond ^ seconds)
+    in
+    { model
+        | offset = offset
+        , target = offset
+        , momentum =
+            if offset /= moved || abs momentum < 10 || isNaN momentum then
+                0
+
+            else
+                momentum
+    }
+
+
+scroll : ScrollBy -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
+scroll scrollBy size2 data model =
+    let
+        clampOffset : Quantity Float UiPixels -> Quantity Float UiPixels
+        clampOffset =
+            clampScroll data.viewportHeight size2
+    in
+    case scrollBy of
+        WheelClicks clicks ->
+            { model
+                | target = Quantity.plus (Units.uiPixels (toFloat (clicks * 150))) model.target |> clampOffset
+                , momentum = 0
+            }
+
+        ScrollPixels pixels ->
+            -- No easing: the content stays under the fingers.
+            { offset = Quantity.plus pixels model.offset |> clampOffset
+            , target = Quantity.plus pixels model.target |> clampOffset
+            , momentum = 0
+            , bottom = model.bottom
+            , grab = model.grab
+            , scrollbarShown = model.scrollbarShown
+            , scrollbarWidened = model.scrollbarWidened
+            }
+
+        Momentum velocity ->
+            { model | momentum = velocity, bottom = clampOffset (Units.uiPixels -1.0e9) }
+
+
+{-| Keep an offset between the top of the content and its bottom. Content no taller than
+the viewport doesn't scroll at all.
+-}
+clampScroll : Quantity Int UiPixels -> Coord UiPixels -> Quantity Float UiPixels -> Quantity Float UiPixels
+clampScroll viewportHeight contentSize offset =
+    Quantity.clamp (Quantity.negate (maxScroll viewportHeight contentSize)) Quantity.zero offset
+
+
+{-| How far the content can scroll: how much taller it is than the inside of the
+viewport, or 0.
+-}
+maxScroll : Quantity Int UiPixels -> Coord UiPixels -> Quantity Float UiPixels
+maxScroll viewportHeight contentSize =
+    Coord.y contentSize
+        |> Quantity.minus (insideHeight viewportHeight)
+        |> Quantity.max Quantity.zero
+        |> Quantity.toFloatQuantity
+
+
+{-| How tall the inside of a viewport (and its scroll bar) is: its height less the outline.
+-}
+insideHeight : Quantity Int UiPixels -> Quantity Int UiPixels
+insideHeight viewportHeight =
+    viewportHeight |> Quantity.max Quantity.zero
+
+
+{-| A viewport's scroll bar: its track is the inside of the viewport.
+-}
+viewportGeometry : Quantity Int UiPixels -> Coord UiPixels -> Scrollbar.Geometry
+viewportGeometry viewportHeight contentSize =
+    { track = Quantity.unwrap (insideHeight viewportHeight), content = Coord.yRaw contentSize }
+
+
+{-| How far a viewport's content is scrolled down (its offset is how far it is moved up).
+-}
+scrolled : Quantity Float UiPixels -> Float
+scrolled offset =
+    negate (Quantity.unwrap offset)
+
+
+{-| Whether a point (from the viewport's top left) is on the scroll bar: in the strip
+down the right of its inside, when its content scrolls. The scroll bar lies over the
+content there.
+-}
+overScrollbar : Coord UiPixels -> Quantity Int UiPixels -> ElementFull id lazy -> Bool
+overScrollbar point viewportHeight child =
+    let
+        childSize : Coord UiPixels
+        childSize =
+            sizeHelper child
+    in
+    Scrollbar.isOver
+        (viewportGeometry viewportHeight childSize)
+        (Coord.minus (Coord.xy (Coord.xRaw childSize - Scrollbar.width) 0) point)
 
 
 scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
@@ -456,32 +1127,66 @@ type BorderAndFill
     | BorderOnly { borderWidth : Int, borderColor : Color }
     | FillOnly Color
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
+      -- A fill with a faint grid of dots over it (Sprite.dotGrid): app windows.
+    | BorderFillAndDots { borderWidth : Int, borderColor : Color, fillColor : Color, dotColor : Color }
 
 
-noPadding : Bounds UiPixels
+{-| Room left empty around an element's child, on each side (UI pixels).
+-}
+type alias Padding =
+    { top : Int, bottom : Int, left : Int, right : Int }
+
+
+noPadding : Padding
 noPadding =
-    { topLeft = Coord.origin, bottomRight = Coord.origin }
+    { top = 0, bottom = 0, left = 0, right = 0 }
 
 
-paddingXY : Int -> Int -> Bounds UiPixels
+{-| `x` on the left and right, `y` on the top and bottom.
+-}
+paddingXY : Int -> Int -> Padding
 paddingXY x y =
-    { topLeft = Coord.xy x y, bottomRight = Coord.xy x y }
+    { top = y, bottom = y, left = x, right = x }
+
+
+{-| Where the child goes, from the element's top left.
+-}
+paddingTopLeft : Padding -> Coord UiPixels
+paddingTopLeft padding =
+    Coord.xy padding.left padding.top
 
 
 
 -- TEXT
 
 
-{-| Black text. '\\n' starts a new line.
+{-| Black text in the small regular sans font. '\\n' starts a new line. For any other
+size or font use `monoText` or `customText`.
 -}
-text : Sprite.FontSize -> Sprite.Font -> String -> Element id
-text fontSize font =
-    colorText Color.black fontSize font
+text : String -> Element id
+text =
+    colorText Color.textColor
 
 
-colorText : Color -> Sprite.FontSize -> Sprite.Font -> String -> Element id
-colorText color fontSize font text2 =
-    customText fontSize [ { text = text2, color = color, font = font } ]
+{-| `text` in a given colour.
+-}
+colorText : Color -> String -> Element id
+colorText color text2 =
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
+
+
+{-| Black text in the small monospace font. '\\n' starts a new line.
+-}
+monoText : String -> Element id
+monoText =
+    monoColorText Color.textColor
+
+
+{-| `monoText` in a given colour.
+-}
+monoColorText : Color -> String -> Element id
+monoColorText color text2 =
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [] } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
@@ -489,10 +1194,12 @@ font size, so every line is the same height whichever fonts it mixes. '\\n' in a
 them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
     Ui.customText Sprite.Small
-        [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
-        , { text = "make check", color = Color.black, font = Sprite.Mono }
-        , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
+        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] }
+        , { text = "make check", color = Color.textColor, font = Sprite.Mono, decorations = [ Sprite.Underline ] }
+        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] }
         ]
+
+Each segment's `decorations` underline it or strike it through (see Sprite.Decoration).
 
 -}
 customText : Sprite.FontSize -> List Sprite.Segment -> Element id
@@ -502,6 +1209,7 @@ customText fontSize segments =
         , segments = segments
         , cachedSize = Sprite.customTextSize fontSize segments
         }
+        |> Element
 
 
 {-| `customText` with word wrap: lines are broken between words so that none is wider
@@ -513,35 +1221,35 @@ customTextWrapped fontSize maxWidth segments =
         ( wrapped, cachedSize ) =
             Sprite.wrapWithSize fontSize maxWidth segments
     in
-    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize }
+    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize } |> Element
 
 
 
 -- TEXT INPUTS
 
 
-textInput : { id : id, style : TextInput.Style, isValid : Bool, state : TextInput.Model } -> Element id
-textInput =
-    TextInput
+textInput : { id : id, style : TextInput.Style, isValid : Bool } -> Element id
+textInput data =
+    TextInput data |> Element
 
 
 {-| A text box with many lines, showing `style.lines` of them from line `scroll`.
 -}
-textInputMultiline : { id : id, style : TextInputMultiline.Style, state : TextInputMultiline.Model } -> Element id
-textInputMultiline =
-    TextInputMultiline
+textInputMultiline : { id : id, style : TextInputMultiline.Style } -> Element id
+textInputMultiline data =
+    TextInputMultiline data |> Element
 
 
 
 -- BUTTONS
 
 
-none : Element id
-none =
-    Empty
+empty : Element id
+empty =
+    Element Empty
 
 
-button : { id : id, padding : Bounds UiPixels } -> Element id -> Element id
+button : { id : id, padding : Padding } -> Element id -> Element id
 button data child =
     customButton
         { id = data.id
@@ -573,29 +1281,35 @@ defaultButtonBorderAndFillHover =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor3 }
 
 
+windowBorderAndFill : BorderAndFill
+windowBorderAndFill =
+    BorderFillAndDots { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor, dotColor = Color.dotGridColor }
+
+
 customButton :
     { id : id
-    , padding : Bounds UiPixels
+    , padding : Padding
     , inFront : List (Element id)
     , borderAndFill : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     }
     -> Element id
     -> Element id
-customButton data child =
+customButton data (Element child) =
     Button
         { id = data.id
         , padding = data.padding
-        , inFront = data.inFront
+        , inFront = List.map (\(Element a) -> a) data.inFront
         , borderAndFill = data.borderAndFill
         , borderAndFillFocus = data.borderAndFillFocus
         , borderAndFillHover = defaultButtonBorderAndFillHover
         , cachedSize = paddedSize data.padding child
         }
         child
+        |> Element
 
 
-selectableButton : { id : id, padding : Bounds UiPixels } -> Bool -> Element id -> Element id
+selectableButton : { id : id, padding : Padding } -> Bool -> Element id -> Element id
 selectableButton data isSelected child =
     let
         fill =
@@ -619,59 +1333,90 @@ selectableButton data isSelected child =
 -- LAYOUT
 
 
-paddedSize : Bounds UiPixels -> Element id -> Coord UiPixels
+paddedSize : Padding -> ElementFull id lazy -> Coord UiPixels
 paddedSize padding child =
-    Coord.plus (Coord.plus padding.topLeft padding.bottomRight) (size child)
+    Coord.plus (Coord.xy (padding.left + padding.right) (padding.top + padding.bottom)) (sizeHelper child)
 
 
-row : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
+row : Int -> List (Element id) -> Element id
 row data children =
     let
         children2 =
-            List.filter (\a -> a /= Empty) children
+            List.filterMap
+                (\(Element a) ->
+                    if a == Empty then
+                        Nothing
+
+                    else
+                        Just a
+                )
+                children
     in
-    Row { spacing = data.spacing, padding = data.padding, cachedSize = rowSize data children2 } children2
+    Row { spacing = data, cachedSize = rowSize data children2 } children2 |> Element
 
 
-column : { spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Element id
-column data children =
+column : Int -> List (Element id) -> Element id
+column spacing children =
     let
         children2 =
-            List.filter (\a -> a /= Empty) children
+            List.filterMap
+                (\(Element a) ->
+                    if a == Empty then
+                        Nothing
+
+                    else
+                        Just a
+                )
+                children
     in
-    Column { spacing = data.spacing, padding = data.padding, cachedSize = columnSize data children2 } children2
+    Column { spacing = spacing, cachedSize = columnSize spacing children2 } children2
+        |> Element
 
 
-el : { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
-el data child =
+el : { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
+el data (Element child) =
     Single
         { padding = data.padding
         , borderAndFill = data.borderAndFill
-        , inFront = data.inFront
         , cachedSize = paddedSize data.padding child
         , id = Nothing
         }
         child
+        |> Element
 
 
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Bounds UiPixels, inFront : List (Element id), borderAndFill : BorderAndFill } -> Element id -> Element id
-elWithId id data child =
+elWithId : id -> { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId id data (Element child) =
     Single
         { padding = data.padding
         , borderAndFill = data.borderAndFill
-        , inFront = data.inFront
         , cachedSize = paddedSize data.padding child
         , id = Just id
         }
         child
+        |> Element
 
 
-viewport : { id : id, viewportHeight : Quantity Int UiPixels, model : ViewportModel } -> Element id -> Element id
-viewport { id, viewportHeight, model } =
-    Viewport { id = id, viewportHeight = viewportHeight, scrollOffset = model.offset }
+inFront : List ( Coord UiPixels, Element id ) -> Element id
+inFront inFront2 =
+    InFront
+        { cachedSize =
+            List.foldl
+                (\( position, Element a ) coord -> Coord.componentMax coord (Coord.plus position (sizeHelper a)))
+                Coord.origin
+                inFront2
+        }
+        (List.map (\( position, Element a ) -> ( position, a )) inFront2)
+        |> Element
+
+
+viewport : { id : id, viewportHeight : Quantity Int UiPixels } -> Element id -> Element id
+viewport { id, viewportHeight } (Element child) =
+    Viewport { id = id, viewportHeight = viewportHeight } child |> Element
+
 
 
 -- LAZY
@@ -718,30 +1463,36 @@ lazyElements elements =
 
 
 lazyParts : Element id -> List (SeqDict id (Element id)) -> List (SeqDict id (Element id))
-lazyParts element found =
+lazyParts (Element element) found =
     case element of
         Lazy key inner child ->
             if SeqDict.isEmpty inner then
                 -- No Lazy inside it: look anyway, as it's quick.
-                lazyParts child (SeqDict.singleton key element :: found)
+                lazyParts (Element child) (SeqDict.singleton key (Element element) :: found)
 
             else
-                SeqDict.insert key element inner :: found
+                SeqDict.insert key (Element element) inner :: found
 
         Button data child ->
-            List.foldl lazyParts (lazyParts child found) data.inFront
+            List.foldl lazyParts (lazyParts (Element child) found) (List.map Element data.inFront)
 
         Row _ children ->
-            List.foldl lazyParts found children
+            List.foldl lazyParts found (List.map Element children)
 
         Column _ children ->
-            List.foldl lazyParts found children
+            List.foldl lazyParts found (List.map Element children)
 
-        Single data child ->
-            List.foldl lazyParts (lazyParts child found) data.inFront
+        Single _ child ->
+            lazyParts (Element child) found
+
+        Sourced _ child ->
+            lazyParts (Element child) found
+
+        InFront _ children ->
+            List.foldl lazyParts found (List.map (\( _, a ) -> Element a) children)
 
         Viewport _ child ->
-            lazyParts child found
+            lazyParts (Element child) found
 
         TextInput _ ->
             found
@@ -778,6 +1529,16 @@ lazy3 _ f a b c =
     f a b c
 
 
+lazy2 : LazyCache id -> (a -> b -> Element id) -> a -> b -> Element id
+lazy2 _ f a b =
+    f a b
+
+
+lazy : LazyCache id -> (a -> Element id) -> a -> Element id
+lazy _ f a =
+    f a
+
+
 {-| What the code generator turns a `lazy` call into: the element that last frame's
 `lazy` with an equal (`==`) key made, or else what `build` gives. `==` is quick
 when nothing changed, as it first checks whether the two are the very same value.
@@ -790,28 +1551,27 @@ lazyKeyed (LazyCache cache) key build =
 
         Nothing ->
             let
-                child : Element id
-                child =
+                (Element child) =
                     build ()
             in
-            Lazy key (lazyElements [ child ]) child
+            Lazy key (lazyElements [ Element child ]) child |> Element
 
 
 quads : { size : Coord UiPixels, triangles : List (Triangle UiPixels) } -> Element id
-quads =
-    Quads
+quads data =
+    Quads data |> Element
 
 
 {-| Put a child somewhere in an area of the given size. `fx` and `fy` go from 0 (left, top) to 2 (right, bottom).
 -}
-align : Int -> Int -> Coord UiPixels -> Element id -> Element id
+align : Int -> Int -> Coord UiPixels -> ElementFull id lazy -> ElementFull id lazy
 align fx fy areaSize child =
     let
         ( sizeX, sizeY ) =
             Coord.toTuple areaSize
 
         ( childX, childY ) =
-            Coord.toTuple (size child)
+            Coord.toTuple (sizeHelper child)
 
         left2 =
             (sizeX - childX) * fx // 2
@@ -821,10 +1581,11 @@ align fx fy areaSize child =
     in
     Single
         { padding =
-            { topLeft = Coord.xy left2 top
-            , bottomRight = Coord.xy (sizeX - childX - left2) (sizeY - childY - top)
+            { top = top
+            , bottom = sizeY - childY - top
+            , left = left2
+            , right = sizeX - childX - left2
             }
-        , inFront = []
         , borderAndFill = NoBorderOrFill
         , cachedSize = areaSize
         , id = Nothing
@@ -835,49 +1596,44 @@ align fx fy areaSize child =
 {-| A child at the left of a space at least `width` wide, for lining things up in columns.
 -}
 left : Quantity Int UiPixels -> Element id -> Element id
-left width child =
-    align 0 0 ( Quantity.max width (Coord.x (size child)), Coord.y (size child) ) child
+left width (Element child) =
+    align 0 0 ( Quantity.max width (Coord.x (sizeHelper child)), Coord.y (sizeHelper child) ) child |> Element
 
 
 {-| Two children in a row at least `width` wide: one at the left, the other at the right.
 -}
 leftAndRight : Quantity Int UiPixels -> Element id -> Element id -> Element id
-leftAndRight width leftChild rightChild =
-    row { spacing = 0, padding = noPadding } [ left (width |> Quantity.minus (Coord.x (size rightChild))) leftChild, rightChild ]
+leftAndRight width leftChild (Element rightChild) =
+    row 0 [ left (width |> Quantity.minus (Coord.x (sizeHelper rightChild))) leftChild, Element rightChild ]
 
 
 center : { size : Coord UiPixels } -> Element id -> Element id
-center data =
-    align 1 1 data.size
+center data (Element child) =
+    align 1 1 data.size child |> Element
 
 
 right : { width : Quantity Int UiPixels } -> Element id -> Element id
-right data element =
-    align 2 0 ( data.width, Coord.y (size element) ) element
-
-
-topLeft : { size : Coord UiPixels } -> Element id -> Element id
-topLeft data =
-    align 0 0 data.size
+right data (Element child) =
+    align 2 0 ( data.width, Coord.y (sizeHelper child) ) child |> Element
 
 
 topRight : { size : Coord UiPixels } -> Element id -> Element id
-topRight data =
-    align 2 0 data.size
-
-
-bottomLeft : { size : Coord UiPixels } -> Element id -> Element id
-bottomLeft data =
-    align 0 2 data.size
+topRight data (Element child) =
+    align 2 0 data.size child |> Element
 
 
 bottomRight : { size : Coord UiPixels } -> Element id -> Element id
-bottomRight data =
-    align 2 2 data.size
+bottomRight data (Element child) =
+    align 2 2 data.size child |> Element
 
 
 size : Element id -> Coord UiPixels
-size element =
+size (Element element) =
+    sizeHelper element
+
+
+sizeHelper : ElementFull id lazy -> Coord UiPixels
+sizeHelper element =
     case element of
         TextInput data ->
             TextInput.size data.style
@@ -900,6 +1656,9 @@ size element =
         Single data _ ->
             data.cachedSize
 
+        InFront data _ ->
+            data.cachedSize
+
         Quads data ->
             data.size
 
@@ -910,83 +1669,351 @@ size element =
             viewportSize data child
 
         Lazy _ _ child ->
-            size child
+            sizeHelper child
+
+        Sourced _ child ->
+            sizeHelper child
 
 
-viewportSize : { a | viewportHeight : Quantity Int UiPixels, scrollOffset : Quantity Float UiPixels } -> Element id -> Coord UiPixels
+viewportSize : { id : id, viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Coord UiPixels
 viewportSize data child =
-    ( Coord.x (size child), data.viewportHeight )
+    ( Coord.x (sizeHelper child)
+    , data.viewportHeight
+    )
 
 
-rowSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Coord UiPixels
-rowSize data children =
-    let
-        ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( Coord.xRaw (size child) + data.spacing + x, max (Coord.yRaw (size child)) y )) ( 0, 0 ) children
-    in
-    Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
-        (Coord.xy
-            (if List.isEmpty children then
-                w
+{-| Where a viewport's content is, from the viewport's top left: inside the outline,
+moved up by the scroll offset.
+-}
+contentPosition : { a | offset : Quantity Float UiPixels } -> Coord UiPixels
+contentPosition data =
+    Coord.xy 0 (round (Quantity.unwrap data.offset))
 
-             else
-                w - data.spacing
+
+{-| The inside of a viewport at `position`, which its content shows through.
+-}
+viewportInside : Coord UiPixels -> { a | viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Bounds UiPixels
+viewportInside position data child =
+    { topLeft = position
+    , bottomRight =
+        Coord.plus
+            (Coord.xy
+                (Coord.xRaw (sizeHelper child))
+                (Quantity.unwrap (insideHeight data.viewportHeight))
             )
-            h
-        )
+            position
+    }
 
 
-columnSize : { a | spacing : Int, padding : Bounds UiPixels } -> List (Element id) -> Coord UiPixels
-columnSize data children =
+rowSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
+rowSize spacing children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (size child)) x, Coord.yRaw (size child) + data.spacing + y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + spacing + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
     in
-    Coord.plus (Coord.plus data.padding.topLeft data.padding.bottomRight)
-        (Coord.xy
+    Coord.xy
+        (if List.isEmpty children then
             w
-            (if List.isEmpty children then
-                h
 
-             else
-                h - data.spacing
-            )
+         else
+            w - spacing
+        )
+        h
+
+
+columnSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
+columnSize spacing children =
+    let
+        ( w, h ) =
+            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + spacing + y )) ( 0, 0 ) children
+    in
+    Coord.xy
+        w
+        (if List.isEmpty children then
+            h
+
+         else
+            h - spacing
         )
 
 
 {-| Where each child of a row or column goes.
 -}
-childPositions : Bool -> RowColumn -> Coord UiPixels -> List (Element id) -> List ( Coord UiPixels, Element id )
-childPositions isRow data position children =
+childPositions : Bool -> Int -> Coord UiPixels -> List (ElementFull id lazy) -> List ( Coord UiPixels, ElementFull id lazy )
+childPositions isRow spacing position children =
     List.foldl
         (\child ( at, acc ) ->
             ( Coord.plus
                 (if isRow then
-                    Coord.xy (Coord.xRaw (size child) + data.spacing) 0
+                    Coord.xy (Coord.xRaw (sizeHelper child) + spacing) 0
 
                  else
-                    Coord.xy 0 (Coord.yRaw (size child) + data.spacing)
+                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + spacing)
                 )
                 at
             , ( at, child ) :: acc
             )
         )
-        ( Coord.plus data.padding.topLeft position, [] )
+        ( position, [] )
         children
         |> Tuple.second
         |> List.reverse
 
 
 
+-- WHERE ELEMENTS ARE MADE
+
+
+{-| Where an element was made: the module, the line, and the Ui function called there.
+-}
+type alias Source =
+    { module_ : String, line : Int, function : String }
+
+
+{-| `element`, knowing where it was made. Only UiSource.elm calls it, for tools/wire
+(see there).
+-}
+sourced : Source -> Element id -> Element id
+sourced source (Element element) =
+    case element of
+        -- `row` and `column` leave out an `empty`, which they can only see if it's bare.
+        Empty ->
+            Element Empty
+
+        _ ->
+            Element (Sourced source element)
+
+
+{-| For the outline mode's inspector: the elements under `point` that know where they
+were made (see UiSource.elm), innermost first, each with the part of it that can be seen (a
+viewport hides what is scrolled out of it). It finds what can be seen at the point,
+and goes by the element drawn in front where they overlap. An element with nothing at
+the point to see (an `el` with no border or fill, or the gap between a row's children)
+is seen through, as is a viewport's scroll bar.
+-}
+inspect : Model id -> Coord UiPixels -> Element id -> List { source : Source, bounds : Bounds UiPixels }
+inspect model point (Element element) =
+    inspectHelper
+        model
+        point
+        { topLeft = Coord.xy -100000 -100000, bottomRight = Coord.xy 100000 100000 }
+        Coord.origin
+        element
+        []
+        |> Maybe.withDefault []
+
+
+inspectHelper :
+    Model id
+    -> Coord UiPixels
+    -> Bounds UiPixels
+    -> Coord UiPixels
+    -> ElementFull id lazy
+    -> List { source : Source, bounds : Bounds UiPixels }
+    -> Maybe (List { source : Source, bounds : Bounds UiPixels })
+inspectHelper model point clip position element found =
+    let
+        elementSize : Coord UiPixels
+        elementSize =
+            sizeHelper element
+
+        -- What the first of `children` (each at its position) that has something at the
+        -- point found.
+        firstOf : List ( Coord UiPixels, ElementFull id lazy ) -> Maybe (List { source : Source, bounds : Bounds UiPixels })
+        firstOf children =
+            findFirst (\( at, child ) -> inspectHelper model point clip at child found) children
+
+        orItself : Maybe (List { source : Source, bounds : Bounds UiPixels }) -> Maybe (List { source : Source, bounds : Bounds UiPixels })
+        orItself result =
+            case result of
+                Just _ ->
+                    result
+
+                Nothing ->
+                    Just found
+    in
+    if contains point position elementSize then
+        case element of
+            Sourced source child ->
+                inspectHelper
+                    model
+                    point
+                    clip
+                    position
+                    child
+                    (case Bounds.intersection clip { topLeft = position, bottomRight = Coord.plus position elementSize } of
+                        Just visible ->
+                            { source = source, bounds = visible } :: found
+
+                        Nothing ->
+                            found
+                    )
+
+            TextInput _ ->
+                Just found
+
+            TextInputMultiline _ ->
+                Just found
+
+            Text _ ->
+                Just found
+
+            Quads _ ->
+                Just found
+
+            Empty ->
+                Nothing
+
+            Button data child ->
+                -- The ones in front first.
+                firstOf (List.reverse (List.map (Tuple.pair position) data.inFront) ++ [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ])
+                    |> orItself
+
+            Row data children ->
+                firstOf (childPositions True data.spacing position children)
+
+            Column data children ->
+                firstOf (childPositions False data.spacing position children)
+
+            Single data child ->
+                let
+                    inChild =
+                        firstOf [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ]
+                in
+                -- Only a fill can be seen everywhere in it.
+                case data.borderAndFill of
+                    NoBorderOrFill ->
+                        inChild
+
+                    BorderOnly _ ->
+                        inChild
+
+                    FillOnly _ ->
+                        orItself inChild
+
+                    BorderAndFill _ ->
+                        orItself inChild
+
+                    BorderFillAndDots _ ->
+                        orItself inChild
+
+            InFront _ children ->
+                firstOf (List.reverse (List.map (\( coord, child ) -> ( Coord.plus coord position, child )) children))
+
+            Viewport data child ->
+                let
+                    inside : Bounds UiPixels
+                    inside =
+                        viewportInside position data child
+
+                    viewportModel : ViewportModel
+                    viewportModel =
+                        getViewport data.id model
+                in
+                case Bounds.intersection clip inside of
+                    Just clip2 ->
+                        if
+                            contains point inside.topLeft (Coord.minus inside.topLeft inside.bottomRight)
+                                && not (overScrollbar (Coord.minus position point) data.viewportHeight child)
+                        then
+                            inspectHelper model point clip2 (Coord.plus (contentPosition viewportModel) position) child found
+                                |> orItself
+
+                        else
+                            Just found
+
+                    Nothing ->
+                        Just found
+
+            Lazy _ _ child ->
+                inspectHelper model point clip position child found
+
+    else
+        Nothing
+
+
+
 -- HOVER AND FOCUS
+
+
+hover : Model id -> Coord UiPixels -> Element id -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+hover uiState point (Element element) =
+    hoverHelper uiState [] point Coord.origin element
+        |> List.map (\( a, b ) -> ( a, { relativePositionToUi = b.relativePositionToUi, ui = Element b.ui } ))
 
 
 {-| All of the elements with ids that contain the given point (usually the mouse cursor position).
 The first element in the list is the top most visible element.
 -}
-hover : Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
-hover point element =
-    hoverHelper [] point Coord.origin element
+hoverIdOnly : Model id -> Coord UiPixels -> Element id -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+hoverIdOnly uiState point element =
+    List.filterMap
+        (\( maybeId, element2 ) ->
+            case maybeId of
+                Just id ->
+                    Just ( id, element2 )
+
+                Nothing ->
+                    Nothing
+        )
+        (hover uiState point element)
+
+
+{-| The mouse cursor for the given point: a hand over a button, an I-beam over a text
+input, and the arrow anywhere else. It goes by the top most element with an id, the one
+`hoverIdOnly` gives first, which is also the one a click goes to and the one drawn
+hovered.
+-}
+cursorAt : Model id -> Coord UiPixels -> Element id -> Cursor
+cursorAt uiState point element =
+    case hoverIdOnly uiState point element of
+        ( id, { relativePositionToUi, ui } ) :: _ ->
+            case ui of
+                Element (Button _ _) ->
+                    Cursor.Pointer
+
+                Element (TextInput _) ->
+                    Cursor.Text
+
+                Element (TextInputMultiline data) ->
+                    if TextInputMultiline.overScrollbar data.style (Coord.minus relativePositionToUi point) (getTextInputMultiline id uiState) then
+                        Cursor.Arrow
+
+                    else
+                        Cursor.Text
+
+                Element (Text _) ->
+                    Cursor.Arrow
+
+                Element (Row _ _) ->
+                    Cursor.Arrow
+
+                Element (Column _ _) ->
+                    Cursor.Arrow
+
+                Element (Single _ _) ->
+                    Cursor.Arrow
+
+                Element (InFront _ _) ->
+                    Cursor.Arrow
+
+                Element (Quads _) ->
+                    Cursor.Arrow
+
+                Element Empty ->
+                    Cursor.Arrow
+
+                Element (Viewport _ _) ->
+                    Cursor.Arrow
+
+                Element (Lazy _ _ _) ->
+                    Cursor.Arrow
+
+                Element (Sourced _ _) ->
+                    Cursor.Arrow
+
+        [] ->
+            Cursor.Arrow
 
 
 contains : Coord UiPixels -> Coord UiPixels -> Coord UiPixels -> Bool
@@ -1005,97 +2032,101 @@ contains point position size2 =
 
 
 hoverHelper :
-    List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+    Model id
+    -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
     -> Coord UiPixels
     -> Coord UiPixels
-    -> Element id
-    -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
-hoverHelper hovers point position element =
-    case element of
-        TextInput data ->
-            if contains point position (TextInput.size data.style) then
-                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+    -> ElementFull id lazy
+    -> List ( Maybe id, { relativePositionToUi : Coord UiPixels, ui : ElementFull id lazy } )
+hoverHelper model hovers point position element =
+    if contains point position (sizeHelper element) then
+        case element of
+            TextInput data ->
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-            else
-                hovers
+            TextInputMultiline data ->
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-        TextInputMultiline data ->
-            if contains point position (TextInputMultiline.size data.style) then
-                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+            Button data _ ->
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
-            else
-                hovers
+            Row data children ->
+                childPositions True data.spacing position children
+                    |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
-        Button data _ ->
-            if contains point position data.cachedSize then
-                ( data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+            Column data children ->
+                childPositions False data.spacing position children
+                    |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
-            else
-                hovers
-
-        Row data children ->
-            childPositions True data position children
-                |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
-
-        Column data children ->
-            childPositions False data position children
-                |> List.foldl (\( at, child ) acc -> hoverHelper acc point at child) hovers
-
-        Single data child ->
-            let
-                hovers2 =
-                    case data.id of
-                        Just id ->
-                            if contains point position data.cachedSize then
-                                ( id, { relativePositionToUi = position, ui = element } ) :: hovers
-
-                            else
-                                hovers
-
-                        Nothing ->
-                            hovers
-
-                hovers3 =
-                    hoverHelper hovers2 point (Coord.plus data.padding.topLeft position) child
-            in
-            List.foldr (\inFront acc -> hoverHelper acc point position inFront) hovers3 data.inFront
-
-        Text _ ->
-            hovers
-
-        Quads _ ->
-            hovers
-
-        Empty ->
-            hovers
-
-        Viewport data child ->
-            if contains point position (viewportSize data child) then
+            Single data child ->
                 hoverHelper
+                    model
                     (( data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
                     point
-                    (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
+                    (Coord.plus (paddingTopLeft data.padding) position)
                     child
 
-            else
+            InFront _ children ->
+                -- Each is drawn over the ones before it, so it goes nearer the front of the list.
+                List.foldl
+                    (\( coord, child ) acc -> hoverHelper model acc point (Coord.plus coord position) child)
+                    hovers
+                    children
+
+            Text _ ->
+                ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
+
+            Quads _ ->
+                ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
+
+            Empty ->
                 hovers
 
-        Lazy _ _ child ->
-            hoverHelper hovers point position child
+            Viewport data child ->
+                let
+                    inside : Bounds UiPixels
+                    inside =
+                        viewportInside position data child
+
+                    hovers2 =
+                        ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+
+                    viewportModel =
+                        getViewport data.id model
+                in
+                -- Content scrolled out of sight, or under the scroll bar, can't be hovered.
+                if
+                    contains point inside.topLeft (Coord.minus inside.topLeft inside.bottomRight)
+                        && not (overScrollbar (Coord.minus position point) data.viewportHeight child)
+                then
+                    hoverHelper model hovers2 point (Coord.plus (contentPosition viewportModel) position) child
+
+                else
+                    hovers2
+
+            Lazy _ _ child ->
+                hoverHelper model hovers point position child
+
+            Sourced _ child ->
+                hoverHelper model hovers point position child
+
+    else
+        hovers
 
 
 type InputType id
-    = ButtonType { data : ButtonData id, position : Coord UiPixels, size : Coord UiPixels }
+    = ButtonType { position : Coord UiPixels, size : Coord UiPixels }
     | TextInputType { position : Coord UiPixels, size : Coord UiPixels }
+    | ViewportType { position : Coord UiPixels, viewportHeight : Quantity Int UiPixels, contentSize : Coord UiPixels }
 
 
-findInput : id -> Element id -> Maybe (InputType id)
-findInput id element =
-    findInputHelper id Coord.origin element
+findInput : Model id -> id -> Element id -> Maybe (InputType id)
+findInput uiState id (Element element) =
+    findInputHelper uiState id Coord.origin element
 
 
-findInputHelper : id -> Coord UiPixels -> Element id -> Maybe (InputType id)
-findInputHelper id position element =
+findInputHelper : Model id -> id -> Coord UiPixels -> ElementFull id lazy -> Maybe (InputType id)
+findInputHelper model id position element =
     case element of
         TextInput data ->
             if data.id == id then
@@ -1113,24 +2144,27 @@ findInputHelper id position element =
 
         Button data _ ->
             if data.id == id then
-                Just (ButtonType { data = data, position = position, size = data.cachedSize })
+                Just
+                    (ButtonType
+                        { position = position
+                        , size = data.cachedSize
+                        }
+                    )
 
             else
                 Nothing
 
         Row data children ->
-            findFirst (\( at, child ) -> findInputHelper id at child) (childPositions True data position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data.spacing position children)
 
         Column data children ->
-            findFirst (\( at, child ) -> findInputHelper id at child) (childPositions False data position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.spacing position children)
 
         Single data child ->
-            case findFirst (findInputHelper id position) data.inFront of
-                Just result ->
-                    Just result
+            findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
 
-                Nothing ->
-                    findInputHelper id (Coord.plus data.padding.topLeft position) child
+        InFront _ children ->
+            findFirst (\( coord, child ) -> findInputHelper model id (Coord.plus coord position) child) (List.reverse children)
 
         Text _ ->
             Nothing
@@ -1142,10 +2176,17 @@ findInputHelper id position element =
             Nothing
 
         Viewport data child ->
-            findInputHelper id (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position) child
+            if data.id == id then
+                Just (ViewportType { position = position, viewportHeight = data.viewportHeight, contentSize = sizeHelper child })
+
+            else
+                findInputHelper model id (Coord.plus (contentPosition (getViewport data.id model)) position) child
 
         Lazy _ _ child ->
-            findInputHelper id position child
+            findInputHelper model id position child
+
+        Sourced _ child ->
+            findInputHelper model id position child
 
 
 findFirst : (a -> Maybe b) -> List a -> Maybe b
@@ -1171,35 +2212,39 @@ findFirst f list =
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
 -}
-view : UiScale -> Bool -> Maybe id -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view scale showUiBorder maybeHover focus screenSize element =
+view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view uiState time scale showUiBorder maybeHover screenSize (Element element) =
     viewList
+        uiState
+        time
         scale
         showUiBorder
         maybeHover
-        focus
         { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
 
-viewList : UiScale -> Bool -> Maybe id -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> Element id -> List (Triangle DevicePixels)
-viewList scale showUiBorder maybeHover focus viewport2 position element =
-    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (size element) } of
+viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList model time scale showUiBorder maybeHover viewport2 position element =
+    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
                 TextInput data ->
-                    TextInput.view scale viewport3 data.style position (focus == Just data.id) data.isValid data.state.current
+                    TextInput.view scale viewport3 data.style position (model.focus == Just data.id) data.isValid (getTextInput data.id model).current
 
                 TextInputMultiline data ->
+                    let
+                        state =
+                            getTextInputMultiline data.id model
+                    in
                     TextInputMultiline.view
                         scale
                         viewport3
                         data.style
                         position
-                        (focus == Just data.id)
-                        data.state.scroll
-                        data.state.input.current
+                        (model.focus == Just data.id)
+                        state
 
                 Text data ->
                     (if showUiBorder then
@@ -1207,7 +2252,7 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                             scale
                             viewport3
                             position
-                            (BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 })
+                            (BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor })
                             data.cachedSize
 
                      else
@@ -1216,6 +2261,11 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         ++ Sprite.customText scale data.fontSize viewport3 data.segments position
 
                 Button data child ->
+                    let
+                        state : Button.Model
+                        state =
+                            getButton data.id model
+                    in
                     borderAndFillView
                         scale
                         viewport3
@@ -1223,23 +2273,49 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         (if Just data.id == maybeHover then
                             data.borderAndFillHover
 
-                         else if Just data.id == focus then
+                         else if Just data.id == model.focus then
                             data.borderAndFillFocus
 
                          else
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
+                        ++ (case state.buttonDown of
+                                Just ( buttonDownAt, buttonDownPos ) ->
+                                    let
+                                        timeElapsed : Duration
+                                        timeElapsed =
+                                            Duration.from buttonDownAt time
+
+                                        opacity =
+                                            200 - round (Duration.inSeconds timeElapsed * 350)
+                                    in
+                                    if opacity > 0 then
+                                        Sprite.circle
+                                            (Color.pressColor opacity)
+                                            1
+                                            (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
+                                            (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUiPixels |> min 100)
+                                            |> Sprite.move position
+                                            |> Sprite.clipTo (boundsToArea (Bounds.shrink (Units.uiPixels 2) viewport3))
+                                            |> Sprite.toDevice scale
+
+                                    else
+                                        []
+
+                                Nothing ->
+                                    []
+                           )
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
-                    childPositions True data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                    childPositions True data.spacing position children
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Column data children ->
-                    childPositions False data position children
-                        |> List.concatMap (\( at, child ) -> viewList scale showUiBorder maybeHover focus viewport3 at child)
+                    childPositions False data.spacing position children
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Single data child ->
                     borderAndFillView
@@ -1249,45 +2325,102 @@ viewList scale showUiBorder maybeHover focus viewport2 position element =
                         (if showUiBorder then
                             case data.borderAndFill of
                                 NoBorderOrFill ->
-                                    BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 }
+                                    BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor }
 
                                 BorderOnly _ ->
-                                    BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 }
+                                    BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor }
 
                                 FillOnly fillColor ->
-                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = fillColor }
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.focusedUiColor, fillColor = fillColor }
 
                                 BorderAndFill data2 ->
-                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = data2.fillColor }
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.focusedUiColor, fillColor = data2.fillColor }
+
+                                BorderFillAndDots data2 ->
+                                    BorderFillAndDots { data2 | borderWidth = 1, borderColor = Color.focusedUiColor }
 
                          else
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList scale showUiBorder maybeHover focus viewport3 (Coord.plus data.padding.topLeft position) child
-                        ++ List.concatMap (viewList scale showUiBorder maybeHover focus viewport3 position) data.inFront
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+
+                InFront _ children ->
+                    List.concatMap
+                        (\( coord, child ) ->
+                            viewList
+                                model
+                                time
+                                scale
+                                showUiBorder
+                                maybeHover
+                                viewport3
+                                (Coord.plus coord position)
+                                child
+                        )
+                        children
 
                 Quads data ->
-                    Sprite.move position data.triangles |> Sprite.toDevice scale
+                    Sprite.move position data.triangles
+                        |> Sprite.clipTo (boundsToArea viewport3)
+                        |> Sprite.toDevice scale
 
                 Empty ->
                     []
 
                 Viewport data child ->
-                    viewList
+                    let
+                        childSize : Coord UiPixels
+                        childSize =
+                            sizeHelper child
+
+                        viewportModel =
+                            getViewport data.id model
+                    in
+                    borderAndFillView
                         scale
-                        showUiBorder
-                        maybeHover
-                        focus
                         viewport3
-                        (Coord.plus ( Quantity.zero, Quantity.round data.scrollOffset ) position)
-                        child
+                        position
+                        (BorderOnly { borderWidth = 1, borderColor = Color.outlineColor })
+                        (viewportSize data child)
+                        ++ (case Bounds.intersection viewport3 (viewportInside position data child) of
+                                Just inside ->
+                                    viewList
+                                        model
+                                        time
+                                        scale
+                                        showUiBorder
+                                        maybeHover
+                                        inside
+                                        (Coord.plus (contentPosition viewportModel) position)
+                                        child
+
+                                Nothing ->
+                                    []
+                           )
+                        ++ (Scrollbar.view
+                                viewport3
+                                -- The scroll bar's strip, over the right of the content.
+                                (Coord.plus (Coord.xy (Coord.xRaw childSize - Scrollbar.width) 0) position)
+                                (viewportGeometry data.viewportHeight childSize)
+                                (scrolled viewportModel.offset)
+                                viewportModel
+                                |> Sprite.toDevice scale
+                           )
 
                 Lazy _ _ child ->
-                    viewList scale showUiBorder maybeHover focus viewport3 position child
+                    viewList model time scale showUiBorder maybeHover viewport3 position child
+
+                Sourced _ child ->
+                    viewList model time scale showUiBorder maybeHover viewport3 position child
 
         Nothing ->
             []
+
+
+buttonCircleGrowSpeed : Quantity Float (Rate UiPixels Seconds)
+buttonCircleGrowSpeed =
+    Quantity.rate (Units.uiPixels 250) Duration.second
 
 
 borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
@@ -1333,3 +2466,27 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                     (Coord.plus (Coord.xy borderWidth borderWidth) position)
                     (size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth)))
                 |> Sprite.toDevice scale
+
+        BorderFillAndDots { borderWidth, borderColor, fillColor, dotColor } ->
+            let
+                inside =
+                    Coord.plus (Coord.xy borderWidth borderWidth) position
+
+                insideSize =
+                    size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth))
+            in
+            Sprite.rectangle borderColor viewport2 position size2
+                ++ Sprite.rectangle fillColor viewport2 inside insideSize
+                ++ Sprite.dotGrid dotColor viewport2 inside insideSize
+                |> Sprite.toDevice scale
+
+
+{-| A viewport as `Sprite.clipTo` takes it.
+-}
+boundsToArea : Bounds UiPixels -> { left : Float, top : Float, right : Float, bottom : Float }
+boundsToArea bounds =
+    { left = toFloat (Coord.xRaw bounds.topLeft)
+    , top = toFloat (Coord.yRaw bounds.topLeft)
+    , right = toFloat (Coord.xRaw bounds.bottomRight)
+    , bottom = toFloat (Coord.yRaw bounds.bottomRight)
+    }

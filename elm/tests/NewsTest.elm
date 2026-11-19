@@ -1,14 +1,18 @@
 module NewsTest exposing (suite)
 
 import Bytes
+import Coord
 import Date exposing (Date)
 import Duration
 import Effect
 import Expect
 import Json.Decode as D
-import News exposing (Inline(..), Item(..))
+import News
+import News.Types exposing (Inline(..), Item(..), NewsState(..))
 import Test exposing (Test, describe, test)
 import Time
+import Ui
+import Units
 
 
 {-| Shortened from Portal:Current events/2026 November 7.
@@ -136,6 +140,19 @@ suite =
 
                     _ ->
                         Expect.fail "not an HTTP request"
+            )
+        , test "the view is no wider than its window"
+            (\_ ->
+                -- The bullet before each item used to be left out of the items' width,
+                -- so wrapped items stuck out of the window by its width.
+                News.view
+                    Ui.noLazyCache
+                    (Units.uiPixels 300)
+                    (Units.uiPixels 400)
+                    (LoadedNews [ { date = date 2026 11 7, topics = News.parseWikitext day } ])
+                    |> Ui.size
+                    |> Coord.xRaw
+                    |> Expect.atMost 300
             )
         ]
 

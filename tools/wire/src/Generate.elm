@@ -33,6 +33,7 @@ import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation(..))
 import Freeze
 import Lazy
 import Set exposing (Set)
+import Source
 
 
 type alias Options =
@@ -128,6 +129,26 @@ builtins =
         ]
 
 
+{-| Type aliases that packages define, as what they stand for. tools/wire only reads
+this program's modules, not the packages', so it sees `Duration` as a name it doesn't
+know unless it is told here that it is a `Quantity Float Duration.Seconds`, which it
+can save. Each is written out in full wherever it is named, frozen modules included.
+-}
+packageAliases : Dict Key Ty
+packageAliases =
+    let
+        quantityFloat : String -> String -> Ty
+        quantityFloat moduleName units =
+            TNamed ( "Quantity", "Quantity" ) [ TNamed ( "Basics", "Float" ) [], TNamed ( moduleName, units ) [] ]
+    in
+    Dict.fromList
+        [ ( ( "Duration", "Duration" ), quantityFloat "Duration" "Seconds" )
+        , ( ( "Length", "Length" ), quantityFloat "Length" "Meters" )
+        , ( ( "Angle", "Angle" ), quantityFloat "Angle" "Radians" )
+        , ( ( "Mass", "Mass" ), quantityFloat "Mass" "Kilograms" )
+        ]
+
+
 {-| The modules every Elm module imports without saying so, and the types they expose.
 -}
 defaultImports : List { name : String, alias : Maybe String, types : List String }
@@ -150,7 +171,29 @@ defaultImports =
 -}
 generate : Options -> List SourceFile -> Result (List String) { files : List SourceFile, warnings : List String }
 generate options files =
-    withModules options files generateWith
+    withModules options
+        files
+        (\options2 modules modelKey msgKey configKey ->
+            -- Each element told where it was made (Source.elm). Lines stay where they
+            -- were, so `file` still says where everything is, apart from columns.
+            generateWith options2 (Dict.map (\_ m -> { m | source = Source.rewrite m.file m.source }) modules) modelKey msgKey configKey
+                |> Result.map
+                    (\result ->
+                        -- SourceCode.elm holding every module's text, as it was written.
+                        { result
+                            | files =
+                                List.map
+                                    (\f ->
+                                        if f.path == "SourceCode.elm" then
+                                            { f | source = Source.sourceCodeModule (List.map (\s -> ( s.path, s.source )) files) }
+
+                                        else
+                                            f
+                                    )
+                                    result.files
+                        }
+                    )
+        )
 
 
 {-| What to write when `generate` fails: the source files as they are, and an entry
@@ -346,7 +389,7 @@ lazyTypeText modules { caller, qualifier } annotation =
                             []
 
                 ref ( moduleName, name ) =
-                    if List.member moduleName bareModules then
+                    if List.member moduleName bareModules || qualifier moduleName == "" then
                         name
 
                     else
@@ -821,7 +864,12 @@ canonical m annotation =
             in
             case resolve m qualifier name of
                 Just moduleName ->
-                    TNamed ( moduleName, name ) (List.map (Node.value >> canonical m) args)
+                    case Dict.get ( moduleName, name ) packageAliases of
+                        Just ty ->
+                            ty
+
+                        Nothing ->
+                            TNamed ( moduleName, name ) (List.map (Node.value >> canonical m) args)
 
                 Nothing ->
                     TUnknown written
@@ -2447,7 +2495,10 @@ left `import Date` out of a frozen module.
 -}
 packageModules : List String
 packageModules =
-    builtinModules |> List.filter (\m -> not (List.member m bareModules))
+    (builtinModules ++ (Dict.keys packageAliases |> List.map Tuple.first))
+        |> Set.fromList
+        |> Set.toList
+        |> List.filter (\m -> not (List.member m bareModules))
 
 
 {-| Every module that has a type in `builtins`.

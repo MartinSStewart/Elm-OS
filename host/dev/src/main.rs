@@ -15,8 +15,11 @@
 //!     (common::raster), with the same atlas. Resizing a window sends Elm the new
 //!     display sizes.
 //!   - Keys, the mouse and the wheel come from the window. Keys go to Elm as the same
-//!     Linux key codes a keyboard sends Elm OS. The cursor is your desktop's, as if it
-//!     were on a cursor plane, so Elm draws its orange "frame lag" copy.
+//!     Linux key codes a keyboard sends Elm OS. On Wayland, the desktop is asked to
+//!     keep its shortcuts (PrintScreen, say) to itself while a window has the focus,
+//!     as QEMU does (shortcuts.rs). The cursor is your desktop's, showing Elm's
+//!     picture of it, as if it were on a cursor plane, so Elm draws its orange "frame
+//!     lag" copy.
 //!   - HTTP is real: host/init's http.rs, compiled in as it is.
 //!   - Reading files is real too (host/init's files.rs): the debug overlay shows your
 //!     computer's battery, for instance. Writing kernel settings (writeSys) is ignored.
@@ -48,6 +51,8 @@ macro_rules! log {
 mod files;
 #[path = "../../init/src/http.rs"]
 mod http;
+#[path = "../../init/src/tls_socket.rs"]
+mod tls_socket;
 #[path = "../../init/src/websocket.rs"]
 mod websocket;
 #[path = "../../init/src/stats.rs"]
@@ -56,6 +61,7 @@ mod stats;
 mod elm;
 mod fake;
 mod program;
+mod shortcuts;
 mod sys;
 
 use std::fs::OpenOptions;
@@ -75,7 +81,7 @@ use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::scancode::PhysicalKeyExtScancode;
-use winit::window::{Window, WindowId};
+use winit::window::{CustomCursor, Window, WindowId};
 
 use program::{Built, FromProgram, Watch};
 
@@ -88,8 +94,6 @@ const RAN_WELL: Duration = Duration::from_secs(30);
 const CRASH_LOOP: u32 = 5;
 const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
 const WATCH_EVERY: Duration = Duration::from_millis(300);
-/// A touchpad's scrolling, in pixels, that counts as one wheel click.
-const PIXELS_PER_CLICK: f64 = 40.0;
 
 struct Options {
     program: PathBuf,
@@ -156,6 +160,9 @@ struct Running {
 
 /// A display's window, what shows our pixels in it, and what it shows.
 struct Screen {
+    /// Keeps the desktop's shortcuts (PrintScreen, say) from taking keys while the
+    /// window has the focus (shortcuts.rs). Before the window, so it goes first.
+    _shortcuts: Option<shortcuts::Inhibit>,
     window: Rc<Window>,
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     w: u32,
@@ -196,8 +203,13 @@ struct Runner {
     mouse: (i32, i32),
     /// Whether the mouse has moved since it was last sent.
     mouse_moved: bool,
-    /// Touchpad scrolling not yet a whole wheel click.
+    /// Wheel turning not yet a whole click (some mice report fractions).
     wheel: f64,
+    /// The UI scale, from Elm's Effect::Cursor: touchpad scrolling goes to Elm in UI pixels.
+    ui_scale: f64,
+    /// Elm's last Effect::Cursor, and whether the windows show it yet.
+    cursor: Option<(u32, u32, protocol::CursorImage)>,
+    cursor_shown: bool,
     watch: Option<Watch>,
     watched_at: Instant,
     started: Instant,
@@ -405,15 +417,22 @@ impl Runner {
                     }
                     match protocol::read_render(bytes) {
                         Some(tris) => {
-                            screen.scene = Some(tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba }).collect())
+                            screen.scene = Some(tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba, linear: t.linear, tile: t.tile }).collect())
                         }
                         None => log!("dev", "couldn't read Elm's scene: {} bytes", bytes.len()),
                     }
                 }
                 self.shown = scenes;
             }
-            // The cursor is the desktop's.
-            Effect::Cursor { .. } => {}
+            // The desktop shows it (show_cursor), when it changes.
+            Effect::Cursor { rgba, scale, image } => {
+                self.ui_scale = scale.max(1) as f64;
+                let cursor = Some((rgba, scale, image));
+                if cursor != self.cursor {
+                    self.cursor = cursor;
+                    self.cursor_shown = false;
+                }
+            }
             Effect::WifiScan => fake::scan(&mut self.timers),
             Effect::WifiConnect { ssid, password } => {
                 let m = fake::connect(&mut self.timers, &ssid, &password);
@@ -436,6 +455,9 @@ impl Runner {
             Effect::WebSocketOpen { id, url, headers } => websocket::open(id, url, headers),
             Effect::WebSocketSend { id, data } => websocket::send(&id, data),
             Effect::WebSocketClose { id } => websocket::close(&id),
+            Effect::TlsOpen { id, host, port } => tls_socket::open(id, host, port),
+            Effect::TlsSend { id, data } => tls_socket::send(&id, data),
+            Effect::TlsClose { id } => tls_socket::close(&id),
             Effect::ListDir { path } => files::request(elm::program(), files::Request::ListDir { path }),
             Effect::ReadFiles { id, paths } => files::request(elm::program(), files::Request::ReadFiles { id, paths }),
             Effect::ReadBytes { path, offset, length } => {
@@ -523,7 +545,7 @@ impl Runner {
             return;
         }
         self.asked_at = Instant::now();
-        elm::send(&ToElm::Frame { time: (sys::now() * 1e6).round() / 1000.0 });
+        elm::send(&ToElm::frame_now((sys::now() * 1e6).round() / 1000.0));
         self.awaiting_frame = true;
     }
 
@@ -647,7 +669,12 @@ impl Runner {
                 // Positive is up (away from you), as Elm OS's.
                 self.wheel += match delta {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
-                    MouseScrollDelta::PixelDelta(p) => p.y / PIXELS_PER_CLICK,
+                    MouseScrollDelta::PixelDelta(p) => {
+                        // A touchpad: smooth scrolling, as /init sends it.
+                        self.send_mouse();
+                        elm::send(&ToElm::Scroll { dy: p.y / self.ui_scale });
+                        return;
+                    }
                 };
                 let clicks = self.wheel.trunc();
                 if clicks != 0.0 {
@@ -688,6 +715,47 @@ impl Screen {
     }
 }
 
+impl Runner {
+    /// Gives the windows Elm's cursor, if it has changed.
+    fn show_cursor(&mut self, event_loop: &ActiveEventLoop) {
+        if self.cursor_shown {
+            return;
+        }
+        self.cursor_shown = true;
+        let Some((rgba, scale, image)) = &self.cursor else { return };
+        let picture = common::cursor::Picture {
+            width: image.width as usize,
+            height: image.height as usize,
+            pixels: image.pixels.clone(),
+        };
+        let s = (*scale).clamp(1, 4) as usize;
+        let (w, h) = ((picture.width * s).min(common::cursor::PLANE), (picture.height * s).min(common::cursor::PLANE));
+        let plane = picture.plane_image(s, *rgba);
+        // Premultiplied ARGB to straight RGBA, cut to the picture's size.
+        let mut bytes = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for &p in &plane[y * common::cursor::PLANE..y * common::cursor::PLANE + w] {
+                let a = p >> 24;
+                let un = |c: u32| if a == 0 { 0 } else { (c * 255 / a).min(255) as u8 };
+                bytes.extend_from_slice(&[un(p >> 16 & 255), un(p >> 8 & 255), un(p & 255), a as u8]);
+            }
+        }
+        let hot = ((image.hot_x as usize * s).min(w.saturating_sub(1)) as u16, (image.hot_y as usize * s).min(h.saturating_sub(1)) as u16);
+        if w == 0 || h == 0 {
+            return;
+        }
+        match CustomCursor::from_rgba(bytes, w as u16, h as u16, hot.0, hot.1) {
+            Ok(source) => {
+                let cursor = event_loop.create_custom_cursor(source);
+                for screen in &self.screens {
+                    screen.window.set_cursor(cursor.clone());
+                }
+            }
+            Err(e) => log!("dev", "can't make Elm's cursor: {e}"),
+        }
+    }
+}
+
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.screens.is_empty() {
@@ -704,7 +772,7 @@ impl ApplicationHandler for Runner {
                 // The window manager may have made it another size.
                 let size = window.inner_size();
                 let (w, h) = if size.width > 0 && size.height > 0 { (size.width, size.height) } else { (w, h) };
-                Ok(Screen { window, surface, w, h, pixels: vec![0; w as usize * h as usize], scene: None })
+                Ok(Screen { _shortcuts: shortcuts::inhibit(&window), window, surface, w, h, pixels: vec![0; w as usize * h as usize], scene: None })
             });
             match made {
                 Ok(screen) => self.screens.push(screen),
@@ -732,6 +800,7 @@ impl ApplicationHandler for Runner {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let next = self.tick();
+        self.show_cursor(event_loop);
         if self.quit {
             event_loop.exit();
         } else {
@@ -807,6 +876,9 @@ fn main() {
         mouse: (0, 0),
         mouse_moved: false,
         wheel: 0.0,
+        ui_scale: 1.0,
+        cursor: None,
+        cursor_shown: false,
         watch,
         watched_at: Instant::now(),
         started: Instant::now(),

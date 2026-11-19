@@ -203,8 +203,9 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   `elmos-gpu`, a small dynamically linked program. If that fails or finds only a software
   driver, `/init` draws on the CPU instead. Mesa comes prebuilt from Alpine Linux.
 - Elm draws only when the host sends a `frame` message, which follows the display's refresh.
-  Each frame is 52 bytes per triangle (three corners of screen and atlas coordinates as
-  32-bit floats, plus a colour), all sampling one texture atlas (`host/common/src/atlas.rs`).
+  Each frame is 56 bytes per triangle (three corners of screen and atlas coordinates as
+  32-bit floats, plus a colour and whether the atlas is sampled bilinearly or by the nearest
+  pixel), all sampling one texture atlas (`host/common/src/atlas.rs`).
   They go out on a bytes port, which eco lends to the host without encoding or copying, and
   the host hands them to the renderer nearly as they are. With JSON, encoding and parsing
   them took most of Elm's time per frame: `make measure-frames` measured 88 ms per frame

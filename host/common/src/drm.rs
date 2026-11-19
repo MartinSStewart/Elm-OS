@@ -503,15 +503,18 @@ pub fn move_cursor(card: &File, crtc: u32, x: i32, y: i32) {
     ioctl(card, IOCTL_MODE_CURSOR, &mut c);
 }
 
-/// Draws the cursor image into a 64 x 64 dumb buffer and puts it on the cursor plane.
-pub fn draw_cursor(card: &File, crtc: u32, handle: u32, scale: usize, fill: u32) -> bool {
-    use crate::atlas::{cursor_image, CURSOR_PLANE};
+/// Copies a cursor plane image (cursor::Picture::plane_image) into a 64 x 64 dumb
+/// buffer and puts it on the cursor plane.
+pub fn draw_cursor(card: &File, crtc: u32, handle: u32, img: &[u32]) -> bool {
+    use crate::cursor::PLANE as CURSOR_PLANE;
     let size = CURSOR_PLANE * CURSOR_PLANE * 4;
+    if img.len() != CURSOR_PLANE * CURSOR_PLANE {
+        return false;
+    }
     let Some(px) = map_dumb(card, handle, size) else {
         return false;
     };
-    let img = cursor_image(scale, fill);
-    // SAFETY: px maps the 64 x 64 x 4 byte buffer.
+    // SAFETY: px maps the 64 x 64 x 4 byte buffer, and img is 64 x 64.
     unsafe {
         std::ptr::copy_nonoverlapping(img.as_ptr(), px, CURSOR_PLANE * CURSOR_PLANE);
         libc::munmap(px as *mut libc::c_void, size);

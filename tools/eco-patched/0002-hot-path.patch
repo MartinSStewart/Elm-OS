@@ -1,0 +1,1204 @@
+eco hot-path speedups for Elm OS, on top of 0001 (branch claude/project-thread-a9tfyd of
+MartinSStewart/eco-compiler, one commit each):
+
+  057ca87 Resolve heap pointers inline in hpointerToPtr
+  6306c7b Look interned literals up in a direct-mapped cache first
+  d53d1fc Call saturated closures directly from eco_apply_closure_eval
+  7ffb6fa Snapshot String characters without a vector for short Strings
+  4fec875 Compare pairs of unboxed numbers and Chars without the slot walk
+  8ec2abe Keep a fused encoder loop's names inside the loop
+  914603f Fuse sequence (List.map f xs) encoders without a length prefix
+
+diff --git a/compiler/src/Compiler/GenerateMlir/BytesFusion/Emit.elm b/compiler/src/Compiler/GenerateMlir/BytesFusion/Emit.elm
+index 0ec98e0..3a6c1c3 100644
+--- a/compiler/src/Compiler/GenerateMlir/BytesFusion/Emit.elm
++++ b/compiler/src/Compiler/GenerateMlir/BytesFusion/Emit.elm
+@@ -381,6 +381,38 @@ emitWidthExpr compileExpr expr ctx =
+             in
+             ( exprResult.ops ++ [ widthOp ], resultVar, ctx3 )
+ 
++        WListWalkMul listExpr constWidth ->
++            let
++                listResult =
++                    compileExpr listExpr ctx
++
++                ( countOps, countVar, ctx1 ) =
++                    emitListCount listResult.resultVar listResult.ctx
++
++                ( constVar, ctx2 ) =
++                    Context.freshVar ctx1
++
++                ( ctx3, constOp ) =
++                    Ops.mlirOp ctx2 "arith.constant"
++                        |> Ops.opBuilder.withResults [ ( constVar, I32 ) ]
++                        |> Ops.opBuilder.withAttrs (Dict.singleton "value" (IntAttr (Just I32) constWidth))
++                        |> Ops.opBuilder.build
++
++                ( mulVar, ctx4 ) =
++                    Context.freshVar ctx3
++
++                ( ctx5, mulOp ) =
++                    Ops.mlirOp ctx4 "arith.muli"
++                        |> Ops.opBuilder.withOperands [ countVar, constVar ]
++                        |> Ops.opBuilder.withResults [ ( mulVar, I32 ) ]
++                        |> Ops.opBuilder.withAttrs
++                            (Dict.singleton "_operand_types"
++                                (ArrayAttr Nothing [ TypeAttr I32, TypeAttr I32 ])
++                            )
++                        |> Ops.opBuilder.build
++            in
++            ( listResult.ops ++ countOps ++ [ constOp, mulOp ], mulVar, ctx5 )
++
+         WListLengthMul countExpr constWidth ->
+             -- The count is truncated to i32 as it stands, so it must compile to
+             -- an unboxed integer, not an !eco.value.
+@@ -426,6 +458,167 @@ emitWidthExpr compileExpr expr ctx =
+             ( countResult.ops ++ [ trunciOp, constOp, mulOp ], mulVar, ctx7 )
+ 
+ 
++{-| Emits a loop that counts the elements of the list `listVar`, as an `i32`.
++Returns the ops, the SSA name of the count, and the context after them.
++
++    %n, %rest = scf.while (%k = 0, %lst = %list) {
++      %is_cons = <tag of %lst is not the constant tag>
++      scf.condition (%is_cons) %k, %lst
++    } do {
++    ^bb0(%k, %lst):
++      %tail = eco.project.list_tail %lst
++      %k1 = arith.addi %k, 1
++      scf.yield %k1, %tail
++    }
++
++It reads only list cells and allocates nothing, so it is a cheap pass before
++the buffer is allocated, for a list loop with no length written before it.
++
++-}
++emitListCount : String -> Context -> ( List MlirOp, String, Context )
++emitListCount listVar ctx0 =
++    let
++        ( zeroVar, ctx1 ) =
++            Context.freshVar ctx0
++
++        ( ctx2, zeroOp ) =
++            Ops.mlirOp ctx1 "arith.constant"
++                |> Ops.opBuilder.withResults [ ( zeroVar, I32 ) ]
++                |> Ops.opBuilder.withAttrs (Dict.singleton "value" (IntAttr (Just I32) 0))
++                |> Ops.opBuilder.build
++
++        ( countResult, ctx3 ) =
++            Context.freshVar ctx2
++
++        ( listResult, ctx4 ) =
++            Context.freshVar ctx3
++
++        ( beforeCount, ctx5 ) =
++            Context.freshVar ctx4
++
++        ( beforeList, ctx6 ) =
++            Context.freshVar ctx5
++
++        ( tagVar, ctx7 ) =
++            Context.freshVar ctx6
++
++        ( ctx8, tagOp ) =
++            Ops.mlirOp ctx7 "eco.get_tag"
++                |> Ops.opBuilder.withOperands [ beforeList ]
++                |> Ops.opBuilder.withResults [ ( tagVar, I32 ) ]
++                |> Ops.opBuilder.withAttrs
++                    (Dict.singleton "_operand_types"
++                        (ArrayAttr Nothing [ TypeAttr Types.ecoValue ])
++                    )
++                |> Ops.opBuilder.build
++
++        -- The empty list is an embedded constant, whose tag reads as
++        -- CtorTag.constantTag, not 0.
++        ( nilTagVar, ctx9 ) =
++            Context.freshVar ctx8
++
++        ( ctx10, nilTagOp ) =
++            Ops.mlirOp ctx9 "arith.constant"
++                |> Ops.opBuilder.withResults [ ( nilTagVar, I32 ) ]
++                |> Ops.opBuilder.withAttrs (Dict.singleton "value" (IntAttr (Just I32) CtorTag.constantTag))
++                |> Ops.opBuilder.build
++
++        ( isConsVar, ctx11 ) =
++            Context.freshVar ctx10
++
++        -- Predicate 1 is ne.
++        ( ctx12, cmpNeOp ) =
++            Ops.mlirOp ctx11 "arith.cmpi"
++                |> Ops.opBuilder.withOperands [ tagVar, nilTagVar ]
++                |> Ops.opBuilder.withResults [ ( isConsVar, I1 ) ]
++                |> Ops.opBuilder.withAttrs
++                    (Dict.fromList
++                        [ ( "predicate", IntAttr Nothing 1 )
++                        , ( "_operand_types", ArrayAttr Nothing [ TypeAttr I32, TypeAttr I32 ] )
++                        ]
++                    )
++                |> Ops.opBuilder.build
++
++        ( ctx13, conditionOp ) =
++            Ops.scfCondition ctx12
++                isConsVar
++                [ ( beforeCount, I32 )
++                , ( beforeList, Types.ecoValue )
++                ]
++
++        beforeRegion =
++            Ops.mkRegion
++                [ ( beforeCount, I32 )
++                , ( beforeList, Types.ecoValue )
++                ]
++                [ tagOp, nilTagOp, cmpNeOp ]
++                conditionOp
++
++        ( afterCount, ctx14 ) =
++            Context.freshVar ctx13
++
++        ( afterList, ctx15 ) =
++            Context.freshVar ctx14
++
++        ( tailVar, ctx16 ) =
++            Context.freshVar ctx15
++
++        ( ctx17, tailOp ) =
++            Ops.mlirOp ctx16 "eco.project.list_tail"
++                |> Ops.opBuilder.withOperands [ afterList ]
++                |> Ops.opBuilder.withResults [ ( tailVar, Types.ecoValue ) ]
++                |> Ops.opBuilder.withAttrs
++                    (Dict.singleton "_operand_types"
++                        (ArrayAttr Nothing [ TypeAttr Types.ecoValue ])
++                    )
++                |> Ops.opBuilder.build
++
++        ( oneVar, ctx18 ) =
++            Context.freshVar ctx17
++
++        ( ctx19, oneOp ) =
++            Ops.mlirOp ctx18 "arith.constant"
++                |> Ops.opBuilder.withResults [ ( oneVar, I32 ) ]
++                |> Ops.opBuilder.withAttrs (Dict.singleton "value" (IntAttr (Just I32) 1))
++                |> Ops.opBuilder.build
++
++        ( nextCount, ctx20 ) =
++            Context.freshVar ctx19
++
++        ( ctx21, addOp ) =
++            Ops.mlirOp ctx20 "arith.addi"
++                |> Ops.opBuilder.withOperands [ afterCount, oneVar ]
++                |> Ops.opBuilder.withResults [ ( nextCount, I32 ) ]
++                |> Ops.opBuilder.build
++
++        ( ctx22, yieldOp ) =
++            Ops.mlirOp ctx21 "scf.yield"
++                |> Ops.opBuilder.withOperands [ nextCount, tailVar ]
++                |> Ops.opBuilder.withAttrs
++                    (Dict.singleton "_operand_types"
++                        (ArrayAttr Nothing [ TypeAttr I32, TypeAttr Types.ecoValue ])
++                    )
++                |> Ops.opBuilder.build
++
++        afterRegion =
++            Ops.mkRegion
++                [ ( afterCount, I32 )
++                , ( afterList, Types.ecoValue )
++                ]
++                [ tailOp, oneOp, addOp ]
++                yieldOp
++
++        ( ctx23, whileOp ) =
++            Ops.scfWhile ctx22
++                [ ( countResult, zeroVar, I32 )
++                , ( listResult, listVar, Types.ecoValue )
++                ]
++                beforeRegion
++                afterRegion
++    in
++    ( [ zeroOp, whileOp ], countResult, ctx23 )
++
++
+ {-| Returns the `endianness` attribute of a `bf` read or write: the `i32` 0 for
+ little-endian and 1 for big-endian.
+ -}
+@@ -914,8 +1107,13 @@ emitWriteEachItem r state =
+                     )
+                 |> Ops.opBuilder.build
+ 
++        -- The body comes from the mapped function, whose local names can
++        -- equal names of the enclosing let chain, so the chain's placeholders
++        -- must not be visible inside it: a `let` there of a name the chain
++        -- also binds would otherwise be given, and define, the chain's
++        -- placeholder for that name.
+         ctxBody =
+-            Context.addVarMapping r.itemVar headVar headType ctx21
++            Context.addVarMapping r.itemVar headVar headType { ctx21 | currentLetSiblings = Dict.empty }
+ 
+         -- The body's ops go inside the region, and its values are compiled
+         -- there, not taken from the hoisted ones.
+@@ -954,7 +1152,19 @@ emitWriteEachItem r state =
+                 afterRegion
+     in
+     { state
+-        | ctx = ctx24
++        | -- The item and whatever the body bound are in scope only inside the
++          -- loop. Left mapped, the item's name would stand for an SSA value of
++          -- the loop region in the code after it, where a later binding of the
++          -- same name (a callee's parameter name such as `_v0` is common)
++          -- would find it already defined. The tables keyed by local name
++          -- are restored for the same reason.
++          ctx =
++            { ctx24
++                | varMappings = ctx0.varMappings
++                , currentLetSiblings = ctx0.currentLetSiblings
++                , decoderExprs = ctx0.decoderExprs
++                , localEvaluatorParams = ctx0.localEvaluatorParams
++            }
+         , cursor = whileCursorResult
+         , hoisted = hoisted
+         , ops = whileOp :: (List.reverse iterResult.ops ++ state.ops)
+diff --git a/compiler/src/Compiler/GenerateMlir/BytesFusion/LoopIR.elm b/compiler/src/Compiler/GenerateMlir/BytesFusion/LoopIR.elm
+index f105c62..234b454 100644
+--- a/compiler/src/Compiler/GenerateMlir/BytesFusion/LoopIR.elm
++++ b/compiler/src/Compiler/GenerateMlir/BytesFusion/LoopIR.elm
+@@ -65,6 +65,9 @@ occupies when encoded as UTF-8, which is not its length in characters.
+ time. It sizes a loop that writes the same number of bytes for every item. Its
+ expression must produce the count as an integer.
+ 
++`WListWalkMul` is the same for a loop with no count at hand: its expression
++produces the list itself, whose elements are counted at run time.
++
+ `WOpaqueWidth` is the size, measured at run time, of an encoder value that was
+ not recognised and is written as a whole.
+ 
+@@ -75,6 +78,7 @@ type WidthExpr
+     | WStringUtf8Width Mono.MonoExpr
+     | WBytesWidth Mono.MonoExpr
+     | WListLengthMul Mono.MonoExpr Int
++    | WListWalkMul Mono.MonoExpr Int
+     | WOpaqueWidth Mono.MonoExpr
+ 
+ 
+diff --git a/compiler/src/Compiler/GenerateMlir/BytesFusion/Reify.elm b/compiler/src/Compiler/GenerateMlir/BytesFusion/Reify.elm
+index 3cf248a..98ea79c 100644
+--- a/compiler/src/Compiler/GenerateMlir/BytesFusion/Reify.elm
++++ b/compiler/src/Compiler/GenerateMlir/BytesFusion/Reify.elm
+@@ -1,7 +1,7 @@
+ module Compiler.GenerateMlir.BytesFusion.Reify exposing
+     ( EncoderNode, DecoderNode, BodyLookup
+     , reifyEncoderWith, reifyDecoder
+-    , nodesToOps, decoderNodeToOps
++    , nodesToOps, decoderNodeToOps, bindLoopLists, nodeExprs
+     , CountSource, LengthDecoder
+     )
+ 
+@@ -56,7 +56,7 @@ through those as well as through calls.
+ 
+ # Loop IR Conversion
+ 
+-@docs nodesToOps, decoderNodeToOps
++@docs nodesToOps, decoderNodeToOps, bindLoopLists, nodeExprs
+ 
+ 
+ # Auxiliary Types
+@@ -110,6 +110,10 @@ name by which `itemWrites` refer to the current element, and `itemType` is its
+ type. `iterExpr` is `xs`, and `countExpr` is the `List.length xs` call itself,
+ also used to size the buffer.
+ 
++The same loop with no length before it, `sequence (List.map f xs)`, reifies to
++an `ELoop` alone whose `countExpr` is `Nothing`: the buffer is then sized by
++counting the list's elements at run time.
++
+ `EOpaque` is an encoder subtree that was not recognised. It is written at run
+ time by the ordinary encoder, and its width is measured at run time too.
+ 
+@@ -127,7 +131,7 @@ type EncoderNode
+         , itemType : Mono.MonoType
+         , itemWrites : List FixedWrite
+         , iterExpr : Mono.MonoExpr
+-        , countExpr : Mono.MonoExpr
++        , countExpr : Maybe Mono.MonoExpr
+         }
+     | EOpaque Mono.MonoExpr
+ 
+@@ -262,7 +266,8 @@ is not recognised.
+ 
+ Recognised forms are a call of a `Bytes.Encode` function, directly, curried,
+ or through a local variable bound to a partial call; a `let`, whose binding is
+-added to `exprCache`; and a local variable bound in `exprCache`. The encoders
++added to `exprCache`; a destructuring, which is put around every value under
++it (see `destructInNode`); and a local variable bound in `exprCache`. The encoders
+ inside a recognised `sequence` are reified with `reifyEncoderHelp`, so they may
+ still be opaque.
+ 
+@@ -342,10 +347,178 @@ reifyEncoderHelpStrict bodyLookup registry exprCache expr =
+                 Nothing ->
+                     Nothing
+ 
++        Mono.MonoDestruct destructor body _ ->
++            Just (List.map (destructInNode destructor) (reifyEncoderHelp bodyLookup registry exprCache body))
++
+         _ ->
+             Nothing
+ 
+ 
++{-| Gives the list of each loop that counts its list at run time (an `ELoop`
++whose `countExpr` is `Nothing`) a name of its own, and returns the names with
++the expressions they stand for, and the nodes with each such list replaced by
++its name.
++
++Such a list is read twice, once to count it and once to write it. Compiling
++its expression once, bound to the name, before the fused encoder, keeps the
++two from computing it twice, and from defining the names bound inside it
++twice.
++
++-}
++bindLoopLists : List EncoderNode -> ( List ( Name, Mono.MonoExpr ), List EncoderNode )
++bindLoopLists nodes =
++    List.foldl
++        (\node ( binds, acc ) ->
++            case node of
++                ELoop r ->
++                    case r.countExpr of
++                        Nothing ->
++                            let
++                                name : Name
++                                name =
++                                    "bf$list" ++ String.fromInt (List.length binds)
++                            in
++                            ( ( name, r.iterExpr ) :: binds
++                            , ELoop { r | iterExpr = Mono.MonoVarLocal name (Mono.typeOf r.iterExpr) } :: acc
++                            )
++
++                        Just _ ->
++                            ( binds, node :: acc )
++
++                _ ->
++                    ( binds, node :: acc )
++        )
++        ( [], [] )
++        nodes
++        |> (\( binds, acc ) -> ( List.reverse binds, List.reverse acc ))
++
++
++{-| Returns every expression the nodes compute at run time: each write's
++value, and each loop's list, count and item values. A loop's item values may
++refer to its `itemVar`, which none of the other expressions can see.
++-}
++nodeExprs : List EncoderNode -> List Mono.MonoExpr
++nodeExprs nodes =
++    let
++        fixedExpr : FixedWrite -> Mono.MonoExpr
++        fixedExpr write =
++            case write of
++                FU8 expr ->
++                    expr
++
++                FU16 _ expr ->
++                    expr
++
++                FU32 _ expr ->
++                    expr
++
++                FF32 _ expr ->
++                    expr
++
++                FF64 _ expr ->
++                    expr
++
++        exprsOf : EncoderNode -> List Mono.MonoExpr
++        exprsOf node =
++            case node of
++                EU8 expr ->
++                    [ expr ]
++
++                EU16 _ expr ->
++                    [ expr ]
++
++                EU32 _ expr ->
++                    [ expr ]
++
++                EF32 _ expr ->
++                    [ expr ]
++
++                EF64 _ expr ->
++                    [ expr ]
++
++                EBytes expr ->
++                    [ expr ]
++
++                EUtf8 expr ->
++                    [ expr ]
++
++                ELoop r ->
++                    r.iterExpr :: (Maybe.withDefault [] (Maybe.map List.singleton r.countExpr) ++ List.map fixedExpr r.itemWrites)
++
++                EOpaque expr ->
++                    [ expr ]
++    in
++    List.concatMap exprsOf nodes
++
++
++{-| Puts the destructuring `destructor` around every expression in `node`.
++
++A function whose parameter is a pattern, such as `encode (Triangle t) = ...`,
++starts with a destructuring that binds `t`, and the values its writes take
++refer to `t`. Each of those values is compiled on its own, so each gets the
++destructuring that binds what it refers to; the repeated projections are
++pure and are merged later.
++
++-}
++destructInNode : Mono.MonoDestructor -> EncoderNode -> EncoderNode
++destructInNode destructor node =
++    let
++        wrap : Mono.MonoExpr -> Mono.MonoExpr
++        wrap expr =
++            Mono.MonoDestruct destructor expr (Mono.typeOf expr)
++
++        wrapFixed : FixedWrite -> FixedWrite
++        wrapFixed write =
++            case write of
++                FU8 expr ->
++                    FU8 (wrap expr)
++
++                FU16 endian expr ->
++                    FU16 endian (wrap expr)
++
++                FU32 endian expr ->
++                    FU32 endian (wrap expr)
++
++                FF32 endian expr ->
++                    FF32 endian (wrap expr)
++
++                FF64 endian expr ->
++                    FF64 endian (wrap expr)
++    in
++    case node of
++        EU8 expr ->
++            EU8 (wrap expr)
++
++        EU16 endian expr ->
++            EU16 endian (wrap expr)
++
++        EU32 endian expr ->
++            EU32 endian (wrap expr)
++
++        EF32 endian expr ->
++            EF32 endian (wrap expr)
++
++        EF64 endian expr ->
++            EF64 endian (wrap expr)
++
++        EBytes expr ->
++            EBytes (wrap expr)
++
++        EUtf8 expr ->
++            EUtf8 (wrap expr)
++
++        ELoop r ->
++            ELoop
++                { r
++                    | itemWrites = List.map wrapFixed r.itemWrites
++                    , iterExpr = wrap r.iterExpr
++                    , countExpr = Maybe.map wrap r.countExpr
++                }
++
++        EOpaque expr ->
++            EOpaque (wrap expr)
++
++
+ {-| Reifies a saturated call of the `Bytes.Encode` function or constructor
+ `name` to `args`, or returns `Nothing` for any other name or argument count,
+ or when an endianness or nested part is not recognised.
+@@ -445,8 +618,9 @@ reifyBytesEncodeCall bodyLookup registry exprCache name args =
+ encoders, in order, or returns `Nothing` when the list's shape is not known.
+ 
+ The list is recognised as a list literal, whose elements are each reified with
+-`reifyEncoderHelp`, or as the length-prefixed shape `header :: List.map f xs`
+-(see `reifyLengthPrefixedLoop`). A `let` around the list, or a local variable
++`reifyEncoderHelp`, as the length-prefixed shape `header :: List.map f xs`
++(see `reifyLengthPrefixedLoop`), or as `List.map f xs` alone (see
++`reifyUncountedLoop`). A `let` around the list, or a local variable
+ standing for it, is seen through with `exprCache`, which is how a list bound by
+ an inlined helper's `let` is still recognised.
+ 
+@@ -463,7 +637,7 @@ reifyEncoderList bodyLookup registry exprCache listExpr =
+                     reifyLengthPrefixedLoop bodyLookup registry exprCache headerExpr tailExpr
+ 
+                 _ ->
+-                    Nothing
++                    reifyUncountedLoop bodyLookup registry exprCache listExpr
+ 
+         Mono.MonoLet (Mono.MonoDef name boundExpr) body _ ->
+             reifyEncoderList bodyLookup registry (Dict.insert name boundExpr exprCache) body
+@@ -584,7 +758,7 @@ reifyLengthPrefixedLoop bodyLookup registry exprCache headerExpr tailExpr =
+                     Nothing
+ 
+                 Just ( headerNode, countExpr ) ->
+-                    case reifyMapBody bodyLookup registry exprCache mapFn iterExpr countExpr of
++                    case reifyMapBody bodyLookup registry exprCache mapFn iterExpr (Just countExpr) of
+                         Nothing ->
+                             Nothing
+ 
+@@ -592,6 +766,25 @@ reifyLengthPrefixedLoop bodyLookup registry exprCache headerExpr tailExpr =
+                             Just [ headerNode, loopNode ]
+ 
+ 
++{-| Reifies `List.map f xs`, the list of a `sequence` with no length written
++before it, as an `ELoop` that counts `xs` at run time, or returns `Nothing` when
++it is not one.
++
++`xs` must be a local variable, because the loop reads it twice: once to count
++it and once to write it. `f` must be as `reifyMapBody` requires.
++
++-}
++reifyUncountedLoop : BodyLookup -> Mono.SpecializationRegistry -> Dict String Mono.MonoExpr -> Mono.MonoExpr -> Maybe (List EncoderNode)
++reifyUncountedLoop bodyLookup registry exprCache listExpr =
++    case reifyListMapCall registry listExpr of
++        Just ( mapFn, (Mono.MonoVarLocal _ _) as iterExpr ) ->
++            reifyMapBody bodyLookup registry exprCache mapFn iterExpr Nothing
++                |> Maybe.map List.singleton
++
++        _ ->
++            Nothing
++
++
+ {-| Matches the header of a length-prefixed list: a call of the `Bytes.Encode`
+ global `unsignedInt32` or `U32` to an endianness and `List.length` of the local
+ variable `iterExpr`. Returns the `EU32` write and the `List.length` call.
+@@ -629,7 +822,7 @@ matchLengthPrefixHeader registry headerExpr iterExpr =
+ 
+ 
+ {-| Builds the `ELoop` for `List.map mapFn iterExpr`, with `countExpr` as its
+-count, or returns `Nothing` when `mapFn`'s body is not known or not
++count (`Nothing` to count the list at run time), or returns `Nothing` when `mapFn`'s body is not known or not
+ constant-width.
+ 
+ `mapFn` may be a lambda of one parameter, or a named function found in
+@@ -642,7 +835,7 @@ The body must reify to fixed-width numeric writes only (see
+ width.
+ 
+ -}
+-reifyMapBody : BodyLookup -> Mono.SpecializationRegistry -> Dict String Mono.MonoExpr -> Mono.MonoExpr -> Mono.MonoExpr -> Mono.MonoExpr -> Maybe EncoderNode
++reifyMapBody : BodyLookup -> Mono.SpecializationRegistry -> Dict String Mono.MonoExpr -> Mono.MonoExpr -> Mono.MonoExpr -> Maybe Mono.MonoExpr -> Maybe EncoderNode
+ reifyMapBody bodyLookup registry exprCache mapFn iterExpr countExpr =
+     case mapFn of
+         Mono.MonoClosure _ _ _ ->
+@@ -696,7 +889,7 @@ are numeric but the element they read from may be of any type, a record for
+ instance.
+ 
+ -}
+-buildLoopNode : BodyLookup -> Mono.SpecializationRegistry -> Dict String Mono.MonoExpr -> String -> Mono.MonoType -> Mono.MonoExpr -> Mono.MonoExpr -> Mono.MonoExpr -> Maybe EncoderNode
++buildLoopNode : BodyLookup -> Mono.SpecializationRegistry -> Dict String Mono.MonoExpr -> String -> Mono.MonoType -> Mono.MonoExpr -> Mono.MonoExpr -> Maybe Mono.MonoExpr -> Maybe EncoderNode
+ buildLoopNode bodyLookup registry exprCache paramName paramType body iterExpr countExpr =
+     reifyEncoderHelp bodyLookup registry exprCache body
+         |> traverseMaybe asFixedWrite
+@@ -949,7 +1142,12 @@ addNodeWidth node acc =
+             addWidth acc (WStringUtf8Width stringExpr)
+ 
+         ELoop r ->
+-            addWidth acc (WListLengthMul r.countExpr (sumFixedWidths r.itemWrites))
++            case r.countExpr of
++                Just countExpr ->
++                    addWidth acc (WListLengthMul countExpr (sumFixedWidths r.itemWrites))
++
++                Nothing ->
++                    addWidth acc (WListWalkMul r.iterExpr (sumFixedWidths r.itemWrites))
+ 
+         EOpaque expr ->
+             addWidth acc (WOpaqueWidth expr)
+diff --git a/compiler/src/Compiler/GenerateMlir/Expr.elm b/compiler/src/Compiler/GenerateMlir/Expr.elm
+index 321e571..30799e7 100644
+--- a/compiler/src/Compiler/GenerateMlir/Expr.elm
++++ b/compiler/src/Compiler/GenerateMlir/Expr.elm
+@@ -2702,18 +2702,37 @@ bfExprCompiler fusedLets monoExpr compilerCtx =
+     }
+ 
+ 
+-{-| Returns `expr` with each local variable that has no entry in `varMappings`
+-replaced by the expression it is bound to, recursively: first from
++{-| Returns `expr` with each local variable that has no entry in `varMappings`,
++and that no destructuring inside `expr` binds, replaced by the expression it is
++bound to, recursively: first from
+ `fusedLets`, then from a let anywhere in the context's inlined bodies
+ (`findLetInInlineBodies`). A variable found in neither is left as it is.
+ -}
+ resolveFusedLets : Dict.Dict Name.Name Mono.MonoExpr -> Ctx.Context -> Mono.MonoExpr -> Mono.MonoExpr
+ resolveFusedLets fusedLets ctx expr =
++    let
++        -- A name a destructuring inside `expr` binds is defined where it is
++        -- used, so it is not looked up elsewhere: a let of the same name in
++        -- some inlined body is a different variable.
++        destructured : Set.Set Name.Name
++        destructured =
++            MonoTraverse.foldExpr
++                (\e acc ->
++                    case e of
++                        Mono.MonoDestruct (Mono.MonoDestructor n _ _) _ _ ->
++                            Set.insert n acc
++
++                        _ ->
++                            acc
++                )
++                Set.empty
++                expr
++    in
+     MonoTraverse.mapExpr
+         (\e ->
+             case e of
+                 Mono.MonoVarLocal name _ ->
+-                    if Dict.member name ctx.varMappings then
++                    if Dict.member name ctx.varMappings || Set.member name destructured then
+                         Nothing
+ 
+                     else
+@@ -2976,6 +2995,58 @@ compileSkippedBindings ctx bindings =
+             ( exprResult.ops ++ restOps, ctxFinal )
+ 
+ 
++{-| Returns, outermost first, the bindings of `innermostFirst` (a let chain,
++innermost binding first) that `exprs` need, directly or through other needed
++bindings.
++
++The bindings above a fused encoder are compiled before it, and most of them
++only built the encoder that fusion replaces, such as the list of item encoders
++of `sequence (List.map f xs)`. Compiling those would build the whole unused
++encoder at run time.
++
++-}
++liveBindings : List Mono.MonoExpr -> List ( Name.Name, Mono.MonoExpr ) -> List ( Name.Name, Mono.MonoExpr )
++liveBindings exprs innermostFirst =
++    let
++        localsOf : Mono.MonoExpr -> Set.Set Name.Name -> Set.Set Name.Name
++        localsOf expr acc =
++            MonoTraverse.foldExpr
++                (\e names ->
++                    case e of
++                        Mono.MonoVarLocal n _ ->
++                            Set.insert n names
++
++                        Mono.MonoTailCall n _ _ ->
++                            Set.insert n names
++
++                        Mono.MonoClosure info _ _ ->
++                            List.foldl (\( n, _, _ ) ns -> Set.insert n ns) names info.captures
++
++                        Mono.MonoCase _ root _ _ _ ->
++                            Set.insert root names
++
++                        Mono.MonoDestruct (Mono.MonoDestructor _ path _) _ _ ->
++                            Set.insert (pathRootName path) names
++
++                        _ ->
++                            names
++                )
++                acc
++                expr
++    in
++    List.foldl
++        (\( name, expr ) ( needed, kept ) ->
++            if Set.member name needed then
++                ( localsOf expr needed, ( name, expr ) :: kept )
++
++            else
++                ( needed, kept )
++        )
++        ( List.foldl localsOf Set.empty exprs, [] )
++        innermostFirst
++        |> Tuple.second
++
++
+ {-| Generates a fused encode of `encoderExpr`, or returns `Nothing` when the
+ configuration's `bytesFusion` flag is off or the encoder cannot be reified.
+ 
+@@ -3014,8 +3085,11 @@ tryEncoderFusionWithBindings ctx accumulated encoderExpr =
+                 else
+                     Nothing
+             of
+-                Just nodes ->
++                Just reifiedNodes ->
+                     let
++                        ( loopLists, nodes ) =
++                            BFReify.bindLoopLists reifiedNodes
++
+                         loopOps =
+                             BFReify.nodesToOps nodes
+ 
+@@ -3024,13 +3098,28 @@ tryEncoderFusionWithBindings ctx accumulated encoderExpr =
+                             bfExprCompiler (fusedLetsFromChain accumulated encoderExpr)
+ 
+                         ( bindingOps, ctxAfterBindings ) =
+-                            compileSkippedBindings ctx (List.reverse accumulated)
++                            compileSkippedBindings ctx (liveBindings (BFReify.nodeExprs reifiedNodes) accumulated)
++
++                        -- Each list a loop counts at run time, compiled once.
++                        ( loopListOps, ctxAfterLists ) =
++                            List.foldl
++                                (\( name, listExpr ) ( opsAcc, ctxAcc ) ->
++                                    let
++                                        listResult =
++                                            exprCompiler listExpr ctxAcc
++                                    in
++                                    ( opsAcc ++ listResult.ops
++                                    , Ctx.addVarMapping name listResult.resultVar listResult.resultType listResult.ctx
++                                    )
++                                )
++                                ( [], ctxAfterBindings )
++                                loopLists
+ 
+                         ( mlirOps, bufferVar, ctx2 ) =
+-                            BFEmit.emitFusedEncoder exprCompiler ctxAfterBindings loopOps
++                            BFEmit.emitFusedEncoder exprCompiler ctxAfterLists loopOps
+                     in
+                     Just
+-                        { ops = bindingOps ++ mlirOps
++                        { ops = bindingOps ++ loopListOps ++ mlirOps
+                         , resultVar = bufferVar
+                         , resultType = Types.ecoValue
+                         , ctx = ctx2
+@@ -4928,7 +5017,9 @@ generateLetSingle ctx def body =
+                                         ++ placeholderVar
+                                         ++ " for let-bound name '"
+                                         ++ name
+-                                        ++ "' is already defined - duplicate let name reached codegen"
++                                        ++ "' is already defined - duplicate let name reached codegen (in "
++                                        ++ ctx.currentFuncName
++                                        ++ ")"
+                                     )
+ 
+                             else
+diff --git a/elm-kernel-cpp/src/core/StringExports.cpp b/elm-kernel-cpp/src/core/StringExports.cpp
+index 6825779..aa4fded 100644
+--- a/elm-kernel-cpp/src/core/StringExports.cpp
++++ b/elm-kernel-cpp/src/core/StringExports.cpp
+@@ -8,6 +8,7 @@
+ #include "allocator/RuntimeExports.h"
+ #include "allocator/StringOps.hpp"
+ #include <cassert>
++#include <cstring>
+ #include <vector>
+ 
+ using namespace Elm;
+@@ -213,19 +214,52 @@ static uint64_t callFoldClosure(HPtr closure_hptr, uint32_t c, uint64_t acc) {
+     return eco_apply_closure_typed(closure_hptr, args, 2, layout).toBits();
+ }
+ 
+-// Returns a copy of the UTF-16 units of the String `str`, of any form, or an empty vector for
+-// null. The copy is C++ memory, outside the collected heap, so closures called while it is walked
+-// may allocate without invalidating it. A UTF-8 form's bytes are ASCII, so each is copied as one
+-// unit.
+-static std::vector<u16> snapshotChars(void* str) {
+-    if (!str) return {};
+-    if (Elm::StringOps::isUtf8(str)) {
+-        auto pr = Elm::StringOps::utf8Bytes(str);
+-        return std::vector<u16>(pr.first, pr.first + pr.second);
++// A copy of the UTF-16 units of the String `str`, of any form, empty for null. The copy is C++
++// memory, outside the collected heap, so closures called while it is walked may allocate without
++// invalidating it. A UTF-8 form's bytes are ASCII, so each is copied as one unit.
++//
++// Most strings these kernels see are short (a word, a line of text), so up to `kInline` units are
++// copied into the object itself, on the caller's stack, and only a longer string is copied to the C
++// heap. The kernels that use it call a closure per character, and two heap allocations per call (the
++// u16string and then the vector) used to cost as much as a short string's closure calls.
++class CharSnapshot {
++public:
++    explicit CharSnapshot(void* str) {
++        if (!str) return;
++        n_ = static_cast<Header*>(str)->size;
++        u16* dst = inline_;
++        if (n_ > kInline) {
++            heap_.resize(n_);
++            dst = heap_.data();
++        }
++        data_ = dst;
++        if (Elm::StringOps::isUtf8(str)) {
++            auto pr = Elm::StringOps::utf8Bytes(str);
++            n_ = pr.second;
++            for (size_t i = 0; i < n_; ++i) dst[i] = pr.first[i];
++            return;
++        }
++        size_t at = 0;
++        Elm::StringOps::forEachSegment(str, [&](const u16* p, u32 k) {
++            std::memcpy(dst + at, p, k * sizeof(u16));
++            at += k;
++        });
++        n_ = at;
+     }
+-    auto u16str = Elm::StringOps::toStdU16String(str);
+-    return std::vector<u16>(u16str.begin(), u16str.end());
+-}
++    CharSnapshot(const CharSnapshot&) = delete;
++    CharSnapshot& operator=(const CharSnapshot&) = delete;
++
++    const u16* data() const { return data_; }
++    size_t size() const { return n_; }
++    bool empty() const { return n_ == 0; }
++
++private:
++    static constexpr size_t kInline = 256;
++    u16 inline_[kInline];
++    std::vector<u16> heap_;
++    const u16* data_ = inline_;
++    size_t n_ = 0;
++};
+ 
+ // Returns the String of the UTF-16 units in `result`: the Empty constant when there are none, a
+ // UTF-8 form when they are all ASCII and UTF-8 Strings are enabled, and a UTF-16 String otherwise.
+@@ -244,7 +278,7 @@ static HPtr materializeString(const std::vector<u16>& result) {
+ }
+ 
+ HPtr Elm_Kernel_String_map(HPtr closure, HPtr str) {
+-    auto chars = snapshotChars(Export::toPtr(str.toBits()));
++    CharSnapshot chars(Export::toPtr(str.toBits()));
+     if (chars.empty()) {
+         return HPtr::fromBits(Export::encode(Elm::alloc::emptyString()));
+     }
+@@ -264,7 +298,7 @@ HPtr Elm_Kernel_String_map(HPtr closure, HPtr str) {
+ }
+ 
+ HPtr Elm_Kernel_String_filter(HPtr closure, HPtr str) {
+-    auto chars = snapshotChars(Export::toPtr(str.toBits()));
++    CharSnapshot chars(Export::toPtr(str.toBits()));
+     if (chars.empty()) {
+         return HPtr::fromBits(Export::encode(Elm::alloc::emptyString()));
+     }
+@@ -281,13 +315,13 @@ HPtr Elm_Kernel_String_filter(HPtr closure, HPtr str) {
+         HPtr cl = HPtr::fromBits(Export::encode(closureHP));
+         // The kept Char's own units are copied, so a lone surrogate stays as it was.
+         if (callCharToBoolClosure(cl, c))
+-            result.insert(result.end(), chars.begin() + start, chars.begin() + i);
++            result.insert(result.end(), chars.data() + start, chars.data() + i);
+     }
+     return materializeString(result);
+ }
+ 
+ HPtr Elm_Kernel_String_any(HPtr closure, HPtr str) {
+-    auto chars = snapshotChars(Export::toPtr(str.toBits()));
++    CharSnapshot chars(Export::toPtr(str.toBits()));
+     if (chars.empty()) {
+         return HPtr::fromBits(Export::encodeBoxedBool(false));
+     }
+@@ -307,7 +341,7 @@ HPtr Elm_Kernel_String_any(HPtr closure, HPtr str) {
+ }
+ 
+ HPtr Elm_Kernel_String_all(HPtr closure, HPtr str) {
+-    auto chars = snapshotChars(Export::toPtr(str.toBits()));
++    CharSnapshot chars(Export::toPtr(str.toBits()));
+     if (chars.empty()) {
+         return HPtr::fromBits(Export::encodeBoxedBool(true));
+     }
+@@ -327,7 +361,7 @@ HPtr Elm_Kernel_String_all(HPtr closure, HPtr str) {
+ }
+ 
+ HPtr Elm_Kernel_String_foldl(HPtr closure, HPtr acc, HPtr str) {
+-    auto chars = snapshotChars(Export::toPtr(str.toBits()));
++    CharSnapshot chars(Export::toPtr(str.toBits()));
+     if (chars.empty()) return acc;
+ 
+     HPointer closureHP = Export::decode(closure.toBits());
+@@ -345,7 +379,7 @@ HPtr Elm_Kernel_String_foldl(HPtr closure, HPtr acc, HPtr str) {
+ }
+ 
+ HPtr Elm_Kernel_String_foldr(HPtr closure, HPtr acc, HPtr str) {
+-    auto chars = snapshotChars(Export::toPtr(str.toBits()));
++    CharSnapshot chars(Export::toPtr(str.toBits()));
+     if (chars.empty()) return acc;
+ 
+     HPointer closureHP = Export::decode(closure.toBits());
+diff --git a/elm-kernel-cpp/src/core/Utils.cpp b/elm-kernel-cpp/src/core/Utils.cpp
+index d35489a..e5ddd18 100644
+--- a/elm-kernel-cpp/src/core/Utils.cpp
++++ b/elm-kernel-cpp/src/core/Utils.cpp
+@@ -155,6 +155,20 @@ static int compareChar(u32 a, u32 b) {
+     return a < b ? -1 : (a > b ? 1 : 0);
+ }
+ 
++/// Returns the order of the unboxed slots `a` and `b`, which must both have kind `kind`: 1 (Int), 2 (Float)
++/// or 3 (Char). It orders them as `compareUnboxableSlot` does.
++static inline int compareUnboxedSlot(Elm::Unboxable a, Elm::Unboxable b, uint32_t kind) {
++    switch (kind) {
++        case 1:
++            if (a.i == b.i) return 0;
++            return a.i < b.i ? -1 : 1;
++        case 2:
++            return compareFloat(a.f, b.f);
++        default:
++            return compareChar(a.c, b.c);
++    }
++}
++
+ /// Returns the order of slots `a` and `b`, which must both have kind `kind`, with `cmpFn` used to compare
+ /// two boxed heap values.
+ ///
+@@ -298,6 +312,21 @@ static int cmp(void* a, void* b) {
+     Tag tagA = getTag(a);
+     Tag tagB = getTag(b);
+ 
++    // Two pairs whose fields are unboxed Ints, Floats or Chars of the same kinds, such as the
++    // `( Char, Char )` keys of a Dict, compare without the general slot walk below.
++    if (tagA == Tag_Tuple2 && tagB == Tag_Tuple2) {
++        u32 kinds = getHeader(a)->unboxed & 0xFU;
++        u32 k0 = Elm::tupleFieldKind(kinds, 0);
++        u32 k1 = Elm::tupleFieldKind(kinds, 1);
++        if (k0 != 0 && k1 != 0 && (getHeader(b)->unboxed & 0xFU) == kinds) {
++            Elm::Tuple2* atup = static_cast<Elm::Tuple2*>(a);
++            Elm::Tuple2* btup = static_cast<Elm::Tuple2*>(b);
++            int ord = compareUnboxedSlot(atup->a, btup->a, k0);
++            if (ord != 0) return ord;
++            return compareUnboxedSlot(atup->b, btup->b, k1);
++        }
++    }
++
+     // Checked before the tags, which differ between String forms.
+     if (alloc::isString(a) && alloc::isString(b)) {
+         return StringOps::compare(a, b);
+diff --git a/runtime/src/allocator/RuntimeExports.cpp b/runtime/src/allocator/RuntimeExports.cpp
+index a86a709..076f2b6 100644
+--- a/runtime/src/allocator/RuntimeExports.cpp
++++ b/runtime/src/allocator/RuntimeExports.cpp
+@@ -72,7 +72,13 @@ inline void* hpointerToPtr(uint64_t val) {
+     if (hp.ptr_ind != 0) {
+         return nullptr;
+     }
++#if ECO_HEAP_VALIDATE
+     return Allocator::instance().resolve(hp);
++#else
++    // Inline unless the object has been forwarded, which happens only during a collection: this runs
++    // several times on every closure call.
++    return Allocator::resolveFast(hp);
++#endif
+ }
+ 
+ } // anonymous namespace
+@@ -666,6 +672,19 @@ namespace {
+ struct LiteralTable {
+     uint64_t generation = 0;  // The `Allocator::heapGeneration` the cache was built under.
+     std::unordered_map<const void*, Elm::HPointer*> byGlobal;
++    // A direct-mapped cache in front of `byGlobal`, indexed by the key's address bits: compiled code
++    // interns a capture-free closure every time it evaluates one (`eco_intern_closure0`), so a hash
++    // map lookup per evaluation showed up in profiles.
++    static constexpr size_t kRecent = 512;
++    struct Recent {
++        const void* key;
++        Elm::HPointer* slot;
++    };
++    Recent recent[kRecent] = {};
++
++    static size_t recentIndex(const void* key) {
++        return (reinterpret_cast<uintptr_t>(key) >> 3) & (kRecent - 1);
++    }
+     // The slots, in fixed-size chunks so that growing the table moves none of them.
+     std::deque<std::array<Elm::HPointer, 64>> chunks;
+     size_t nextSlot = 64;  // Next free index in the last chunk; 64 means a new chunk is needed.
+@@ -675,6 +694,7 @@ struct LiteralTable {
+     void syncEpoch(uint64_t gen) {
+         if (gen != generation) {
+             byGlobal.clear();
++            for (Recent& r : recent) r = Recent{};
+             chunks.clear();
+             nextSlot = 64;
+             generation = gen;
+@@ -733,14 +753,21 @@ template <class AllocFn>
+ inline HPtr internLiteral(const void* key, AllocFn&& alloc) {
+     LiteralTable& table = literalTable();
+     table.syncEpoch(Allocator::instance().heapGeneration());
++    LiteralTable::Recent& recent = table.recent[LiteralTable::recentIndex(key)];
++    if (recent.key == key) {
++        return HPtr::fromHPointer(*recent.slot);
++    }
+     auto it = table.byGlobal.find(key);
+     if (it != table.byGlobal.end()) {
++        recent = LiteralTable::Recent{key, it->second};
+         return HPtr::fromHPointer(*it->second);
+     }
+     HPtr result = alloc();
+     Elm::HPointer* slot = table.newSlot();
+     *slot = result.toHPointer();
+     table.byGlobal[key] = slot;
++    // `alloc` may have collected, but nothing in `table` moves; the reference is still good.
++    recent = LiteralTable::Recent{key, slot};
+     uint64_t raw = result.toBits();
+     if (!Elm::isConstantBits(raw) &&
+         !Elm::PermanentSpace::instance().contains(
+@@ -2229,6 +2256,92 @@ void deliverPrimitiveFromBoxed(HPtr boxed, uint8_t desired_kind, void* result_sl
+     }
+ }
+ 
++// The common case of `eco_apply_closure_eval`: the arguments exactly fill the closure, each already has the
++// kind of its slot, and the result needs no conversion that the general path would reject. Calls the
++// closure's evaluator straight from an argument array on the stack, without the general path's kind
++// snapshot, zeroing and per-argument conversion, and returns true. Returns false, having done nothing,
++// when the case does not apply.
++//
++// Nothing allocates between reading the closure and the call, so the closure needs no root; the argument
++// array is rooted for the call, as `invokeSaturatedTyped` roots it, for an evaluator that reads it late.
++// Kernels call closures through here once per element (String.foldl, List.map2 and the like), which is why
++// the general path's fixed cost matters.
++inline bool tryInvokeSaturatedDirect(Closure* closure,
++                                     int64_t* typed_args,
++                                     uint32_t num_args,
++                                     const EvalParamLayout* args_layout,
++                                     uint8_t K,
++                                     uint8_t desired_kind,
++                                     void* result_slot) {
++#if ECO_HEAP_VALIDATE
++    // The general path checks each boxed argument for staleness; validating builds keep that.
++    return false;
++#endif
++    constexpr uint32_t kMaxDirect = 16;
++    const uint32_t n_values = closure->n_values;
++    const uint32_t max_values = closure->max_values;
++    if (max_values > kMaxDirect || max_values >= CLOSURE_HDR_SLOTS) return false;
++    if (!(desired_kind == K || desired_kind == 0 || K == 0)) return false;
++    if (dispatchStatsEnabled()) return false;
++
++    uint64_t args[kMaxDirect];
++    uint64_t pointerMask = 0;
++    for (uint32_t i = 0; i < n_values; ++i) {
++        args[i] = static_cast<uint64_t>(closure->values[i].i);
++        if (closureSlotKind(closure, i) == 0) pointerMask |= uint64_t{1} << i;
++    }
++    for (uint32_t i = 0; i < num_args; ++i) {
++        const uint32_t slot = n_values + i;
++        const uint32_t slotKind = closureSlotKind(closure, slot);
++        const uint32_t callerKind = args_layout ? (args_layout->kinds[i] & 0x3u) : 0u;
++        if (slotKind != callerKind) return false;
++        args[slot] = static_cast<uint64_t>(typed_args[i]);
++        if (slotKind == 0) pointerMask |= uint64_t{1} << slot;
++    }
++
++    EcoRootMark saved_range = ecoRootMark();
++    if (pointerMask) eco_gc_push_stack_range(args, max_values, pointerMask);
++    void* eval = reinterpret_cast<void*>(closure->evaluator->generic);
++    void** argv = reinterpret_cast<void**>(args);
++    switch (K) {
++        case 0: {
++            using FnT = void* (*)(void**);
++            HPtr boxed = HPtr::fromBits(reinterpret_cast<uint64_t>(reinterpret_cast<FnT>(eval)(argv)));
++            ecoRootRelease(saved_range);
++            if (desired_kind == 0) *static_cast<HPtr*>(result_slot) = boxed;
++            else deliverPrimitiveFromBoxed(boxed, desired_kind, result_slot);
++            return true;
++        }
++        case 1: {
++            using FnT = int64_t (*)(void**);
++            int64_t r = reinterpret_cast<FnT>(eval)(argv);
++            ecoRootRelease(saved_range);
++            if (desired_kind == 1) *static_cast<int64_t*>(result_slot) = r;
++            else *static_cast<HPtr*>(result_slot) = eco_alloc_int(r);
++            return true;
++        }
++        case 2: {
++            using FnT = double (*)(void**);
++            double r = reinterpret_cast<FnT>(eval)(argv);
++            ecoRootRelease(saved_range);
++            if (desired_kind == 2) *static_cast<double*>(result_slot) = r;
++            else *static_cast<HPtr*>(result_slot) = eco_alloc_float(r);
++            return true;
++        }
++        case 3: {
++            using FnT = uint32_t (*)(void**);
++            uint32_t r = reinterpret_cast<FnT>(eval)(argv);
++            ecoRootRelease(saved_range);
++            if (desired_kind == 3) *static_cast<uint32_t*>(result_slot) = r;
++            else *static_cast<HPtr*>(result_slot) = eco_alloc_char(r);
++            return true;
++        }
++        default:
++            ecoRootRelease(saved_range);
++            return false;
++    }
++}
++
+ } // anonymous namespace
+ 
+ extern "C" void eco_apply_closure_eval(HPtr closure_hptr,
+@@ -2269,6 +2382,11 @@ extern "C" void eco_apply_closure_eval(HPtr closure_hptr,
+         return;
+     }
+ 
++    if (num_args == remaining && tryInvokeSaturatedDirect(closure, typed_args, num_args, args_layout, K,
++                                                          desired_kind, result_slot)) {
++        return;
++    }
++
+     EcoRootMark saved_range = ecoRootMark();
+     ecoRoot1Push(reinterpret_cast<HPointer*>(&closure_bits));
+     if (num_args > 0 && args_layout) {
+diff --git a/test/elm-bytes/src/EncodeMappedListTest.elm b/test/elm-bytes/src/EncodeMappedListTest.elm
+new file mode 100644
+index 0000000..549f268
+--- /dev/null
++++ b/test/elm-bytes/src/EncodeMappedListTest.elm
+@@ -0,0 +1,72 @@
++module EncodeMappedListTest exposing (main)
++
++{-| `Bytes.Encode.sequence (List.map f xs)`, with no length prefix, writes each element
++in order, for a list of any length.
++
++The mapped function takes a pattern, binds a `let` of its own and writes fixed-width
++numbers, so the encoder is fused into one loop that counts the list at run time. The
++`_ =` bindings after it check that the loop's names do not leak into the code after it.
++
++-}
++
++-- CHECK: widths: (36,0)
++-- CHECK: decoded: [(1,1.5,4294967295),(2,-2.25,0),(3,0,7)]
++-- CHECK: after: 3
++
++import Bytes exposing (Bytes, Endianness(..))
++import Bytes.Decode as D
++import Bytes.Encode as E
++import Html exposing (text)
++
++
++type Point
++    = Point { id : Int, x : Float, tag : Int }
++
++
++encodePoint : Point -> E.Encoder
++encodePoint (Point p) =
++    let
++        f =
++            E.float32 LE
++    in
++    E.sequence [ E.unsignedInt16 BE p.id, E.unsignedInt16 LE 0, f p.x, E.unsignedInt32 LE p.tag ]
++
++
++encodeAll : List Point -> Bytes
++encodeAll points =
++    E.encode (E.sequence (List.map encodePoint points))
++
++
++decodePoint : D.Decoder ( Int, Float, Int )
++decodePoint =
++    D.map4 (\id _ x tag -> ( id, x, tag ))
++        (D.unsignedInt16 BE)
++        (D.unsignedInt16 LE)
++        (D.float32 LE)
++        (D.unsignedInt32 LE)
++
++
++main =
++    let
++        points =
++            [ Point { id = 1, x = 1.5, tag = 4294967295 }
++            , Point { id = 2, x = -2.25, tag = 0 }
++            , Point { id = 3, x = 0, tag = 7 }
++            ]
++
++        bytes =
++            encodeAll points
++
++        decoded =
++            D.decode (D.loop ( 3, [] ) (\( n, acc ) -> if n == 0 then D.succeed (D.Done (List.reverse acc)) else D.map (\p -> D.Loop ( n - 1, p :: acc )) decodePoint)) bytes
++
++        _ =
++            Debug.log "widths" ( Bytes.width bytes, Bytes.width (encodeAll []) )
++
++        _ =
++            Debug.log "decoded" (Maybe.withDefault [] decoded)
++
++        _ =
++            Debug.log "after" (List.length points)
++    in
++    text "done"

@@ -1,9 +1,11 @@
-module Main exposing (App, Model, Msg, PowerAction, RendererInfo, SystemInfo, SystemStats, WeatherState, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, WeatherState, persistConfig)
 
-{-| Elm OS: a mouse cursor, a toolbar, a debug overlay drawn by the UI framework (Ui.elm, from town-collab),
-a network panel: wired Ethernet (plug in a cable), wifi (pick a network, type its
-password, join it; networks joined before are joined again by themselves), and the weather once either is connected, and a calculator
-(Calculator.elm) that opens from the toolbar.
+{-| Elm OS: a mouse cursor, a toolbar with a clock, and apps that open from the toolbar,
+drawn by the UI framework (Ui.elm, from town-collab). Each open app gets a window, laid
+out automatically by its size limits (Layout.elm, `windows`). Among them: the debug app,
+the network app (wired Ethernet: plug in a cable; wifi: pick a network, type its
+password, join it; networks joined before are joined again by themselves), the weather
+once either is connected, and a calculator (Calculator.elm).
 
 The host (host/init, in Rust) sends input events and everything else on Effect.fromHost,
 including a Frame whenever the screen is ready for a frame (HostMessage.elm). `update` answers with a
@@ -14,29 +16,41 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 import AsciiCollab
 import AsciiCollab.Types
 import BootInfo
+import Bounds exposing (Bounds)
 import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
 import Clock
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Cursor exposing (Cursor)
 import Date
 import Display exposing (Display)
 import Duration exposing (Duration)
 import Effect exposing (Effect, HttpError(..))
+import Email
+import Email.Types
 import HackerNews
 import HackerNews.Types
 import HostMessage
 import Ipv4
 import Json.Decode as D
 import Keyboard exposing (Key(..))
-import News exposing (NewsState(..))
+import Layout
+import News
+import News.Types exposing (NewsState(..))
+import Nonempty
 import Persist
 import Quantity exposing (Quantity)
+import ScreenshotViewer
+import ScreenshotViewer.Types
 import SeqDict exposing (SeqDict)
+import SourceCode
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
+import TicTacToe
+import TicTacToe.Types
 import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
@@ -56,12 +70,15 @@ type Input
       -- A display was plugged in or out (an app on a display that has gone shows on
       -- the main one, and goes back when the display does).
     | DisplaysChanged (List Display)
-      -- The host's monotonic clock, in milliseconds, when it asked for the frame: draw now.
-    | Frame Float
+      -- The host's monotonic clock, in milliseconds, when it asked for the frame, and
+      -- the wall clock then: draw now.
+    | Frame Float Time.Posix
     | HttpResponse String (Result HttpError { status : Int, body : Bytes })
     | Mouse Int Int
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
+    | Scroll Float -- touchpad scrolling, UI pixels, positive is down
+    | ScrollMomentum Float -- the fingers lifted: keep going at this many UI pixels a second, 0 stops
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
@@ -84,6 +101,10 @@ type Input
     | WebSocketOpened String (List ( String, String ))
     | WebSocketMessage String Bytes
     | WebSocketClosed String String
+      -- TLS connections (Effect.TlsOpen), only the email app's.
+    | TlsOpened String
+    | TlsData String Bytes
+    | TlsClosed String String
       -- Random bytes in hex, for AsciiCollab's client id.
     | RandomBytes (Maybe String)
 
@@ -121,8 +142,8 @@ toInput message =
         HostMessage.DisplaysChanged displays ->
             Ok (DisplaysChanged displays)
 
-        HostMessage.Frame time ->
-            Ok (Frame time)
+        HostMessage.Frame time posix ->
+            Ok (Frame time posix)
 
         HostMessage.Mouse x y ->
             Ok (Mouse x y)
@@ -132,6 +153,12 @@ toInput message =
 
         HostMessage.Wheel dy ->
             Ok (Wheel dy)
+
+        HostMessage.Scroll dy ->
+            Ok (Scroll dy)
+
+        HostMessage.ScrollMomentum velocity ->
+            Ok (ScrollMomentum velocity)
 
         HostMessage.Key code down repeat ->
             Ok (Key code down repeat)
@@ -248,6 +275,15 @@ toInput message =
         HostMessage.WebSocketClosed id reason ->
             Ok (WebSocketClosed id reason)
 
+        HostMessage.TlsOpened id ->
+            Ok (TlsOpened id)
+
+        HostMessage.TlsData id data ->
+            Ok (TlsData id data)
+
+        HostMessage.TlsClosed id reason ->
+            Ok (TlsClosed id reason)
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -293,7 +329,7 @@ type alias Model =
       savedWifiPasswords : SeqDict Ssid Wpa2Password
     , showPassword : Bool
     , weather : WeatherState
-    , time : Maybe Time.Posix -- the wall clock, from the host's Tick each second
+    , time : Maybe Time.Posix -- the wall clock, from each Frame and the host's Tick each second
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
     , geoUrl : String
     , weatherUrl : String
@@ -303,18 +339,36 @@ type alias Model =
     , newsOpen : Bool
     , news : NewsState
     , hackerNews : HackerNews.Model
+    , email : Email.Model
     , asciiCollab : AsciiCollab.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
+    , ticTacToe : TicTacToe.Model
+    , ticTacToeOpen : Bool
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
+
+    -- The editor's Open button was pressed: the list of modules shows instead of the text.
+    , editorPicking : Bool
+    , debugOpen : Bool
+    , networkOpen : Bool
+    , weatherOpen : Bool
     , upgradingTo : Maybe String -- the build the host is switching to, from "switching"
     , reflashNeeded : Maybe String -- the deployed build this computer can't switch to
     , uiState : Ui.Model UiId
     , showUiBorders : Bool
-    , takingScreenshot : Maybe { mouse : Coord DevicePixels }
-    , screenshots : List (Ui.Element UiId)
+
+    -- The element clicked in the outline mode, and the ones it is in (innermost first),
+    -- listed in the corner of the display it is on.
+    , inspected : Maybe { display : Int, sources : List Ui.Source }
+    , screenshotViewer : ScreenshotViewer.Model
+    , takingScreenshot : Maybe ScreenshotPreview
+    , screenshots : List Ui.Screenshot
     }
+
+
+type alias ScreenshotPreview =
+    { mouse : Coord DevicePixels, bounds : Bounds DevicePixels, depth : Int }
 
 
 type PowerAction
@@ -329,9 +383,22 @@ type App
     = AboutApp
     | NewsApp
     | HackerNewsApp
+    | EmailApp
     | AsciiCollabApp
     | CalculatorApp
+    | TicTacToeApp
     | EditorApp
+    | ScreenshotViewerApp
+    | DebugApp
+    | NetworkApp
+    | WeatherApp
+
+
+{-| Every app, in the order the ones open at start are laid out.
+-}
+allApps : List App
+allApps =
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
 
 
 type WeatherState
@@ -386,15 +453,24 @@ init =
     , newsOpen = False
     , news = NewsNotRequested
     , hackerNews = HackerNews.init
+    , email = Email.init
     , asciiCollab = AsciiCollab.init
     , calculator = Calculator.init
     , calculatorOpen = False
+    , ticTacToe = TicTacToe.init
+    , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
+    , editorPicking = False
+    , debugOpen = True
+    , networkOpen = True
+    , weatherOpen = True
     , upgradingTo = Nothing
     , reflashNeeded = Nothing
     , uiState = Ui.init
     , showUiBorders = False
+    , inspected = Nothing
+    , screenshotViewer = ScreenshotViewer.init
     , takingScreenshot = Nothing
     , screenshots = []
     }
@@ -417,26 +493,31 @@ update msg model =
 
                 ( asciiCollab, asciiEffects ) =
                     AsciiCollab.tick time model.asciiCollab
+
+                ( email, emailEffects ) =
+                    Email.tick (Time.posixToMillis time) model.email
             in
-            ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab }, bootEffects ++ asciiEffects )
+            ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab, email = email }
+            , bootEffects ++ asciiEffects ++ emailEffects
+            )
 
         GotInput value ->
             case value of
                 Ok event ->
-                    let
-                        ( next, cmd ) =
-                            step event model
-                    in
-                    ( next
-                    , if cursorColor next /= cursorColor model || uiScale next /= uiScale model || isRenderer event then
-                        cmd ++ [ Effect.SetCursor { color = cursorColor next, scale = uiScale next } ]
-
-                      else
-                        cmd
-                    )
+                    step event model
 
                 Err error ->
                     ( model, [ Effect.Log ("couldn't read a message from the host: " ++ error) ] )
+
+
+mousePosition : Model -> Coord DevicePixels
+mousePosition model =
+    case model.takingScreenshot of
+        Just data ->
+            data.mouse
+
+        Nothing ->
+            model.mouse
 
 
 step : Input -> Model -> ( Model, List Effect )
@@ -466,7 +547,7 @@ step event model =
             -- The host sends where the mouse is next.
             ( { model | displays = displays }, [] )
 
-        Frame time ->
+        Frame time posix ->
             let
                 -- The host's clock starts again at each boot, but lastFrame is saved with
                 -- the Model, so the first frame after a restart can come "before" the last
@@ -483,6 +564,7 @@ step event model =
                 next =
                     { model
                         | lastFrame = Just time
+                        , time = Just posix
                         , frames = model.frames + 1
                         , frameIntervals =
                             case model.lastFrame of
@@ -491,7 +573,12 @@ step event model =
 
                                 Nothing ->
                                     model.frameIntervals
-                        , uiState = Ui.onAnimationFrame elapsedTime model.uiState
+                        , uiState =
+                            Ui.onAnimationFrame
+                                elapsedTime
+                                (uiMouse model)
+                                (hover model)
+                                model.uiState
                     }
             in
             -- `draw` draws it, unless the message is being replayed.
@@ -582,73 +669,174 @@ step event model =
 
         Mouse x y ->
             let
-                moved =
-                    { model | mouse = Coord.xy x y }
+                modelOld =
+                    model
+
+                model2 =
+                    dragScreenshot model { model | mouse = Coord.xy x y }
             in
-            case ( model.selectingText, model.uiState.focus ) of
-                ( True, Just focus ) ->
-                    case findInput focus model of
-                        Just ( display, Ui.TextInputType { position } ) ->
-                            -- The mouse in that display's UI pixels, even once it has left it.
-                            ( dragSelect focus (uiMouseOn display moved.mouse) position moved, [] )
+            case model2.takingScreenshot of
+                Just data ->
+                    updateScreenshotPreview data model2
 
-                        Just ( _, Ui.ButtonType _ ) ->
-                            ( moved, [] )
+                Nothing ->
+                    case ( model2.selectingText, model2.uiState.focus ) of
+                        ( True, Just focus ) ->
+                            case findInput focus modelOld of
+                                Just ( display, Ui.TextInputType { position } ) ->
+                                    -- The mouse in that display's UI pixels, even once it has left it.
+                                    ( dragSelect focus (uiMouseOn display model2.mouse) position model2, [] )
 
-                        Nothing ->
-                            ( moved, [] )
+                                Just ( _, Ui.ButtonType _ ) ->
+                                    ( model2, [] )
 
-                _ ->
-                    ( moved, [] )
+                                Just ( display, Ui.ViewportType viewport ) ->
+                                    ( { model2 | uiState = Ui.dragScrollbar focus (uiMouseOn display model2.mouse) viewport model2.uiState }
+                                    , []
+                                    )
+
+                                Nothing ->
+                                    ( model2, [] )
+
+                        _ ->
+                            ( model2, [] )
 
         Button 0 True ->
             let
                 cursor =
                     uiMouse model
             in
-            case hover model of
-                ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
-                    ( { model
-                        | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
-                        , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
-                      }
-                    , []
-                    )
+            if model.showUiBorders then
+                -- The outline mode's inspector: a click shows where the element under the
+                -- mouse was made, and doesn't press it.
+                let
+                    display : Display
+                    display =
+                        mouseDisplay model
+                in
+                ( { model
+                    | inspected =
+                        case Ui.inspect model.uiState cursor (displayUi model display) of
+                            [] ->
+                                Nothing
 
-                ( id, { relativePositionToUi, ui } ) :: _ ->
-                    let
-                        ( uiState, maybeModelAndEffects ) =
-                            Ui.onMouseDown (click model) relativePositionToUi cursor id ui model.uiState
-                    in
-                    case maybeModelAndEffects of
-                        Just ( model2, effects ) ->
-                            ( { model2 | selectingText = True }, effects )
+                            found ->
+                                Just { display = display.id, sources = List.map .source found }
+                  }
+                , []
+                )
 
-                        Nothing ->
-                            ( { model | selectingText = True, uiState = uiState }, [] )
+            else
+                case model.takingScreenshot of
+                    Just data ->
+                        case model.time of
+                            Just time ->
+                                let
+                                    display : Display
+                                    display =
+                                        mouseDisplay model
 
-                [] ->
-                    ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
+                                    displayUi2 : Ui.Element UiId
+                                    displayUi2 =
+                                        displayUi model display
+                                in
+                                case Ui.hoverIdOnly model.uiState (uiMouseOn display data.mouse) displayUi2 of
+                                    ( _, { ui } ) :: _ ->
+                                        ( { model
+                                            | screenshots =
+                                                Ui.elementToScreenshot time (Display.uiScale display) model.uiState ui
+                                                    :: model.screenshots
+                                            , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
+                                            , takingScreenshot = Nothing
+                                          }
+                                        , []
+                                        )
+
+                                    [] ->
+                                        ( { model
+                                            | screenshots =
+                                                Ui.elementToScreenshot time (Display.uiScale display) model.uiState displayUi2
+                                                    :: model.screenshots
+                                            , screenshotViewer = ScreenshotViewer.screenshotAdded model.screenshotViewer
+                                            , takingScreenshot = Nothing
+                                          }
+                                        , []
+                                        )
+
+                            Nothing ->
+                                ( model, [] )
+
+                    Nothing ->
+                        case hover model of
+                            ( ScreenshotViewer ScreenshotViewer.Types.ImageArea, _ ) :: _ ->
+                                ( { model
+                                    | screenshotViewer = ScreenshotViewer.startDragging model.screenshotViewer
+                                    , uiState = Ui.setFocus Nothing model.uiState
+                                  }
+                                , []
+                                )
+
+                            ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
+                                ( { model
+                                    | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
+                                    , uiState = Ui.setFocus (Just (AsciiCollab AsciiCollab.Types.GridArea)) model.uiState
+                                  }
+                                , []
+                                )
+
+                            ( id, { relativePositionToUi, ui } ) :: _ ->
+                                let
+                                    model2 : Model
+                                    model2 =
+                                        { model
+                                            | uiState =
+                                                Ui.onMouseDown
+                                                    (Maybe.withDefault (Time.millisToPosix 0) model.time)
+                                                    relativePositionToUi
+                                                    cursor
+                                                    id
+                                                    ui
+                                                    model.uiState
+                                        }
+
+                                    ( model3, effects ) =
+                                        click model2 id
+                                in
+                                ( { model3 | selectingText = True }, effects )
+
+                            [] ->
+                                ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
 
         Button 0 False ->
-            ( { model | pressed = False, selectingText = False }, [] )
+            ( { model
+                | pressed = False
+                , selectingText = False
+                , uiState = Ui.onMouseUp model.uiState
+                , screenshotViewer = ScreenshotViewer.stopDragging model.screenshotViewer
+              }
+            , []
+            )
 
         Button _ down ->
             ( { model | pressed = down }, [] )
 
         Wheel clicks ->
-            case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
-                _ :: _ ->
-                    AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
-                        |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
+            case model.takingScreenshot of
+                Just data ->
+                    updateScreenshotPreview { data | depth = data.depth + clicks } model
 
-                [] ->
-                    case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (hover model) of
-                        ( id, { ui } ) :: _ ->
-                            ( { model | uiState = Ui.onWheel id clicks ui model.uiState }, [] )
+                Nothing ->
+                    scrollUnderMouse (Ui.WheelClicks clicks) model
 
-                        _ ->
-                            ( model, [] )
+        Scroll pixels ->
+            scrollUnderMouse (Ui.ScrollPixels (Units.uiPixels pixels)) model
+
+        ScrollMomentum velocity ->
+            if velocity == 0 then
+                ( { model | uiState = Ui.stopMomentum model.uiState }, [] )
+
+            else
+                scrollUnderMouse (Ui.Momentum velocity) model
 
         Key code down repeat ->
             let
@@ -657,10 +845,24 @@ step event model =
                     Keyboard.fromCode model.shift code
             in
             if key == PrintScreen then
-                ( { model | takingScreenshot = Just { mouse = model.mouse } }, [] )
+                let
+                    display : Display
+                    display =
+                        mouseDisplay model
+                in
+                ( { model
+                    | takingScreenshot =
+                        Just
+                            { mouse = model.mouse
+                            , bounds = Bounds.fromTopLeftAndSize display.position display.size
+                            , depth = 0
+                            }
+                  }
+                , []
+                )
 
             else if model.ctrl && model.shift && key == Character "Q" && down then
-                ( { model | showUiBorders = not model.showUiBorders }, [] )
+                ( { model | showUiBorders = not model.showUiBorders, inspected = Nothing }, [] )
 
             else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
@@ -676,6 +878,14 @@ step event model =
 
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
+
+            else if emailFieldFocused model /= Nothing then
+                case emailFieldFocused model of
+                    Just field ->
+                        emailKey field key model
+
+                    Nothing ->
+                        ( model, [] )
 
             else if model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea) && model.asciiCollab.isOpen then
                 AsciiCollab.key (appUiSize AsciiCollabApp model) model.ctrl key model.asciiCollab
@@ -740,6 +950,15 @@ step event model =
         WebSocketClosed id reason ->
             webSocketInput (WebSocketClosed id reason) model
 
+        TlsOpened id ->
+            ( { model | email = Email.tlsOpened id model.email }, [] )
+
+        TlsData id data ->
+            Email.tlsData id data model.email |> Tuple.mapFirst (\email -> { model | email = email })
+
+        TlsClosed id reason ->
+            ( { model | email = Email.tlsClosed id reason model.email }, [] )
+
         RandomBytes hex ->
             AsciiCollab.gotRandomBytes hex model.asciiCollab |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
@@ -747,6 +966,53 @@ step event model =
             ( { model
                 | geoUrl = nonEmpty urls.geoUrl Weather.defaultGeoUrl
                 , weatherUrl = nonEmpty urls.weatherUrl Weather.defaultWeatherUrl
+              }
+            , []
+            )
+
+
+updateScreenshotPreview : ScreenshotPreview -> Model -> ( Model, List Effect )
+updateScreenshotPreview data model =
+    let
+        display : Display
+        display =
+            Display.at model.mouse model.displays |> Maybe.withDefault (mainDisplay model)
+
+        displayUi2 : Ui.Element UiId
+        displayUi2 =
+            displayUi model display
+
+        uiScale2 : UiScale
+        uiScale2 =
+            uiScale model
+
+        mouse : Coord UiPixels
+        mouse =
+            uiMouseOn display model.mouse
+    in
+    case Nonempty.fromList (Ui.hover model.uiState mouse displayUi2) |> Maybe.map (Nonempty.get data.depth) of
+        Just ( _, { relativePositionToUi, ui } ) ->
+            let
+                _ =
+                    Debug.log "rel" relativePositionToUi
+            in
+            ( { model
+                | takingScreenshot =
+                    Just
+                        { data
+                            | bounds =
+                                Bounds.fromTopLeftAndSize
+                                    (Coord.toDevice uiScale2 relativePositionToUi)
+                                    (Coord.toDevice uiScale2 (Ui.size ui))
+                        }
+              }
+            , []
+            )
+
+        Nothing ->
+            ( { model
+                | takingScreenshot =
+                    Just { data | bounds = Bounds.fromTopLeftAndSize display.position display.size }
               }
             , []
             )
@@ -859,25 +1125,32 @@ fetchWeather model =
 {-| A click on a toolbar's app button opens the app on that toolbar's display, or moves
 it there if it is open on another one.
 -}
-click : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
-click model id uiState =
+click : Model -> UiId -> ( Model, List Effect )
+click model id =
     case appButton id of
         Just app ->
             let
                 here =
                     mouseDisplay model
 
+                -- Last in appDisplays: laid out after the apps already open there.
                 moved =
-                    { model | appDisplays = SeqDict.insert app here.name model.appDisplays }
+                    { model | appDisplays = SeqDict.remove app model.appDisplays |> SeqDict.insert app here.name }
             in
-            if appIsOpen app model && (displayOf app model).id /= here.id then
-                ( { moved | uiState = uiState }, [] )
+            if appIsOpen app model && not (shownOn here app model) then
+                -- On another display, or left out of this one's layout for want of room:
+                -- shown here, as the newest.
+                ( moved, [] )
+
+            else if appIsOpen app model then
+                -- closing it
+                clickElement model id
 
             else
-                clickElement moved id uiState
+                clickElement moved id
 
         Nothing ->
-            clickElement model id uiState
+            clickElement model id
 
 
 {-| The app a toolbar button opens.
@@ -894,13 +1167,71 @@ appButton id =
         CalculatorButton ->
             Just CalculatorApp
 
+        TicTacToeButton ->
+            Just TicTacToeApp
+
         EditorButton ->
             Just EditorApp
+
+        ScreenshotViewer id2 ->
+            case id2 of
+                ScreenshotViewer.Types.OpenButton ->
+                    Just ScreenshotViewerApp
+
+                ScreenshotViewer.Types.CloseButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.PreviewList ->
+                    Nothing
+
+                ScreenshotViewer.Types.Preview _ ->
+                    Nothing
+
+                ScreenshotViewer.Types.ImageArea ->
+                    Nothing
+
+                ScreenshotViewer.Types.ZoomInButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.ZoomOutButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.ActualSizeButton ->
+                    Nothing
+
+                ScreenshotViewer.Types.FitButton ->
+                    Nothing
+
+        DebugButton ->
+            Just DebugApp
+
+        NetworkAppButton ->
+            Just NetworkApp
+
+        WeatherAppButton ->
+            Just WeatherApp
+
+        CloseDebugButton ->
+            Nothing
+
+        CloseNetworkButton ->
+            Nothing
+
+        CloseWeatherButton ->
+            Nothing
 
         HackerNews id2 ->
             case id2 of
                 HackerNews.Types.OpenButton ->
                     Just HackerNewsApp
+
+                _ ->
+                    Nothing
+
+        Email id2 ->
+            case id2 of
+                Email.Types.OpenButton ->
+                    Just EmailApp
 
                 _ ->
                     Nothing
@@ -958,6 +1289,9 @@ appButton id =
         Calculator _ ->
             Nothing
 
+        TicTacToe _ ->
+            Nothing
+
         EditorInput ->
             Nothing
 
@@ -965,6 +1299,15 @@ appButton id =
             Nothing
 
         CloseEditorButton ->
+            Nothing
+
+        EditorOpenButton ->
+            Nothing
+
+        EditorModulesViewport ->
+            Nothing
+
+        EditorModuleButton _ ->
             Nothing
 
         News _ ->
@@ -983,18 +1326,46 @@ appIsOpen app model =
         HackerNewsApp ->
             model.hackerNews.isOpen
 
+        EmailApp ->
+            model.email.isOpen
+
         AsciiCollabApp ->
             model.asciiCollab.isOpen
 
         CalculatorApp ->
             model.calculatorOpen
 
+        TicTacToeApp ->
+            model.ticTacToeOpen
+
         EditorApp ->
             model.editorOpen
 
+        ScreenshotViewerApp ->
+            model.screenshotViewer.isOpen
 
-clickElement : Model -> UiId -> Ui.Model UiId -> ( Model, List Effect )
-clickElement model id uiState =
+        DebugApp ->
+            model.debugOpen
+
+        NetworkApp ->
+            model.networkOpen
+
+        WeatherApp ->
+            model.weatherOpen
+
+
+emailFieldFocused : Model -> Maybe Email.Types.Field
+emailFieldFocused model =
+    case model.uiState.focus of
+        Just (Email (Email.Types.InputField field)) ->
+            Just field
+
+        _ ->
+            Nothing
+
+
+clickElement : Model -> UiId -> ( Model, List Effect )
+clickElement model id =
     case id of
         RefreshButton ->
             ( { model | scanning = True }, [ Effect.WifiScan ] )
@@ -1012,7 +1383,7 @@ clickElement model id uiState =
                                  else
                                     Nothing
                                 )
-                                uiState
+                                model.uiState
                       }
                     , []
                     )
@@ -1021,7 +1392,7 @@ clickElement model id uiState =
                     ( model, [] )
 
         PasswordInput ->
-            ( { model | uiState = Ui.setFocus (Just PasswordInput) uiState }, [] )
+            ( { model | uiState = Ui.setFocus (Just PasswordInput) model.uiState }, [] )
 
         ShowPasswordButton ->
             ( { model | showPassword = not model.showPassword }, [] )
@@ -1040,7 +1411,7 @@ clickElement model id uiState =
             fetchWeather model
 
         AboutButton ->
-            ( { model | aboutOpen = not model.aboutOpen, editorOpen = False }, [] )
+            ( { model | aboutOpen = not model.aboutOpen }, [] )
 
         NewsButton ->
             let
@@ -1066,12 +1437,12 @@ clickElement model id uiState =
                     )
 
                 ( False, _ ) ->
-                    ( { model | newsOpen = isOpen, editorOpen = False }, [] )
+                    ( { model | newsOpen = isOpen }, [] )
 
         EditorButton ->
             ( { model
                 | editorOpen = not model.editorOpen
-                , aboutOpen = False
+                , editorPicking = False
                 , uiState =
                     Ui.setFocus
                         (if model.editorOpen then
@@ -1080,7 +1451,7 @@ clickElement model id uiState =
                          else
                             Just EditorInput
                         )
-                        uiState
+                        model.uiState
               }
             , []
             )
@@ -1089,14 +1460,58 @@ clickElement model id uiState =
             ( model, [] )
 
         EditorWindow ->
-            -- A click on the window around the text still types into it.
-            ( { model | uiState = Ui.setFocus (Just EditorInput) uiState }, [] )
+            -- A click on the window around the text still types into it (unless the
+            -- list of modules is showing instead).
+            if model.editorPicking then
+                ( model, [] )
+
+            else
+                ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
 
         CloseEditorButton ->
-            ( { model | editorOpen = False }, [] )
+            ( { model | editorOpen = False, editorPicking = False }, [] )
+
+        EditorOpenButton ->
+            ( { model | editorPicking = not model.editorPicking, uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        EditorModulesViewport ->
+            ( model, [] )
+
+        EditorModuleButton name ->
+            case SeqDict.get name SourceCode.sourceCode of
+                Just source ->
+                    ( { model
+                        | editorPicking = False
+                        , uiState =
+                            Ui.insertElement EditorInput (TextInputMultilineState (TextInputMultiline.withText source)) model.uiState
+                                |> Ui.setFocus (Just EditorInput)
+                      }
+                    , []
+                    )
+
+                Nothing ->
+                    ( model, [] )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
+
+        DebugButton ->
+            ( { model | debugOpen = not model.debugOpen }, [] )
+
+        CloseDebugButton ->
+            ( { model | debugOpen = False }, [] )
+
+        NetworkAppButton ->
+            ( { model | networkOpen = not model.networkOpen }, [] )
+
+        CloseNetworkButton ->
+            ( { model | networkOpen = False }, [] )
+
+        WeatherAppButton ->
+            ( { model | weatherOpen = not model.weatherOpen }, [] )
+
+        CloseWeatherButton ->
+            ( { model | weatherOpen = False }, [] )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -1105,7 +1520,19 @@ clickElement model id uiState =
             else
                 ( { model
                     | calculatorOpen = True
-                    , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState
+                    , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) model.uiState
+                  }
+                , []
+                )
+
+        TicTacToeButton ->
+            if model.ticTacToeOpen then
+                ( { model | ticTacToeOpen = False }, [] )
+
+            else
+                ( { model
+                    | ticTacToeOpen = True
+                    , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState
                   }
                 , []
                 )
@@ -1143,13 +1570,32 @@ clickElement model id uiState =
                 Calculator.Types.KeyButton key ->
                     ( { model
                         | calculator = Calculator.press key model.calculator
-                        , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState
+                        , uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) model.uiState
                       }
                     , []
                     )
 
                 Calculator.Types.Panel ->
-                    ( { model | uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) uiState }, [] )
+                    ( { model | uiState = Ui.setFocus (Just (Calculator Calculator.Types.Panel)) model.uiState }, [] )
+
+        TicTacToe ticTacToeId ->
+            case ticTacToeId of
+                TicTacToe.Types.CloseButton ->
+                    ( { model | ticTacToeOpen = False }, [] )
+
+                TicTacToe.Types.NewGameButton ->
+                    ( { model | ticTacToe = TicTacToe.init, uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState }, [] )
+
+                TicTacToe.Types.Square i ->
+                    ( { model
+                        | ticTacToe = TicTacToe.press i model.ticTacToe
+                        , uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState
+                      }
+                    , []
+                    )
+
+                TicTacToe.Types.Panel ->
+                    ( { model | uiState = Ui.setFocus (Just (TicTacToe TicTacToe.Types.Panel)) model.uiState }, [] )
 
         News _ ->
             ( model, [] )
@@ -1158,10 +1604,26 @@ clickElement model id uiState =
             ( model, [] )
 
         AsciiCollab asciiCollabId ->
-            asciiCollabClick asciiCollabId model uiState
+            asciiCollabClick asciiCollabId model model.uiState
 
         HackerNews uiId2 ->
             hackerNewsClick uiId2 model
+
+        Email uiId2 ->
+            emailClick uiId2 model
+
+        ScreenshotViewer uiId2 ->
+            ( { model
+                | screenshotViewer =
+                    ScreenshotViewer.onClick
+                        (Display.uiScale (displayOf ScreenshotViewerApp model))
+                        (screenshotViewerArea model)
+                        model.screenshots
+                        uiId2
+                        model.screenshotViewer
+              }
+            , []
+            )
 
 
 {-| A click on one of the ASCII collab app's elements.
@@ -1202,6 +1664,182 @@ hackerNewsClick uiId model =
         ( { model | hackerNews = hackerNews }, [] )
         effects
         |> Tuple.mapSecond List.reverse
+
+
+{-| A click on one of the email app's elements. The form's boxes and Link button need
+the text typed in them, which Ui keeps.
+-}
+emailClick : Email.Types.UiId -> Model -> ( Model, List Effect )
+emailClick uiId model =
+    case uiId of
+        Email.Types.InputField _ ->
+            ( { model | uiState = Ui.setFocus (Just (Email uiId)) model.uiState }, [] )
+
+        Email.Types.LinkButton ->
+            linkEmail model
+
+        _ ->
+            Email.onClick uiId model.email |> Tuple.mapFirst (\email -> { model | email = email })
+
+
+{-| Links the account the form describes, if the address and password are filled in.
+-}
+linkEmail : Model -> ( Model, List Effect )
+linkEmail model =
+    let
+        typed : Email.Types.Field -> String
+        typed field =
+            Ui.getTextInput (Email (Email.Types.InputField field)) model.uiState |> .current |> .text |> String.trim
+
+        address : String
+        address =
+            typed Email.Types.AddressField
+
+        password : String
+        password =
+            Ui.getTextInput (Email (Email.Types.InputField Email.Types.PasswordField)) model.uiState |> .current |> .text
+    in
+    if String.contains "@" address && not (String.isEmpty password) then
+        Email.link
+            { server =
+                case typed Email.Types.ServerField of
+                    "" ->
+                        Email.serverFor address
+
+                    server ->
+                        server
+            , address = address
+            , password = password
+            }
+            model.email
+            |> Tuple.mapFirst (\email -> { model | email = email })
+
+    else
+        let
+            email : Email.Model
+            email =
+                model.email
+        in
+        ( { model | email = { email | error = Just "Type your email address and an app password." } }, [] )
+
+
+emailStyle : Email.Types.Field -> TextInput.Style
+emailStyle field =
+    case field of
+        Email.Types.PasswordField ->
+            Email.passwordStyle
+
+        _ ->
+            Email.inputStyle
+
+
+{-| A key typed in the email form's box `field`.
+-}
+emailKey : Email.Types.Field -> Key -> Model -> ( Model, List Effect )
+emailKey field key model =
+    let
+        id : UiId
+        id =
+            Email (Email.Types.InputField field)
+
+        nextField : Email.Types.Field
+        nextField =
+            case field of
+                Email.Types.AddressField ->
+                    Email.Types.PasswordField
+
+                Email.Types.PasswordField ->
+                    Email.Types.ServerField
+
+                Email.Types.ServerField ->
+                    Email.Types.AddressField
+    in
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
+            linkEmail model
+
+        ( False, Keyboard.Tab ) ->
+            ( { model | uiState = Ui.setFocus (Just (Email (Email.Types.InputField nextField))) model.uiState }
+            , []
+            )
+
+        ( False, Keyboard.Escape ) ->
+            ( { model | uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        ( True, Keyboard.Character "v" ) ->
+            ( { model
+                | uiState =
+                    Ui.updateElement
+                        id
+                        (\maybe ->
+                            TextInput.paste
+                                model.clipboard
+                                (case maybe of
+                                    Just (TextInputState state) ->
+                                        state
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+              }
+            , []
+            )
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput id model.uiState)
+            in
+            ( { model
+                | uiState = Ui.insertElement id (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            if field == Email.Types.PasswordField then
+                                model.clipboard
+
+                            else
+                                text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+            , []
+            )
+
+
+dragSelectEmail : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectEmail focus mouse position model =
+    case focus of
+        Email (Email.Types.InputField field) ->
+            { model
+                | uiState =
+                    Ui.updateElement
+                        focus
+                        (\maybe ->
+                            TextInput.mouseDownMove
+                                (emailStyle field)
+                                mouse
+                                position
+                                (case maybe of
+                                    Just (TextInputState state) ->
+                                        state
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+            }
+
+        _ ->
+            model
 
 
 httpGet : HttpRequestId -> String -> Effect
@@ -1289,7 +1927,7 @@ connect model =
                             Err error ->
                                 ( { model
                                     | wifiStatus =
-                                        { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = error }
+                                        { state = Wifi.Failed, ssid = network.ssid, ip = Nothing, error = error }
                                   }
                                 , []
                                 )
@@ -1354,13 +1992,7 @@ typeKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case SeqDict.get PasswordInput model.uiState.uiState of
-                            Just (TextInputState password2) ->
-                                password2
-
-                            _ ->
-                                TextInput.init
-                        )
+                        (Ui.getTextInput PasswordInput model.uiState)
             in
             ( { model
                 | uiState =
@@ -1465,6 +2097,9 @@ dragSelect focus mouse position model =
         CalculatorButton ->
             model
 
+        TicTacToeButton ->
+            model
+
         PowerOffButton ->
             model
 
@@ -1480,6 +2115,9 @@ dragSelect focus mouse position model =
         Calculator _ ->
             model
 
+        TicTacToe _ ->
+            model
+
         EditorButton ->
             model
 
@@ -1489,13 +2127,49 @@ dragSelect focus mouse position model =
         CloseEditorButton ->
             model
 
+        EditorOpenButton ->
+            model
+
+        EditorModulesViewport ->
+            model
+
+        EditorModuleButton _ ->
+            model
+
+        DebugButton ->
+            model
+
+        CloseDebugButton ->
+            model
+
+        NetworkAppButton ->
+            model
+
+        CloseNetworkButton ->
+            model
+
+        WeatherAppButton ->
+            model
+
+        CloseWeatherButton ->
+            model
+
         News _ ->
             model
 
         HackerNews _ ->
             model
 
+        Email (Email.Types.InputField _) ->
+            dragSelectEmail focus mouse position model
+
+        Email _ ->
+            model
+
         AsciiCollab _ ->
+            model
+
+        ScreenshotViewer _ ->
             model
 
         Lazy _ ->
@@ -1540,13 +2214,7 @@ editorKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (case SeqDict.get EditorInput model.uiState.uiState of
-                            Just (TextInputMultilineState editor2) ->
-                                editor2
-
-                            _ ->
-                                TextInputMultiline.init
-                        )
+                        (Ui.getTextInputMultiline EditorInput model.uiState)
             in
             { model
                 | uiState = Ui.insertElement EditorInput (TextInputMultilineState editor) model.uiState
@@ -1579,16 +2247,6 @@ limitPassword textInput =
         textInput
 
 
-isRenderer : Input -> Bool
-isRenderer event =
-    case event of
-        Renderer _ ->
-            True
-
-        _ ->
-            False
-
-
 cursorColor : Model -> Color
 cursorColor model =
     if model.pressed then
@@ -1598,25 +2256,99 @@ cursorColor model =
         Color.white
 
 
+{-| The mouse cursor's shape: a crosshair while picking what to screenshot, otherwise
+whatever the UI under the mouse asks for (`Ui.cursorAt`). `uis` is each display's UI, as
+`draw` built them.
+-}
+cursorShape : Model -> List ( Display, Ui.Element UiId ) -> Cursor
+cursorShape model uis =
+    case model.takingScreenshot of
+        Just _ ->
+            Cursor.Crosshair
+
+        Nothing ->
+            let
+                display =
+                    mouseDisplay model
+            in
+            case List.filter (\( d, _ ) -> d.id == display.id) uis of
+                ( _, ui ) :: _ ->
+                    Ui.cursorAt model.uiState (uiMouseOn display (mousePosition model)) ui
+
+                [] ->
+                    Cursor.Arrow
+
+
 
 -- VIEW
 
 
 {-| What one display shows: its part of the UI (`ui`), and the cursor if the mouse is on it.
 -}
-view : Model -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
-view model display ui =
+view : Model -> Cursor -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
+view model cursor display ui =
     let
+        hovered : Maybe UiId
         hovered =
             if (mouseDisplay model).id == display.id then
-                Ui.hover (uiMouseOn display model.mouse) ui |> List.head |> Maybe.map Tuple.first
+                Ui.hoverIdOnly model.uiState (uiMouseOn display (mousePosition model)) ui |> List.head |> Maybe.map Tuple.first
 
             else
                 Nothing
     in
-    Ui.view (Display.uiScale display) model.showUiBorders hovered model.uiState.focus display.size ui
+    Ui.view
+        model.uiState
+        (Maybe.withDefault (Time.millisToPosix 0) model.time)
+        (Display.uiScale display)
+        model.showUiBorders
+        hovered
+        display.size
+        ui
+        ++ inspectorView model display ui
+        ++ (case model.takingScreenshot of
+                Just data ->
+                    let
+                        { topLeft, bottomRight } =
+                            data.bounds
+
+                        size =
+                            display.size
+
+                        color =
+                            Color.rgba255 50 50 50 120
+
+                        bounds : Bounds DevicePixels
+                        bounds =
+                            { topLeft = Coord.origin
+                            , bottomRight = size
+                            }
+                    in
+                    Sprite.rectangle
+                        color
+                        bounds
+                        Coord.origin
+                        (Coord.xy (Coord.xRaw size) (Coord.yRaw topLeft))
+                        ++ Sprite.rectangle
+                            color
+                            bounds
+                            (Coord.xy 0 (Coord.yRaw bottomRight))
+                            (Coord.xy (Coord.xRaw size) (Coord.yRaw size - Coord.yRaw bottomRight))
+                        ++ Sprite.rectangle
+                            color
+                            bounds
+                            (Coord.xy 0 (Coord.yRaw topLeft))
+                            (Coord.xy (Coord.xRaw topLeft) (Coord.yRaw bottomRight - Coord.yRaw topLeft))
+                        ++ Sprite.rectangle
+                            color
+                            bounds
+                            (Coord.xy (Coord.xRaw bottomRight) (Coord.yRaw topLeft))
+                            (Coord.xy (Coord.xRaw size - Coord.xRaw bottomRight) (Coord.yRaw bottomRight - Coord.yRaw topLeft))
+
+                Nothing ->
+                    []
+           )
         ++ (if Display.contains model.mouse display then
-                Sprite.cursor
+                Cursor.view
                     (if Maybe.map .hardwareCursor model.renderer == Just True then
                         -- The host moves the real cursor; this orange one trails it by however
                         -- long a frame takes to get from the mouse to the screen.
@@ -1627,14 +2359,96 @@ view model display ui =
                     )
                     (Display.uiScale display)
                     (Display.local display model.mouse)
+                    cursor
 
             else
                 []
            )
 
 
-{-| The main display: the first, with the debug overlay, the network panel and the
-notices on it. A stand-in until the host says which displays there are.
+{-| The outline mode's inspector (Ctrl+Shift+Q): a blue tint over the element under the
+mouse, and in the bottom right corner the element last clicked on this display and the
+ones it is in, each with where it was made (Ui.inspect).
+-}
+inspectorView : Model -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
+inspectorView model display ui =
+    if model.showUiBorders then
+        let
+            scale : UiScale
+            scale =
+                Display.uiScale display
+
+            hovered : List (Triangle DevicePixels)
+            hovered =
+                if (mouseDisplay model).id == display.id then
+                    case Ui.inspect model.uiState (uiMouseOn display (mousePosition model)) ui of
+                        { bounds } :: _ ->
+                            Sprite.rectangle (Color.rgba255 40 120 255 70) bounds bounds.topLeft (Coord.minus bounds.topLeft bounds.bottomRight)
+                                |> Sprite.toDevice scale
+
+                        [] ->
+                            []
+
+                else
+                    []
+
+            clicked : List (Triangle DevicePixels)
+            clicked =
+                case model.inspected of
+                    Just inspected ->
+                        if inspected.display == display.id then
+                            Ui.view
+                                model.uiState
+                                (Maybe.withDefault (Time.millisToPosix 0) model.time)
+                                scale
+                                False
+                                Nothing
+                                display.size
+                                (Ui.bottomRight { size = Display.uiSize display } (inspectorList inspected.sources))
+
+                        else
+                            []
+
+                    Nothing ->
+                        []
+        in
+        hovered ++ clicked
+
+    else
+        []
+
+
+{-| The clicked element and the ones it is in, innermost first: the Ui function that
+made each, and the module and line it was called on.
+-}
+inspectorList : List Ui.Source -> Ui.Element UiId
+inspectorList sources =
+    let
+        width : Int
+        width =
+            List.map (\source -> String.length source.function) sources |> List.maximum |> Maybe.withDefault 0
+    in
+    Ui.el
+        { padding = Ui.paddingXY 8 6, borderAndFill = Ui.windowBorderAndFill }
+        (Ui.column
+            4
+            [ Ui.text "Clicked element, then the ones it is in:"
+            , List.take 40 sources
+                |> List.map
+                    (\source ->
+                        String.padRight (width + 5) ' ' ("Ui." ++ source.function)
+                            ++ source.module_
+                            ++ ":"
+                            ++ String.fromInt source.line
+                    )
+                |> String.join "\n"
+                |> Ui.monoText
+            ]
+        )
+
+
+{-| The main display: the first, with the notices on it, and the apps that haven't been
+moved to another display. A stand-in until the host says which displays there are.
 -}
 mainDisplay : Model -> Display
 mainDisplay model =
@@ -1650,7 +2464,7 @@ mainDisplay model =
 -}
 mouseDisplay : Model -> Display
 mouseDisplay model =
-    Display.at model.mouse model.displays |> Maybe.withDefault (mainDisplay model)
+    Display.at (mousePosition model) model.displays |> Maybe.withDefault (mainDisplay model)
 
 
 {-| The display an app shows on.
@@ -1667,11 +2481,21 @@ displayOf app model =
             mainDisplay model
 
 
-{-| The size, in UI pixels, of the display an app shows on.
+{-| The size, in UI pixels, of an app's window (`windows`); the whole display it shows
+on while it isn't open.
 -}
 appUiSize : App -> Model -> Coord UiPixels
 appUiSize app model =
-    Display.uiSize (displayOf app model)
+    let
+        display =
+            displayOf app model
+    in
+    case List.filter (\( windowApp, _ ) -> windowApp == app) (windows model display) of
+        ( _, bounds ) :: _ ->
+            Coord.minus bounds.topLeft bounds.bottomRight
+
+        [] ->
+            Display.uiSize display
 
 
 {-| Device pixels per UI pixel where the mouse is: the cursor's size, and how far the
@@ -1686,7 +2510,7 @@ uiScale model =
 -}
 uiMouse : Model -> Coord UiPixels
 uiMouse model =
-    uiMouseOn (mouseDisplay model) model.mouse
+    uiMouseOn (mouseDisplay model) (mousePosition model)
 
 
 {-| A point in the displays' space, in a display's UI pixels.
@@ -1694,6 +2518,84 @@ uiMouse model =
 uiMouseOn : Display -> Coord DevicePixels -> Coord UiPixels
 uiMouseOn display point =
     Coord.toUi (Display.uiScale display) (Display.local display point)
+
+
+{-| The size of the area the screenshot viewer shows its picture in, in UI pixels.
+-}
+screenshotViewerArea : Model -> Coord UiPixels
+screenshotViewerArea model =
+    ScreenshotViewer.areaSize (appUiSize ScreenshotViewerApp model)
+
+
+{-| The mouse moved from where `before` has it to where `after` has it: moves a screenshot
+being dragged with it.
+-}
+dragScreenshot : Model -> Model -> Model
+dragScreenshot before after =
+    let
+        display : Display
+        display =
+            displayOf ScreenshotViewerApp after
+    in
+    { after
+        | screenshotViewer =
+            ScreenshotViewer.dragged
+                (Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse))
+                after.screenshotViewer
+    }
+
+
+{-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
+the mouse scrolls.
+-}
+scrollUnderMouse : Ui.ScrollBy -> Model -> ( Model, List Effect )
+scrollUnderMouse scrollBy model =
+    case List.filter (\( id, _ ) -> id == ScreenshotViewer ScreenshotViewer.Types.ImageArea) (hover model) of
+        ( _, { relativePositionToUi } ) :: _ ->
+            -- The wheel zooms the screenshot; two fingers on a touchpad move it.
+            ( { model
+                | screenshotViewer =
+                    case scrollBy of
+                        Ui.WheelClicks clicks ->
+                            ScreenshotViewer.wheel (Coord.minus relativePositionToUi (uiMouse model)) clicks model.screenshotViewer
+
+                        Ui.ScrollPixels pixels ->
+                            ScreenshotViewer.scrolledBy model.shift (Quantity.unwrap pixels) model.screenshotViewer
+
+                        Ui.Momentum _ ->
+                            model.screenshotViewer
+              }
+            , []
+            )
+
+        [] ->
+            scrollUnderMouseOutsideViewer scrollBy model
+
+
+scrollUnderMouseOutsideViewer : Ui.ScrollBy -> Model -> ( Model, List Effect )
+scrollUnderMouseOutsideViewer scrollBy model =
+    case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
+        _ :: _ ->
+            (case scrollBy of
+                Ui.WheelClicks clicks ->
+                    AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
+
+                Ui.ScrollPixels pixels ->
+                    AsciiCollab.scrollPixels (appUiSize AsciiCollabApp model) (Quantity.unwrap pixels) model.asciiCollab
+
+                Ui.Momentum _ ->
+                    -- the grid moves a whole row at a time, so it doesn't glide
+                    ( model.asciiCollab, [] )
+            )
+                |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
+
+        [] ->
+            case List.filter (\( _, { ui } ) -> Ui.scrolls ui) (hover model) of
+                ( id, { ui } ) :: _ ->
+                    ( { model | uiState = Ui.onWheel id scrollBy ui model.uiState }, [] )
+
+                _ ->
+                    ( model, [] )
 
 
 {-| What is under the mouse, innermost first.
@@ -1704,7 +2606,7 @@ hover model =
         display =
             mouseDisplay model
     in
-    Ui.hover (uiMouseOn display model.mouse) (displayUi model display)
+    Ui.hoverIdOnly model.uiState (uiMouseOn display (mousePosition model)) (displayUi model display)
 
 
 {-| The text box or button `id`, and the display it is on.
@@ -1712,7 +2614,7 @@ hover model =
 findInput : UiId -> Model -> Maybe ( Display, Ui.InputType UiId )
 findInput id model =
     List.filterMap
-        (\display -> Ui.findInput id (displayUi model display) |> Maybe.map (Tuple.pair display))
+        (\display -> Ui.findInput model.uiState id (displayUi model display) |> Maybe.map (Tuple.pair display))
         model.displays
         |> List.head
 
@@ -1743,92 +2645,229 @@ headingSize =
     Sprite.Big
 
 
-{-| Everything the UI framework draws on a display. On each, a toolbar in the top left;
-on the main display the debug panel in the bottom left corner and the wifi panel in the
-top right; and each open app on its display: the calculator under the toolbar, the text
-editor or the about page in the middle.
+{-| A title in `headingSize`.
+-}
+heading : String -> Ui.Element id
+heading string =
+    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [] } ]
+
+
+{-| Everything the UI framework draws on a display: the toolbar along the top, each
+app open on this display in the window `windows` gives it, and on the main display the
+notices.
 -}
 displayUi : Model -> Display -> Ui.Element UiId
 displayUi model display =
-    let
-        isMain =
-            display.id == (mainDisplay model).id
+    ( Coord.origin, toolbar model display )
+        :: List.map
+            (\( app, bounds ) ->
+                ( bounds.topLeft
+                , appView app (Coord.minus bounds.topLeft bounds.bottomRight) model
+                )
+            )
+            (windows model display)
+        ++ (if display.id == (mainDisplay model).id then
+                case model.upgradingTo of
+                    Just build ->
+                        [ notice model ("Upgrade to " ++ build ++ " in progress") ]
 
-        on app element =
-            if appIsOpen app model && (displayOf app model).id == display.id then
-                [ element () ]
+                    Nothing ->
+                        case model.reflashNeeded of
+                            Just build ->
+                                [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
+
+                            Nothing ->
+                                []
 
             else
                 []
+           )
+        |> Ui.inFront
 
-        size =
-            Display.uiSize display
+
+
+-- WINDOW LAYOUT
+
+
+{-| Where each app open on a display goes, in UI pixels from the display's top left
+corner: laid out by Layout.elm under the toolbar, in the order they were opened (the
+ones open from the start first). The oldest are left out when there isn't room for them
+all; they stay open, and their toolbar buttons bring them back.
+-}
+windows : Model -> Display -> List ( App, Bounds UiPixels )
+windows model display =
+    let
+        areaTopLeft =
+            Coord.xy windowGap (toolbarHeight + windowGap)
+
+        area =
+            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap windowGap)) (Display.uiSize display)
+
+        inOrder =
+            List.filter (\app -> not (SeqDict.member app model.appDisplays)) allApps
+                ++ SeqDict.keys model.appDisplays
+    in
+    inOrder
+        |> List.filter (\app -> appIsOpen app model && (displayOf app model).id == display.id)
+        |> List.map (\app -> ( app, appLimits app model ))
+        |> Layout.layout windowGap area
+        |> List.map
+            (\( app, bounds ) ->
+                ( app
+                , { topLeft = Coord.plus areaTopLeft bounds.topLeft
+                  , bottomRight = Coord.plus areaTopLeft bounds.bottomRight
+                  }
+                )
+            )
+
+
+{-| Whether an app has a window on a display: it is open there, and there was room for it.
+-}
+shownOn : Display -> App -> Model -> Bool
+shownOn display app model =
+    List.any (\( windowApp, _ ) -> windowApp == app) (windows model display)
+
+
+{-| Space between windows, and around them.
+-}
+windowGap : Int
+windowGap =
+    8
+
+
+{-| How big each app's window can be. The ones that are always the same size say what
+size their view is.
+-}
+appLimits : App -> Model -> Layout.Limits
+appLimits app model =
+    case app of
+        AboutApp ->
+            Layout.fixed (Ui.size (aboutPage model))
+
+        NewsApp ->
+            { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
+
+        EmailApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy 900 700, max = Coord.xy 1200 100000 }
+
+        HackerNewsApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
+
+        AsciiCollabApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
+
+        CalculatorApp ->
+            Layout.fixed (Ui.size (Calculator.view False model.calculator))
+
+        TicTacToeApp ->
+            Layout.fixed (Ui.size (TicTacToe.view model.ticTacToe))
+
+        EditorApp ->
+            { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
+            , preferred = Coord.xy (Quantity.unwrap (em 40) + 16) (editorChrome + 24 * Quantity.unwrap (Sprite.lineHeight bodySize))
+            , max = Coord.xy (Quantity.unwrap (em 60) + 16) 100000
+            }
+
+        DebugApp ->
+            Layout.fixed (Ui.size (overlay model))
+
+        NetworkApp ->
+            Layout.fixed (Ui.size (networkPanel model))
+
+        WeatherApp ->
+            Layout.fixed (Ui.size (weatherPanel model))
+
+        ScreenshotViewerApp ->
+            { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
+
+
+{-| An app's view, in a window this big. The apps that are always the same size ignore
+it.
+-}
+appView : App -> Coord UiPixels -> Model -> Ui.Element UiId
+appView app size model =
+    case app of
+        AboutApp ->
+            aboutPage model
+
+        NewsApp ->
+            News.view model.lazyCache (Coord.x size) (Coord.y size) model.news
+
+        HackerNewsApp ->
+            HackerNews.view model.lazyCache size model.hackerNews
+
+        EmailApp ->
+            Email.view size model.email
+
+        AsciiCollabApp ->
+            AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
+
+        CalculatorApp ->
+            Calculator.view (calculatorFocused model) model.calculator
+
+        TicTacToeApp ->
+            TicTacToe.view model.ticTacToe
+
+        EditorApp ->
+            editorWindow model
+
+        DebugApp ->
+            overlay model
+
+        NetworkApp ->
+            networkPanel model
+
+        WeatherApp ->
+            weatherPanel model
+
+        ScreenshotViewerApp ->
+            ScreenshotViewer.view
+                (Display.uiScale (displayOf ScreenshotViewerApp model))
+                size
+                model.screenshots
+                model.screenshotViewer
+
+
+{-| A small app's window: a bordered box with a title and a Close button above its rows.
+-}
+smallWindow : { title : Ui.Element UiId, close : UiId, width : Quantity Int UiPixels } -> List (Ui.Element UiId) -> Ui.Element UiId
+smallWindow { title, close, width } rows =
+    let
+        widest =
+            List.foldl (\row soFar -> Quantity.max (Coord.x (Ui.size row)) soFar) width rows
     in
     Ui.el
-        { padding = { topLeft = Coord.origin, bottomRight = size }
-        , inFront =
-            (if isMain then
-                [ overlay model, networkPanel model ]
-
-             else
-                []
+        { padding = Ui.paddingXY 6 6, borderAndFill = Ui.windowBorderAndFill }
+        (Ui.column
+            4
+            (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+                :: rows
             )
-                ++ [ toolbar model display ]
-                ++ on EditorApp (\() -> editorWindow model)
-                ++ on CalculatorApp (\() -> calculatorWindow model)
-                ++ on AboutApp (\() -> aboutPage model)
-                ++ on NewsApp (\() -> Ui.topRight { size = size } (News.view model.uiState model.news))
-                ++ on AsciiCollabApp
-                    (\() ->
-                        AsciiCollab.view
-                            size
-                            (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea))
-                            model.asciiCollab
-                    )
-                ++ on HackerNewsApp
-                    (\() -> Ui.topRight { size = size } (HackerNews.view model.lazyCache model.uiState size model.hackerNews))
-                ++ (if isMain then
-                        case model.upgradingTo of
-                            Just build ->
-                                [ notice model ("Upgrade to " ++ build ++ " in progress") ]
-
-                            Nothing ->
-                                case model.reflashNeeded of
-                                    Just build ->
-                                        [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
-
-                                    Nothing ->
-                                        []
-
-                    else
-                        []
-                   )
-        , borderAndFill = Ui.NoBorderOrFill
-        }
-        Ui.none
+        )
 
 
-{-| The debug panel, in the bottom left corner of the screen.
+{-| The debug app: the build, the displays, the mouse, frame times and the boot's timings.
 -}
 overlay : Model -> Ui.Element UiId
 overlay model =
     let
-        -- The debug overlay keeps town-collab's pixel font.
+        -- The debug app keeps town-collab's pixel font.
         mono =
             Sprite.Mono
 
         line label value =
-            Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.text Sprite.Small mono (String.padRight 10 ' ' label), Ui.text Sprite.Small mono value ]
+            Ui.row
+                0
+                [ Ui.monoText (String.padRight 10 ' ' label), Ui.monoText value ]
 
         rendererLine =
             case model.renderer of
                 Just { gpu, name } ->
-                    Ui.row { spacing = 4, padding = Ui.noPadding }
-                        [ Ui.text Sprite.Small mono (String.padRight 10 ' ' "Renderer")
+                    Ui.row
+                        4
+                        [ Ui.monoText (String.padRight 10 ' ' "Renderer")
                         , badge Sprite.Small gpu
-                        , Ui.text Sprite.Small
-                            mono
+                        , Ui.monoText
                             ((if gpu then
                                 "GPU, "
 
@@ -1907,51 +2946,50 @@ overlay model =
         seconds ms =
             fixed 2 (ms / 1000) ++ " s"
     in
-    Ui.bottomLeft { size = Display.uiSize (mainDisplay model) }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-            (Ui.el
-                { padding = Ui.paddingXY 6 6
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = 3, padding = Ui.noPadding }
-                    ([ Ui.text Sprite.Small mono "Elm OS debug"
-                     , line "Build" (BootInfo.buildText model.bootInfo)
-                     ]
-                        ++ List.indexedMap
-                            (\i display ->
-                                line
-                                    (if i == 0 then
-                                        "Screen"
+    smallWindow { title = Ui.monoText "Elm OS debug", close = CloseDebugButton, width = debugWidth }
+        [ Ui.column
+            3
+            (line "Build" (BootInfo.buildText model.bootInfo)
+                :: List.indexedMap
+                    (\i display ->
+                        line
+                            (if i == 0 then
+                                "Screen"
 
-                                     else
-                                        ""
-                                    )
-                                    (display.name
-                                        ++ " "
-                                        ++ String.fromInt (Coord.xRaw display.size)
-                                        ++ " x "
-                                        ++ String.fromInt (Coord.yRaw display.size)
-                                        ++ ", UI scale "
-                                        ++ String.fromInt (Units.scaleInt (Display.uiScale display))
-                                        ++ "x"
-                                    )
+                             else
+                                ""
                             )
-                            model.displays
-                        ++ [ line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
-                           , rendererLine
-                           , cursorLine
-                           , line "Frame" (frameText model)
-                           ]
-                        ++ statsLines
-                        ++ (line "Clock" (BootInfo.clockText model.bootInfo)
-                                :: line "Battery" (BootInfo.batteryText model.bootInfo)
-                                :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
-                           )
+                            (display.name
+                                ++ " "
+                                ++ String.fromInt (Coord.xRaw display.size)
+                                ++ " x "
+                                ++ String.fromInt (Coord.yRaw display.size)
+                                ++ ", UI scale "
+                                ++ String.fromInt (Units.scaleInt (Display.uiScale display))
+                                ++ "x"
+                            )
                     )
-                )
+                    model.displays
+                ++ [ line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
+                   , rendererLine
+                   , cursorLine
+                   , line "Frame" (frameText model)
+                   ]
+                ++ statsLines
+                ++ (line "Clock" (BootInfo.clockText model.bootInfo)
+                        :: line "Battery" (BootInfo.batteryText model.bootInfo)
+                        :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
+                   )
             )
-        )
+        ]
+
+
+{-| The debug app's width, unless a line is longer: its lines change length as the numbers
+change, and its window shouldn't.
+-}
+debugWidth : Quantity Int UiPixels
+debugWidth =
+    Units.uiPixels 600
 
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
@@ -2065,13 +3103,18 @@ last frame's `Ui.lazy` elements, which are kept for the next. Persist calls it a
 draw : Msg -> Model -> ( Model, List Effect )
 draw msg model =
     case msg of
-        GotInput (Ok (Frame _)) ->
+        GotInput (Ok (Frame _ _)) ->
             let
                 uis =
                     List.map (\display -> ( display, displayUi model display )) model.displays
+
+                cursor =
+                    cursorShape model uis
             in
             ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
-            , [ Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model display ui }) uis) ]
+            , [ Effect.SetCursor { image = Cursor.image cursor, color = cursorColor model, scale = uiScale model }
+              , Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model cursor display ui }) uis)
+              ]
             )
 
         GotInput _ ->
@@ -2156,15 +3199,15 @@ webSocketInput input model =
 -- NETWORK AND WEATHER
 
 
-{-| How wide the wifi panel's contents are, in pixels.
+{-| How wide the network and weather apps' contents are, in UI pixels.
 -}
 panelWidth : Quantity Int UiPixels
 panelWidth =
     em 28
 
 
-{-| The panel in the top right: a line for each wired card, then wifi (left out on a
-computer with a wired card and no wifi), then the weather.
+{-| The network app: a line for each wired card, then wifi (left out on a computer with
+a wired card and no wifi).
 -}
 networkPanel : Model -> Ui.Element UiId
 networkPanel model =
@@ -2176,7 +3219,7 @@ networkPanel model =
             panelWidth
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         fit string =
             Sprite.ellipsis bodySize font width string
@@ -2248,8 +3291,6 @@ networkPanel model =
                         Wifi.Connected ->
                             Ui.colorText
                                 connectedColor
-                                bodySize
-                                font
                                 (fit
                                     ("Connected to "
                                         ++ ssid
@@ -2265,7 +3306,7 @@ networkPanel model =
                                 )
 
                         Wifi.Failed ->
-                            Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width status.error)
+                            Ui.colorText Color.errorColor (Sprite.wrap bodySize font width status.error)
 
         networkRows =
             case model.wifiDevice of
@@ -2296,13 +3337,14 @@ networkPanel model =
                         []
 
                     else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText Color.errorColor bodySize font "That kind of network isn't supported yet" ]
+                        [ Ui.colorText Color.errorColor "That kind of network isn't supported yet" ]
 
                     else
                         (if needsPassword selected then
-                            [ Ui.row { spacing = 6, padding = Ui.noPadding }
+                            [ Ui.row
+                                6
                                 [ -- lined up with the text in the box, which is inset by its padding
-                                  Ui.el { padding = Ui.paddingXY 0 4, inFront = [], borderAndFill = Ui.NoBorderOrFill } (t "Password")
+                                  Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (t "Password")
                                 , passwordInput model
                                 , Ui.button { id = ShowPasswordButton, padding = small }
                                     (t
@@ -2341,43 +3383,43 @@ networkPanel model =
             else
                 []
     in
-    Ui.topRight { size = Display.uiSize (mainDisplay model) }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-            (Ui.el
-                { padding = Ui.paddingXY 6 6
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = 4, padding = Ui.noPadding }
-                    (clockRows model
-                        ++ wiredRows model
-                        ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
-                                []
+    smallWindow { title = heading "Network", close = CloseNetworkButton, width = width }
+        (wiredRows model
+            ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
+                    []
 
-                            else
-                                [ header, statusLine ]
-                                    ++ networkRows
-                                    ++ joinRows
-                                    ++ disconnectRow
-                           )
-                        ++ weatherRows model
-                    )
-                )
-            )
+                else
+                    [ header, statusLine ]
+                        ++ networkRows
+                        ++ joinRows
+                        ++ disconnectRow
+               )
         )
 
 
-{-| The date and time, once the host has said (each second). In UTC until the weather
-says where this computer is.
+{-| The date and time, once the host has said (each second), at the right end of the
+toolbar: just the time when the date doesn't fit in `room`. In UTC until the weather says
+where this computer is.
 -}
-clockRows : Model -> List (Ui.Element UiId)
-clockRows model =
+clock : Quantity Int UiPixels -> Model -> Ui.Element UiId
+clock room model =
     case model.time of
         Just time ->
-            [ Ui.text bodySize sans (Clock.toString model.utcOffsetMinutes time) ]
+            let
+                box string =
+                    Ui.el { padding = Ui.paddingXY 6 3, borderAndFill = Ui.defaultElBorderAndFill } (Ui.text string)
+
+                full =
+                    box (Clock.toString model.utcOffsetMinutes time)
+            in
+            if Coord.x (Ui.size full) |> Quantity.lessThanOrEqualTo room then
+                full
+
+            else
+                box (Clock.timeOnly model.utcOffsetMinutes time)
 
         Nothing ->
-            []
+            Ui.empty
 
 
 {-| Two lines for each wired card: its name, and whether it has a cable and an address.
@@ -2392,7 +3434,7 @@ wiredRows model =
             panelWidth
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         link : Wired.Link -> List (Ui.Element id)
         link l =
@@ -2407,8 +3449,6 @@ wiredRows model =
                 Wired.Connected ->
                     Ui.colorText
                         connectedColor
-                        bodySize
-                        font
                         (Sprite.ellipsis
                             bodySize
                             font
@@ -2425,8 +3465,6 @@ wiredRows model =
                 Wired.Failed ->
                     Ui.colorText
                         Color.errorColor
-                        bodySize
-                        font
                         (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
             ]
 
@@ -2457,7 +3495,7 @@ wiredRows model =
 
 connectedColor : Color
 connectedColor =
-    Color.rgb255 30 120 60
+    Color.successColor
 
 
 networkRow : Model -> Wifi.Network -> Ui.Element UiId
@@ -2506,13 +3544,8 @@ networkRow model network =
     Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY 4 2 }
         (Maybe.map .ssid model.selected == Just network.ssid)
         (Ui.leftAndRight width
-            (Ui.row
-                { spacing = 6, padding = Ui.noPadding }
-                [ bars
-                , Ui.text bodySize font (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid))
-                ]
-            )
-            (Ui.text bodySize font label)
+            (Ui.row 6 [ bars, Ui.text (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid)) ])
+            (Ui.text label)
         )
 
 
@@ -2541,7 +3574,7 @@ signalBars dbm =
             in
             Sprite.rectangle
                 (if i < filled then
-                    Color.rgb255 40 40 40
+                    Color.textColor
 
                  else
                     Color.outlineColor
@@ -2566,14 +3599,13 @@ passwordInput model =
         { id = PasswordInput
         , style = passwordStyle model
         , isValid = True
-        , state =
-            case SeqDict.get PasswordInput model.uiState.uiState of
-                Just (TextInputState textInput) ->
-                    textInput
-
-                _ ->
-                    TextInput.init
         }
+
+
+weatherPanel : Model -> Ui.Element UiId
+weatherPanel model =
+    smallWindow { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
+        (weatherRows model)
 
 
 weatherRows : Model -> List (Ui.Element UiId)
@@ -2586,21 +3618,10 @@ weatherRows model =
             panelWidth
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         small =
             Ui.paddingXY 6 3
-
-        divider =
-            Ui.quads
-                { size = ( width, Units.uiPixels 6 )
-                , triangles =
-                    Sprite.rectangle
-                        Color.outlineColor
-                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                        (Coord.xy 0 2)
-                        ( width, Units.uiPixels 2 )
-                }
 
         degrees value =
             String.fromInt (round value) ++ "°"
@@ -2608,32 +3629,32 @@ weatherRows model =
     case model.weather of
         NoWeather ->
             if isOnline model then
-                [ divider, Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
+                [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
 
             else
-                []
+                [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
 
         FindingPlace ->
-            [ divider, t "Weather: finding where we are…" ]
+            [ t "Finding where we are…" ]
 
         LoadingForecast place ->
-            [ divider, t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
+            [ t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
-            [ divider
-            , Ui.colorText Color.errorColor bodySize font (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
+            [ Ui.colorText Color.errorColor (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
             , Ui.button { id = WeatherButton, padding = small } (t "Try again")
             ]
 
         GotWeather place forecast ->
-            [ divider
-            , Ui.leftAndRight width
+            [ Ui.leftAndRight width
                 (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
-            , Ui.row { spacing = 8, padding = Ui.noPadding }
+            , Ui.row
+                8
                 [ weatherIcon 3 forecast.code
-                , Ui.column { spacing = 3, padding = Ui.noPadding }
-                    [ Ui.text headingSize sans (fixed 1 forecast.temperature ++ "°C")
+                , Ui.column
+                    3
+                    [ heading (fixed 1 forecast.temperature ++ "°C")
                     , t (Weather.describe forecast.code)
                     , t
                         ("Wind "
@@ -2644,10 +3665,12 @@ weatherRows model =
                         )
                     ]
                 ]
-            , Ui.column { spacing = 3, padding = Ui.noPadding }
+            , Ui.column
+                3
                 (List.indexedMap
                     (\i day ->
-                        Ui.row { spacing = 6, padding = Ui.noPadding }
+                        Ui.row
+                            6
                             [ weatherIcon 1 day.code
                             , Ui.left (em 6)
                                 (t
@@ -2664,7 +3687,7 @@ weatherRows model =
                     )
                     forecast.days
                 )
-            , Ui.colorText Color.outlineColor bodySize font ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
             ]
 
 
@@ -2679,28 +3702,11 @@ weatherIcon unit code =
         side =
             18 * unit
 
-        circle color ( cx, cy ) r =
-            List.range 0 11
-                |> List.map
-                    (\i ->
-                        let
-                            startAngle =
-                                turns (toFloat i / 12)
-
-                            endAngle =
-                                turns (toFloat (i + 1) / 12)
-                        in
-                        Sprite.triangle color
-                            ( cx * s, cy * s )
-                            ( (cx + r * cos startAngle) * s, (cy + r * sin startAngle) * s )
-                            ( (cx + r * cos endAngle) * s, (cy + r * sin endAngle) * s )
-                    )
-
         sun =
-            circle (Color.rgb255 250 190 40) ( 9, 9 ) 6
+            Sprite.circle (Color.rgb255 250 190 40) s ( 9, 9 ) 6
 
         smallSun =
-            circle (Color.rgb255 250 190 40) ( 6, 6 ) 4.5
+            Sprite.circle (Color.rgb255 250 190 40) s ( 6, 6 ) 4.5
 
         cloudColor =
             if code >= 61 || code == 3 then
@@ -2710,9 +3716,9 @@ weatherIcon unit code =
                 Color.rgb255 170 175 185
 
         cloud =
-            circle cloudColor ( 6, 11 ) 4
-                ++ circle cloudColor ( 11, 9 ) 5
-                ++ circle cloudColor ( 14, 12 ) 3.5
+            Sprite.circle cloudColor s ( 6, 11 ) 4
+                ++ Sprite.circle cloudColor s ( 11, 9 ) 5
+                ++ Sprite.circle cloudColor s ( 14, 12 ) 3.5
                 ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
 
         drops color =
@@ -2724,7 +3730,7 @@ weatherIcon unit code =
             drops (Color.rgb255 60 110 220)
 
         snow =
-            List.concatMap (\x -> circle Color.white ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
+            List.concatMap (\x -> Sprite.circle Color.white s ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
 
         bolt =
             [ Sprite.triangle (Color.rgb255 250 200 40) ( 10 * s, 13 * s ) ( 8 * s, 18 * s ) ( 12 * s, 15 * s ) ]
@@ -2762,10 +3768,7 @@ toolbar : Model -> Display -> Ui.Element UiId
 toolbar model display =
     let
         openHere app =
-            appIsOpen app model && (displayOf app model).id == display.id
-
-        t =
-            Ui.text bodySize sans
+            shownOn display app model
 
         small =
             Ui.paddingXY 6 3
@@ -2774,11 +3777,8 @@ toolbar model display =
             case model.confirmPower of
                 Just action ->
                     [ Ui.el
-                        { padding = small
-                        , inFront = []
-                        , borderAndFill = Ui.defaultElBorderAndFill
-                        }
-                        (t
+                        { padding = small, borderAndFill = Ui.defaultElBorderAndFill }
+                        (Ui.text
                             (case action of
                                 PowerOff ->
                                     "Power off?"
@@ -2788,48 +3788,73 @@ toolbar model display =
                             )
                         )
                     , -- Cancel first, where the button that asked was, so a double click is harmless.
-                      Ui.button { id = CancelPowerButton, padding = small } (t "Cancel")
+                      Ui.button { id = CancelPowerButton, padding = small } (Ui.text "Cancel")
                     , Ui.customButton
                         { id = ConfirmPowerButton
                         , padding = small
                         , inFront = []
                         , borderAndFill =
-                            Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.rgb255 230 150 140 }
+                            Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.dangerColor }
                         , borderAndFillFocus = Ui.defaultButtonBorderAndFillFocus
                         }
-                        (t "Yes")
+                        (Ui.text "Yes")
                     ]
 
                 Nothing ->
-                    [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (t "About")
-                    , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (t "Wikipedia")
+                    [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (Ui.text "About")
+                    , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (Ui.text "Wikipedia")
                     , Ui.selectableButton
                         { id = HackerNews HackerNews.Types.OpenButton, padding = small }
                         (openHere HackerNewsApp)
-                        (t "Hacker news")
-                    , Ui.selectableButton { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small } (openHere AsciiCollabApp) (t "ASCII collab")
-                    , Ui.selectableButton { id = CalculatorButton, padding = small } (openHere CalculatorApp) (t "Calculator")
-                    , Ui.selectableButton { id = EditorButton, padding = small } (openHere EditorApp) (t "Text editor")
-                    , Ui.button { id = RestartButton, padding = small } (t "Restart")
-                    , Ui.button { id = PowerOffButton, padding = small } (t "Power off")
+                        (Ui.text "Hacker news")
+                    , Ui.selectableButton
+                        { id = Email Email.Types.OpenButton, padding = small }
+                        (openHere EmailApp)
+                        (Ui.text "Email")
+                    , Ui.selectableButton
+                        { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small }
+                        (openHere AsciiCollabApp)
+                        (Ui.text "ASCII collab")
+                    , Ui.selectableButton
+                        { id = CalculatorButton, padding = small }
+                        (openHere CalculatorApp)
+                        (Ui.text "Calculator")
+                    , Ui.selectableButton
+                        { id = TicTacToeButton, padding = small }
+                        (openHere TicTacToeApp)
+                        (Ui.text "Tic Tac Toe")
+                    , Ui.selectableButton
+                        { id = EditorButton, padding = small }
+                        (openHere EditorApp)
+                        (Ui.text "Text editor")
+                    , Ui.selectableButton
+                        { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
+                        (openHere ScreenshotViewerApp)
+                        (Ui.text "Screenshots")
+                    , Ui.selectableButton
+                        { id = NetworkAppButton, padding = small }
+                        (openHere NetworkApp)
+                        (Ui.text "Network")
+                    , Ui.selectableButton
+                        { id = WeatherAppButton, padding = small }
+                        (openHere WeatherApp)
+                        (Ui.text "Weather")
+                    , Ui.selectableButton { id = DebugButton, padding = small } (openHere DebugApp) (Ui.text "Debug")
+                    , Ui.button { id = RestartButton, padding = small } (Ui.text "Restart")
+                    , Ui.button { id = PowerOffButton, padding = small } (Ui.text "Power off")
                     ]
+
+        row =
+            Ui.row 4 buttons
+
+        width =
+            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels 16)
+
+        room =
+            width |> Quantity.minus (Coord.x (Ui.size row)) |> Quantity.minus (Units.uiPixels 8)
     in
-    Ui.topLeft { size = Display.uiSize display }
-        (Ui.row { spacing = 6, padding = Ui.paddingXY 8 8 } buttons)
-
-
-{-| The calculator, under the toolbar.
--}
-calculatorWindow : Model -> Ui.Element UiId
-calculatorWindow model =
-    Ui.topLeft { size = appUiSize CalculatorApp model }
-        (Ui.el
-            { padding = { topLeft = Coord.xy 8 (toolbarHeight + 8), bottomRight = Coord.origin }
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            }
-            (Calculator.view (calculatorFocused model) model.calculator)
-        )
+    Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+        (Ui.leftAndRight width row (clock room model))
 
 
 {-| The toolbar's buttons and the gap above them, in UI pixels.
@@ -2843,18 +3868,20 @@ toolbarHeight =
 newest build needs the USB stick flashed again. The next program starts without it
 (`Displays`).
 -}
-notice : Model -> String -> Ui.Element UiId
+notice : Model -> String -> ( Coord UiPixels, Ui.Element UiId )
 notice model text =
-    Ui.bottomRight { size = Display.uiSize (mainDisplay model) }
-        (Ui.el { padding = Ui.paddingXY 8 8, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-            (Ui.el
-                { padding = Ui.paddingXY 10 6
-                , inFront = []
-                , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-                }
-                (Ui.text bodySize sans text)
-            )
-        )
+    let
+        element : Ui.Element id
+        element =
+            Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+                (Ui.el
+                    { padding = Ui.paddingXY 10 6
+                    , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+                    }
+                    (Ui.text text)
+                )
+    in
+    ( Display.uiSize (mainDisplay model) |> Coord.minus (Ui.size element), element )
 
 
 aboutPage : Model -> Ui.Element UiId
@@ -2864,14 +3891,13 @@ aboutPage model =
             sans
 
         t =
-            Ui.text bodySize font
+            Ui.text
 
         valueWidth =
             em 26
 
         line label value =
-            Ui.row { spacing = 0, padding = Ui.noPadding }
-                [ Ui.left (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
+            Ui.row 0 [ Ui.left (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
 
         system =
             model.system
@@ -2879,50 +3905,48 @@ aboutPage model =
         field f =
             Maybe.map f system |> Maybe.withDefault "?"
     in
-    Ui.center { size = appUiSize AboutApp model }
-        (Ui.el
-            { padding = Ui.paddingXY 12 10
-            , inFront = []
-            , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-            }
-            (Ui.column { spacing = 4, padding = Ui.noPadding }
-                [ Ui.text headingSize sans "Elm OS"
-                , t "A Linux kernel that boots straight into one Elm program."
-                , t ""
-                , line "Version" (field .commit)
-                , line "Kernel" (field .kernel)
-                , line "CPU" (field .cpu)
-                , line "Memory"
-                    (case model.stats of
-                        Just stats ->
-                            String.fromInt stats.memTotal ++ " MB"
+    Ui.el
+        { padding = Ui.paddingXY 12 10
+        , borderAndFill = Ui.windowBorderAndFill
+        }
+        (Ui.column
+            4
+            [ heading "Elm OS"
+            , t "A Linux kernel that boots straight into one Elm program."
+            , t ""
+            , line "Version" (field .commit)
+            , line "Kernel" (field .kernel)
+            , line "CPU" (field .cpu)
+            , line "Memory"
+                (case model.stats of
+                    Just stats ->
+                        String.fromInt stats.memTotal ++ " MB"
 
-                        Nothing ->
-                            "?"
-                    )
-                , line "Graphics"
-                    (case model.renderer of
-                        Just r ->
-                            r.name
+                    Nothing ->
+                        "?"
+                )
+            , line "Graphics"
+                (case model.renderer of
+                    Just r ->
+                        r.name
 
-                        Nothing ->
-                            "?"
+                    Nothing ->
+                        "?"
+                )
+            , t ""
+            , t
+                (Sprite.wrap bodySize
+                    font
+                    (em 31)
+                    ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
+                        ++ "The UI framework and the debug app's pixel font are from town-collab. "
+                        ++ "Text is in Noto Sans (SIL Open Font License). "
+                        ++ "Weather: open-meteo.com, location: geojs.io."
                     )
-                , t ""
-                , t
-                    (Sprite.wrap bodySize
-                        font
-                        (em 31)
-                        ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
-                            ++ "The UI framework and the debug overlay's pixel font are from town-collab. "
-                            ++ "Text is in Noto Sans (SIL Open Font License). "
-                            ++ "Weather: open-meteo.com, location: geojs.io."
-                        )
-                    )
-                , t ""
-                , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
-                ]
-            )
+                )
+            , t ""
+            , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
+            ]
         )
 
 
@@ -2930,19 +3954,27 @@ aboutPage model =
 -- TEXT EDITOR
 
 
-{-| The text box: up to 40 em wide and 24 lines tall, smaller on a small screen.
+{-| The text box: as big as the editor's window lets it be.
 -}
 editorStyle : Model -> TextInputMultiline.Style
 editorStyle model =
     let
-        ( screenWidth, screenHeight ) =
+        ( windowWidth, windowHeight ) =
             Coord.toTuple (appUiSize EditorApp model)
     in
     { font = sans
     , fontSize = bodySize
-    , width = Quantity.min (em 40) (Units.uiPixels (screenWidth - 40))
-    , lines = clamp 4 24 ((screenHeight - 160) // Quantity.unwrap (Sprite.lineHeight bodySize))
+    , width = Units.uiPixels (windowWidth - 16)
+    , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
     }
+
+
+{-| The editor window's height besides its lines of text: the padding, the title, the
+status line, the spacing between them and the text box's own padding.
+-}
+editorChrome : Int
+editorChrome =
+    2 * 8 + Quantity.unwrap (Sprite.lineHeight headingSize) + Quantity.unwrap (Sprite.lineHeight bodySize) + 2 * 6 + 2 * 4
 
 
 {-| The text editor's window: a title and a close button, the text, and where the cursor is.
@@ -2952,19 +3984,14 @@ editorWindow : Model -> Ui.Element UiId
 editorWindow model =
     let
         t =
-            Ui.text bodySize sans
+            Ui.text
 
         style =
             editorStyle model
 
         textInput : TextInputMultiline.Model
         textInput =
-            case SeqDict.get EditorInput model.uiState.uiState of
-                Just (TextInputMultilineState editor) ->
-                    editor
-
-                _ ->
-                    TextInputMultiline.init
+            Ui.getTextInputMultiline EditorInput model.uiState
 
         state =
             textInput.input.current
@@ -2989,30 +4016,45 @@ editorWindow model =
                         ", " ++ String.fromInt (abs state.cursorSize) ++ " selected"
                    )
     in
-    Ui.center { size = appUiSize EditorApp model }
-        (Ui.elWithId EditorWindow
-            { padding = Ui.paddingXY 8 8
-            , inFront = []
-            , borderAndFill = Ui.defaultElBorderAndFill
-            }
-            (Ui.column { spacing = 6, padding = Ui.noPadding }
-                [ Ui.leftAndRight style.width
-                    (Ui.text headingSize sans "Text editor")
-                    (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-                , Ui.textInputMultiline
+    Ui.elWithId
+        EditorWindow
+        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
+        (Ui.column
+            6
+            [ Ui.leftAndRight style.width
+                (heading "Text editor")
+                (Ui.row
+                    6
+                    [ Ui.button { id = EditorOpenButton, padding = Ui.paddingXY 6 3 } (t "Open")
+                    , Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close")
+                    ]
+                )
+            , if model.editorPicking then
+                Ui.viewport
+                    { id = EditorModulesViewport
+                    , viewportHeight = Units.uiPixels (Coord.yRaw (TextInputMultiline.size style))
+                    }
+                    (Ui.column
+                        4
+                        (List.map
+                            (\name -> Ui.button { id = EditorModuleButton name, padding = Ui.paddingXY 6 3 } (t name))
+                            (SeqDict.keys SourceCode.sourceCode)
+                        )
+                    )
+
+              else
+                Ui.textInputMultiline
                     { id = EditorInput
                     , style = style
-                    , state = textInput
                     }
-                , Ui.leftAndRight style.width
-                    (t status)
-                    (Ui.customText bodySize
-                        [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
-                        , { text = " undo, ", color = Color.outlineColor, font = sans }
-                        , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
-                        , { text = " redo", color = Color.outlineColor, font = sans }
-                        ]
-                    )
-                ]
-            )
+            , Ui.leftAndRight style.width
+                (t status)
+                (Ui.customText bodySize
+                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
+                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [] }
+                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
+                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [] }
+                    ]
+                )
+            ]
         )

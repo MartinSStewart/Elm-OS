@@ -101,6 +101,8 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         ToElm::Frame { .. }
         | ToElm::Button { .. }
         | ToElm::Wheel { .. }
+        | ToElm::Scroll { .. }
+        | ToElm::ScrollMomentum { .. }
         | ToElm::Key { .. }
         | ToElm::Stats { .. }
         | ToElm::HttpResponse { .. }
@@ -116,7 +118,10 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::ReplayDone { .. }
         | ToElm::WebSocketOpened { .. }
         | ToElm::WebSocketMessage { .. }
-        | ToElm::WebSocketClosed { .. } => return None,
+        | ToElm::WebSocketClosed { .. }
+        | ToElm::TlsOpened { .. }
+        | ToElm::TlsData { .. }
+        | ToElm::TlsClosed { .. } => return None,
     })
 }
 

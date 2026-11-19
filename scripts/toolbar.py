@@ -3,7 +3,7 @@
 The labels come from Main.toolbar's source (the buttons shown when nothing asks
 "Restart?"), in order, and the buttons from a screenshot: each one has a
 2 UI pixel border in Ui.elm's outline colour (or the focus colour), so along a
-row just inside the top border they are runs of that colour, 6 UI pixels apart.
+row just inside the top border they are runs of that colour, 4 UI pixels apart.
 Adding, removing or renaming a toolbar button needs no change here.
 """
 
@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTLINE = (157, 143, 134)  # Color.outlineColor
 FOCUSED = (70, 120, 255)  # Color.focusedUiColor
 TOP = 8  # the toolbar row's padding, in UI pixels
-SPACING = 6  # between buttons
+SPACING = 4  # between buttons
 
 
 def labels():
@@ -45,13 +45,14 @@ def buttons(shot, s):
             while x < w and _border(pixel(x, y)):
                 x += 1
             if runs and abs(x0 - runs[-1][1] - SPACING * s) > s:
-                break  # not the toolbar's next button (the network panel, say)
+                break  # not the toolbar's next button (the clock, say)
             runs.append((x0, x))
         elif runs and x - runs[-1][1] > (SPACING + 1) * s:
             break
         else:
             x += 1
     names = labels()
+    runs = runs[:len(names)]  # the clock may be right after the last button
     if len(runs) != len(names):
         raise RuntimeError(f"expected the toolbar's {len(names)} buttons {names}, found {len(runs)} "
                            f"at {runs} along y={y}")

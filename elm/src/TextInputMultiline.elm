@@ -6,9 +6,13 @@ module TextInputMultiline exposing
     , lineAndColumn
     , mouseDown
     , mouseDownMove
+    , mouseUp
+    , overScrollbar
     , paste
     , size
+    , withText
     , view
+    , scrollPixels
     , wheel
     )
 
@@ -30,6 +34,7 @@ import Color
 import Coord exposing (Coord)
 import Keyboard
 import Quantity exposing (Quantity)
+import Scrollbar
 import Sprite exposing (Triangle)
 import TextInput
 import Units exposing (DevicePixels, UiPixels, UiScale)
@@ -42,7 +47,15 @@ the first of them, so passing through a shorter line doesn't lose the column.
 type alias Model =
     { input : TextInput.Model
     , scroll : Int
+
+    -- Touchpad scrolling (scrollPixels) not yet a whole line, in UI pixels.
+    , scrollRemainder : Float
     , goalX : Maybe Int
+
+    -- The overlay scroll bar (Scrollbar.elm), as viewports have.
+    , grab : Maybe Int
+    , scrollbarShown : Float
+    , scrollbarWidened : Float
     }
 
 
@@ -54,7 +67,21 @@ type alias Style =
 
 init : Model
 init =
-    { input = TextInput.init, scroll = 0, goalX = Nothing }
+    { input = TextInput.init
+    , scroll = 0
+    , scrollRemainder = 0
+    , goalX = Nothing
+    , grab = Nothing
+    , scrollbarShown = 0
+    , scrollbarWidened = 0
+    }
+
+
+{-| A box holding `text`, the cursor at its start.
+-}
+withText : String -> Model
+withText text =
+    { init | input = { current = { cursorPosition = 0, cursorSize = 0, text = text }, undoHistory = [], redoHistory = [] } }
 
 
 {-| How many undo steps are kept. Every key that changes the text is one, and each holds
@@ -404,7 +431,37 @@ clampScroll style state scroll =
 -}
 wheel : Style -> Int -> Model -> Model
 wheel style clicks model =
-    { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks) }
+    { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks), scrollRemainder = 0 }
+
+
+{-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down, the text
+following them): scroll a line for each line height they moved.
+-}
+scrollPixels : Style -> Float -> Model -> Model
+scrollPixels style pixels model =
+    let
+        total : Float
+        total =
+            model.scrollRemainder + pixels
+
+        lineCount : Int
+        lineCount =
+            truncate (total / toFloat (lineHeight style))
+
+        scroll : Int
+        scroll =
+            clampScroll style model.input.current (model.scroll - lineCount)
+    in
+    { model
+        | scroll = scroll
+        , scrollRemainder =
+            if scroll == model.scroll - lineCount then
+                total - toFloat (lineCount * lineHeight style)
+
+            else
+                -- at the top or bottom: don't save up scrolling past it
+                0
+    }
 
 
 
@@ -448,24 +505,105 @@ indexAt style mousePosition position model =
         indexAtX style ls line (mx - padding - caretWidth style + scrollX style state)
 
 
+{-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
+it grabs it, else it moves the cursor there.
+-}
 mouseDown : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDown style mousePosition position model =
-    { model
-        | input = TextInput.replaceState (moveTo False (indexAt style mousePosition position model)) model.input
-        , goalX = Nothing
-    }
+    let
+        onTrack : Coord UiPixels
+        onTrack =
+            Coord.minus (Coord.plus (scrollbarPosition style) position) mousePosition
+
+        geometry : Scrollbar.Geometry
+        geometry =
+            scrollbarGeometry style model.input.current
+    in
+    if Scrollbar.isOver geometry onTrack then
+        case Scrollbar.press geometry (scrolledPixels style model) (Coord.yRaw onTrack) of
+            Just { grab, scrolled } ->
+                scrollToPixels style scrolled { model | grab = Just grab }
+
+            Nothing ->
+                model
+
+    else
+        { model
+            | input = TextInput.replaceState (moveTo False (indexAt style mousePosition position model)) model.input
+            , goalX = Nothing
+        }
 
 
-{-| The mouse moved with its button down: select from where it went down to here,
-scrolling if it is above or below the box.
+{-| The mouse moved with its button down: drag the scroll bar if it went down on it, else
+select from where it went down to here, scrolling if it is above or below the box.
 -}
 mouseDownMove : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDownMove style mousePosition position model =
-    { model
-        | input = TextInput.replaceState (moveTo True (indexAt style mousePosition position model)) model.input
-        , goalX = Nothing
+    case model.grab of
+        Just grab ->
+            scrollToPixels
+                style
+                (Scrollbar.drag
+                    (scrollbarGeometry style model.input.current)
+                    grab
+                    (Coord.yRaw mousePosition - Coord.yRaw position - padding)
+                )
+                model
+
+        Nothing ->
+            { model
+                | input = TextInput.replaceState (moveTo True (indexAt style mousePosition position model)) model.input
+                , goalX = Nothing
+            }
+                |> scrollToCursor style
+
+
+{-| The mouse button went up: let go of the scroll bar.
+-}
+mouseUp : Model -> Model
+mouseUp model =
+    { model | grab = Nothing }
+
+
+{-| Whether a point (from the box's top left) is on the scroll bar.
+-}
+overScrollbar : Style -> Coord UiPixels -> Model -> Bool
+overScrollbar style point model =
+    Scrollbar.isOver (scrollbarGeometry style model.input.current) (Coord.minus (scrollbarPosition style) point)
+
+
+{-| The scroll bar's track is the text area, a line for each line of text.
+-}
+scrollbarGeometry : Style -> TextInput.State -> Scrollbar.Geometry
+scrollbarGeometry style state =
+    { track = lineHeight style * style.lines
+    , content = lineHeight style * List.length (lines state.text)
     }
-        |> scrollToCursor style
+
+
+{-| Where the scroll bar's track is, from the box's top left: down the right of the text
+area, over the text.
+-}
+scrollbarPosition : Style -> Coord UiPixels
+scrollbarPosition style =
+    Coord.xy (width style - padding - Scrollbar.width) padding
+
+
+{-| How far the text is scrolled down, in UI pixels.
+-}
+scrolledPixels : Style -> Model -> Float
+scrolledPixels style model =
+    toFloat (model.scroll * lineHeight style)
+
+
+{-| Scroll to the line nearest `pixels` down (the box moves a line at a time).
+-}
+scrollToPixels : Style -> Float -> Model -> Model
+scrollToPixels style pixels model =
+    { model
+        | scroll = clampScroll style model.input.current (round (pixels / toFloat (lineHeight style)))
+        , scrollRemainder = 0
+    }
 
 
 
@@ -499,16 +637,11 @@ size style =
     Coord.xy (width style) (lineHeight style * style.lines + padding * 2)
 
 
-{-| The pixels between the box's padding that text shows in, leaving room for the scroll bar.
+{-| The pixels between the box's padding that text shows in (the scroll bar lies over it).
 -}
 innerWidth : Style -> Int
 innerWidth style =
-    width style - 2 * padding - 2 * caretWidth style - scrollBarWidth
-
-
-scrollBarWidth : Int
-scrollBarWidth =
-    4
+    width style - 2 * padding - 2 * caretWidth style
 
 
 {-| How far every line is scrolled left, in UI pixels: just enough to show the cursor.
@@ -518,9 +651,15 @@ scrollX style state =
     max 0 (cursorX style state - innerWidth style)
 
 
-view : UiScale -> Bounds UiPixels -> Style -> Coord UiPixels -> Bool -> Int -> TextInput.State -> List (Triangle DevicePixels)
-view scale viewport style offset hasFocus scroll state =
+view : UiScale -> Bounds UiPixels -> Style -> Coord UiPixels -> Bool -> Model -> List (Triangle DevicePixels)
+view scale viewport style offset hasFocus model =
     let
+        state =
+            model.input.current
+
+        scroll =
+            model.scroll
+
         ls =
             lines state.text
 
@@ -534,7 +673,7 @@ view scale viewport style offset hasFocus scroll state =
             x + padding + caretWidth style - scrollX style state
 
         clip =
-            { left = x + padding, right = x + width style - padding - scrollBarWidth }
+            { left = x + padding, right = x + width style - padding }
 
         selectionStart =
             TextInput.selectionMin state
@@ -567,7 +706,7 @@ view scale viewport style offset hasFocus scroll state =
                 (size style)
                 ++ Sprite.rectangle
                     (if hasFocus then
-                        Color.highlightColor
+                        Color.focusedInputColor
 
                      else
                         Color.fillColor3
@@ -617,7 +756,7 @@ view scale viewport style offset hasFocus scroll state =
 
                             else
                                 Sprite.rectangle
-                                    (Color.rgb255 170 210 255)
+                                    (Color.selectionColor)
                                     viewport
                                     (Coord.xy (max clip.left left) (top l.line))
                                     (Coord.xy (min clip.right right - max clip.left left) height)
@@ -629,7 +768,7 @@ view scale viewport style offset hasFocus scroll state =
         caret =
             if hasFocus && cursorLine >= scroll && cursorLine < scroll + style.lines then
                 Sprite.rectangle
-                    Color.black
+                    Color.textColor
                     viewport
                     (Coord.xy
                         (textLeft + caretX (carets style (lineAt ls cursorLine)) cursorColumn - caretWidth style)
@@ -640,29 +779,20 @@ view scale viewport style offset hasFocus scroll state =
             else
                 []
 
-        lineCount =
-            List.length ls
-
-        trackHeight =
-            boxHeight - 2 * padding
-
         scrollBar =
-            if lineCount > style.lines then
-                Sprite.rectangle
-                    Color.outlineColor
-                    viewport
-                    (Coord.xy (x + boxWidth - padding - scrollBarWidth) (y + padding + trackHeight * scroll // lineCount))
-                    (Coord.xy scrollBarWidth (max 4 (trackHeight * style.lines // lineCount)))
-
-            else
-                []
+            Scrollbar.view
+                viewport
+                (Coord.plus (scrollbarPosition style) offset)
+                (scrollbarGeometry style state)
+                (scrolledPixels style model)
+                model
     in
     Sprite.toDevice scale (box ++ selection)
         ++ List.concatMap
             (\l ->
                 Sprite.text
                     scale
-                    Color.black
+                    Color.textColor
                     style.fontSize
                     style.font
                     { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }

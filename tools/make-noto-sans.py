@@ -22,6 +22,7 @@ for kerning. The output is checked in, so building Elm OS doesn't.
 """
 import hashlib
 import os
+import struct
 import sys
 
 import freetype
@@ -40,7 +41,9 @@ SUBPIXELS = 4
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_W, ATLAS_H = 2048, 4096
-# The pixel font, cursor and solid block live in the top left 256 x 256.
+# The pixel font, cursor and solid block live in the top left RESERVED_W x RESERVED_H
+# (host/common/src/atlas.rs).
+RESERVED_W, RESERVED_H = 304, 256
 SIZES = [16, 24, 32, 48]
 CHARS = (
     list(range(33, 127))
@@ -50,7 +53,9 @@ CHARS = (
 # Kerning is measured once, at a big size, between these, and stored in 1/1000 em.
 KERN_CHARS = list(range(33, 127))
 KERN_SIZE = 1000
-GAP = 1
+# Every glyph copy has its edge pixels copied once more around it (see `bleed`), so
+# there are two pixels between copies: one for each copy's border.
+GAP = 2
 
 # Name in Elm, file, sha256.
 FONTS = [
@@ -83,7 +88,7 @@ def glyph_image(face, ch, shift):
 
 def glyph_copies(face, ch):
     """The glyph's SUBPIXELS copies side by side, each in a cell of the same size, GAP
-    apart, and where a cell's top left is from the pen (on the baseline) when the
+    apart (room for each one's border, see `bleed`), and where a cell's top left is from the pen (on the baseline) when the
     copy is the one to draw."""
     drawn = [glyph_image(face, ch, k * 64 // SUBPIXELS) for k in range(SUBPIXELS)]
     drawn = [d for d in drawn if d[0] is not None]
@@ -99,8 +104,23 @@ def glyph_copies(face, ch):
     return strip, left, top
 
 
-# Shelf packing, tallest first, into the free parts of the atlas.
-regions = [[256, 0, ATLAS_W, 256], [0, 256, ATLAS_W, ATLAS_H]]  # x0, y0, x1, y1
+def bleed(x, y, w, h):
+    """Copies the edge pixels of the atlas's rectangle at x, y (w x h) out by one pixel all
+    round, corners too. A triangle sampled bilinearly (Sprite.Linear) blends in the pixels
+    just outside what it shows; these make those the shape's own edge, so it doesn't fade
+    out or pick up a neighbour at its edges."""
+    atlas.paste(atlas.crop((x, y, x + 1, y + h)), (x - 1, y))
+    atlas.paste(atlas.crop((x + w - 1, y, x + w, y + h)), (x + w, y))
+    atlas.paste(atlas.crop((x - 1, y, x + w + 1, y + 1)), (x - 1, y - 1))
+    atlas.paste(atlas.crop((x - 1, y + h - 1, x + w + 1, y + h)), (x - 1, y + h))
+
+
+# Shelf packing, tallest first, into the free parts of the atlas, which keep a pixel
+# clear inside their edges for the borders `bleed` draws.
+regions = [  # x0, y0, x1, y1
+    [RESERVED_W + 1, 1, ATLAS_W - 1, RESERVED_H - 1],
+    [1, RESERVED_H + 1, ATLAS_W - 1, ATLAS_H - 1],
+]
 shelves = []  # [region index, y, height, next x]
 
 
@@ -119,6 +139,22 @@ def place(w, h):
     sys.exit("make-noto-sans.py: the glyphs don't fit in the atlas")
 
 
+def line_metrics(path):
+    """Where the font says underlines and strikethroughs go: the middle of each line
+    (up from the baseline) and how thick it is, in font units. The `post` and `OS/2`
+    tables give the top of each line, as browsers read them."""
+    with open(path, "rb") as f:
+        data = f.read()
+    tables = {}
+    for i in range(struct.unpack(">H", data[4:6])[0]):
+        tag, _, offset, _ = struct.unpack(">4sIII", data[12 + 16 * i : 28 + 16 * i])
+        tables[tag] = offset
+    post, os2 = tables[b"post"], tables[b"OS/2"]
+    under_top, under_size = struct.unpack(">hh", data[post + 8 : post + 12])
+    strike_size, strike_top = struct.unpack(">hh", data[os2 + 26 : os2 + 30])
+    return (under_top - under_size // 2, under_size), (strike_top - strike_size // 2, strike_size)
+
+
 def measure_kerning(path):
     big = ImageFont.truetype(path, KERN_SIZE, layout_engine=ImageFont.Layout.RAQM)
     widths = {c: big.getlength(chr(c), features=["-liga"]) for c in KERN_CHARS}
@@ -132,7 +168,7 @@ def measure_kerning(path):
     return kerning
 
 
-variants = []  # (name, file, faces, kerning); faces is [(size, ascent, descent, glyphs)]
+variants = []  # (name, file, faces, kerning, lines); faces is [(size, ascent, descent, glyphs)]
 work = []
 for name, file, _ in FONTS:
     path = os.path.join(font_dir, file)
@@ -153,13 +189,15 @@ for name, file, _ in FONTS:
             if im is not None:
                 work.append((im.height, im.width, glyphs[code], im))
         faces.append((size, ascent, descent, glyphs))
-    variants.append((name, file, faces, measure_kerning(path)))
+    variants.append((name, file, faces, measure_kerning(path), line_metrics(path)))
 
 # Sorted by size only (stable), so equal glyphs keep the order they were drawn in.
 for h, w, g, im in sorted(work, key=lambda g: (-g[0], -g[1])):
     x, y = place(w, h)
     atlas.paste(im, (x, y))
     g[0:4] = [x, y, (w - (SUBPIXELS - 1) * GAP) // SUBPIXELS, h]
+    for k in range(SUBPIXELS):
+        bleed(x + k * (g[2] + GAP), y, g[2], h)
 
 # Run-length coding: a 0 byte is followed by how many 0s (1-255) it stands for; any
 # other byte is itself.
@@ -185,7 +223,7 @@ def elm_char(code):
 
 
 lines = [
-    "module NotoSans exposing (Face, Glyph, Variant, bold, boldItalic, gap, italic, regular, subpixels)",
+    "module NotoSans exposing (Face, Glyph, Line, Variant, bold, boldItalic, gap, italic, regular, subpixels)",
     "",
     "{-| Generated by tools/make-noto-sans.py: don't edit by hand.",
     "",
@@ -195,7 +233,8 @@ lines = [
     f"A glyph is drawn {SUBPIXELS} times, shifted right by 0, 1/{SUBPIXELS}, ... of a pixel; copy k is the rectangle",
     f"`x + k * (w + {GAP})`, `y`, `w`, `h` of the atlas, drawn `left` pixels right of the pen (rounded to",
     "the nearest copy) and `top` pixels below the baseline (so usually negative). `advance` is",
-    "unhinted, in font units (1/1000 em), the same at every size.",
+    "unhinted, in font units (1/1000 em), the same at every size. Each copy's edge pixels are",
+    "repeated once more around it in the atlas, for bilinear sampling.",
     "",
     "-}",
     "",
@@ -210,11 +249,19 @@ lines = [
     "    { size : Int, ascent : Int, descent : Int, glyphs : Dict Char Glyph }",
     "",
     "",
-    "{-| One of the font's styles: its faces, smallest first, and how much closer (negative)",
-    "or further apart two characters go, in 1/1000 em.",
+    "{-| One of the font's styles: its faces, smallest first, how much closer (negative)",
+    "or further apart two characters go, in 1/1000 em, and where the font puts underlines",
+    "and strikethroughs.",
     "-}",
     "type alias Variant =",
-    "    { faces : List Face, kerning : Dict ( Char, Char ) Int }",
+    "    { faces : List Face, kerning : Dict ( Char, Char ) Int, underline : Line, strikethrough : Line }",
+    "",
+    "",
+    "{-| A line drawn across text: how far its middle is above the baseline (negative is",
+    "below) and how thick it is, in font units (1/1000 em).",
+    "-}",
+    "type alias Line =",
+    "    { middle : Int, thickness : Int }",
     "",
     "",
     "{-| How many copies of each glyph there are, each shifted right by 1/subpixels pixels more.",
@@ -233,7 +280,7 @@ lines = [
     "g code x y w h left top advance =",
     "    ( Char.fromCode code, { x = x, y = y, w = w, h = h, left = left, top = top, advance = advance } )",
 ]
-for name, file, faces, kerning in variants:
+for name, file, faces, kerning, (underline, strikethrough) in variants:
     lines += ["", "", f"{{-| {file}", "-}", f"{name} : Variant", f"{name} =", "    { faces ="]
     for n, (size, ascent, descent, glyphs) in enumerate(faces):
         lines.append(("        [ " if n == 0 else "        , ") + f"{{ size = {size}, ascent = {ascent}, descent = {descent}, glyphs =")
@@ -248,6 +295,8 @@ for name, file, faces, kerning in variants:
     for m, (a, b, k) in enumerate(kerning):
         lines.append(("            [ " if m == 0 else "            , ") + f"( ( {elm_char(a)}, {elm_char(b)} ), {k} )")
     lines.append("            ]" if kerning else "            []")
+    lines.append(f"    , underline = {{ middle = {underline[0]}, thickness = {underline[1]} }}")
+    lines.append(f"    , strikethrough = {{ middle = {strikethrough[0]}, thickness = {strikethrough[1]} }}")
     lines.append("    }")
 with open(os.path.join(ROOT, "elm/src/NotoSans.elm"), "w") as f:
     f.write("\n".join(lines) + "\n")

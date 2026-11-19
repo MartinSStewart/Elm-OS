@@ -1,21 +1,29 @@
 module Sprite exposing
-    ( Font(..)
+    ( Decoration(..)
+    , Font(..)
     , FontSize(..)
+    , Sampling(..)
     , Segment
     , Style(..)
+    , Tile
     , Triangle
     , asciiChar
     , asciiIndex
     , caretPositions
-    , cursor
+    , circle
+    , block
+    , clipTo
     , customText
     , customTextSize
+    , dotGrid
     , ellipsis
     , encoder
     , lineHeight
     , monoChar
     , move
     , rectangle
+    , sampled
+    , scaleAndMove
     , text
     , textSize
     , toDevice
@@ -31,10 +39,10 @@ module Sprite exposing
 Every triangle samples the host's texture atlas (host/common/src/atlas.rs, 2048 x 4096
 pixels) and multiplies the sample by its colour:
 
-  - glyphs of town-collab's 10 x 18 pixel font fill x 0-250, y 0-180, 25 to a row,
-    in the order of `asciiChars` below
-  - the mouse cursor, 12 x 19: its outline at x 0, y 184 and its fill at x 16, y 184
+  - glyphs of town-collab's 10 x 18 pixel font fill x 0-300, y 0-200, 25 to a row,
+    in the order of `asciiChars` below, each at 1, 1 in a 12 x 20 cell
   - a solid white block at x 248-256, y 248-256, for flat colours
+  - a 16 x 16 tile at x 256, y 224 with one pixel in the middle, repeated for `dotGrid`
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
@@ -67,17 +75,44 @@ type alias Vertex =
 
 
 type Triangle units
-    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color }
+    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling, tile : Maybe Tile }
 
 
-{-| A triangle as Effect.renderBytes sends it: x, y, u, v of each corner as 32-bit
-floats, then the colour as an unsigned 32-bit 0xRRGGBBAA, all little-endian.
+{-| A rectangle of the atlas, in atlas pixels, that a triangle repeats: its u, v can go
+past the rectangle, and wrap round into it, so the triangle shows it tiled over and
+over (a pattern, as in `dotGrid`). Each pixel wraps on its own, so even `Linear`
+sampling repeats seamlessly. Width and height are at most 32767.
+-}
+type alias Tile =
+    { left : Int, top : Int, width : Int, height : Int }
+
+
+{-| How a triangle reads the atlas between its pixels: the nearest pixel (what text and
+UI are drawn with, so they stay sharp), or blended from the four around the point
+(bilinear), which is smoother when shapes are drawn smaller than the atlas has them.
+Blending also pulls in the pixels just outside a shape in the atlas, so every glyph and
+image there has its edge pixels repeated once around it, and a shape blends with its own
+edge rather than with whatever sits next to it. A triangle showing only part of a glyph
+still blends with the rest of it.
+-}
+type Sampling
+    = Nearest
+    | Linear
+
+
+{-| A triangle as Effect.renderBytes sends it (60 bytes, host/protocol/src/lib.rs
+read\_render): x, y, u, v of each corner as 32-bit floats, then as unsigned 32-bit
+integers the colour (0xRRGGBBAA), the tile's left + top \* 2^16, and its width +
+height \* 2^16 + 2^31 if `Linear`; all little-endian. No tile is all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
 encoder (Triangle t) =
     let
         f =
             BE.float32 LE
+
+        tile =
+            Maybe.withDefault { left = 0, top = 0, width = 0, height = 0 } t.tile
     in
     BE.sequence
         [ f t.a.x
@@ -93,12 +128,139 @@ encoder (Triangle t) =
         , f t.c.u
         , f t.c.v
         , BE.unsignedInt32 LE (Color.toInt t.color)
+        , BE.unsignedInt32 LE (tile.left + tile.top * 65536)
+        , BE.unsignedInt32 LE
+            (tile.width
+                + tile.height
+                * 65536
+                + (case t.sampling of
+                    Nearest ->
+                        0
+
+                    Linear ->
+                        2147483648
+                  )
+            )
         ]
 
 
 mapCorners : (Vertex -> Vertex) -> List (Triangle a) -> List (Triangle b)
 mapCorners f =
-    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color })
+    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color, sampling = t.sampling, tile = t.tile })
+
+
+{-| The triangles sampling the atlas the given way.
+-}
+sampled : Sampling -> List (Triangle units) -> List (Triangle units)
+sampled sampling =
+    List.map (\(Triangle t) -> Triangle { t | sampling = sampling })
+
+
+{-| Shapes scaled around the origin, then moved: a point at x, y goes to x \* factor + dx,
+y \* factor + dy. The atlas pixels they show don't change, so scaling up makes them blocky
+with `Nearest` and soft with `Linear`.
+-}
+scaleAndMove : Float -> ( Float, Float ) -> List (Triangle a) -> List (Triangle b)
+scaleAndMove factor ( dx, dy ) =
+    mapCorners (\v -> { v | x = v.x * factor + dx, y = v.y * factor + dy })
+
+
+{-| Shapes cut to a rectangle: what is outside it is not drawn, and a triangle across an
+edge is cut there, its atlas coordinates following. Nothing else stops shapes from drawing
+outside where they were meant to.
+-}
+clipTo : { left : Float, top : Float, right : Float, bottom : Float } -> List (Triangle units) -> List (Triangle units)
+clipTo area triangles =
+    List.concatMap (clipTriangle area) triangles
+
+
+clipTriangle : { left : Float, top : Float, right : Float, bottom : Float } -> Triangle units -> List (Triangle units)
+clipTriangle area (Triangle t) =
+    let
+        xs =
+            [ t.a.x, t.b.x, t.c.x ]
+
+        ys =
+            [ t.a.y, t.b.y, t.c.y ]
+
+        minOf =
+            List.foldl min (1 / 0)
+
+        maxOf =
+            List.foldl max (-1 / 0)
+    in
+    if maxOf xs <= area.left || minOf xs >= area.right || maxOf ys <= area.top || minOf ys >= area.bottom then
+        []
+
+    else if minOf xs >= area.left && maxOf xs <= area.right && minOf ys >= area.top && maxOf ys <= area.bottom then
+        [ Triangle t ]
+
+    else
+        case
+            [ t.a, t.b, t.c ]
+                |> clipSide .x True area.left
+                |> clipSide .x False area.right
+                |> clipSide .y True area.top
+                |> clipSide .y False area.bottom
+        of
+            first :: second :: rest ->
+                -- A fan of triangles around the polygon's first corner.
+                List.map2
+                    (\b c -> Triangle { a = first, b = b, c = c, color = t.color, sampling = t.sampling, tile = t.tile })
+                    (second :: rest)
+                    rest
+
+            _ ->
+                []
+
+
+{-| Cuts a polygon at one side of a rectangle, keeping the corners at or beyond `limit`
+(or at or before it), and putting new corners where its edges cross it.
+-}
+clipSide : (Vertex -> Float) -> Bool -> Float -> List Vertex -> List Vertex
+clipSide axis keepAbove limit polygon =
+    case polygon of
+        [] ->
+            []
+
+        first :: rest ->
+            let
+                inside v =
+                    if keepAbove then
+                        axis v >= limit
+
+                    else
+                        axis v <= limit
+
+                crossing p q =
+                    let
+                        k =
+                            (limit - axis p) / (axis q - axis p)
+                    in
+                    { x = p.x + (q.x - p.x) * k
+                    , y = p.y + (q.y - p.y) * k
+                    , u = p.u + (q.u - p.u) * k
+                    , v = p.v + (q.v - p.v) * k
+                    }
+            in
+            List.map2
+                (\p q ->
+                    case ( inside p, inside q ) of
+                        ( True, True ) ->
+                            [ q ]
+
+                        ( True, False ) ->
+                            [ crossing p q ]
+
+                        ( False, True ) ->
+                            [ crossing p q, q ]
+
+                        ( False, False ) ->
+                            []
+                )
+                polygon
+                (rest ++ [ first ])
+                |> List.concat
 
 
 {-| Shapes moved by an offset.
@@ -143,6 +305,8 @@ triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
         , b = { x = bx, y = by, u = u, v = v }
         , c = { x = cx, y = cy, u = u, v = v }
         , color = color
+        , sampling = Nearest
+        , tile = Nothing
         }
 
 
@@ -181,8 +345,8 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
         bottomRight =
             { x = right, y = bottom, u = uRight, v = vBottom }
     in
-    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color }
-    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color }
+    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest, tile = Nothing }
+    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest, tile = Nothing }
     ]
 
 
@@ -201,20 +365,40 @@ rectangle color clip position size =
         ( 4, 4 )
 
 
-{-| The mouse cursor with its tip at the given point: a black outline around a fill of
-the given colour, 12 x 19 UI pixels.
+{-| The atlas's dot grid tile (host/common/src/atlas.rs DOT\_GRID): 16 x 16, with one
+pixel at 8, 8 in it.
 -}
-cursor : Color -> UiScale -> Coord DevicePixels -> List (Triangle DevicePixels)
-cursor fill scale position =
-    let
-        size =
-            Coord.toDevice scale (Coord.xy 12 19) |> Coord.toTuple
+dotGridTile : Tile
+dotGridTile =
+    { left = 256, top = 224, width = 16, height = 16 }
 
-        at =
-            Coord.toTuple position
-    in
-    sprite Color.black at size ( 0, 184 ) ( 12, 19 )
-        ++ sprite fill at size ( 16, 184 ) ( 12, 19 )
+
+{-| A rectangle (position, size) covered in a grid of dots one atlas pixel across, 16
+apart, the first 8, 8 from its top left corner, cut to `clip`. Two triangles, however
+big the rectangle: they repeat the atlas's dot grid tile. Made in UI pixels, so on a
+2x screen the dots are 2 x 2 device pixels and 32 apart.
+-}
+dotGrid : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
+dotGrid color clip position size =
+    clippedSprite
+        color
+        { left = Coord.x clip.topLeft |> Quantity.unwrap
+        , right = Coord.x clip.bottomRight |> Quantity.unwrap
+        , top = Coord.y clip.topLeft |> Quantity.unwrap
+        , bottom = Coord.y clip.bottomRight |> Quantity.unwrap
+        }
+        (Coord.toTuple position)
+        (Coord.toTuple size)
+        ( dotGridTile.left, dotGridTile.top )
+        (Coord.toTuple size)
+        |> List.map (\(Triangle t) -> Triangle { t | tile = Just dotGridTile })
+
+
+{-| A solid rectangle (x, y, w, h) in one colour.
+-}
+block : Color -> Coord units -> Coord units -> List (Triangle units)
+block color position size =
+    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 250, 250 ) ( 4, 4 )
 
 
 
@@ -259,10 +443,20 @@ type FontSize
     | Big
 
 
-{-| A run of text in one font and colour, for `customText`.
+{-| A run of text in one font and colour, for `customText`, with lines drawn across it.
 -}
 type alias Segment =
-    { text : String, color : Color, font : Font }
+    { text : String, color : Color, font : Font, decorations : List Decoration }
+
+
+{-| A line drawn across text, in the text's colour, where Noto Sans says it goes (for the
+pixel font too, so one line runs straight across mixed fonts). Each is one solid
+rectangle per line of text for every run of segments next to each other that have it and
+share a colour, drawn on top of the glyphs rather than baked into the atlas.
+-}
+type Decoration
+    = Underline
+    | Strikethrough
 
 
 {-| The pixel font's pixels per UI pixel.
@@ -357,7 +551,8 @@ charTexturePosition char =
         index =
             Dict.get char charToInt |> Maybe.withDefault questionMark
     in
-    ( modBy charsPerRow index * Tuple.first charSize, index // charsPerRow * Tuple.second charSize )
+    -- Each glyph's edge pixels are repeated around it in the atlas, so they are 2 pixels apart.
+    ( modBy charsPerRow index * (Tuple.first charSize + 2) + 1, index // charsPerRow * (Tuple.second charSize + 2) + 1 )
 
 
 {-| The Noto Sans file for a style.
@@ -574,7 +769,7 @@ caretPositions fontSize font string =
 -}
 text : UiScale -> Color -> FontSize -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
 text uiScale color fontSize font clip string position =
-    customText uiScale fontSize clip [ { text = string, color = color, font = font } ] position
+    customText uiScale fontSize clip [ { text = string, color = color, font = font, decorations = [] } ] position
 
 
 {-| Runs of text, each in its own colour and font but all the same size, one after
@@ -607,25 +802,90 @@ customText uiScale fontSize clip segments position =
             let
                 top =
                     y + lineIndex * height
-            in
-            layoutSegments fontSize line
-                |> Tuple.first
-                |> List.concatMap
-                    (\( start, segment ) ->
-                        let
-                            left64 =
-                                (x * 64 + start) * s
-                        in
-                        case segment.font of
-                            Mono ->
-                                monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+                ( placed, end ) =
+                    layoutSegments fontSize line
 
-                            Sans style ->
-                                sansRun s fontSize (variant style) deviceClip segment.color ( left64, (top + ascent) * s ) segment.text
-                    )
+                -- where each segment starts and ends, in 1/64 device pixels
+                spans =
+                    List.map2
+                        (\( start, segment ) next -> { left64 = (x * 64 + start) * s, right64 = (x * 64 + next) * s, segment = segment })
+                        placed
+                        (List.map Tuple.first (List.drop 1 placed) ++ [ end ])
+
+                baseline =
+                    (top + ascent) * s
+            in
+            List.concatMap
+                (\{ left64, segment } ->
+                    case segment.font of
+                        Mono ->
+                            monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+
+                        Sans style ->
+                            sansRun s fontSize (variant style) deviceClip segment.color ( left64, baseline ) segment.text
+                )
+                spans
+                ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
+                ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
         )
         (segmentLines segments)
         |> List.concat
+
+
+{-| One kind of line across one line of text: a rectangle for each run of segments next to
+each other that have it and share a colour. It's as thick as the font says, rounded to
+whole device pixels (at least one), and its edges are on whole pixels.
+-}
+decorationRun :
+    Int
+    -> FontSize
+    -> { left : Int, right : Int, top : Int, bottom : Int }
+    -> Int
+    -> Decoration
+    -> NotoSans.Line
+    -> List { left64 : Int, right64 : Int, segment : Segment }
+    -> List (Triangle DevicePixels)
+decorationRun s fontSize deviceClip baseline decoration line spans =
+    let
+        size =
+            sansSize fontSize * s
+
+        thickness =
+            max 1 (round (toFloat (line.thickness * size) / 1000))
+
+        top =
+            baseline + round (toFloat (-line.middle * size) / 1000 - toFloat thickness / 2)
+
+        runs =
+            List.foldr
+                (\{ left64, right64, segment } acc ->
+                    if not (List.member decoration segment.decorations) || right64 <= left64 then
+                        acc
+
+                    else
+                        case acc of
+                            next :: rest ->
+                                if next.left64 == right64 && next.color == segment.color then
+                                    { next | left64 = left64 } :: rest
+
+                                else
+                                    { left64 = left64, right64 = right64, color = segment.color } :: acc
+
+                            [] ->
+                                [ { left64 = left64, right64 = right64, color = segment.color } ]
+                )
+                []
+                spans
+    in
+    List.concatMap
+        (\run ->
+            let
+                left =
+                    (run.left64 + 32) // 64
+            in
+            clippedSprite run.color deviceClip ( left, top ) ( (run.right64 + 32) // 64 - left, thickness ) ( 250, 250 ) ( 4, 4 )
+        )
+        runs
 
 
 {-| One line of the pixel font, from its top left in device pixels.
@@ -742,7 +1002,7 @@ monoChar color position char =
 -}
 textSize : FontSize -> Font -> String -> Coord UiPixels
 textSize fontSize font string =
-    customTextSize fontSize [ { text = string, color = Color.black, font = font } ]
+    customTextSize fontSize [ { text = string, color = Color.textColor, font = font, decorations = [] } ]
 
 
 {-| The size of `customText`'s segments: its widest line by its lines.
@@ -879,7 +1139,7 @@ joinLines lines =
 
         style : Segment
         style =
-            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.black, font = Sans Regular }
+            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [] }
     in
     case lines of
         first :: rest ->
@@ -1223,3 +1483,23 @@ italicMetrics =
 boldItalicMetrics : Metrics
 boldItalicMetrics =
     makeMetrics BoldItalic
+
+
+circle : Color -> Float -> ( Float, Float ) -> Float -> List (Triangle unit)
+circle color s ( cx, cy ) r =
+    List.range 0 11
+        |> List.map
+            (\i ->
+                let
+                    startAngle =
+                        turns (toFloat i / 12)
+
+                    endAngle =
+                        turns (toFloat (i + 1) / 12)
+                in
+                triangle
+                    color
+                    ( cx * s, cy * s )
+                    ( (cx + r * cos startAngle) * s, (cy + r * sin startAngle) * s )
+                    ( (cx + r * cos endAngle) * s, (cy + r * sin endAngle) * s )
+            )

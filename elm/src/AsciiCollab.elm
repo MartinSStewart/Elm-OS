@@ -8,6 +8,7 @@ module AsciiCollab exposing
     , key
     , onClick
     , randomBytesPath
+    , scrollPixels
     , socketId
     , tick
     , view
@@ -46,10 +47,10 @@ back on the next connection, so this computer stays the same user.
 
 -}
 
+import Array
 import AsciiCollab.Grid as Grid
 import AsciiCollab.LocalGrid as LocalGrid exposing (LocalModel)
 import AsciiCollab.Types exposing (Ascii, AsciiUnit, Bounds(..), CellUnit, Change(..), ClientChange(..), Grid(..), LocalChange(..), Nonempty(..), ToBackend(..), ToFrontend(..), UserId(..))
-import Array
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
@@ -88,6 +89,9 @@ type alias Model =
 
     -- The character in the top left corner of the grid.
     , viewPoint : Coord AsciiUnit
+
+    -- Touchpad scrolling (scrollPixels) not yet a whole row, in UI pixels.
+    , scrollRemainder : Float
     , pendingChanges : List LocalChange
     , now : Int
     , lastUndoPoint : Int
@@ -120,6 +124,7 @@ init =
     , cursor = startPoint
     , lineStart = Coord.xRaw startPoint
     , viewPoint = startPoint
+    , scrollRemainder = 0
     , pendingChanges = []
     , now = 0
     , lastUndoPoint = 0
@@ -513,7 +518,7 @@ tick time model =
 -- THE VIEW'S PLACE
 
 
-{-| How many characters across and down the grid shows on a screen this size.
+{-| How many characters across and down the grid shows in a window this size.
 -}
 gridSize : Coord UiPixels -> ( Int, Int )
 gridSize screen =
@@ -521,8 +526,8 @@ gridSize screen =
         ( w, h ) =
             Coord.toTuple screen
     in
-    ( max 1 ((w - 2 * margin - 2 * padding) // charWidth)
-    , max 1 ((h - topGap - margin - 2 * padding - headerHeight) // charHeight)
+    ( max 1 ((w - 2 * padding) // charWidth)
+    , max 1 ((h - 2 * padding - headerHeight) // charHeight)
     )
 
 
@@ -536,21 +541,9 @@ charHeight =
     18
 
 
-margin : Int
-margin =
-    8
-
-
 padding : Int
 padding =
     8
-
-
-{-| Below the toolbar.
--}
-topGap : Int
-topGap =
-    48
 
 
 headerHeight : Int
@@ -659,7 +652,29 @@ wheel screen shift clicks model =
             else
                 Coord.xy 0 (-3 * clicks)
     in
-    updateViewBounds screen { model | viewPoint = Coord.plus offset model.viewPoint }
+    updateViewBounds screen { model | viewPoint = Coord.plus offset model.viewPoint, scrollRemainder = 0 }
+
+
+{-| Two fingers on a touchpad moved `pixels` UI pixels over the grid (positive is down,
+the grid following them): scroll a row for each row height they moved.
+-}
+scrollPixels : Coord UiPixels -> Float -> Model -> ( Model, List Effect )
+scrollPixels screen pixels model =
+    let
+        total : Float
+        total =
+            model.scrollRemainder + pixels
+
+        rows : Int
+        rows =
+            truncate (total / toFloat charHeight)
+    in
+    updateViewBounds
+        screen
+        { model
+            | viewPoint = Coord.plus (Coord.xy 0 -rows) model.viewPoint
+            , scrollRemainder = total - toFloat (rows * charHeight)
+        }
 
 
 key : Coord UiPixels -> Bool -> Key -> Model -> ( Model, List Effect )
@@ -735,6 +750,9 @@ key screen ctrl pressed model =
 
             PageDown ->
                 { model | cursor = Coord.plus (Coord.xy 0 (Tuple.second (gridSize screen))) model.cursor } |> done
+
+            ScrollLock ->
+                ( model, [] )
 
             PrintScreen ->
                 ( model, [] )
@@ -826,31 +844,20 @@ view screen focused model =
 
                     else
                         "Disconnected (" ++ reason ++ "), trying again…"
-
-        t =
-            Ui.text Sprite.Small (Sprite.Sans Sprite.Regular)
     in
-    Ui.topLeft { size = screen }
-        (Ui.el
-            { padding = { topLeft = Coord.xy margin topGap, bottomRight = Coord.origin }
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            }
-            (Ui.el
-                { padding = Ui.paddingXY padding padding
-                , inFront = []
-                , borderAndFill = Ui.defaultElBorderAndFill
-                }
-                (Ui.column { spacing = 6, padding = Ui.noPadding }
-                    [ Ui.leftAndRight (Quantity.Quantity (cols * charWidth))
-                        (t ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
-                        (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-                    , Ui.elWithId (AsciiCollab AsciiCollab.Types.GridArea)
-                        { padding = Ui.noPadding, inFront = [], borderAndFill = Ui.NoBorderOrFill }
-                        (gridView focused cols rows model)
-                    ]
-                )
-            )
+    Ui.el
+        { padding = Ui.paddingXY padding padding, borderAndFill = Ui.windowBorderAndFill }
+        (Ui.column
+            6
+            [ Ui.leftAndRight
+                (Quantity.Quantity (cols * charWidth))
+                (Ui.text ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
+                (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+            , Ui.elWithId
+                (AsciiCollab AsciiCollab.Types.GridArea)
+                { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+                (gridView focused cols rows model)
+            ]
         )
 
 
@@ -954,7 +961,6 @@ gridTriangles cols rows viewPoint local =
                                         let
                                             position =
                                                 Coord.xy (x * charWidth) (y * charHeight)
-
                                         in
                                         Sprite.rectangle (userColor 1 userId) clip position (Coord.xy charWidth charHeight)
                                             ++ Sprite.monoChar (userColor 0.3 userId) position (Grid.toChar ascii)

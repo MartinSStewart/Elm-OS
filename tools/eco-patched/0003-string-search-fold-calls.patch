@@ -1,0 +1,857 @@
+eco String search and fold-call speedups for Elm OS, on top of 0002 (branch
+claude/project-thread-lyd4mb of MartinSStewart/eco-compiler, one commit each):
+
+  d6987a3 Search String units in place in indexes, split, contains and affixes
+  1d6da75 Return non-overlapping matches from String.indexes, as elm/core does
+  8c52a87 Call fold steps through DirectCall in String and Array folds
+
+diff --git a/elm-kernel-cpp/src/DirectCall.hpp b/elm-kernel-cpp/src/DirectCall.hpp
+new file mode 100644
+index 0000000..4377979
+--- /dev/null
++++ b/elm-kernel-cpp/src/DirectCall.hpp
+@@ -0,0 +1,192 @@
++// DirectCall: one closure, called many times by a kernel that calls it once per element.
++//
++// Kernels such as String.foldl, List.map and List.foldl call the same closure for every element.
++// `eco_apply_closure_eval` works out on each call what `DirectCall` works out once: whether the
++// arguments exactly fill the closure, the kind of every slot, the result kind, which slots hold
++// pointers, and the root range for the argument array. Each call then calls the descriptor's
++// `sat[]` entry with the arguments in registers when the compiler made one (the fast edge compiled
++// code takes, closures-and-calls.md), and otherwise copies the captures and the arguments into the
++// array and calls the evaluator's generic entry.
++//
++// It also tells the kernel the kind each argument slot wants, so a kernel can pass a value in the
++// closure's own kind. A fold whose accumulator slot and result are both an unboxed Int, Float or
++// Char can then carry its accumulator unboxed from one call to the next, where the general path
++// boxes the accumulator after every call and unboxes it before the next.
++//
++// When the fast path does not apply (`ok()` is false) the kernel uses `eco_apply_closure_eval` as
++// before. Validating builds always take that path, which checks each argument for staleness.
++
++#ifndef ECO_DIRECT_CALL_HPP
++#define ECO_DIRECT_CALL_HPP
++
++#include "ExportHelpers.hpp"
++#include "allocator/Allocator.hpp"
++#include "allocator/Heap.hpp"
++#include "allocator/HeapHelpers.hpp"
++#include "allocator/RootSet.hpp"
++#include "allocator/RuntimeExports.h"
++#include <cstdint>
++#include <cstring>
++
++namespace Elm {
++
++class DirectCall {
++public:
++    // The most slots (captures plus arguments) a closure may have for the fast path.
++    static constexpr uint32_t kMaxSlots = 16;
++
++    // Sets up calls of the closure `*closure` with `nargs` arguments. `closure` must point at a
++    // rooted HPointer that stays rooted, and current, for the life of this object: each call reads
++    // the captures through it, so a collection between calls is harmless. Pushes a root range for
++    // the argument array, popped by the destructor, so a DirectCall must be destroyed before any
++    // root pushed after it is popped (scope it as an RAII guard).
++    DirectCall(const HPointer* closure, uint32_t nargs) : closure_(closure), nargs_(nargs) {
++#if ECO_HEAP_VALIDATE
++        return;
++#endif
++        const Closure* c = static_cast<const Closure*>(Allocator::resolveFast(*closure));
++        if (!c) return;
++        const uint32_t maxv = c->max_values;
++        nvals_ = c->n_values;
++        if (maxv > kMaxSlots || maxv < nvals_ || maxv - nvals_ != nargs) return;
++        uint64_t mask = 0;
++        const uint64_t empty = Kernel::Export::encode(alloc::listNil());
++        for (uint32_t i = 0; i < maxv; ++i) {
++            kinds_[i] = static_cast<uint8_t>(closureSlotKind(c, i));
++            if (kinds_[i] == 0) mask |= uint64_t{1} << i;
++            // Until the first call fills it, a pointer slot holds the Empty constant, which a
++            // collection skips.
++            args_[i] = (i < nvals_) ? static_cast<uint64_t>(c->values[i].i) : (kinds_[i] == 0 ? empty : 0);
++        }
++        K_ = static_cast<uint8_t>(c->result_kind);
++        eval_ = reinterpret_cast<void*>(c->evaluator->generic);
++        // The descriptor's `sat[nargs]` entry, when the compiler made one, takes the closure's
++        // address and the arguments in registers and loads the captures itself, so a call skips
++        // the argument array. Its parameters have the closure's own slot types, which is what
++        // `call` passes; only integer-register kinds are used here (no Float argument).
++        if (maxv <= SAT_MAX_ARITY && nargs >= 1 && nargs <= 3 && c->evaluator->stage_arity == maxv) {
++            bool intRegs = true;
++            for (uint32_t i = nvals_; i < maxv; ++i) intRegs = intRegs && kinds_[i] != 2;
++            if (intRegs) sat_ = c->evaluator->sat[nargs];
++        }
++        maxv_ = maxv;
++        mark_ = ecoRootMark();
++        if (mask) eco_gc_push_stack_range(args_, maxv, mask);
++        ok_ = true;
++    }
++
++    DirectCall(const DirectCall&) = delete;
++    DirectCall& operator=(const DirectCall&) = delete;
++
++    ~DirectCall() {
++        if (ok_) ecoRootRelease(mark_);
++    }
++
++    // Whether the fast path applies; when false, nothing below may be called.
++    bool ok() const { return ok_; }
++
++    // The kind (0 boxed, 1 Int, 2 Float, 3 Char) the closure wants for argument `i` (0-based).
++    uint32_t argKind(uint32_t i) const { return kinds_[nvals_ + i]; }
++
++    // The kind the closure returns.
++    uint32_t resultKind() const { return K_; }
++
++    // Calls the closure with the `nargs` argument words in `args`, each already in the kind
++    // `argKind` gives it (an encoded HPointer for kind 0, the raw value otherwise), and returns the
++    // result word in the kind `resultKind` gives it: an encoded HPointer, an int64_t, the bits of a
++    // double, or a code point. May collect: the caller must root every HPointer it holds except
++    // those it passes here, which this call roots.
++    uint64_t call(const uint64_t* args) {
++        const Closure* c = static_cast<const Closure*>(Allocator::resolveFast(*closure_));
++        if (sat_) return callSat(c, args);
++        for (uint32_t i = 0; i < nvals_; ++i) args_[i] = static_cast<uint64_t>(c->values[i].i);
++        for (uint32_t i = 0; i < nargs_; ++i) args_[nvals_ + i] = args[i];
++        void** argv = reinterpret_cast<void**>(args_);
++        switch (K_) {
++            case 0: {
++                using FnT = void* (*)(void**);
++                return reinterpret_cast<uint64_t>(reinterpret_cast<FnT>(eval_)(argv));
++            }
++            case 1: {
++                using FnT = int64_t (*)(void**);
++                return static_cast<uint64_t>(reinterpret_cast<FnT>(eval_)(argv));
++            }
++            case 2: {
++                using FnT = double (*)(void**);
++                double r = reinterpret_cast<FnT>(eval_)(argv);
++                uint64_t bits;
++                std::memcpy(&bits, &r, sizeof(bits));
++                return bits;
++            }
++            default: {
++                using FnT = uint32_t (*)(void**);
++                return static_cast<uint64_t>(reinterpret_cast<FnT>(eval_)(argv));
++            }
++        }
++    }
++
++    // Returns the value of the boxed Int, Float or Char `word` as a raw word of kind `kind` (1 to
++    // 3), or `word` itself for kind 0.
++    static uint64_t unbox(uint64_t word, uint32_t kind) {
++        if (kind == 0) return word;
++        const char* base = static_cast<const char*>(Kernel::Export::toPtr(word)) + sizeof(Header);
++        switch (kind) {
++            case 1: { int64_t v; std::memcpy(&v, base, sizeof(v)); return static_cast<uint64_t>(v); }
++            case 2: { uint64_t v; std::memcpy(&v, base, sizeof(v)); return v; }
++            default: { uint32_t v; std::memcpy(&v, base, sizeof(v)); return v; }
++        }
++    }
++
++    // Returns the raw word `raw` of kind `kind` boxed, as an encoded HPointer; `raw` itself for kind
++    // 0. Boxing allocates and may collect.
++    static uint64_t box(uint64_t raw, uint32_t kind) {
++        switch (kind) {
++            case 0: return raw;
++            case 1: return eco_alloc_int(static_cast<int64_t>(raw)).toBits();
++            case 2: { double f; std::memcpy(&f, &raw, sizeof(f)); return eco_alloc_float(f).toBits(); }
++            default: return eco_alloc_char(static_cast<uint32_t>(raw)).toBits();
++        }
++    }
++
++private:
++    // Calls `sat_` for the closure at `c`, its arguments in registers.
++    uint64_t callSat(const Closure* c, const uint64_t* a) {
++        void* cp = const_cast<Closure*>(c);
++        switch (K_) {
++            case 0: return reinterpret_cast<uint64_t>(satCall<void*>(cp, a));
++            case 1: return static_cast<uint64_t>(satCall<int64_t>(cp, a));
++            case 2: {
++                double r = satCall<double>(cp, a);
++                uint64_t bits;
++                std::memcpy(&bits, &r, sizeof(bits));
++                return bits;
++            }
++            default: return static_cast<uint64_t>(satCall<uint32_t>(cp, a));
++        }
++    }
++
++    template <class R>
++    R satCall(void* cp, const uint64_t* a) {
++        switch (nargs_) {
++            case 1: return reinterpret_cast<R (*)(void*, uint64_t)>(sat_)(cp, a[0]);
++            case 2: return reinterpret_cast<R (*)(void*, uint64_t, uint64_t)>(sat_)(cp, a[0], a[1]);
++            default: return reinterpret_cast<R (*)(void*, uint64_t, uint64_t, uint64_t)>(sat_)(cp, a[0], a[1], a[2]);
++        }
++    }
++
++    const HPointer* closure_;
++    void* sat_ = nullptr;
++    uint32_t nargs_;
++    uint32_t nvals_ = 0;
++    uint32_t maxv_ = 0;
++    uint8_t K_ = 0;
++    bool ok_ = false;
++    void* eval_ = nullptr;
++    EcoRootMark mark_{};
++    uint8_t kinds_[kMaxSlots] = {};
++    uint64_t args_[kMaxSlots];
++};
++
++} // namespace Elm
++
++#endif
+diff --git a/elm-kernel-cpp/src/core/JsArrayExports.cpp b/elm-kernel-cpp/src/core/JsArrayExports.cpp
+index 3fbae32..c656303 100644
+--- a/elm-kernel-cpp/src/core/JsArrayExports.cpp
++++ b/elm-kernel-cpp/src/core/JsArrayExports.cpp
+@@ -27,6 +27,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "../KernelExports.h"
++#include "../DirectCall.hpp"
+ #include "../ExportHelpers.hpp"
+ #include "JsArray.hpp"
+ #include "allocator/Heap.hpp"
+@@ -603,6 +604,38 @@ static HPtr foldImpl(HPtr closure, HPtr acc, HPtr array, bool forward) {
+         srcKind = src0->header.unboxed & 0x3;
+     }
+ 
++    // The fast path: a step whose element slot takes the array's own kind, or boxed, and whose
++    // accumulator slot takes the kind it returns. Elements of an unboxed array are then passed raw
++    // when the step takes them raw, and the accumulator stays in the step's kind throughout.
++    {
++        StackRootGuard dcRoots(&srcHP, &accHP, &closureHP);
++        Elm::DirectCall dc(&closureHP, 2);
++        const uint32_t ek = dc.ok() ? dc.argKind(0) : 0;
++        if (dc.ok() && dc.argKind(1) == dc.resultKind() && (ek == srcKind || ek == 0)) {
++            const uint32_t ak = dc.resultKind();
++            uint64_t a = Elm::DirectCall::unbox(Export::encode(accHP), ak);
++            for (uint32_t step = 0; step < len; ++step) {
++                uint32_t idx = forward ? step : (len - 1 - step);
++                uint64_t elem;
++                if (srcKind == 0) {
++                    elem = Export::encode(static_cast<ElmArray*>(allocator.resolve(srcHP))->elements[idx].p);
++                } else if (ek == srcKind) {
++                    Unboxable u = static_cast<ElmArray*>(allocator.resolve(srcHP))->elements[idx];
++                    elem = (srcKind == 3) ? (static_cast<uint64_t>(u.i) & 0xFFFFFFFFu) : static_cast<uint64_t>(u.i);
++                } else {
++                    // Boxing allocates; a boxed accumulator is kept current in the rooted accHP.
++                    Unboxable u = static_cast<ElmArray*>(allocator.resolve(srcHP))->elements[idx];
++                    elem = Export::encode(alloc::boxElement(u, srcKind));
++                }
++                uint64_t args[2] = { elem, ak == 0 ? Export::encode(accHP) : a };
++                a = dc.call(args);
++                if (ak == 0) accHP = Export::decode(a);
++            }
++            if (ak == 0) return HPtr::fromBits(Export::encode(accHP));
++            return HPtr::fromBits(Elm::DirectCall::box(a, ak));
++        }
++    }
++
+     // accBits + accKind track the current accumulator's representation.
+     // Starts boxed (HPtr from the caller); after the first call the
+     // closure's `result_kind` may flip it to a primitive kind, in which
+diff --git a/elm-kernel-cpp/src/core/StringExports.cpp b/elm-kernel-cpp/src/core/StringExports.cpp
+index aa4fded..55ec214 100644
+--- a/elm-kernel-cpp/src/core/StringExports.cpp
++++ b/elm-kernel-cpp/src/core/StringExports.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "../KernelExports.h"
+ #include "../ExportHelpers.hpp"
++#include "../DirectCall.hpp"
+ #include "String.hpp"
+ #include "allocator/Heap.hpp"
+ #include "allocator/HeapHelpers.hpp"
+@@ -214,6 +215,15 @@ static uint64_t callFoldClosure(HPtr closure_hptr, uint32_t c, uint64_t acc) {
+     return eco_apply_closure_typed(closure_hptr, args, 2, layout).toBits();
+ }
+ 
++// Whether a fold step can be called through `dc` with the Char unboxed and the accumulator in
++// one kind, `accKind`, that its slot takes and the step returns: then the fold carries the
++// accumulator in that kind, unboxed for an Int, Float or Char, from one call to the next.
++static bool foldCallFits(const Elm::DirectCall& dc, uint32_t& accKind) {
++    if (!dc.ok() || dc.argKind(0) != 3 || dc.argKind(1) != dc.resultKind()) return false;
++    accKind = dc.resultKind();
++    return true;
++}
++
+ // A copy of the UTF-16 units of the String `str`, of any form, empty for null. The copy is C++
+ // memory, outside the collected heap, so closures called while it is walked may allocate without
+ // invalidating it. A UTF-8 form's bytes are ASCII, so each is copied as one unit.
+@@ -369,6 +379,21 @@ HPtr Elm_Kernel_String_foldl(HPtr closure, HPtr acc, HPtr str) {
+     Elm::StackRootGuard loopRoots(&closureHP, &accHP);
+ 
+     const size_t n = chars.size();
++    {
++        Elm::DirectCall dc(&closureHP, 2);
++        uint32_t ak;
++        if (foldCallFits(dc, ak)) {
++            uint64_t a = Elm::DirectCall::unbox(Export::encode(accHP), ak);
++            for (size_t i = 0; i < n;) {
++                uint32_t c = Elm::StringOps::nextCodePoint(chars.data(), n, i);
++                uint64_t args[2] = { c, ak == 0 ? Export::encode(accHP) : a };
++                a = dc.call(args);
++                if (ak == 0) accHP = Export::decode(a);
++            }
++            if (ak != 0) return HPtr::fromBits(Elm::DirectCall::box(a, ak));
++            return HPtr::fromBits(Export::encode(accHP));
++        }
++    }
+     for (size_t i = 0; i < n;) {
+         uint32_t c = Elm::StringOps::nextCodePoint(chars.data(), n, i);
+         HPtr cl = HPtr::fromBits(Export::encode(closureHP));
+@@ -388,6 +413,21 @@ HPtr Elm_Kernel_String_foldr(HPtr closure, HPtr acc, HPtr str) {
+ 
+     // Walk back by code point: a low surrogate combines only with a
+     // preceding high one (StringOps::prevCodePoint).
++    {
++        Elm::DirectCall dc(&closureHP, 2);
++        uint32_t ak;
++        if (foldCallFits(dc, ak)) {
++            uint64_t a = Elm::DirectCall::unbox(Export::encode(accHP), ak);
++            for (size_t i = chars.size(); i > 0;) {
++                uint32_t c = Elm::StringOps::prevCodePoint(chars.data(), i);
++                uint64_t args[2] = { c, ak == 0 ? Export::encode(accHP) : a };
++                a = dc.call(args);
++                if (ak == 0) accHP = Export::decode(a);
++            }
++            if (ak != 0) return HPtr::fromBits(Elm::DirectCall::box(a, ak));
++            return HPtr::fromBits(Export::encode(accHP));
++        }
++    }
+     for (size_t i = chars.size(); i > 0;) {
+         uint32_t c = Elm::StringOps::prevCodePoint(chars.data(), i);
+         HPtr cl = HPtr::fromBits(Export::encode(closureHP));
+diff --git a/runtime/src/allocator/StringOps.cpp b/runtime/src/allocator/StringOps.cpp
+index 4cfcf6a..a8cfcb8 100644
+--- a/runtime/src/allocator/StringOps.cpp
++++ b/runtime/src/allocator/StringOps.cpp
+@@ -698,57 +698,133 @@ HPointer join(void* sep, HPointer stringList) {
+     return buildBalancedRope(parts);
+ }
+ 
++bool contains(void* needle, void* haystack) {
++    if (!needle) return true;
++    if (!haystack) return false;
++
++    size_t needle_len = rawLen(needle);
++    size_t haystack_len = rawLen(haystack);
++    if (needle_len == 0) return true;
++    if (needle_len > haystack_len) return false;
++
++    // Any pairing of flat, slice and UTF-8 forms: search the units where they lie.
++    UnitRun h = unitRun(haystack);
++    UnitRun n = unitRun(needle);
++    if (h.ok() && n.ok()) {
++        bool found = false;
++        withUnitRuns(h, n, [&](auto hp, auto np) {
++            forEachUnitMatch(hp, h.n, np, n.n, false, [&](size_t) { found = true; return false; });
++        });
++        return found;
++    }
++
++    // A rope: compare unit by unit through charAt.
++    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
++        bool match = true;
++        for (size_t j = 0; j < needle_len && match; ++j) {
++            if (charAt(haystack, static_cast<i64>(i + j)) !=
++                charAt(needle, static_cast<i64>(j))) match = false;
++        }
++        if (match) return true;
++    }
++    return false;
++}
++
++bool startsWith(void* prefix, void* str) {
++    if (!prefix) return true;
++    if (!str) return false;
++
++    size_t prefix_len = rawLen(prefix);
++    size_t str_len = rawLen(str);
++    if (prefix_len > str_len) return false;
++    if (prefix_len == 0) return true;
++
++    UnitRun s = unitRun(str);
++    UnitRun p = unitRun(prefix);
++    if (s.ok() && p.ok()) {
++        return withUnitRuns(s, p, [&](auto sp, auto pp) { return unitsEqual(sp, pp, prefix_len); });
++    }
++
++    for (size_t i = 0; i < prefix_len; ++i) {
++        if (charAt(str, static_cast<i64>(i)) != charAt(prefix, static_cast<i64>(i))) return false;
++    }
++    return true;
++}
++
++bool endsWith(void* suffix, void* str) {
++    if (!suffix) return true;
++    if (!str) return false;
++
++    size_t suffix_len = rawLen(suffix);
++    size_t str_len = rawLen(str);
++    if (suffix_len > str_len) return false;
++    if (suffix_len == 0) return true;
++
++    size_t offset = str_len - suffix_len;
++
++    UnitRun s = unitRun(str);
++    UnitRun x = unitRun(suffix);
++    if (s.ok() && x.ok()) {
++        return withUnitRuns(s, x, [&](auto sp, auto xp) { return unitsEqual(sp + offset, xp, suffix_len); });
++    }
++
++    for (size_t i = 0; i < suffix_len; ++i) {
++        if (charAt(str, static_cast<i64>(offset + i)) !=
++            charAt(suffix, static_cast<i64>(i))) return false;
++    }
++    return true;
++}
++
+ HPointer indexes(void* needle, void* haystack) {
+     // An empty needle has no index, as elm/core's `_String_indexes` returns [] when the needle's length is
+     // below 1. A null pointer is the empty string.
+-    if (!haystack || !needle) return alloc::listFromInts({});
++    if (!haystack || !needle) return alloc::listNil();
++
++    // Occurrences do not overlap: as elm/core's `_String_indexes`, the search resumes after the end
++    // of each match, so `indexes "aa" "aaaa"` is [0,2].
++    //
++    // Any pairing of flat, slice and UTF-8 forms is searched where its units lie, without copying
++    // either String. Most calls find a few indexes, which are kept on the stack.
++    UnitRun h = unitRun(haystack);
++    UnitRun n = unitRun(needle);
++    if (h.ok() && n.ok()) {
++        constexpr size_t kInline = 16;
++        i64 inlineIdx[kInline];
++        std::vector<i64> moreIdx;
++        size_t count = 0;
++        withUnitRuns(h, n, [&](auto hp, auto np) {
++            forEachUnitMatch(hp, h.n, np, n.n, false, [&](size_t i) {
++                if (count < kInline) {
++                    inlineIdx[count] = static_cast<i64>(i);
++                } else {
++                    if (count == kInline) moreIdx.assign(inlineIdx, inlineIdx + kInline);
++                    moreIdx.push_back(static_cast<i64>(i));
++                }
++                ++count;
++                return true;
++            });
++        });
++        if (count > kInline) return alloc::listFromInts(moreIdx);
++        // As listFromInts builds a list too short for a chunk chain, or a longer one.
++        if (count >= 4) return alloc::listFromInts(std::vector<i64>(inlineIdx, inlineIdx + count));
++        HPointer result = alloc::listNil();
++        for (size_t k = count; k > 0; --k) {
++            result = alloc::cons(alloc::unboxedInt(inlineIdx[k - 1]), result, static_cast<u8>(1));
++        }
++        return result;
++    }
+ 
++    // A rope: copy both into C++ memory and search the copies.
+     if (isUtf8(needle))
+         GC_STATS_UTF8_WIDEN_SITE(UTF8_WIDEN_INDEXES, static_cast<Header*>(needle)->size);
+     if (isUtf8(haystack))
+         GC_STATS_UTF8_WIDEN_SITE(UTF8_WIDEN_INDEXES, static_cast<Header*>(haystack)->size);
+     auto needleBuf = toStdU16String(needle);
+     auto haystackBuf = toStdU16String(haystack);
+-    const u16* nPtr = reinterpret_cast<const u16*>(needleBuf.data());
+-    const u16* hPtr = reinterpret_cast<const u16*>(haystackBuf.data());
+-    size_t needle_len = needleBuf.size();
+-    size_t haystack_len = haystackBuf.size();
+-
+     std::vector<i64> indices;
+-    if (needle_len == 0) {
+-        // No index, as above.
+-    } else if (needle_len <= haystack_len) {
+-        // Boyer-Moore-Horspool for a needle of 4 or more units, and a direct scan otherwise. The skip
+-        // table is indexed by a unit's low byte, so units that share it share an entry.
+-        if (needle_len >= 4) {
+-            u32 skip[256];
+-            for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(needle_len);
+-            for (size_t i = 0; i + 1 < needle_len; ++i) {
+-                skip[nPtr[i] & 0xFF] = static_cast<u32>(needle_len - 1 - i);
+-            }
+-            size_t i = 0;
+-            while (i + needle_len <= haystack_len) {
+-                size_t j = needle_len;
+-                while (j > 0 && hPtr[i + j - 1] == nPtr[j - 1]) --j;
+-                if (j == 0) {
+-                    indices.push_back(static_cast<i64>(i));
+-                    ++i;  // By one, so that overlapping occurrences are found too.
+-                } else {
+-                    i += skip[hPtr[i + needle_len - 1] & 0xFF];
+-                }
+-            }
+-        } else {
+-            for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
+-                bool match = true;
+-                for (size_t j = 0; j < needle_len && match; ++j) {
+-                    if (hPtr[i + j] != nPtr[j]) match = false;
+-                }
+-                if (match) {
+-                    indices.push_back(static_cast<i64>(i));
+-                }
+-            }
+-        }
+-    }
++    forEachUnitMatch(reinterpret_cast<const u16*>(haystackBuf.data()), haystackBuf.size(),
++                     reinterpret_cast<const u16*>(needleBuf.data()), needleBuf.size(), false,
++                     [&](size_t i) { indices.push_back(static_cast<i64>(i)); return true; });
+     return alloc::listFromInts(indices);
+ }
+ 
+@@ -768,39 +844,21 @@ HPointer split(void* sep, void* str) {
+         return toList(str);
+     }
+ 
+-    // Both UTF-8: search the bytes, and make each piece with slice(), so pieces stay UTF-8 and
+-    // long ones share the source. Mixed forms fall through to the UTF-16 copy below.
+-    if (isUtf8(str) && isUtf8(sep) &&
+-        Allocator::instance().getConfig().utf8_strings_enabled) {
++    // Any pairing of flat, slice and UTF-8 forms: search the units where they lie, and make each
++    // piece with slice(), so long pieces share the source and short ASCII ones are UTF-8 leaves.
++    // A rope falls through to the UTF-16 copy below.
++    UnitRun strRun = unitRun(str);
++    UnitRun sepRun = unitRun(sep);
++    if (strRun.ok() && sepRun.ok()) {
+         auto& allocator = Allocator::instance();
+-        // Phase 1: search over raw bytes. No Elm allocation here, so the
+-        // in-place payload pointers stay valid for the whole scan.
+-        auto sp = utf8Bytes(str);
+-        auto np = utf8Bytes(sep);
+-        const u8* strB = sp.first;
+-        const u8* sepB = np.first;
++        // Phase 1: search the units in place. No Elm allocation here, so the
++        // payload pointers stay valid for the whole scan.
+         std::vector<size_t> splitPositions;
+-        if (sep_len >= 4) {
+-            u32 skip[256];
+-            for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(sep_len);
+-            for (size_t i = 0; i + 1 < sep_len; ++i)
+-                skip[sepB[i]] = static_cast<u32>(sep_len - 1 - i);
+-            size_t i = 0;
+-            while (i + sep_len <= str_len) {
+-                size_t j = sep_len;
+-                while (j > 0 && strB[i + j - 1] == sepB[j - 1]) --j;
+-                if (j == 0) { splitPositions.push_back(i); i += sep_len; }
+-                else { i += skip[strB[i + sep_len - 1]]; }
+-            }
+-        } else {
+-            for (size_t i = 0; i + sep_len <= str_len; ++i) {
+-                bool match = true;
+-                for (size_t j = 0; j < sep_len && match; ++j)
+-                    if (strB[i + j] != sepB[j]) match = false;
+-                if (match) { splitPositions.push_back(i); i += sep_len - 1; }
+-            }
+-        }
+-        // Phase 2: build parts via slice() (UTF-8 sub-forms). slice allocates,
++        withUnitRuns(strRun, sepRun, [&](auto hp, auto np) {
++            forEachUnitMatch(hp, strRun.n, np, sepRun.n, false,
++                             [&](size_t i) { splitPositions.push_back(i); return true; });
++        });
++        // Phase 2: build parts via slice(). slice allocates,
+         // so root the source + parts and re-resolve the source each iteration.
+         size_t numParts = splitPositions.size() + 1;
+         std::vector<HPointer> parts(numParts, alloc::listNil());
+@@ -835,40 +893,9 @@ HPointer split(void* sep, void* str) {
+     const u16* strData = reinterpret_cast<const u16*>(strU16.data());
+     const u16* sepData = reinterpret_cast<const u16*>(sepU16.data());
+ 
+-    // Boyer-Moore-Horspool for a separator of 4 or more units, and a direct scan otherwise.
+     std::vector<size_t> splitPositions;
+-    if (sep_len >= 4) {
+-        // Indexed by a unit's low byte, so units that share it share an entry.
+-        u32 skip[256];
+-        for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(sep_len);
+-        for (size_t i = 0; i + 1 < sep_len; ++i) {
+-            skip[sepData[i] & 0xFF] = static_cast<u32>(sep_len - 1 - i);
+-        }
+-        size_t i = 0;
+-        while (i + sep_len <= str_len) {
+-            size_t j = sep_len;
+-            while (j > 0 && strData[i + j - 1] == sepData[j - 1]) --j;
+-            if (j == 0) {
+-                splitPositions.push_back(i);
+-                i += sep_len;
+-            } else {
+-                i += skip[strData[i + sep_len - 1] & 0xFF];
+-            }
+-        }
+-    } else {
+-        // `i + sep_len <= str_len`, not `i <= str_len - sep_len`: size_t
+-        // underflows when the separator is longer than the input.
+-        for (size_t i = 0; i + sep_len <= str_len; ++i) {
+-            bool match = true;
+-            for (size_t j = 0; j < sep_len && match; ++j) {
+-                if (strData[i + j] != sepData[j]) match = false;
+-            }
+-            if (match) {
+-                splitPositions.push_back(i);
+-                i += sep_len - 1;
+-            }
+-        }
+-    }
++    forEachUnitMatch(strData, strU16.size(), sepData, sepU16.size(), false,
++                     [&](size_t i) { splitPositions.push_back(i); return true; });
+ 
+     size_t numParts = splitPositions.size() + 1;
+     std::vector<HPointer> parts(numParts, alloc::listNil());
+diff --git a/runtime/src/allocator/StringOps.hpp b/runtime/src/allocator/StringOps.hpp
+index 376c96b..f8365a1 100644
+--- a/runtime/src/allocator/StringOps.hpp
++++ b/runtime/src/allocator/StringOps.hpp
+@@ -641,109 +641,128 @@ inline std::pair<const u16*, u32> singleSegmentView(void* str) {
+     return {nullptr, 0};
+ }
+ 
+-// Returns whether the units of `needle` occur in `haystack`. A null `needle` occurs in anything, and
+-// a non-null one in no null `haystack`. Does not allocate on the Elm heap.
+-inline bool contains(void* needle, void* haystack) {
+-    if (!needle) return true;
+-    if (!haystack) return false;
+-
+-    size_t needle_len = rawLen(needle);
+-    size_t haystack_len = rawLen(haystack);
+-    if (needle_len == 0) return true;
+-    if (needle_len > haystack_len) return false;
+-
+-    // Both UTF-8: each byte is one unit, so a byte match is a unit match.
+-    if (isUtf8(needle) && isUtf8(haystack)) {
+-        auto n = utf8Bytes(needle);
+-        auto h = utf8Bytes(haystack);
+-        return std::search(h.first, h.first + h.second, n.first,
+-                           n.first + n.second) != h.first + h.second;
+-    }
+-
+-    auto [nPtr, nLen] = singleSegmentView(needle);
+-    auto [hPtr, hLen] = singleSegmentView(haystack);
+-    if (nPtr && hPtr) {
+-        return std::search(hPtr, hPtr + hLen, nPtr, nPtr + nLen) != hPtr + hLen;
+-    }
+-
+-    // A rope, or a UTF-8 form against a UTF-16 one: compare unit by unit through charAt.
+-    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
+-        bool match = true;
+-        for (size_t j = 0; j < needle_len && match; ++j) {
+-            if (charAt(haystack, static_cast<i64>(i + j)) !=
+-                charAt(needle, static_cast<i64>(j))) match = false;
+-        }
+-        if (match) return true;
+-    }
+-    return false;
+-}
+-
+-// Returns whether the units of `str` begin with those of `prefix`. A null `prefix` begins anything,
+-// and a non-null one no null `str`. Does not allocate on the Elm heap.
+-inline bool startsWith(void* prefix, void* str) {
+-    if (!prefix) return true;
+-    if (!str) return false;
++// The units of a String that lie contiguously in memory, read without copying: UTF-16 units
++// (`wide`) for a UTF-16 leaf, a large String or a slice, or bytes (`bytes`) for a UTF-8 form, whose
++// bytes are ASCII and so each one UTF-16 unit. Both are null for null, a rope, or a view whose base
++// is the null word. The pointers are valid as `singleSegmentView`'s and `utf8Bytes`'s are.
++struct UnitRun {
++    const u16* wide = nullptr;
++    const u8* bytes = nullptr;
++    u32 n = 0;
++    bool ok() const { return wide || bytes; }
++};
+ 
+-    size_t prefix_len = rawLen(prefix);
+-    size_t str_len = rawLen(str);
+-    if (prefix_len > str_len) return false;
+-    if (prefix_len == 0) return true;
++inline UnitRun unitRun(void* str) {
++    UnitRun r;
++    if (!str) return r;
++    if (isUtf8(str)) {
++        auto pr = utf8Bytes(str);
++        r.bytes = pr.first;
++        r.n = pr.first ? pr.second : 0;
++        return r;
++    }
++    auto [p, n] = singleSegmentView(str);
++    r.wide = p;
++    r.n = p ? n : 0;
++    return r;
++}
+ 
+-    if (isUtf8(prefix) && isUtf8(str)) {
+-        auto p = utf8Bytes(prefix);
+-        auto s = utf8Bytes(str);
+-        return std::memcmp(s.first, p.first, prefix_len) == 0;
++// Calls `f(h, n)` with the haystack's and the needle's runs as typed pointers (`const u8*` or
++// `const u16*`), so that one search template serves the four pairings of forms. Both runs must be
++// `ok()`.
++template <class F>
++inline decltype(auto) withUnitRuns(const UnitRun& h, const UnitRun& n, F&& f) {
++    if (h.bytes) {
++        if (n.bytes) return f(h.bytes, n.bytes);
++        return f(h.bytes, n.wide);
+     }
++    if (n.bytes) return f(h.wide, n.bytes);
++    return f(h.wide, n.wide);
++}
+ 
+-    auto [pPtr, pLen] = singleSegmentView(prefix);
+-    auto [sPtr, sLen] = singleSegmentView(str);
+-    if (pPtr && sPtr) {
+-        return std::memcmp(sPtr, pPtr, prefix_len * sizeof(u16)) == 0;
++// Calls `onMatch(i)` for each index `i` at which the `nn` units of `nd` occur in the `hn` units of
++// `h`, in increasing order, and stops early when it returns false. Units compare by value, so an
++// ASCII byte matches the UTF-16 unit of the same value. With `overlapping` the search resumes one
++// unit after a match, otherwise after its end. `nn` must be positive.
++//
++// A needle of 4 or more units is found with Boyer-Moore-Horspool, its skip table indexed by a unit's
++// low byte; a shorter one by scanning for its first unit, with memchr over bytes. Neither allocates.
++template <class H, class N, class F>
++inline void forEachUnitMatch(const H* h, size_t hn, const N* nd, size_t nn, bool overlapping,
++                             F&& onMatch) {
++    if (nn == 0 || nn > hn) return;
++    const size_t step = overlapping ? 1 : nn;
++    if (nn >= 4) {
++        u32 skip[256];
++        for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(nn);
++        for (size_t i = 0; i + 1 < nn; ++i) skip[nd[i] & 0xFF] = static_cast<u32>(nn - 1 - i);
++        size_t i = 0;
++        while (i + nn <= hn) {
++            size_t j = nn;
++            while (j > 0 && static_cast<u16>(h[i + j - 1]) == static_cast<u16>(nd[j - 1])) --j;
++            if (j == 0) {
++                if (!onMatch(i)) return;
++                i += step;
++            } else {
++                i += skip[h[i + nn - 1] & 0xFF];
++            }
++        }
++        return;
+     }
+-
+-    for (size_t i = 0; i < prefix_len; ++i) {
+-        if (charAt(str, static_cast<i64>(i)) != charAt(prefix, static_cast<i64>(i))) return false;
++    const u16 first = static_cast<u16>(nd[0]);
++    const size_t last = hn - nn;
++    size_t i = 0;
++    while (i <= last) {
++        if constexpr (sizeof(H) == 1) {
++            if (first >= 0x80) return;  // An ASCII haystack has no such unit.
++            const void* hit = std::memchr(h + i, first, last - i + 1);
++            if (!hit) return;
++            i = static_cast<size_t>(static_cast<const H*>(hit) - h);
++        } else {
++            while (i <= last && h[i] != first) ++i;
++            if (i > last) return;
++        }
++        size_t j = 1;
++        while (j < nn && static_cast<u16>(h[i + j]) == static_cast<u16>(nd[j])) ++j;
++        if (j == nn) {
++            if (!onMatch(i)) return;
++            i += step;
++        } else {
++            ++i;
++        }
+     }
+-    return true;
+ }
+ 
+-// Returns whether the units of `str` end with those of `suffix`. A null `suffix` ends anything, and
+-// a non-null one no null `str`. Does not allocate on the Elm heap.
+-inline bool endsWith(void* suffix, void* str) {
+-    if (!suffix) return true;
+-    if (!str) return false;
+-
+-    size_t suffix_len = rawLen(suffix);
+-    size_t str_len = rawLen(str);
+-    if (suffix_len > str_len) return false;
+-    if (suffix_len == 0) return true;
+-
+-    size_t offset = str_len - suffix_len;
+-
+-    if (isUtf8(suffix) && isUtf8(str)) {
+-        auto suf = utf8Bytes(suffix);
+-        auto s = utf8Bytes(str);
+-        return std::memcmp(s.first + offset, suf.first, suffix_len) == 0;
++// Returns whether the `n` units at `a` equal those at `b`, units compared by value.
++template <class A, class B>
++inline bool unitsEqual(const A* a, const B* b, size_t n) {
++    if constexpr (sizeof(A) == sizeof(B)) {
++        return std::memcmp(a, b, n * sizeof(A)) == 0;
++    } else {
++        for (size_t i = 0; i < n; ++i)
++            if (static_cast<u16>(a[i]) != static_cast<u16>(b[i])) return false;
++        return true;
+     }
++}
+ 
+-    auto [sufPtr, sufLen] = singleSegmentView(suffix);
+-    auto [sPtr, sLen]     = singleSegmentView(str);
+-    if (sufPtr && sPtr) {
+-        return std::memcmp(sPtr + offset, sufPtr, suffix_len * sizeof(u16)) == 0;
+-    }
++// Returns whether the units of `needle` occur in `haystack`. A null `needle` occurs in anything, and
++// a non-null one in no null `haystack`. Does not allocate on the Elm heap.
++//
++// Defined out of line in StringOps.cpp, as are startsWith and endsWith.
++bool contains(void* needle, void* haystack);
+ 
+-    for (size_t i = 0; i < suffix_len; ++i) {
+-        if (charAt(str, static_cast<i64>(offset + i)) !=
+-            charAt(suffix, static_cast<i64>(i))) return false;
+-    }
+-    return true;
+-}
++// Returns whether the units of `str` begin with those of `prefix`. A null `prefix` begins anything,
++// and a non-null one no null `str`. Does not allocate on the Elm heap.
++bool startsWith(void* prefix, void* str);
++
++// Returns whether the units of `str` end with those of `suffix`. A null `suffix` ends anything, and
++// a non-null one no null `str`. Does not allocate on the Elm heap.
++bool endsWith(void* suffix, void* str);
+ 
+-// Returns an Elm list of every unit index at which `needle` occurs in `haystack`, in increasing
+-// order, overlapping occurrences included.
++// Returns an Elm list of the unit indexes at which `needle` occurs in `haystack`, in increasing
++// order. Occurrences do not overlap, as in elm/core: each search resumes after the previous match.
+ //
+-// A null `haystack` gives the empty list. An empty or null `needle` gives every index from 0 to
+-// the length of `haystack` inclusive. A GC point.
++// A null `haystack`, or an empty or null `needle`, gives the empty list. A GC point.
+ HPointer indexes(void* needle, void* haystack);
+ 
+ // ============================================================================
+diff --git a/test/elm-core/src/StringIndexesTest.elm b/test/elm-core/src/StringIndexesTest.elm
+index 73636e6..b78132f 100644
+--- a/test/elm-core/src/StringIndexesTest.elm
++++ b/test/elm-core/src/StringIndexesTest.elm
+@@ -1,14 +1,17 @@
+ module StringIndexesTest exposing (main)
+ 
+-{-| Checks that `String.indexes` returns every position where a substring occurs, and an empty list when it never does.
++{-| Checks that `String.indexes` returns every position where a substring occurs, without overlaps as in elm/core, and an empty list when it never does.
+ 
+ `"he"` occurs in `"he says hello"` at positions 0 and 8; `"xyz"` does not occur
+-in `"hello"`.
++in `"hello"`. `"aa"` occurs in `"aaaa"` at 0 and 2 only, and `"<"` is found at UTF-16
++unit positions in a String with a non-ASCII character.
+ 
+ -}
+ 
+ -- CHECK: indexes1: [0,8]
+ -- CHECK: indexes_none: []
++-- CHECK: indexes_no_overlap: [0,2]
++-- CHECK: indexes_utf16: [1,4]
+ 
+ import Html exposing (text)
+ 
+@@ -16,5 +19,7 @@ main =
+     let
+         _ = Debug.log "indexes1" (String.indexes "he" "he says hello")
+         _ = Debug.log "indexes_none" (String.indexes "xyz" "hello")
++        _ = Debug.log "indexes_no_overlap" (String.indexes "aa" "aaaa")
++        _ = Debug.log "indexes_utf16" (String.indexes "<" "é<ab<")
+     in
+     text "done"

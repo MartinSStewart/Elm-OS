@@ -229,15 +229,18 @@ if not all(near(c, fill) for c in here):
 if any(near(c, fill) for c in there):
     fail("the cursor is not only under the mouse")
 
-# The debug overlay (elm/src/Main.elm) sits in the bottom left corner: a light panel
-# with dark text, drawn from the texture atlas's font.
-panel = pixel(shot, 11 * s, h - 11 * s)
-print(f"overlay panel {panel}")
+# The debug app (elm/src/Main.elm) is the first window, so the layout (Layout.elm) puts
+# it in the top left corner, under the toolbar: a light panel with dark text, drawn
+# from the texture atlas's font. Windows start at FIRST_WINDOW (UI pixels): 8 to the
+# right of the screen's edge and 8 below the toolbar.
+FIRST_WINDOW = (12, 49)  # just inside the first window's top left border
+panel = pixel(shot, FIRST_WINDOW[0] * s, FIRST_WINDOW[1] * s)
+print(f"debug app's panel {panel}")
 if not near(panel, (220, 210, 199)):
-    fail(f"expected the debug overlay's panel in the bottom left corner, got {panel}")
-dark = sum(1 for x in range(14 * s, 200 * s) for y in range(h - 40 * s, h - 14 * s) if max(pixel(shot, x, y)) < 60)
+    fail(f"expected the debug app's panel in the top left corner, got {panel}")
+dark = sum(1 for x in range(14 * s, 200 * s) for y in range(56 * s, 80 * s) if max(pixel(shot, x, y)) < 60)
 if dark < 20:
-    fail(f"the debug overlay has no text ({dark} dark pixels)")
+    fail(f"the debug app has no text ({dark} dark pixels)")
 
 move(0.75, 0.25)
 if not all(near(c, fill) for c in cursor_at(screen(), 0.75, 0.25)):
@@ -284,23 +287,31 @@ def press(name):
     click(x / w, y / h)
 
 
-# The About button (top left) opens the about page in the middle of the screen; a
-# second click closes it.
-middle = (w // 2, h // 2 - 60 * s)
-before = pixel(first, *middle)
+# Close the apps open from the start (debug, network, weather), so each app below is
+# the only window, in the top left corner.
+for name in ["Debug", "Network", "Weather"]:
+    press(name)
+    time.sleep(0.5)
+time.sleep(1)
+corner = (FIRST_WINDOW[0] * s, FIRST_WINDOW[1] * s)
+before = pixel(screen(), *corner)
+if near(before, (220, 210, 199), tol=10):
+    fail("the Debug, Network and Weather buttons did not close their apps")
+
+# The About button opens the about page; a second click closes it.
 press("About")
 time.sleep(1)
-opened = pixel(screen(), *middle)
+opened = pixel(screen(), *corner)
 press("About")
 time.sleep(1)
-closed = pixel(screen(), *middle)
+closed = pixel(screen(), *corner)
 print(f"about page: {before}, open {opened}, closed {closed}")
 if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
     fail("the About button did not open and close the about page")
 
-# The Calculator button opens the calculator under the toolbar, with the
+# The Calculator button opens the calculator in the top left corner, with the
 # keyboard going to it: 6 * 7 on the number pad, then Enter.
-calc_title = (12 * s, 49 * s)
+calc_title = corner
 press("Calculator")
 time.sleep(1)
 for key in ["kp_6", "kp_multiply", "kp_7", "ret"]:
@@ -320,30 +331,40 @@ time.sleep(1)
 if near(pixel(screen(), *calc_title), (220, 210, 199), tol=10):
     fail("a second click on the Calculator button did not close the calculator")
 
+# The network app again, alone in the top left corner.
+press("Network")
+time.sleep(1)
+
+
+def connected_pixels(shot):
+    """Green "Connected..." in the network app, below its title and the wifi header."""
+    return sum(1 for x in range(14 * s, 460 * s) for y in range(115 * s, 150 * s)
+               if near(pixel(shot, x, y), (30, 120, 60), tol=30))
+
+
 if usb:
-    # No wifi card, so the panel (top right) is just the wired card: its name, then
+    # No wifi card, so the network app is just the wired card: its name, then
     # "Connected, 10.0.2.15" in green once DHCP over the cable has worked.
     end = time.time() + 60
     while True:
         shot = screen()
-        green = sum(1 for x in range(w - 450 * s, w - 20 * s) for y in range(40 * s, 60 * s)
-                    if near(pixel(shot, x, y), (30, 120, 60), tol=30))
+        green = connected_pixels(shot)
         if green >= 20:
             break
         if time.time() > end:
             save_png(shot, f"{ROOT}/build/screenshot.png")
-            fail(f"expected the panel to say the wired card is connected ({green} green pixels; build/screenshot.png)")
+            fail(f"expected the network app to say the wired card is connected ({green} green pixels; build/screenshot.png)")
         time.sleep(2)
     print("got an address over wired Ethernet")
 
 if not usb:
-    # The wifi panel (top right): refresh, pick the test network, type its password
-    # and press Enter. Then the host joins it, gets an address by DHCP, and Elm
-    # fetches the weather.
+    # The network app (top left, under its title): refresh, pick the test network,
+    # type its password and press Enter. Then the host joins it, gets an address by
+    # DHCP, and Elm fetches the weather.
     wait_for("AP-ENABLED", timeout=60)
-    click((w - 60 * s) / w, 26 * s / h)  # Refresh
+    click(426 * s / w, 103 * s / h)  # Refresh
     time.sleep(5)
-    click((w - 330 * s) / w, 75 * s / h)  # the first network
+    click(100 * s / w, 162 * s / h)  # the first network
     for ch in "password":
         cmd("send-key", keys=[{"type": "qcode", "data": {"-": "minus"}.get(ch, ch)}])
         time.sleep(0.2)
@@ -360,10 +381,9 @@ if not usb:
     if "segfault" in open(serial_path, errors="replace").read():
         fail("/init crashed after fetching the weather")
     # "Connected to ..." in green, and the weather below it.
-    green = sum(1 for x in range(w - 450 * s, w - 20 * s) for y in range(40 * s, 60 * s)
-                if near(pixel(shot, x, y), (30, 120, 60), tol=30))
+    green = connected_pixels(shot)
     if green < 20:
-        fail(f"expected the wifi panel to say it is connected ({green} green pixels)")
+        fail(f"expected the network app to say it is connected ({green} green pixels)")
     print(f"fetched the weather: {web_requests}")
 
 save_png(screen(), f"{ROOT}/build/screenshot.png")

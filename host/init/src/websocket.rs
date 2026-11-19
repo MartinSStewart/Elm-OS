@@ -109,13 +109,13 @@ pub fn close(id: &str) {
 }
 
 /// TLS or not, the socket's stream.
-enum Stream {
+pub enum Stream {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
 }
 
 impl Stream {
-    fn tcp(&self) -> &TcpStream {
+    pub fn tcp(&self) -> &TcpStream {
         match self {
             Stream::Plain(s) => s,
             Stream::Tls(s) => &s.sock,
@@ -147,7 +147,7 @@ impl Write for Stream {
     }
 }
 
-fn tls_config() -> Arc<rustls::ClientConfig> {
+pub fn tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CONFIG
         .get_or_init(|| {

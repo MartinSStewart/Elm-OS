@@ -40,6 +40,7 @@ import Review.Rule exposing (Rule)
 import ReviewPipelineStyles
 import ReviewPipelineStyles.Fixes
 import Simplify
+import SimplifyUi
 
 
 config : List Rule
@@ -53,6 +54,7 @@ rules : List Rule
 rules =
     [ ExposeAllRecordFields.rule
     , NoStaleReferences.rule
+
     -- Sprite's font styles (Bold, Italic, BoldItalic) are kept for when the UI uses them.
     -- AsciiCollab/Types.elm copies ascii-collab's types whole: a custom type's tags in
     -- Wire3 depend on all of its constructors, used here or not.
@@ -68,10 +70,11 @@ rules =
     , NoMissingTypeExpose.rule
     , NoSimpleLetBody.rule
     , NoUnused.Dependencies.rule
-    -- Persist.program is used by build/wire/src/ElmOs.elm, and Wire's functions by the
-    -- codecs, which tools/wire writes.
-    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm", "src/Wire.elm" ]
-    , NoUnused.Modules.rule
+
+    -- Persist.program is used by build/wire/src/ElmOs.elm, Wire's functions by the
+    -- codecs, and UiSource by every view: tools/wire writes those uses.
+    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm", "src/Wire.elm", "src/Nonempty.elm", "src/UiSource.elm" ]
+    , NoUnused.Modules.rule |> Review.Rule.ignoreErrorsForFiles [ "src/UiSource.elm" ]
     , NoUnused.Parameters.rule
         -- Unsafe.unreachable recurses on purpose, to crash with a stack overflow.
         |> Review.Rule.ignoreErrorsForFiles [ "src/Unsafe.elm" ]
@@ -95,4 +98,5 @@ rules =
     , NoMissingTypeConstructor.rule
     , NoUnused.Variables.rule
     , EncoderDecoderNaming.rule
+    , SimplifyUi.rule
     ]

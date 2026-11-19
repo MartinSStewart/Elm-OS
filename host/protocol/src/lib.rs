@@ -31,14 +31,23 @@ pub mod link;
 pub struct RenderTriangle {
     pub corners: [[f32; 4]; 3],
     pub rgba: u32,
+    /// 1 to sample the atlas bilinearly, 0 for the nearest pixel.
+    pub linear: u32,
+    /// Left, top, width and height of the atlas rectangle the triangle repeats, in
+    /// atlas pixels: u, v outside it wrap round into it, so the triangle shows the
+    /// rectangle tiled (a pattern). Width 0 for none: u, v are used as they are.
+    pub tile: [u16; 4],
 }
 
 /// How many bytes each triangle takes in `Effect::Render`.
-pub const RENDER_TRIANGLE_BYTES: usize = 52;
+pub const RENDER_TRIANGLE_BYTES: usize = 60;
 
-/// Reads the scene in `Effect::Render`: 52 bytes a triangle, the 12 numbers of its
-/// corners as 32-bit floats and then its colour as an unsigned 32-bit integer, all
-/// little-endian. None if the length isn't a whole number of triangles.
+/// Reads the scene in `Effect::Render`: 60 bytes a triangle, all little-endian. First
+/// the 12 numbers of its corners as 32-bit floats, then three unsigned 32-bit integers:
+/// its colour; its tile's left (low 16 bits) and top (high 16 bits); and its tile's
+/// width (bits 0-15), height (bits 16-30) and whether it samples the atlas bilinearly
+/// (bit 31 set) or by the nearest pixel. None if the length isn't a whole number of
+/// triangles.
 pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
     if bytes.len() % RENDER_TRIANGLE_BYTES != 0 {
         return None;
@@ -53,6 +62,9 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
                     t.corners[k / 4][k % 4] = f32::from_le_bytes(word(b, k));
                 }
                 t.rgba = u32::from_le_bytes(word(b, 12));
+                let (at, size) = (u32::from_le_bytes(word(b, 13)), u32::from_le_bytes(word(b, 14)));
+                t.tile = [at as u16, (at >> 16) as u16, size as u16, (size >> 16) as u16 & 0x7fff];
+                t.linear = size >> 31;
                 t
             })
             .collect(),
@@ -96,9 +108,11 @@ pub struct Display {
 pub enum Effect {
     /// The scene to draw on each display, once a frame (see `Scene`).
     Render(Vec<Scene>),
-    /// The mouse cursor's fill colour, 0xRRGGBBAA, and the UI scale (1 or 2), which
-    /// sets the cursor's size and how far mouse motion moves it.
-    Cursor { rgba: u32, scale: u32 },
+    /// The mouse cursor: its fill colour, 0xRRGGBBAA, the UI scale (1 or 2), which
+    /// sets the cursor's size and how far mouse motion moves it, and its picture (Elm
+    /// has the shapes, elm/src/Cursor.elm). Sent with every frame; the host redraws
+    /// the cursor only when it changes.
+    Cursor { rgba: u32, scale: u32, image: CursorImage },
     WifiScan,
     WifiConnect { ssid: String, password: String },
     WifiDisconnect,
@@ -153,6 +167,34 @@ pub enum Effect {
     },
     /// Closes a WebSocket; `ToElm::WebSocketClosed` follows.
     WebSocketClose { id: String },
+    /// Opens a TLS connection to `host`:`port` (certificate checked against the CAs
+    /// compiled in, as for HTTPS), for protocols like IMAP that aren't HTTP. Answered
+    /// with `ToElm::TlsOpened`, then a `ToElm::TlsData` for each chunk of bytes the
+    /// server sends, and last `ToElm::TlsClosed`, all with the same id. The host only
+    /// moves bytes: what they mean is up to Elm.
+    TlsOpen { id: String, host: String, port: u16 },
+    /// Bytes to send on an open TLS connection.
+    TlsSend {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// Closes a TLS connection; `ToElm::TlsClosed` follows.
+    TlsClose { id: String },
+}
+
+/// A mouse cursor's picture, in UI pixels: `width` x `height` of them, a byte each, row
+/// by row: 0 for nothing, 1 for the black outline, 2 for the fill colour. The hot spot
+/// (`hot_x`, `hot_y`) is the pixel that points, which goes where the mouse is.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CursorImage {
+    pub width: u32,
+    pub height: u32,
+    pub hot_x: u32,
+    pub hot_y: u32,
+    #[serde(with = "serde_bytes")]
+    pub pixels: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -184,8 +226,10 @@ pub enum ToElm {
     /// First, to each program: the connected displays, the built-in one (if any)
     /// first. When they change later, `DisplaysChanged` says so.
     Displays { displays: Vec<Display> },
-    /// Draw a frame now. The host's monotonic clock, in milliseconds.
-    Frame { time: f64 },
+    /// Draw a frame now. `time` is the host's monotonic clock, in milliseconds (for
+    /// how long since the last frame); `posix` is the wall clock, in whole milliseconds
+    /// since 1970 (it can jump when NTP sets the clock).
+    Frame { time: f64, posix: f64 },
     Mouse { x: i32, y: i32 },
     Button { b: i32, down: bool },
     /// Wheel clicks, positive is up.
@@ -280,6 +324,25 @@ pub enum ToElm {
     /// A display was plugged in or out (or a window resized, in the dev runner): the
     /// displays now, as in `Displays`. Unlike `Displays`, not the start of a program.
     DisplaysChanged { displays: Vec<Display> },
+    /// Smooth scrolling (two fingers on a touchpad), in UI pixels: how far the content
+    /// under the pointer follows the fingers. Positive is down, the way the content
+    /// goes for a `Wheel` click up. A mouse wheel still sends `Wheel`.
+    Scroll { dy: f64 },
+    /// The fingers left the touchpad (or all but one did) while scrolling: the content
+    /// they were scrolling should keep going at `velocity` UI pixels a second (positive
+    /// is down, as for `Scroll`), slowing down. 0 when the fingers had stopped. Also
+    /// sent with 0 when a finger touches the pad again, which stops any glide.
+    ScrollMomentum { velocity: f64 },
+    /// The TLS connection is open.
+    TlsOpened { id: String },
+    /// Bytes from the server, as they came: a chunk can end anywhere.
+    TlsData {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// The TLS connection has closed, or couldn't open, and why. Its id can be used again.
+    TlsClosed { id: String, reason: String },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -358,11 +421,21 @@ pub enum HttpFailure {
     Network,
 }
 
+/// The wall clock now, in whole milliseconds since 1970.
+pub fn wall_clock_ms() -> f64 {
+    let since_1970 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    since_1970.map_or(0, |d| d.as_millis()) as f64
+}
+
 impl ToElm {
     /// A `Tick` with the wall clock now.
     pub fn tick_now() -> ToElm {
-        let since_1970 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-        ToElm::Tick { time: since_1970.map_or(0, |d| d.as_millis()) as f64 }
+        ToElm::Tick { time: wall_clock_ms() }
+    }
+
+    /// A `Frame` asked for at `time` on the host's monotonic clock, with the wall clock now.
+    pub fn frame_now(time: f64) -> ToElm {
+        ToElm::Frame { time, posix: wall_clock_ms() }
     }
 
     /// What goes on the socket to the Elm program.
@@ -443,9 +516,12 @@ mod tests {
             Effect::WebSocketOpen { .. } => "webSocketOpen",
             Effect::WebSocketSend { .. } => "webSocketSend",
             Effect::WebSocketClose { .. } => "webSocketClose",
+            Effect::TlsOpen { .. } => "tlsOpen",
+            Effect::TlsSend { .. } => "tlsSend",
+            Effect::TlsClose { .. } => "tlsClose",
         }
     }
-    const EFFECT_TAGS: usize = 22;
+    const EFFECT_TAGS: usize = 25;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -454,6 +530,8 @@ mod tests {
             ToElm::Mouse { .. } => "mouse",
             ToElm::Button { .. } => "button",
             ToElm::Wheel { .. } => "wheel",
+            ToElm::Scroll { .. } => "scroll",
+            ToElm::ScrollMomentum { .. } => "scrollMomentum",
             ToElm::Key { .. } => "key",
             ToElm::Renderer { .. } => "renderer",
             ToElm::System { .. } => "system",
@@ -480,9 +558,12 @@ mod tests {
             ToElm::WebSocketMessage { .. } => "webSocketMessage",
             ToElm::WebSocketClosed { .. } => "webSocketClosed",
             ToElm::DisplaysChanged { .. } => "displaysChanged",
+            ToElm::TlsOpened { .. } => "tlsOpened",
+            ToElm::TlsData { .. } => "tlsData",
+            ToElm::TlsClosed { .. } => "tlsClosed",
         }
     }
-    const TO_ELM_TAGS: usize = 31;
+    const TO_ELM_TAGS: usize = 36;
 
     #[test]
     fn reads_the_render_example() {
@@ -494,9 +575,19 @@ mod tests {
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
             read_render(bytes),
-            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff }])
+            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff, linear: 0, tile: [0; 4] }])
         );
         assert_eq!(read_render(&bytes[1..]), None);
+    }
+
+    #[test]
+    fn reads_a_tile_and_linear_sampling() {
+        // As Sprite.encoder packs them: left + top * 2^16, width + height * 2^16 + 2^31.
+        let mut bytes = vec![0u8; 52];
+        bytes.extend((256u32 + 224 * 65536).to_le_bytes());
+        bytes.extend((16u32 + 20 * 65536 + (1 << 31)).to_le_bytes());
+        let t = read_render(&bytes).unwrap()[0];
+        assert_eq!((t.tile, t.linear), ([256, 224, 16, 20], 1));
     }
 
     #[test]
@@ -535,9 +626,11 @@ mod tests {
 
     #[test]
     fn the_wire_format_is_postcard() {
-        // Variant 1 (Cursor), rgba 0xff0000ff as a varint, scale 2.
-        let cursor = Effect::Cursor { rgba: 0xff00_00ff, scale: 2 };
-        assert_eq!(write_effects(&[cursor]), vec![1, 1, 0xff, 0x81, 0x80, 0xf8, 0x0f, 2]);
+        // Variant 1 (Cursor), rgba 0xff0000ff as a varint, scale 2, then a 1 x 2
+        // image with its hot spot at 0, 1 and two pixels.
+        let image = CursorImage { width: 1, height: 2, hot_x: 0, hot_y: 1, pixels: vec![1, 2] };
+        let cursor = Effect::Cursor { rgba: 0xff00_00ff, scale: 2, image };
+        assert_eq!(write_effects(&[cursor]), vec![1, 1, 0xff, 0x81, 0x80, 0xf8, 0x0f, 2, 1, 2, 0, 1, 2, 1, 2]);
         // Variant 2 (Mouse), zigzagged -1 and 300.
         assert_eq!(ToElm::Mouse { x: -1, y: 300 }.to_bytes(), vec![2, 1, 0xd8, 0x04]);
         assert!(read_effects(&[1, 99]).is_err());

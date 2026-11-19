@@ -1,7 +1,7 @@
 {
-  "comment": "One example of every message between Elm and the host (src/lib.rs), as JSON to be readable: an enum variant is {\"name\": fields}, or just \"name\" without fields. On the wire they are postcard; cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) that the Elm side's bytes are Rust's (cargo run -p protocol --bin protocol-examples). toHost is in the same order as ProtocolTest.effects. The render example draws one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252), on display 33, and nothing on display 34.",
+  "comment": "One example of every message between Elm and the host (src/lib.rs), as JSON to be readable: an enum variant is {\"name\": fields}, or just \"name\" without fields. On the wire they are postcard; cargo test -p protocol checks the Rust side reads and writes these, and elm/tests/ProtocolTest.elm (make elm-tests) that the Elm side's bytes are Rust's (cargo run -p protocol --bin protocol-examples). toHost is in the same order as ProtocolTest.effects. The render example draws one white triangle with corners (0, 0), (10, 0) and (0, 10), all sampling the atlas at (252, 252) by the nearest pixel, on display 33, and nothing on display 34.",
   "toHost": [
-    {"cursor": {"rgba": 4278190335, "scale": 2}},
+    {"cursor": {"rgba": 4278190335, "scale": 2, "image": {"width": 2, "height": 3, "hotX": 1, "hotY": 2, "pixels": [1, 0, 2, 1, 0, 2]}}},
     "wifiScan",
     {"wifiConnect": {"ssid": "Home", "password": "password"}},
     "wifiDisconnect",
@@ -25,14 +25,19 @@
     {"webSocketOpen": {"id": "ascii-collab", "url": "wss://ascii-collab.app/_w", "headers": [["Cookie", "sid=abc"]]}},
     {"webSocketSend": {"id": "ascii-collab", "data": [2, 1, 0, 255]}},
     {"webSocketClose": {"id": "ascii-collab"}},
-    {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255]}, {"display": 34, "triangles": []}]}
+    {"tlsOpen": {"id": "email", "host": "imap.fastmail.com", "port": 993}},
+    {"tlsSend": {"id": "email", "data": [97, 49, 32, 76, 79, 71, 79, 85, 84, 13, 10]}},
+    {"tlsClose": {"id": "email"}},
+    {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 124, 67, 0, 0, 124, 67, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 124, 67, 0, 0, 124, 67, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0]}, {"display": 34, "triangles": []}]}
   ],
   "fromHost": [
     {"displays": {"displays": [{"id": 33, "name": "eDP-1", "x": 0, "y": 0, "w": 2560, "h": 1600, "widthMm": 300, "heightMm": 190}, {"id": 34, "name": "HDMI-A-1", "x": 2560, "y": 0, "w": 1920, "h": 1080, "widthMm": 0, "heightMm": 0}]}},
-    {"frame": {"time": 1000.5}},
+    {"frame": {"time": 1000.5, "posix": 1794701441140}},
     {"mouse": {"x": 300, "y": 20}},
     {"button": {"b": 0, "down": true}},
     {"wheel": {"dy": -1}},
+    {"scroll": {"dy": -12.75}},
+    {"scrollMomentum": {"velocity": 1834.5}},
     {"key": {"code": 30, "down": true, "repeat": false}},
     {"key": {"code": 30, "down": true, "repeat": true}},
     {"renderer": {"gpu": true, "name": "virgl", "hardwareCursor": true}},
@@ -58,6 +63,9 @@
     {"webSocketOpened": {"id": "ascii-collab", "headers": [["set-cookie", "sid=abc; Path=/"]]}},
     {"webSocketMessage": {"id": "ascii-collab", "data": [4, 0, 0, 0, 1, 1]}},
     {"webSocketClosed": {"id": "ascii-collab", "reason": "closed by the server"}},
+    {"tlsOpened": {"id": "email"}},
+    {"tlsData": {"id": "email", "data": [42, 32, 79, 75, 13, 10, 255]}},
+    {"tlsClosed": {"id": "email", "reason": "closed by the server"}},
     {"displaysChanged": {"displays": [{"id": 33, "name": "eDP-1", "x": 0, "y": 0, "w": 2560, "h": 1600, "widthMm": 300, "heightMm": 190}]}},
     {"httpResponse": {"id": "weather", "status": 200, "body": [123, 125, 0, 255]}},
     {"httpError": {"id": "weather", "error": "timeout", "message": "the server took too long"}},

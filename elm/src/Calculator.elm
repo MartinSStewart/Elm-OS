@@ -22,8 +22,8 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 
 -}
 
-import Color
 import Calculator.Types exposing (Key(..), Operator(..))
+import Color
 import Coord exposing (Coord)
 import Keyboard
 import Quantity
@@ -577,6 +577,9 @@ fromKeyboard key =
         Keyboard.Other ->
             Nothing
 
+        Keyboard.ScrollLock ->
+            Nothing
+
         Keyboard.PrintScreen ->
             Nothing
 
@@ -621,22 +624,21 @@ view focused model =
 
         line fontSize color text =
             Ui.topRight { size = Coord.xy inner (Quantity.unwrap (Sprite.lineHeight fontSize)) }
-                (Ui.colorText color fontSize sans text)
+                (Ui.customText fontSize [ { text = text, color = color, font = sans, decorations = [] } ])
 
         big =
             display model
 
         bigLine =
             if Coord.xRaw (Sprite.textSize Big sans big) <= inner then
-                line Big Color.black big
+                line Big Color.textColor big
 
             else
-                line Small Color.black (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
+                line Small Color.textColor (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
 
         displayBox =
             Ui.el
                 { padding = Ui.paddingXY displayPadding 4
-                , inFront = []
                 , borderAndFill =
                     Ui.BorderAndFill
                         { borderWidth = 2
@@ -646,29 +648,21 @@ view focused model =
 
                             else
                                 Color.outlineColor
-                        , fillColor = Color.white
+                        , fillColor = Color.fillColor3
                         }
                 }
-                (Ui.column { spacing = 0, padding = Ui.noPadding }
-                    [ line Small (Color.rgb255 110 100 90) (expression model), bigLine ]
-                )
+                (Ui.column 0 [ line Small Color.dimTextColor (expression model), bigLine ])
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
-                (Ui.text Small sans "Calculator")
-                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text Small sans "×"))
+                (Ui.text "Calculator")
+                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
     in
     Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
-        , inFront = []
-        , borderAndFill = Ui.defaultElBorderAndFill
+        , borderAndFill = Ui.windowBorderAndFill
         }
-        (Ui.column { spacing = spacing, padding = Ui.noPadding }
-            (title
-                :: displayBox
-                :: List.map (keyRow model) keys
-            )
-        )
+        (Ui.column spacing (title :: displayBox :: List.map (keyRow model) keys))
 
 
 keys : List (List ( Key, String, Int ))
@@ -685,7 +679,8 @@ keys =
 -}
 keyRow : Model -> List ( Key, String, Int ) -> Element UiId
 keyRow model row =
-    Ui.row { spacing = spacing, padding = Ui.noPadding }
+    Ui.row
+        spacing
         (List.map
             (\( key, label, columns ) ->
                 let
@@ -704,7 +699,7 @@ keyRow model row =
                 Ui.selectableButton
                     { id = Calculator (Calculator.Types.KeyButton key), padding = Ui.noPadding }
                     (isPendingOperator model key)
-                    (Ui.center { size = size } (Ui.text fontSize sans label))
+                    (Ui.center { size = size } (Ui.customText fontSize [ { text = label, color = Color.textColor, font = sans, decorations = [] } ]))
             )
             row
         )

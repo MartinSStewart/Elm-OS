@@ -63,8 +63,10 @@ include versions.mk
 # By default that release is then patched for eco/containers (tools/eco-patched,
 # eco-containers/README.md), which elm/elm.json depends on: tools/build-patched-eco.sh builds it
 # from source into ECO_PATCHED_DIR (about 10 minutes the first time; it needs LLVM/MLIR 21 from
-# apt.llvm.org: sudo tools/build-patched-eco.sh --install-deps). `make ECO_PATCHED=0` skips that
-# and uses the release as it is, until eco has eco/containers itself.
+# apt.llvm.org: sudo tools/build-patched-eco.sh --install-deps). Where /mnt/project-files exists
+# (Claude's cloud threads) a finished build is shared through /mnt/project-files/eco-cache, so only
+# the first checkout of a given set of patches builds it (ECO_PATCHED_CACHE, see that script).
+# `make ECO_PATCHED=0` skips all that and uses the release as it is, until eco has eco/containers itself.
 ECO_PATCHED ?= 1
 ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)
 ECO_PATCHED_DIR ?= $(ECO_DIR)-patched
@@ -556,7 +558,7 @@ $(BUILD)/licenses/.done: LICENSE THIRD_PARTY.md $(wildcard licenses/*) host/comm
 	python3 -I tools/rust-licenses.py $(BUILD)/licenses/elmos/rust-crates.txt
 	touch $@
 
-$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-libs.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
+$(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-libs.sh tools/check-no-shell.sh tools/mkcpio.sh $(BUILD)/gpu-setting $(BUILD)/source-date $(BUILD)/commit $(BUILD)/host-version $(BUILD)/model-version
 	rm -rf $(BUILD)/rootfs && mkdir -p $(BUILD)/rootfs/etc/elmos $(BUILD)/rootfs/usr/share/licenses
 	cp -r $(BUILD)/licenses/elmos $(BUILD)/rootfs/usr/share/licenses/
 	cp $(BUILD)/init $(BUILD)/rootfs/init
@@ -572,6 +574,7 @@ ifeq ($(GPU),1)
 endif
 	mkdir -p $(BUILD)/rootfs/usr/sbin
 	cp $(BUILD)/wpa_supplicant $(BUILD)/rootfs/usr/sbin/
+	tools/check-no-shell.sh $(BUILD)/rootfs
 	tools/mkcpio.sh $(BUILD)/rootfs $@
 
 # QEMU's initramfs: the normal one plus a simulated wifi access point (hostapd and its config).

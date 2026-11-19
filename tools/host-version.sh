@@ -26,8 +26,9 @@ for f in host/protocol/src/lib.rs host/protocol/src/link.rs; do
   # Up to the tests; without // comments (doc comments too) and blank lines.
   sed -e '/^#\[cfg(test)\]/,$d' -e 's://.*$::' -e 's/[[:space:]]*$//' -e '/^$/d' "$f"
 done
-# The texture atlas too: Elm has where each glyph is in it compiled in (NotoSans.elm),
-# so a build for another atlas draws the wrong glyphs.
-grep -E '^pub const ATLAS_[WH]' host/common/src/atlas.rs
+# The texture atlas too: Elm has where each glyph is in it compiled in (NotoSans.elm,
+# Sprite.elm), so a build for another atlas draws the wrong glyphs. atlas.rs places
+# the pixel font and cursor, make-noto-sans.py (noto_sans.rle) the rest.
+sed -e 's://.*$::' -e 's/[[:space:]]*$//' -e '/^$/d' host/common/src/atlas.rs
 sha256sum < host/common/src/noto_sans.rle
 } | sha256sum | cut -d' ' -f1

@@ -36,6 +36,7 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color exposing (Color)
+import Cursor
 import Duration exposing (Duration)
 import Postcard
 import Sprite exposing (Triangle)
@@ -53,11 +54,13 @@ port fromHost : (Bytes -> msg) -> Sub msg
 type Effect
     = -- What each display shows (by Display.id), in its own pixels.
       Render (() -> List { display : Int, triangles : List (Triangle DevicePixels) })
-      -- The mouse cursor's fill colour and the UI scale. The host draws the cursor on
-      -- the display's cursor plane and moves it as the mouse moves, without waiting
-      -- for a frame. The scale sets the cursor's size and how fast the mouse moves it,
-      -- so moving the mouse the same distance crosses the same amount of UI at 1x and 2x.
-    | SetCursor { color : Color, scale : UiScale }
+      -- The mouse cursor: its picture (Cursor.image), fill colour and the UI scale. The host draws the
+      -- cursor on the display's cursor plane and moves it as the mouse moves, without
+      -- waiting for a frame. The scale sets the cursor's size and how fast the mouse
+      -- moves it, so moving the mouse the same distance crosses the same amount of UI
+      -- at 1x and 2x. Sent with every frame; the host redraws the cursor only when it
+      -- changes.
+    | SetCursor { image : Cursor.Image, color : Color, scale : UiScale }
     | WifiScan
     | WifiConnect { ssid : Ssid, password : Maybe Wpa2Password }
     | WifiDisconnect
@@ -104,6 +107,13 @@ type Effect
     | WebSocketOpen { id : String, url : String, headers : List ( String, String ) }
     | WebSocketSend { id : String, data : Bytes }
     | WebSocketClose String
+      -- A TLS connection to a host and port (host/init/src/tls_socket.rs), for protocols
+      -- that aren't HTTP (IMAP, for the email app). Answered on `fromHost` with
+      -- tlsOpened, a tlsData for each chunk the server sends, and last tlsClosed, with
+      -- the same id. The host only moves bytes.
+    | TlsOpen { id : String, host : String, portNumber : Int }
+    | TlsSend { id : String, data : Bytes }
+    | TlsClose String
 
 
 type PowerAction
@@ -202,9 +212,10 @@ message effects =
     BE.encode (Postcard.list encode effects)
 
 
-{-| 52 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
+{-| 56 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
 x, y, u, v of each corner as 32-bit floats (screen pixels, atlas pixels), then the
-colour as an unsigned 32-bit 0xRRGGBBAA.
+colour as an unsigned 32-bit 0xRRGGBBAA, then 0 to sample the atlas by the nearest pixel
+or 1 to blend the four around the point (`Sprite.Sampling`).
 -}
 renderBytes : List (Triangle DevicePixels) -> Bytes
 renderBytes triangles =
@@ -225,8 +236,12 @@ encode effect =
                     (scenes ())
                 ]
 
-        SetCursor { color, scale } ->
-            Postcard.variant 1 [ Postcard.unsigned (Color.toInt color), Postcard.unsigned (Units.scaleInt scale) ]
+        SetCursor { image, color, scale } ->
+            Postcard.variant 1
+                (Postcard.unsigned (Color.toInt color)
+                    :: Postcard.unsigned (Units.scaleInt scale)
+                    :: Cursor.encode image
+                )
 
         WifiScan ->
             Postcard.variant 2 []
@@ -316,3 +331,12 @@ encode effect =
 
         WebSocketClose id ->
             Postcard.variant 21 [ Postcard.string id ]
+
+        TlsOpen { id, host, portNumber } ->
+            Postcard.variant 22 [ Postcard.string id, Postcard.string host, Postcard.unsigned portNumber ]
+
+        TlsSend { id, data } ->
+            Postcard.variant 23 [ Postcard.string id, Postcard.bytes data ]
+
+        TlsClose id ->
+            Postcard.variant 24 [ Postcard.string id ]

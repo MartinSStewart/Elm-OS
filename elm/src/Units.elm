@@ -1,7 +1,9 @@
 module Units exposing
     ( DevicePixels
+    , LocalUiPixels
     , UiPixels
     , UiScale
+    , inUiPixels
     , scaleFor
     , scaleInt
     , toDevice
@@ -34,6 +36,10 @@ type DevicePixels
     = DevicePixels
 
 
+type LocalUiPixels
+    = LocalUiPixels Never
+
+
 {-| Device pixels per UI pixel.
 -}
 type alias UiScale =
@@ -43,6 +49,11 @@ type alias UiScale =
 uiPixels : number -> Quantity number UiPixels
 uiPixels =
     Quantity
+
+
+inUiPixels : Quantity number UiPixels -> number
+inUiPixels =
+    Quantity.unwrap
 
 
 {-| 2 device pixels per UI pixel on screens at least 2000 pixels wide, otherwise 1.

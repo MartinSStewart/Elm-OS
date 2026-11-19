@@ -13,8 +13,11 @@ app keeps such types in `<App>/Types.elm`, not in `<App>.elm`.
 
 import AsciiCollab.Types
 import Calculator.Types
+import Email.Types
 import HackerNews.Types
 import News.Types
+import ScreenshotViewer.Types
+import TicTacToe.Types
 import Wifi exposing (Ssid)
 
 
@@ -30,6 +33,7 @@ type UiId
     | NewsButton
     | CloseAboutButton
     | CalculatorButton
+    | TicTacToeButton
     | PowerOffButton
     | RestartButton
     | ConfirmPowerButton
@@ -38,10 +42,23 @@ type UiId
     | EditorInput
     | EditorWindow
     | CloseEditorButton
+    | EditorOpenButton
+    | EditorModulesViewport
+      -- A module in the editor's Open list, by its name.
+    | EditorModuleButton String
+    | DebugButton
+    | CloseDebugButton
+    | NetworkAppButton
+    | CloseNetworkButton
+    | WeatherAppButton
+    | CloseWeatherButton
     | Calculator Calculator.Types.UiId
+    | TicTacToe TicTacToe.Types.UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId
+    | Email Email.Types.UiId
+    | ScreenshotViewer ScreenshotViewer.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
 

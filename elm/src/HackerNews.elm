@@ -8,6 +8,7 @@ module HackerNews exposing
     , gotHttpRequest
     , httpRequestIdToString
     , init
+    , maxWindowWidth
     , onClick
     , postIdToString
     , stringToHttpRequestId
@@ -647,11 +648,23 @@ titleSpacing =
     8
 
 
-{-| How wide the window's content is on a screen this big (UI pixels).
+{-| How wide the window's content is in a window this big (UI pixels).
 -}
 pageWidth : Coord UiPixels -> Int
-pageWidth screenSize =
-    min 900 (Coord.xRaw screenSize - 2 * windowPadding - 16)
+pageWidth windowSize =
+    min maxPageWidth (Coord.xRaw windowSize - 2 * windowPadding - 16)
+
+
+maxPageWidth : Int
+maxPageWidth =
+    900
+
+
+{-| The window is no wider than this (UI pixels), however much room there is.
+-}
+maxWindowWidth : Int
+maxWindowWidth =
+    maxPageWidth + 2 * windowPadding + 16
 
 
 {-| How far a reply is indented from the comment it replies to.
@@ -673,69 +686,60 @@ toggleSpacing =
     4
 
 
-{-| The window, in the top right corner of a screen this big (UI pixels).
+{-| The window, filling a window this big (UI pixels).
 -}
-view : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> Model -> Element UiId
-view lazyCache uiState screenSize model =
+view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
+view lazyCache windowSize model =
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding
-        , inFront = []
-        , borderAndFill =
-            Ui.BorderAndFill
-                { borderWidth = 2
-                , fillColor = Color.fillColor
-                , borderColor = Color.outlineColor
-                }
-        }
+        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
         (case model.page of
             PostsPage ->
                 case model.data of
                     NotLoading ->
-                        Ui.Empty
+                        Ui.empty
 
                     Loading maybe ->
                         case maybe of
                             Just data ->
-                                postsView lazyCache uiState screenSize data
+                                postsView lazyCache windowSize data
 
                             Nothing ->
-                                Ui.text Small (Sans Regular) "Loading..."
+                                Ui.text "Loading..."
 
                     Loaded data ->
-                        postsView lazyCache uiState screenSize data
+                        postsView lazyCache windowSize data
 
                     LoadFailed httpError ->
-                        Ui.text Small (Sans Regular) (Effect.httpErrorToString httpError)
+                        Ui.text (Effect.httpErrorToString httpError)
 
             CommentsPage id title ->
                 commentsView
                     lazyCache
-                    uiState
-                    screenSize
+                    windowSize
                     id
                     title
                     (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
 
 
-postsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> List Post -> Element UiId
-postsView lazyCache uiState screenSize data =
+postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
+postsView lazyCache windowSize data =
     let
         width : Int
         width =
-            pageWidth screenSize
+            pageWidth windowSize
 
         title : Element id
         title =
-            Ui.text Small (Sans Bold) "Hacker News"
+            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [] } ]
     in
     Ui.column
-        { spacing = titleSpacing, padding = Ui.noPadding }
+        titleSpacing
         [ title
         , Ui.column
-            { spacing = 0, padding = Ui.noPadding }
+            0
             (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling uiState (HackerNews HackerNews.Types.PostsViewport) screenSize (Coord.yRaw (Ui.size title))
+            |> scrolling (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
         ]
 
 
@@ -754,23 +758,21 @@ postView width index { id, title, comments } =
         spacing =
             8
     in
-    Ui.row
-        { spacing = spacing, padding = Ui.noPadding }
-        [ Ui.right
-            { width = numberWidth }
-            (Ui.colorText
-                Color.lightFont
-                Small
-                (Sans Regular)
+    Ui.leftAndRight
+        (Units.uiPixels width)
+        (Ui.row
+            spacing
+            [ Ui.colorText
+                Color.dimTextColor
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
-            )
-        , Ui.text Small (Sans Regular) (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
-        , Ui.right
+            , Ui.text
+                (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
+            ]
+        )
+        (Ui.right
             { width = countWidth }
             (Ui.colorText
-                Color.lightFont
-                Small
-                (Sans Regular)
+                Color.dimTextColor
                 (String.fromInt comments
                     ++ (if comments == 1 then
                             " comment"
@@ -780,23 +782,22 @@ postView width index { id, title, comments } =
                        )
                 )
             )
-        ]
-        |> Ui.left (Units.uiPixels width)
+        )
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.PostButton id)
             , padding = Ui.paddingXY 0 postPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
-            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.white }
+            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
             }
 
 
-commentsView : Ui.LazyCache UiId -> Ui.Model UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache uiState screenSize postId title comments =
+commentsView : Ui.LazyCache UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
+commentsView lazyCache windowSize postId title comments =
     let
         width : Int
         width =
-            pageWidth screenSize
+            pageWidth windowSize
 
         backButton : Element UiId
         backButton =
@@ -804,44 +805,48 @@ commentsView lazyCache uiState screenSize postId title comments =
                 { id = HackerNews HackerNews.Types.BackButton
                 , padding = Ui.paddingXY 6 0
                 }
-                (Ui.text Small (Sans Regular) "< Posts")
+                (Ui.text "< Posts")
 
         headerSpacing : Int
         headerSpacing =
             8
     in
     Ui.column
-        { spacing = titleSpacing, padding = Ui.noPadding }
+        titleSpacing
         [ Ui.row
-            { spacing = headerSpacing, padding = Ui.noPadding }
+            headerSpacing
             [ backButton
-            , Ui.text
+            , Ui.customText
                 Small
-                (Sans Bold)
-                (Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title)
+                [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title
+                  , color = Color.textColor
+                  , font = Sans Bold
+                  , decorations = []
+                  }
+                ]
             ]
         , (case comments of
             CommentsLoading ->
-                Ui.text Small (Sans Regular) "Loading comments..."
+                Ui.text "Loading comments..."
 
             CommentsLoaded [] ->
-                Ui.text Small (Sans Regular) "No comments yet."
+                Ui.text "No comments yet."
 
             CommentsLoaded loaded ->
                 Ui.lazy3 lazyCache commentsColumn lazyCache width loaded
 
             CommentsLoadFailed error ->
-                Ui.text Small (Sans Regular) (Effect.httpErrorToString error)
+                Ui.text (Effect.httpErrorToString error)
           )
             |> Ui.left (Units.uiPixels width)
-            |> scrolling uiState (HackerNews (HackerNews.Types.CommentsViewport postId)) screenSize (Coord.yRaw (Ui.size backButton))
+            |> scrolling (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
         ]
 
 
 commentsColumn : Ui.LazyCache UiId -> Int -> List Comment -> Element UiId
 commentsColumn lazyCache width comments =
     Ui.column
-        { spacing = commentSpacing, padding = Ui.noPadding }
+        commentSpacing
         (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache width comment) comments)
 
 
@@ -865,30 +870,30 @@ commentView lazyCache width (Comment comment) =
         text : Element UiId
         text =
             Ui.row
-                { spacing = toggleSpacing, padding = Ui.noPadding }
+                toggleSpacing
                 [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
                 , Ui.customTextWrapped
                     Small
                     (Units.uiPixels textWidth)
                     (commentHeader comment.author comment.date
-                        ++ [ { text = comment.content, color = greyColor comment.grey, font = Sans Regular } ]
+                        ++ [ { text = comment.content, color = greyColor comment.grey, font = Sans Regular, decorations = [] } ]
                     )
                 ]
     in
     if comment.isExpanded then
         Ui.column
-            { spacing = commentSpacing, padding = Ui.noPadding }
+            commentSpacing
             [ text
             , Ui.row
-                { spacing = 0, padding = Ui.noPadding }
-                [ Ui.left (Units.uiPixels replyIndent) Ui.none
+                0
+                [ Ui.left (Units.uiPixels replyIndent) Ui.empty
                 , commentsColumn lazyCache (width - replyIndent) comment.children
                 ]
             ]
 
     else
         Ui.row
-            { spacing = toggleSpacing, padding = Ui.noPadding }
+            toggleSpacing
             [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
             , Ui.customTextWrapped
                 Small
@@ -899,12 +904,12 @@ commentView lazyCache width (Comment comment) =
 
 {-| A comment's author, in bold, and the date it was written if there is one.
 -}
-commentHeader : String -> Maybe String -> List { text : String, color : Color.Color, font : Font }
+commentHeader : String -> Maybe String -> List Sprite.Segment
 commentHeader author date =
-    { text = author ++ "  ", color = Color.black, font = Sans Bold }
+    { text = author ++ "  ", color = Color.textColor, font = Sans Bold, decorations = [] }
         :: (case date of
                 Just text ->
-                    [ { text = text ++ "  ", color = Color.lightFont, font = Sans Regular } ]
+                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular, decorations = [] } ]
 
                 Nothing ->
                     []
@@ -912,24 +917,37 @@ commentHeader author date =
 
 
 {-| The color of comment text that is `grey` light on Hacker News's page: that share of
-the way from black to the window's fill, so that it fades the same on our background.
+the way from black to white there, so here that share of the way from our text color to
+the window's fill, so that it fades the same into our background.
 -}
 greyColor : Int -> Color.Color
 greyColor grey =
     let
+        textInt : Int
+        textInt =
+            Color.toInt Color.textColor
+
         fill : Int
         fill =
             Color.toInt Color.fillColor
+
+        channel : Int -> Int
+        channel shift =
+            let
+                from =
+                    modBy 256 (textInt // shift)
+
+                to =
+                    modBy 256 (fill // shift)
+            in
+            from + (to - from) * grey // 255
     in
-    Color.rgb255
-        (fill // 16777216 * grey // 255)
-        (modBy 256 (fill // 65536) * grey // 255)
-        (modBy 256 (fill // 256) * grey // 255)
+    Color.rgb255 (channel 16777216) (channel 65536) (channel 256)
 
 
 toggleButton : Int -> String -> Element UiId
 toggleButton index label =
-    Ui.colorText Color.lightFont Small Mono label
+    Ui.monoColorText Color.dimTextColor label
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.CommentToggle index)
             , padding = Ui.noPadding
@@ -940,19 +958,12 @@ toggleButton index label =
 
 
 {-| Content in a viewport that reaches from below the header (`headerHeight` high) to
-the bottom of the screen, scrolled to where `uiState` says.
+the bottom of the window, scrolled to where `uiState` says.
 -}
-scrolling : Ui.Model UiId -> UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
-scrolling uiState viewportId screenSize headerHeight content =
+scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
+scrolling viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw screenSize - 2 * windowPadding - headerHeight - titleSpacing)
-        , model =
-            case SeqDict.get viewportId uiState.uiState of
-                Just (Ui.ViewportState viewport) ->
-                    viewport
-
-                _ ->
-                    Ui.initViewportModel
+        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
         }
         content
