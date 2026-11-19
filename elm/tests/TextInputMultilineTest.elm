@@ -1,5 +1,6 @@
 module TextInputMultilineTest exposing (suite)
 
+import Coord
 import Expect
 import Keyboard
 import Quantity
@@ -35,6 +36,18 @@ after text keys =
                     )
     in
     List.foldl press TextInputMultiline.init (typed ++ keys)
+
+
+{-| 101 lines (the last empty), the cursor at the start.
+-}
+long : TextInputMultiline.Model
+long =
+    TextInputMultiline.withText (String.repeat 100 "a\n")
+
+
+textLineHeight : Int
+textLineHeight =
+    Sprite.lineHeight style.fontSize |> Quantity.unwrap
 
 
 cursor : TextInputMultiline.Model -> ( Int, Int )
@@ -104,6 +117,36 @@ suite =
             (\_ ->
                 (after "ab\ncd" []).input.current.text
                     |> Expect.equal "ab\ncd"
+            )
+        , test "pressing the scroll bar's track below the thumb scrolls to the bottom, and leaves the cursor"
+            (\_ ->
+                let
+                    pressed =
+                        TextInputMultiline.mouseDown style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
+                in
+                ( pressed.scroll, cursor pressed, pressed.grab /= Nothing )
+                    |> Expect.equal ( 91, ( 0, 0 ), True )
+            )
+        , test "dragging the scroll bar to the top scrolls to the top, and letting go stops it"
+            (\_ ->
+                let
+                    dragged =
+                        TextInputMultiline.mouseDown style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
+                            |> TextInputMultiline.mouseDownMove style (Coord.xy 390 -500) Coord.origin
+
+                    released =
+                        TextInputMultiline.mouseUp dragged
+                in
+                ( dragged.scroll, cursor dragged, released.grab )
+                    |> Expect.equal ( 0, ( 0, 0 ), Nothing )
+            )
+        , test "the scroll bar is only there when the text is taller than the box"
+            (\_ ->
+                ( TextInputMultiline.overScrollbar style (Coord.xy 390 10) long
+                , TextInputMultiline.overScrollbar style (Coord.xy 390 10) (TextInputMultiline.withText "a\nb")
+                , TextInputMultiline.overScrollbar style (Coord.xy 300 10) long
+                )
+                    |> Expect.equal ( True, False, False )
             )
         , test "undo takes back the last key"
             (\_ ->
