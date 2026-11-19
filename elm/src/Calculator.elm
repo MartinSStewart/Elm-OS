@@ -651,7 +651,7 @@ view focused model =
                         , fillColor = Color.fillColor3
                         }
                 }
-                (Ui.column 0 [ line Small (Color.dimTextColor) (expression model), bigLine ])
+                (Ui.column 0 [ line Small Color.dimTextColor (expression model), bigLine ])
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
@@ -660,7 +660,7 @@ view focused model =
     in
     Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
-        , borderAndFill = Ui.defaultElBorderAndFill
+        , borderAndFill = Ui.windowBorderAndFill
         }
         (Ui.column spacing (title :: displayBox :: List.map (keyRow model) keys))
 

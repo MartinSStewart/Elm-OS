@@ -191,7 +191,7 @@ view model =
     Ui.elWithId
         (TicTacToe TicTacToe.Types.Panel)
         { padding = Ui.paddingXY 8 8
-        , borderAndFill = Ui.defaultElBorderAndFill
+        , borderAndFill = Ui.windowBorderAndFill
         }
         (Ui.column spacing [ title, Ui.text (message model), board, newGame ])
 

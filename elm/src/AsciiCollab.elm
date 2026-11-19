@@ -846,7 +846,7 @@ view screen focused model =
                         "Disconnected (" ++ reason ++ "), trying again…"
     in
     Ui.el
-        { padding = Ui.paddingXY padding padding, borderAndFill = Ui.defaultElBorderAndFill }
+        { padding = Ui.paddingXY padding padding, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight

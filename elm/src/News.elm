@@ -49,9 +49,7 @@ view lazyCache width height news =
             height |> Quantity.minus (Quantity.plus (Units.uiPixels (10 + 4)) (Sprite.lineHeight Sprite.Small))
     in
     Ui.el
-        { padding = { top = 10, bottom = 0, left = 0, right = 0 }
-        , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-        }
+        { padding = { top = 10, bottom = 0, left = 0, right = 0 }, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             4
             [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [] } ]

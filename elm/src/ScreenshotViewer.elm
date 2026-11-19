@@ -324,9 +324,7 @@ view scale window screenshots model =
                 (headerButton Types.CloseButton "Close")
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding
-        , borderAndFill = Ui.defaultElBorderAndFill
-        }
+        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             spacing
             [ header

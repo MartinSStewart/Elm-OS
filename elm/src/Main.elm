@@ -2183,7 +2183,7 @@ inspectorList sources =
             List.map (\source -> String.length source.function) sources |> List.maximum |> Maybe.withDefault 0
     in
     Ui.el
-        { padding = Ui.paddingXY 8 6, borderAndFill = Ui.defaultElBorderAndFill }
+        { padding = Ui.paddingXY 8 6, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             4
             [ Ui.text "Clicked element, then the ones it is in:"
@@ -2585,7 +2585,7 @@ smallWindow { title, close, width } rows =
             List.foldl (\row soFar -> Quantity.max (Coord.x (Ui.size row)) soFar) width rows
     in
     Ui.el
-        { padding = Ui.paddingXY 6 6, borderAndFill = Ui.defaultElBorderAndFill }
+        { padding = Ui.paddingXY 6 6, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             4
             (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
@@ -3651,7 +3651,7 @@ aboutPage model =
     in
     Ui.el
         { padding = Ui.paddingXY 12 10
-        , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+        , borderAndFill = Ui.windowBorderAndFill
         }
         (Ui.column
             4
@@ -3762,7 +3762,7 @@ editorWindow model =
     in
     Ui.elWithId
         EditorWindow
-        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.defaultElBorderAndFill }
+        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight style.width

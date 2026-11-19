@@ -691,14 +691,7 @@ toggleSpacing =
 view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding
-        , borderAndFill =
-            Ui.BorderAndFill
-                { borderWidth = 2
-                , fillColor = Color.fillColor
-                , borderColor = Color.outlineColor
-                }
-        }
+        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
         (case model.page of
             PostsPage ->
                 case model.data of

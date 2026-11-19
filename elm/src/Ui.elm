@@ -72,6 +72,7 @@ module Ui exposing
     , updateElement
     , view
     , viewport
+    , windowBorderAndFill
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -1276,6 +1277,11 @@ defaultButtonBorderAndFillFocus =
 defaultButtonBorderAndFillHover : BorderAndFill
 defaultButtonBorderAndFillHover =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor3 }
+
+
+windowBorderAndFill : BorderAndFill
+windowBorderAndFill =
+    BorderAndFill { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor }
 
 
 customButton :
