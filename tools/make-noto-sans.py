@@ -41,9 +41,10 @@ SUBPIXELS = 4
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_W, ATLAS_H = 2048, 4096
-# The pixel font, cursor and solid block live in the top left RESERVED_W x RESERVED_H
-# (host/common/src/atlas.rs).
+# The pixel font lives in the top left RESERVED_W x RESERVED_H, and the sprites
+# (sprites/) in the rows from SPRITES_TOP down (host/common/src/atlas.rs, sprites.rs TOP).
 RESERVED_W, RESERVED_H = 304, 256
+SPRITES_TOP = 3584
 SIZES = [16, 24, 32, 48]
 CHARS = (
     list(range(33, 127))
@@ -119,7 +120,7 @@ def bleed(x, y, w, h):
 # clear inside their edges for the borders `bleed` draws.
 regions = [  # x0, y0, x1, y1
     [RESERVED_W + 1, 1, ATLAS_W - 1, RESERVED_H - 1],
-    [1, RESERVED_H + 1, ATLAS_W - 1, ATLAS_H - 1],
+    [1, RESERVED_H + 1, ATLAS_W - 1, SPRITES_TOP - 1],
 ]
 shelves = []  # [region index, y, height, next x]
 

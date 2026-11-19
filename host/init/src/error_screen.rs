@@ -133,8 +133,6 @@ const CHAR_H: f32 = 18.0;
 /// The pixel font's characters before ' ' in the atlas (box drawing and shades; see
 /// asciiChars in elm/src/Sprite.elm).
 const BEFORE_SPACE: usize = 44;
-/// A solid part of the atlas, for flat colours.
-const SOLID: f32 = 252.0;
 
 const BACKGROUND: u32 = 0x3a0d0dff;
 const TITLE: u32 = 0xffffffff;
@@ -216,7 +214,8 @@ fn triangles(s: &Screen, w: u32, h: u32) -> Vec<Tri> {
     lines.extend(footer);
 
     let mut tris = Vec::with_capacity(2 + lines.iter().map(|(l, _)| l.len() * 2).sum::<usize>());
-    quad(&mut tris, 0.0, 0.0, wf, hf, SOLID, SOLID, SOLID, SOLID, BACKGROUND);
+    let [su, sv] = atlas::solid();
+    quad(&mut tris, 0.0, 0.0, wf, hf, su, sv, su, sv, BACKGROUND);
     for (i, (line, rgba)) in lines.iter().enumerate() {
         text(&mut tris, margin, margin + i as f32 * line_h, scale, line, *rgba);
     }

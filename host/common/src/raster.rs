@@ -126,14 +126,15 @@ pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atlas::{self, DOT_GRID};
+    use crate::{atlas, sprites};
 
     /// A 64 x 40 rectangle showing the dot grid tile repeated: a dot every 16 pixels,
     /// nothing else, whether sampled by the nearest pixel or bilinearly.
     #[test]
     fn a_tile_repeats() {
         let a = atlas::build();
-        let [tx, ty, tw, th] = DOT_GRID.map(|n| n as u16);
+        let dots = sprites::find("dot-grid", 1);
+        let [tx, ty, tw, th] = [dots.fill[0], dots.fill[1], dots.width, dots.height].map(|n| n as u16);
         let (u0, v0) = (tx as f32, ty as f32);
         let (w, h) = (64u32, 40u32);
         for linear in [0, 1] {

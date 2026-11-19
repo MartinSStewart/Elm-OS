@@ -3,6 +3,8 @@ module Ui exposing
     , Element
     , ElementFull
     , ElementState(..)
+    , Find
+    , FindMatch
     , InputType(..)
     , LazyCache
     , Model
@@ -29,6 +31,7 @@ module Ui exposing
     , elWithId
     , elementToScreenshot
     , empty
+    , findAll
     , findInput
     , getTextInput
     , getTextInputMultiline
@@ -45,8 +48,11 @@ module Ui exposing
     , lazyKeyed
     , left
     , leftAndRight
+    , linkAt
+    , links
     , monoColorText
     , monoText
+    , noFind
     , noLazyCache
     , noPadding
     , onAnimationFrame
@@ -55,6 +61,7 @@ module Ui exposing
     , onWheel
     , paddingXY
     , quads
+    , revealMatch
     , right
     , row
     , screenshotSize
@@ -145,6 +152,7 @@ type ElementFull id lazy
         { fontSize : Sprite.FontSize
         , segments : List Sprite.Segment
         , cachedSize : Coord UiPixels
+        , linkId : Maybe id
         }
     | Button (ButtonData id lazy) (ElementFull id lazy)
     | Row RowColumn (List (ElementFull id lazy))
@@ -289,7 +297,7 @@ elementToScreenshotHelper model element acc =
             ( acc2, TextInputMultiline { id = id, style = data.style } )
 
         Text data ->
-            ( acc, Text data )
+            ( acc, Text { fontSize = data.fontSize, segments = data.segments, cachedSize = data.cachedSize, linkId = Nothing } )
 
         Button data child ->
             let
@@ -398,6 +406,7 @@ screenshotView { time, uiState, uiScale, screenshot } =
         uiScale
         False
         Nothing
+        noFind
         { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
         Coord.origin
         screenshot
@@ -1172,7 +1181,7 @@ text =
 -}
 colorText : Color -> String -> Element id
 colorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
 
 
 {-| Black text in the small monospace font. '\\n' starts a new line.
@@ -1186,7 +1195,7 @@ monoText =
 -}
 monoColorText : Color -> String -> Element id
 monoColorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [] } ]
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [], link = Nothing } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
@@ -1194,9 +1203,9 @@ font size, so every line is the same height whichever fonts it mixes. '\\n' in a
 them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
     Ui.customText Sprite.Small
-        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] }
-        , { text = "make check", color = Color.textColor, font = Sprite.Mono, decorations = [ Sprite.Underline ] }
-        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] }
+        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
+        , { text = "make check", color = Color.textColor, font = Sprite.Mono, decorations = [ Sprite.Underline ], link = Nothing }
+        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [], link = Nothing }
         ]
 
 Each segment's `decorations` underline it or strike it through (see Sprite.Decoration).
@@ -1208,6 +1217,7 @@ customText fontSize segments =
         { fontSize = fontSize
         , segments = segments
         , cachedSize = Sprite.customTextSize fontSize segments
+        , linkId = Nothing
         }
         |> Element
 
@@ -1221,7 +1231,50 @@ customTextWrapped fontSize maxWidth segments =
         ( wrapped, cachedSize ) =
             Sprite.wrapWithSize fontSize maxWidth segments
     in
-    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize } |> Element
+    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize, linkId = Nothing } |> Element
+
+
+{-| Makes the segments of a text that have a `link` hoverable: over one, `hover` finds the
+text with this id, and the mouse cursor is a hand. `linkAt` then says which link. Anything but a text is left as it is.
+-}
+links : id -> Element id -> Element id
+links id (Element element) =
+    linksHelper id element |> Element
+
+
+linksHelper : id -> ElementFull id lazy -> ElementFull id lazy
+linksHelper id element =
+    case element of
+        Text data ->
+            Text { fontSize = data.fontSize, segments = data.segments, cachedSize = data.cachedSize, linkId = Just id }
+
+        -- What the inspector's code generator wraps an element in.
+        Sourced source child ->
+            Sourced source (linksHelper id child)
+
+        _ ->
+            element
+
+
+{-| The address of the link under a point, if the element is a text with links and the
+point is on one.
+-}
+linkAt : Coord UiPixels -> Element id -> Maybe String
+linkAt point (Element element) =
+    linkAtHelper point element
+
+
+linkAtHelper : Coord UiPixels -> ElementFull id lazy -> Maybe String
+linkAtHelper point element =
+    case element of
+        Text data ->
+            Sprite.linkAt data.fontSize data.segments point
+
+        Sourced _ child ->
+            linkAtHelper point child
+
+        _ ->
+            Nothing
 
 
 
@@ -1983,7 +2036,8 @@ cursorAt uiState point element =
                         Cursor.Text
 
                 Element (Text _) ->
-                    Cursor.Arrow
+                    -- Only a text with links over the link has an id.
+                    Cursor.Pointer
 
                 Element (Row _ _) ->
                     Cursor.Arrow
@@ -2073,8 +2127,13 @@ hoverHelper model hovers point position element =
                     hovers
                     children
 
-            Text _ ->
-                ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
+            Text data ->
+                ( data.linkId
+                    |> Maybe.andThen
+                        (\id -> Sprite.linkAt data.fontSize data.segments (Coord.minus position point) |> Maybe.map (\_ -> id))
+                , { relativePositionToUi = position, ui = element }
+                )
+                    :: hovers
 
             Quads _ ->
                 ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
@@ -2205,28 +2264,242 @@ findFirst f list =
 
 
 
+-- FIND (Ctrl+F)
+
+
+{-| What the find bar is looking for: `query` ("" for nothing), and the selected match,
+as the top left of the text element it is in (where `view` draws that element) and
+which of that element's matches it is (see `FindMatch`).
+-}
+type alias Find =
+    { query : String, selected : Maybe ( Coord UiPixels, Int ) }
+
+
+noFind : Find
+noFind =
+    { query = "", selected = Nothing }
+
+
+{-| One match of the find bar's text: the top left of the text element it is in, as
+`view` draws it, which of that element's matches it is (Sprite.findMatches), and for
+each viewport it is in (outermost first) how far down that viewport's content its
+lines start and end, for `revealMatch`.
+-}
+type alias FindMatch id =
+    { at : Coord UiPixels
+    , index : Int
+    , viewports :
+        List
+            { id : id
+            , viewportHeight : Quantity Int UiPixels
+            , contentSize : Coord UiPixels
+            , top : Int
+            , bottom : Int
+            }
+    }
+
+
+{-| Every match of `query` in the text of an element, in the order they come in the
+tree, including the ones scrolled out of sight in a viewport.
+-}
+findAll : Model id -> String -> Element id -> List (FindMatch id)
+findAll model query (Element element) =
+    if String.isEmpty query then
+        []
+
+    else
+        findAllHelper model query Coord.origin [] element [] |> List.reverse
+
+
+{-| `findAll`, adding to `found` (last first). `viewports` are the viewports the
+element is in, innermost first, each with where its content's top is.
+-}
+findAllHelper :
+    Model id
+    -> String
+    -> Coord UiPixels
+    -> List { id : id, viewportHeight : Quantity Int UiPixels, contentSize : Coord UiPixels, contentTop : Int }
+    -> ElementFull id lazy
+    -> List (FindMatch id)
+    -> List (FindMatch id)
+findAllHelper model query position viewports element found =
+    case element of
+        Text data ->
+            let
+                -- How many lines start before a character.
+                lineOf : Int -> Int
+                lineOf index =
+                    String.left index allText |> String.indexes "\n" |> List.length
+
+                allText : String
+                allText =
+                    String.concat (List.map .text data.segments)
+
+                lineHeight : Int
+                lineHeight =
+                    Quantity.unwrap (Sprite.lineHeight data.fontSize)
+            in
+            Sprite.findMatches query data.segments
+                |> List.indexedMap Tuple.pair
+                |> List.foldl
+                    (\( index, ( start, end ) ) found2 ->
+                        let
+                            top =
+                                Coord.yRaw position + lineOf start * lineHeight
+
+                            bottom =
+                                Coord.yRaw position + (lineOf (max start (end - 1)) + 1) * lineHeight
+                        in
+                        { at = position
+                        , index = index
+                        , viewports =
+                            List.foldl
+                                (\around acc ->
+                                    { id = around.id
+                                    , viewportHeight = around.viewportHeight
+                                    , contentSize = around.contentSize
+                                    , top = top - around.contentTop
+                                    , bottom = bottom - around.contentTop
+                                    }
+                                        :: acc
+                                )
+                                []
+                                viewports
+                        }
+                            :: found2
+                    )
+                    found
+
+        Button data child ->
+            List.foldl
+                (\child2 found2 -> findAllHelper model query position viewports child2 found2)
+                (findAllHelper model query (Coord.plus (paddingTopLeft data.padding) position) viewports child found)
+                data.inFront
+
+        Row data children ->
+            List.foldl
+                (\( at, child ) found2 -> findAllHelper model query at viewports child found2)
+                found
+                (childPositions True data.spacing position children)
+
+        Column data children ->
+            List.foldl
+                (\( at, child ) found2 -> findAllHelper model query at viewports child found2)
+                found
+                (childPositions False data.spacing position children)
+
+        Single data child ->
+            findAllHelper model query (Coord.plus (paddingTopLeft data.padding) position) viewports child found
+
+        InFront _ children ->
+            List.foldl
+                (\( coord, child ) found2 -> findAllHelper model query (Coord.plus coord position) viewports child found2)
+                found
+                children
+
+        Viewport data child ->
+            let
+                contentAt : Coord UiPixels
+                contentAt =
+                    Coord.plus (contentPosition (getViewport data.id model)) position
+            in
+            findAllHelper
+                model
+                query
+                contentAt
+                ({ id = data.id, viewportHeight = data.viewportHeight, contentSize = sizeHelper child, contentTop = Coord.yRaw contentAt } :: viewports)
+                child
+                found
+
+        Lazy _ _ child ->
+            findAllHelper model query position viewports child found
+
+        Sourced _ child ->
+            findAllHelper model query position viewports child found
+
+        TextInput _ ->
+            found
+
+        TextInputMultiline _ ->
+            found
+
+        Quads _ ->
+            found
+
+        Empty ->
+            found
+
+
+{-| Scrolls every viewport a match is in so that it can be seen: one that already shows
+it stays where it is, and the others put it in the middle.
+-}
+revealMatch : FindMatch id -> Model id -> Model id
+revealMatch match model =
+    List.foldl
+        (\around model2 ->
+            let
+                state : ViewportModel
+                state =
+                    getViewport around.id model2
+
+                shownTop : Float
+                shownTop =
+                    scrolled state.offset
+
+                height : Int
+                height =
+                    Quantity.unwrap (insideHeight around.viewportHeight)
+            in
+            if toFloat around.top >= shownTop && toFloat around.bottom <= shownTop + toFloat height then
+                model2
+
+            else
+                insertElement
+                    around.id
+                    (ViewportState
+                        (scrollTo
+                            around.viewportHeight
+                            around.contentSize
+                            (toFloat ((around.top + around.bottom - height) // 2))
+                            state
+                        )
+                    )
+                    model2
+        )
+        model
+        match.viewports
+
+
+
 -- DRAWING
 
 
 {-| The triangles that draw the UI in drawing order (back to front), given the hovered and
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
+
+`find` is what the find bar (Ctrl+F) is looking for (see `Find`): every match of it in
+text gets a yellow background, the selected one a stronger one (see Sprite.foundText).
+It's done here, while drawing, rather than by the apps' views, so that typing in the
+find bar changes no view's arguments and every `lazy` element is reused.
+
 -}
-view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view uiState time scale showUiBorder maybeHover screenSize (Element element) =
+view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Find -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view uiState time scale showUiBorder maybeHover find screenSize (Element element) =
     viewList
         uiState
         time
         scale
         showUiBorder
         maybeHover
+        find
         { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
 
-viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
-viewList model time scale showUiBorder maybeHover viewport2 position element =
+viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Find -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList model time scale showUiBorder maybeHover find viewport2 position element =
     case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
@@ -2258,7 +2531,33 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                      else
                         []
                     )
-                        ++ Sprite.customText scale data.fontSize viewport3 data.segments position
+                        ++ (if String.isEmpty find.query then
+                                Sprite.customText scale data.fontSize viewport3 data.segments position
+
+                            else
+                                Sprite.foundText
+                                    scale
+                                    { query = find.query
+                                    , selected =
+                                        case find.selected of
+                                            Just ( at, index ) ->
+                                                if at == position then
+                                                    Just index
+
+                                                else
+                                                    Nothing
+
+                                            Nothing ->
+                                                Nothing
+                                    , background = Color.findMatchColor
+                                    , color = Color.findMatchTextColor
+                                    , otherBackground = Color.findOtherMatchColor
+                                    }
+                                    data.fontSize
+                                    viewport3
+                                    data.segments
+                                    position
+                           )
 
                 Button data child ->
                     let
@@ -2288,7 +2587,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                             Duration.from buttonDownAt time
 
                                         opacity =
-                                            200 - round (Duration.inSeconds timeElapsed * 350)
+                                            50 - round (Duration.inSeconds timeElapsed * 100)
                                     in
                                     if opacity > 0 then
                                         Sprite.circle
@@ -2306,16 +2605,16 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 Nothing ->
                                     []
                            )
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
-                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
+                        ++ viewList model time scale showUiBorder maybeHover find viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover find viewport3 position) data.inFront
 
                 Row data children ->
                     childPositions True data.spacing position children
-                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover find viewport3 at child)
 
                 Column data children ->
                     childPositions False data.spacing position children
-                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover find viewport3 at child)
 
                 Single data child ->
                     borderAndFillView
@@ -2343,7 +2642,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFill
                         )
                         data.cachedSize
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ viewList model time scale showUiBorder maybeHover find viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
 
                 InFront _ children ->
                     List.concatMap
@@ -2354,6 +2653,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 scale
                                 showUiBorder
                                 maybeHover
+                                find
                                 viewport3
                                 (Coord.plus coord position)
                                 child
@@ -2391,6 +2691,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                         scale
                                         showUiBorder
                                         maybeHover
+                                        find
                                         inside
                                         (Coord.plus (contentPosition viewportModel) position)
                                         child
@@ -2409,10 +2710,10 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                            )
 
                 Lazy _ _ child ->
-                    viewList model time scale showUiBorder maybeHover viewport3 position child
+                    viewList model time scale showUiBorder maybeHover find viewport3 position child
 
                 Sourced _ child ->
-                    viewList model time scale showUiBorder maybeHover viewport3 position child
+                    viewList model time scale showUiBorder maybeHover find viewport3 position child
 
         Nothing ->
             []

@@ -9,8 +9,12 @@ module Color exposing
     , fillColor2
     , fillColor3
     , focusedInputColor
+    , findMatchColor
+    , findMatchTextColor
+    , findOtherMatchColor
     , focusedUiColor
     , highlightColor
+    , linkColor
     , outlineColor
     , pressColor
     , rgb
@@ -87,6 +91,13 @@ dimTextColor =
     rgb255 160 152 146
 
 
+{-| Links in text (underlined too).
+-}
+linkColor : Color
+linkColor =
+    rgb255 120 170 255
+
+
 errorColor : Color
 errorColor =
     rgb255 255 105 95
@@ -156,6 +167,29 @@ highlightColor =
 selectionColor : Color
 selectionColor =
     rgb255 40 75 140
+
+
+{-| Behind the selected match of what the find bar (Ctrl+F) is looking for: yellow, as
+browsers do it.
+-}
+findMatchColor : Color
+findMatchColor =
+    rgb255 255 214 60
+
+
+{-| Behind the other matches: a fainter yellow, which the text keeps its own colour on.
+-}
+findOtherMatchColor : Color
+findOtherMatchColor =
+    rgba255 255 214 60 90
+
+
+{-| The selected match's text, on `findMatchColor`: dark, as light text on
+yellow can't be read.
+-}
+findMatchTextColor : Color
+findMatchTextColor =
+    rgb255 28 26 24
 
 
 {-| A button that does something that can't be undone, such as powering off.

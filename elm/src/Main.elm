@@ -55,6 +55,8 @@ import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
+import WebViewer
+import WebViewer.Types
 import Weather
 import Wifi exposing (Ssid)
 import Wired
@@ -340,6 +342,7 @@ type alias Model =
     , news : NewsState
     , hackerNews : HackerNews.Model
     , email : Email.Model
+    , webViewer : WebViewer.Model
     , asciiCollab : AsciiCollab.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
@@ -362,6 +365,11 @@ type alias Model =
     -- listed in the corner of the display it is on.
     , inspected : Maybe { display : Int, sources : List Ui.Source }
     , screenshotViewer : ScreenshotViewer.Model
+
+    -- The find bar (Ctrl+F) is open along the bottom of this display (its Display.name;
+    -- the main one if it isn't connected), with this match selected (counted from 0 in
+    -- `findMatches` order, wrapping around). Its text is in `uiState`, under FindInput.
+    , findBar : Maybe { display : String, selected : Int }
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
     }
@@ -384,6 +392,7 @@ type App
     | NewsApp
     | HackerNewsApp
     | EmailApp
+    | WebViewerApp
     | AsciiCollabApp
     | CalculatorApp
     | TicTacToeApp
@@ -398,7 +407,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
 
 
 type WeatherState
@@ -454,6 +463,7 @@ init =
     , news = NewsNotRequested
     , hackerNews = HackerNews.init
     , email = Email.init
+    , webViewer = WebViewer.init
     , asciiCollab = AsciiCollab.init
     , calculator = Calculator.init
     , calculatorOpen = False
@@ -471,6 +481,7 @@ init =
     , showUiBorders = False
     , inspected = Nothing
     , screenshotViewer = ScreenshotViewer.init
+    , findBar = Nothing
     , takingScreenshot = Nothing
     , screenshots = []
     }
@@ -664,6 +675,11 @@ step event model =
                             , []
                             )
 
+                        WebViewerRequest count ->
+                            ( { model | webViewer = WebViewer.gotHttpRequest count result model.webViewer }
+                            , []
+                            )
+
                 Nothing ->
                     ( model, [] )
 
@@ -784,6 +800,18 @@ step event model =
                                 , []
                                 )
 
+                            ( HackerNews HackerNews.Types.CommentLink, { relativePositionToUi, ui } ) :: _ ->
+                                case Ui.linkAt (Coord.minus relativePositionToUi cursor) ui of
+                                    Just url ->
+                                        if HackerNews.isExternalLink url then
+                                            openInWebViewer url model
+
+                                        else
+                                            ( model, [] )
+
+                                    Nothing ->
+                                        ( model, [] )
+
                             ( id, { relativePositionToUi, ui } ) :: _ ->
                                 let
                                     model2 : Model
@@ -864,6 +892,9 @@ step event model =
             else if model.ctrl && model.shift && key == Character "Q" && down then
                 ( { model | showUiBorders = not model.showUiBorders, inspected = Nothing }, [] )
 
+            else if model.ctrl && down && (key == Character "f" || key == Character "F") then
+                openFindBar model
+
             else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
 
@@ -873,11 +904,20 @@ step event model =
             else if not down then
                 ( model, [] )
 
+            else if model.uiState.focus == Just FindInput && model.findBar /= Nothing then
+                findBarKey key model
+
+            else if model.uiState.focus == Nothing && model.findBar /= Nothing && key == Keyboard.Escape then
+                ( closeFindBar model, [] )
+
             else if model.uiState.focus == Just PasswordInput then
                 typeKey key model
 
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
+
+            else if model.uiState.focus == Just (WebViewer WebViewer.Types.UrlInput) && model.webViewer.isOpen then
+                webViewerKey key model
 
             else if emailFieldFocused model /= Nothing then
                 case emailFieldFocused model of
@@ -1220,6 +1260,18 @@ appButton id =
         CloseWeatherButton ->
             Nothing
 
+        FindInput ->
+            Nothing
+
+        CloseFindButton ->
+            Nothing
+
+        FindPreviousButton ->
+            Nothing
+
+        FindNextButton ->
+            Nothing
+
         HackerNews id2 ->
             case id2 of
                 HackerNews.Types.OpenButton ->
@@ -1232,6 +1284,14 @@ appButton id =
             case id2 of
                 Email.Types.OpenButton ->
                     Just EmailApp
+
+                _ ->
+                    Nothing
+
+        WebViewer id2 ->
+            case id2 of
+                WebViewer.Types.OpenButton ->
+                    Just WebViewerApp
 
                 _ ->
                     Nothing
@@ -1328,6 +1388,9 @@ appIsOpen app model =
 
         EmailApp ->
             model.email.isOpen
+
+        WebViewerApp ->
+            model.webViewer.isOpen
 
         AsciiCollabApp ->
             model.asciiCollab.isOpen
@@ -1513,6 +1576,18 @@ clickElement model id =
         CloseWeatherButton ->
             ( { model | weatherOpen = False }, [] )
 
+        FindInput ->
+            ( { model | uiState = Ui.setFocus (Just FindInput) model.uiState }, [] )
+
+        CloseFindButton ->
+            ( closeFindBar model, [] )
+
+        FindPreviousButton ->
+            ( selectMatch (\selected -> selected - 1) model, [] )
+
+        FindNextButton ->
+            ( selectMatch (\selected -> selected + 1) model, [] )
+
         CalculatorButton ->
             if model.calculatorOpen then
                 ( closeCalculator model, [] )
@@ -1612,6 +1687,9 @@ clickElement model id =
         Email uiId2 ->
             emailClick uiId2 model
 
+        WebViewer uiId2 ->
+            webViewerClick uiId2 model
+
         ScreenshotViewer uiId2 ->
             ( { model
                 | screenshotViewer =
@@ -1647,6 +1725,40 @@ asciiCollabClick uiId model uiState =
     )
 
 
+{-| A link that is not to Hacker News opens in the website viewer, which opens if it
+isn't already.
+-}
+openInWebViewer : String -> Model -> ( Model, List Effect )
+openInWebViewer url model =
+    let
+        opened : Model
+        opened =
+            if appIsOpen WebViewerApp model then
+                model
+
+            else
+                click model (WebViewer WebViewer.Types.OpenButton) |> Tuple.first
+
+        ( webViewer, request ) =
+            WebViewer.go url opened.webViewer
+    in
+    ( { opened
+        | webViewer = webViewer
+        , uiState =
+            Ui.insertElement
+                (WebViewer WebViewer.Types.UrlInput)
+                (TextInputState { current = { cursorPosition = String.length url, cursorSize = 0, text = url }, undoHistory = [], redoHistory = [] })
+                opened.uiState
+      }
+    , case request of
+        Just ( count, url2 ) ->
+            [ httpGet (WebViewerRequest count) url2 ]
+
+        Nothing ->
+            []
+    )
+
+
 {-| A click on one of the Hacker News app's elements.
 -}
 hackerNewsClick : HackerNews.Types.UiId -> Model -> ( Model, List Effect )
@@ -1664,6 +1776,313 @@ hackerNewsClick uiId model =
         ( { model | hackerNews = hackerNews }, [] )
         effects
         |> Tuple.mapSecond List.reverse
+
+
+{-| A click on one of the website viewer's elements. The address box and Go button
+need the text typed in the box, which Ui keeps.
+-}
+webViewerClick : WebViewer.Types.UiId -> Model -> ( Model, List Effect )
+webViewerClick uiId model =
+    case uiId of
+        WebViewer.Types.UrlInput ->
+            ( { model | uiState = Ui.setFocus (Just (WebViewer uiId)) model.uiState }, [] )
+
+        WebViewer.Types.GoButton ->
+            webViewerGo model
+
+        _ ->
+            ( { model | webViewer = WebViewer.onClick uiId model.webViewer }, [] )
+
+
+{-| Loads the page whose address is in the box.
+-}
+webViewerGo : Model -> ( Model, List Effect )
+webViewerGo model =
+    let
+        typed : String
+        typed =
+            Ui.getTextInput (WebViewer WebViewer.Types.UrlInput) model.uiState |> .current |> .text
+
+        ( webViewer, request ) =
+            WebViewer.go typed model.webViewer
+    in
+    ( { model | webViewer = webViewer }
+    , case request of
+        Just ( count, url ) ->
+            [ httpGet (WebViewerRequest count) url ]
+
+        Nothing ->
+            []
+    )
+
+
+{-| A key typed in the website viewer's address box.
+-}
+webViewerKey : Key -> Model -> ( Model, List Effect )
+webViewerKey key model =
+    let
+        id : UiId
+        id =
+            WebViewer WebViewer.Types.UrlInput
+    in
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
+            webViewerGo model
+
+        ( False, Keyboard.Escape ) ->
+            ( { model | uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        ( True, Keyboard.Character "v" ) ->
+            ( { model
+                | uiState =
+                    Ui.updateElement
+                        id
+                        (\maybe ->
+                            TextInput.paste
+                                model.clipboard
+                                (case maybe of
+                                    Just (TextInputState state) ->
+                                        state
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+              }
+            , []
+            )
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput id model.uiState)
+            in
+            ( { model
+                | uiState = Ui.insertElement id (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+            , []
+            )
+
+
+dragSelectWebViewer : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectWebViewer focus mouse position model =
+    { model
+        | uiState =
+            Ui.updateElement
+                focus
+                (\maybe ->
+                    TextInput.mouseDownMove
+                        (WebViewer.urlStyle (appUiSize WebViewerApp model))
+                        mouse
+                        position
+                        (case maybe of
+                            Just (TextInputState state) ->
+                                state
+
+                            _ ->
+                                TextInput.init
+                        )
+                        |> TextInputState
+                        |> Just
+                )
+                model.uiState
+    }
+
+
+{-| Ctrl+F: opens the find bar along the bottom of the display the mouse is on (or moves
+it there), with the keyboard in it and what was typed before selected, so typing
+replaces it.
+-}
+openFindBar : Model -> ( Model, List Effect )
+openFindBar model =
+    let
+        state : TextInput.Model
+        state =
+            Ui.getTextInput FindInput model.uiState
+    in
+    ( { model
+        | findBar =
+            Just
+                { display = (mouseDisplay model).name
+                , selected = Maybe.map .selected model.findBar |> Maybe.withDefault 0
+                }
+        , uiState =
+            model.uiState
+                |> Ui.insertElement
+                    FindInput
+                    (TextInputState
+                        (TextInput.replaceState
+                            (\current -> { current | cursorPosition = String.length current.text, cursorSize = -(String.length current.text) })
+                            state
+                        )
+                    )
+                |> Ui.setFocus (Just FindInput)
+      }
+        |> selectMatch identity
+    , []
+    )
+
+
+{-| Every match of the find bar's text on the displays (each with its parts: Ui.findAll
+on `displayWindows`, without the find bar), in order: display by display, and on each
+in the order they come in its UI. Each says which display (its id) it is on.
+-}
+findMatches : Model -> List ( Display, Ui.Element UiId ) -> List ( Int, Ui.FindMatch UiId )
+findMatches model windowsByDisplay =
+    List.concatMap
+        (\( display, windows2 ) -> Ui.findAll model.uiState (findText model) windows2 |> List.map (Tuple.pair display.id))
+        windowsByDisplay
+
+
+{-| Selects another match (`change` gets the one selected now; it wraps around) and
+scrolls the viewports it is in to show it.
+-}
+selectMatch : (Int -> Int) -> Model -> Model
+selectMatch change model =
+    case model.findBar of
+        Just bar ->
+            let
+                matches : List ( Int, Ui.FindMatch UiId )
+                matches =
+                    findMatches model (List.map (\display -> ( display, Ui.inFront (displayWindows model display) )) model.displays)
+
+                total : Int
+                total =
+                    List.length matches
+
+                selected : Int
+                selected =
+                    if total == 0 then
+                        0
+
+                    else
+                        modBy total (change bar.selected)
+            in
+            { model
+                | findBar = Just { bar | selected = selected }
+                , uiState =
+                    case List.drop selected matches of
+                        ( _, match ) :: _ ->
+                            Ui.revealMatch match model.uiState
+
+                        [] ->
+                            model.uiState
+            }
+
+        Nothing ->
+            model
+
+
+{-| Closes the find bar. What was typed in it is kept for the next Ctrl+F.
+-}
+closeFindBar : Model -> Model
+closeFindBar model =
+    { model
+        | findBar = Nothing
+        , uiState =
+            if model.uiState.focus == Just FindInput then
+                Ui.setFocus Nothing model.uiState
+
+            else
+                model.uiState
+    }
+
+
+{-| What every app's text is searched for: the find bar's text while it is open.
+-}
+findText : Model -> String
+findText model =
+    case model.findBar of
+        Just _ ->
+            (Ui.getTextInput FindInput model.uiState).current.text
+
+        Nothing ->
+            ""
+
+
+{-| A key pressed while the find bar has the keyboard. Escape closes it.
+-}
+findBarKey : Key -> Model -> ( Model, List Effect )
+findBarKey key model =
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Escape ) ->
+            ( closeFindBar model, [] )
+
+        ( False, Keyboard.Enter ) ->
+            ( selectMatch
+                (if model.shift then
+                    \selected -> selected - 1
+
+                 else
+                    \selected -> selected + 1
+                )
+                model
+            , []
+            )
+
+        ( True, Keyboard.Character "v" ) ->
+            ( { model
+                | uiState =
+                    Ui.insertElement
+                        FindInput
+                        (TextInputState (TextInput.paste (String.replace "\n" " " model.clipboard) (Ui.getTextInput FindInput model.uiState)))
+                        model.uiState
+              }
+                |> findTextChanged model
+            , []
+            )
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput FindInput model.uiState)
+            in
+            ( { model
+                | uiState = Ui.insertElement FindInput (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+                |> findTextChanged model
+            , []
+            )
+
+
+{-| After a key in the find bar: if its text changed, selects the first match of the
+new text and shows it.
+-}
+findTextChanged : Model -> Model -> Model
+findTextChanged before after =
+    if findText after == findText before then
+        after
+
+    else
+        selectMatch (\_ -> 0) after
+
+
+dragSelectFind : Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectFind mouse position model =
+    { model
+        | uiState =
+            Ui.insertElement
+                FindInput
+                (TextInputState (TextInput.mouseDownMove (findInputStyle (findBarDisplay model)) mouse position (Ui.getTextInput FindInput model.uiState)))
+                model.uiState
+    }
 
 
 {-| A click on one of the email app's elements. The form's boxes and Link button need
@@ -1852,6 +2271,7 @@ type HttpRequestId
     | ForecastRequest
     | NewsRequest
     | HackerNewsRequest HackerNews.HttpRequestId
+    | WebViewerRequest Int
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -1869,6 +2289,9 @@ httpRequestIdToString request =
         HackerNewsRequest request2 ->
             "hackernews_" ++ HackerNews.httpRequestIdToString request2
 
+        WebViewerRequest count ->
+            "webviewer_" ++ WebViewer.requestIdToString count
+
 
 stringToHttpRequestId : String -> Maybe HttpRequestId
 stringToHttpRequestId string =
@@ -1884,6 +2307,9 @@ stringToHttpRequestId string =
 
         "hackernews" :: rest ->
             HackerNews.stringToHttpRequestId rest |> Maybe.map HackerNewsRequest
+
+        "webviewer" :: rest ->
+            WebViewer.stringToRequestId rest |> Maybe.map WebViewerRequest
 
         _ ->
             Nothing
@@ -2154,10 +2580,28 @@ dragSelect focus mouse position model =
         CloseWeatherButton ->
             model
 
+        FindInput ->
+            dragSelectFind mouse position model
+
+        CloseFindButton ->
+            model
+
+        FindPreviousButton ->
+            model
+
+        FindNextButton ->
+            model
+
         News _ ->
             model
 
         HackerNews _ ->
+            model
+
+        WebViewer WebViewer.Types.UrlInput ->
+            dragSelectWebViewer focus mouse position model
+
+        WebViewer _ ->
             model
 
         Email (Email.Types.InputField _) ->
@@ -2283,10 +2727,55 @@ cursorShape model uis =
 -- VIEW
 
 
-{-| What one display shows: its part of the UI (`ui`), and the cursor if the mouse is on it.
+{-| For the find bar: the selected match (with the id of the display it is on) and what
+it says about the matches, such as "2 of 15".
 -}
-view : Model -> Cursor -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
-view model cursor display ui =
+findCount : Model -> List ( Display, Ui.Element UiId ) -> { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
+findCount model windowsByDisplay =
+    case model.findBar of
+        Just bar ->
+            if String.isEmpty (findText model) then
+                { count = "", selected = Nothing }
+
+            else
+                let
+                    matches : List ( Int, Ui.FindMatch UiId )
+                    matches =
+                        findMatches model windowsByDisplay
+
+                    total : Int
+                    total =
+                        List.length matches
+                in
+                if total == 0 then
+                    { count = "No matches", selected = Nothing }
+
+                else
+                    let
+                        selected : Int
+                        selected =
+                            modBy total bar.selected
+                    in
+                    { count = String.fromInt (selected + 1) ++ " of " ++ String.fromInt total
+                    , selected = List.drop selected matches |> List.head
+                    }
+
+        Nothing ->
+            { count = "", selected = Nothing }
+
+
+{-| What one display shows: its part of the UI (`ui`, for what the mouse is over), drawn
+as its windows (`content`, searched for the find bar's text, `find`) with the find
+bar (`bar`) over them,
+and the cursor if the mouse is on it.
+-}
+view :
+    Model
+    -> Cursor
+    -> Display
+    -> { ui : Ui.Element UiId, content : Ui.Element UiId, bar : List ( Coord UiPixels, Ui.Element UiId ), find : Ui.Find }
+    -> List (Triangle DevicePixels)
+view model cursor display { ui, content, bar, find } =
     let
         hovered : Maybe UiId
         hovered =
@@ -2302,8 +2791,18 @@ view model cursor display ui =
         (Display.uiScale display)
         model.showUiBorders
         hovered
+        find
         display.size
-        ui
+        content
+        ++ Ui.view
+            model.uiState
+            (Maybe.withDefault (Time.millisToPosix 0) model.time)
+            (Display.uiScale display)
+            model.showUiBorders
+            hovered
+            Ui.noFind
+            display.size
+            (Ui.inFront bar)
         ++ inspectorView model display ui
         ++ (case model.takingScreenshot of
                 Just data ->
@@ -2403,6 +2902,7 @@ inspectorView model display ui =
                                 scale
                                 False
                                 Nothing
+                                Ui.noFind
                                 display.size
                                 (Ui.bottomRight { size = Display.uiSize display } (inspectorList inspected.sources))
 
@@ -2649,7 +3149,7 @@ headingSize =
 -}
 heading : String -> Ui.Element id
 heading string =
-    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [] } ]
+    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]
 
 
 {-| Everything the UI framework draws on a display: the toolbar along the top, each
@@ -2658,6 +3158,13 @@ notices.
 -}
 displayUi : Model -> Display -> Ui.Element UiId
 displayUi model display =
+    Ui.inFront (displayWindows model display ++ findBarAt model display "")
+
+
+{-| `displayUi` without the find bar: what it searches.
+-}
+displayWindows : Model -> Display -> List ( Coord UiPixels, Ui.Element UiId )
+displayWindows model display =
     ( Coord.origin, toolbar model display )
         :: List.map
             (\( app, bounds ) ->
@@ -2682,8 +3189,82 @@ displayUi model display =
             else
                 []
            )
-        |> Ui.inFront
 
+
+{-| The find bar, if it is open on this display, along its bottom, showing `count`.
+-}
+findBarAt : Model -> Display -> String -> List ( Coord UiPixels, Ui.Element UiId )
+findBarAt model display count =
+    if model.findBar /= Nothing && (findBarDisplay model).id == display.id then
+        [ ( Coord.xy 0 (Coord.yRaw (Display.uiSize display) - findBarHeight display), findBar display count ) ]
+
+    else
+        []
+
+
+
+{-| The display the find bar is on: the one it was opened on, or the main one if that
+isn't connected.
+-}
+findBarDisplay : Model -> Display
+findBarDisplay model =
+    case model.findBar of
+        Just bar ->
+            List.filter (\display -> display.name == bar.display) model.displays
+                |> List.head
+                |> Maybe.withDefault (mainDisplay model)
+
+        Nothing ->
+            mainDisplay model
+
+
+{-| The find bar (Ctrl+F), across the bottom of a display: what to look for in every
+app's text, which match is selected and how many there are (`count`), and buttons to
+select the previous or next one (Shift+Enter and Enter do too). Ui.view does the
+highlighting, from `findText`.
+-}
+findBar : Display -> String -> Ui.Element UiId
+findBar display count =
+    let
+        padding =
+            Ui.paddingXY 8 6
+
+        width =
+            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels (2 * 8))
+    in
+    Ui.el
+        { padding = padding
+        , borderAndFill = Ui.BorderAndFill { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+        }
+        (Ui.leftAndRight
+            width
+            (Ui.row
+                8
+                [ Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.text "Find")
+                , Ui.textInput { id = FindInput, style = findInputStyle display, isValid = True }
+                , Ui.button { id = FindPreviousButton, padding = Ui.paddingXY 6 3 } (Ui.text "Previous")
+                , Ui.button { id = FindNextButton, padding = Ui.paddingXY 6 3 } (Ui.text "Next")
+                , Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.left (em 8) (Ui.colorText Color.dimTextColor count))
+                ]
+            )
+            (Ui.button { id = CloseFindButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+        )
+
+
+findInputStyle : Display -> TextInput.Style
+findInputStyle display =
+    { font = sans
+    , fontSize = bodySize
+    , width = Quantity.min (em 20) (Coord.x (Display.uiSize display) |> Quantity.minus (em 30))
+    , masked = False
+    }
+
+
+{-| How tall the find bar is: the windows on its display stop above it.
+-}
+findBarHeight : Display -> Int
+findBarHeight display =
+    Coord.yRaw (Ui.size (findBar display ""))
 
 
 -- WINDOW LAYOUT
@@ -2700,8 +3281,15 @@ windows model display =
         areaTopLeft =
             Coord.xy windowGap (toolbarHeight + windowGap)
 
+        bottom =
+            if model.findBar /= Nothing && (findBarDisplay model).id == display.id then
+                findBarHeight display
+
+            else
+                0
+
         area =
-            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap windowGap)) (Display.uiSize display)
+            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap (windowGap + bottom))) (Display.uiSize display)
 
         inOrder =
             List.filter (\app -> not (SeqDict.member app model.appDisplays)) allApps
@@ -2749,6 +3337,9 @@ appLimits app model =
 
         EmailApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy 900 700, max = Coord.xy 1200 100000 }
+
+        WebViewerApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy 900 900, max = Coord.xy 1400 100000 }
 
         HackerNewsApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
@@ -2798,6 +3389,9 @@ appView app size model =
 
         EmailApp ->
             Email.view size model.email
+
+        WebViewerApp ->
+            WebViewer.view size model.webViewer
 
         AsciiCollabApp ->
             AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
@@ -3105,15 +3699,57 @@ draw msg model =
     case msg of
         GotInput (Ok (Frame _ _)) ->
             let
+                parts : List { display : Display, windows : List ( Coord UiPixels, Ui.Element UiId ) }
+                parts =
+                    List.map (\display -> { display = display, windows = displayWindows model display }) model.displays
+
+                uis : List ( Display, Ui.Element UiId )
                 uis =
-                    List.map (\display -> ( display, displayUi model display )) model.displays
+                    List.map (\part -> ( part.display, Ui.inFront (part.windows ++ findBarAt model part.display "") )) parts
 
                 cursor =
                     cursorShape model uis
             in
             ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
-            , [ Effect.SetCursor { image = Cursor.image cursor, color = cursorColor model, scale = uiScale model }
-              , Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model cursor display ui }) uis)
+            , [ Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
+              , Effect.Render
+                    (\() ->
+                        let
+                            found : { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
+                            found =
+                                findCount model (List.map (\part -> ( part.display, Ui.inFront part.windows )) parts)
+                        in
+                        List.map2
+                            (\part ( _, ui ) ->
+                                { display = part.display.id
+                                , triangles =
+                                    view
+                                        model
+                                        cursor
+                                        part.display
+                                        { ui = ui
+                                        , content = Ui.inFront part.windows
+                                        , bar = findBarAt model part.display found.count
+                                        , find =
+                                            { query = findText model
+                                            , selected =
+                                                case found.selected of
+                                                    Just ( displayId, match ) ->
+                                                        if displayId == part.display.id then
+                                                            Just ( match.at, match.index )
+
+                                                        else
+                                                            Nothing
+
+                                                    Nothing ->
+                                                        Nothing
+                                            }
+                                        }
+                                }
+                            )
+                            parts
+                            uis
+                    )
               ]
             )
 
@@ -3812,6 +4448,10 @@ toolbar model display =
                         (openHere EmailApp)
                         (Ui.text "Email")
                     , Ui.selectableButton
+                        { id = WebViewer WebViewer.Types.OpenButton, padding = small }
+                        (openHere WebViewerApp)
+                        (Ui.text "Web viewer")
+                    , Ui.selectableButton
                         { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small }
                         (openHere AsciiCollabApp)
                         (Ui.text "ASCII collab")
@@ -4050,10 +4690,10 @@ editorWindow model =
             , Ui.leftAndRight style.width
                 (t status)
                 (Ui.customText bodySize
-                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
-                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [] }
-                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
-                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [] }
+                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
+                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [], link = Nothing }
+                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
+                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [], link = Nothing }
                     ]
                 )
             ]

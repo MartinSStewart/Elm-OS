@@ -283,7 +283,15 @@ $(BUILD)/elm.o: $(BUILD)/wire/.done $(BUILD)/eco-setting | check-deps
 WIRE_FLAGS := --runtime elm/src/Wire.elm --entry ElmOs \
               --config Main.persistConfig --model Main.Model --msg Main.Msg
 
-$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm")
+# Where each sprite (sprites/) is in the atlas, for Elm: checked in like NotoSans.elm, and
+# written again whenever a sprite or the packing changes (host/common/src/sprites.rs).
+SPRITES := $(wildcard sprites/*)
+elm/src/Sprites.elm: $(SPRITES) host/common/src/sprites.rs host/common/src/atlas.rs host/common/build.rs \
+                     host/common/examples/sprites-elm.rs
+	$(CARGO) run -q --manifest-path host/Cargo.toml -p common --example sprites-elm \
+	  --target-dir $(abspath $(BUILD)/cargo-tools) -- $(abspath $@)
+
+$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm") elm/src/Sprites.elm
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
 	$(call WIRE,$(BUILD)/wire,--src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes)
@@ -429,7 +437,7 @@ release: check-migration
 # assembly, which cargo compiles with musl-gcc.
 CARGO       ?= cargo
 RUST_TARGET := x86_64-unknown-linux-musl
-HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
+HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml) $(wildcard sprites/*)
 # Paths to this checkout and to cargo's crate sources end up in panic messages and in
 # ring's C code; map them to fixed names so the output doesn't depend on where they are.
 CARGO_HOME_DIR := $(or $(CARGO_HOME),$(HOME)/.cargo)
@@ -803,7 +811,7 @@ test-containers: | check-deps
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
-review:
+review: elm/src/Sprites.elm
 	cd elm && npx --yes elm-review --compiler $(ECO_BIN)
 	@echo "passed: review" $(SAY)
 

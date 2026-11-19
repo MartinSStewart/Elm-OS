@@ -51,7 +51,7 @@ screen =
 
 draw : Ui.Element Id -> List (Sprite.Triangle Units.DevicePixels)
 draw =
-    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing screen
+    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing Ui.noFind screen
 
 
 nextFrame : ( List String, String ) -> ( List String, String ) -> List (Sprite.Triangle Units.DevicePixels)

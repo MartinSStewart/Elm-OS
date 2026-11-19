@@ -469,13 +469,19 @@ pub fn map_dumb(card: &File, handle: u32, size: usize) -> Option<*mut u32> {
 }
 
 /// Puts buffer `handle` (64 x 64 ARGB) on the CRTC's cursor plane. False if there is none.
-pub fn set_cursor(card: &File, crtc: u32, handle: u32, size: u32) -> bool {
+/// Puts the buffer `handle` (size x size) on the CRTC's cursor plane, its hot spot
+/// `hot`. Drivers that draw the plane (real GPUs) only look at where it is moved to
+/// (move_cursor: the top left corner), but a virtual GPU (virtio-gpu in QEMU) shows it
+/// as the host's own pointer, with the hot spot where the host's mouse is.
+pub fn set_cursor(card: &File, crtc: u32, handle: u32, size: u32, hot: [usize; 2]) -> bool {
     let mut c2 = Cursor2 {
         flags: CURSOR_BO,
         crtc_id: crtc,
         width: size,
         height: size,
         handle,
+        hot_x: hot[0] as i32,
+        hot_y: hot[1] as i32,
         ..Default::default()
     };
     if ioctl(card, IOCTL_MODE_CURSOR2, &mut c2) {
@@ -504,8 +510,8 @@ pub fn move_cursor(card: &File, crtc: u32, x: i32, y: i32) {
 }
 
 /// Copies a cursor plane image (cursor::Picture::plane_image) into a 64 x 64 dumb
-/// buffer and puts it on the cursor plane.
-pub fn draw_cursor(card: &File, crtc: u32, handle: u32, img: &[u32]) -> bool {
+/// buffer and puts it on the cursor plane, its hot spot `hot` (set_cursor).
+pub fn draw_cursor(card: &File, crtc: u32, handle: u32, img: &[u32], hot: [usize; 2]) -> bool {
     use crate::cursor::PLANE as CURSOR_PLANE;
     let size = CURSOR_PLANE * CURSOR_PLANE * 4;
     if img.len() != CURSOR_PLANE * CURSOR_PLANE {
@@ -520,5 +526,5 @@ pub fn draw_cursor(card: &File, crtc: u32, handle: u32, img: &[u32]) -> bool {
         libc::munmap(px as *mut libc::c_void, size);
     }
     // Setting the cursor again makes drivers that copy it (virtio-gpu) take the new image.
-    set_cursor(card, crtc, handle, CURSOR_PLANE as u32)
+    set_cursor(card, crtc, handle, CURSOR_PLANE as u32, hot)
 }

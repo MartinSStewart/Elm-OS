@@ -8,6 +8,7 @@ module HackerNews exposing
     , gotHttpRequest
     , httpRequestIdToString
     , init
+    , isExternalLink
     , maxWindowWidth
     , onClick
     , postIdToString
@@ -27,7 +28,7 @@ import Color
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect
-import HackerNews.Types exposing (Comment(..), Post, PostId(..))
+import HackerNews.Types exposing (Comment(..), Post, PostId(..), Span)
 import Hex
 import Html.Parser
 import Quantity exposing (Quantity)
@@ -265,6 +266,10 @@ onClick uiId model =
         HackerNews.Types.BackButton ->
             ( { model | page = PostsPage }, [] )
 
+        HackerNews.Types.CommentLink ->
+            -- Main opens it, if it isn't a link to Hacker News itself.
+            ( model, [] )
+
         HackerNews.Types.CommentToggle index ->
             case model.page of
                 CommentsPage id _ ->
@@ -359,6 +364,16 @@ toggle index (Comment comment) =
 
     else
         Comment comment
+
+
+
+{-| Whether a link in a comment points away from Hacker News: it has a scheme and
+isn't on news.ycombinator.com.
+-}
+isExternalLink : String -> Bool
+isExternalLink url =
+    (String.startsWith "http://" url || String.startsWith "https://" url)
+        && not (String.startsWith "https://news.ycombinator.com/" url || String.startsWith "http://news.ycombinator.com/" url)
 
 
 
@@ -469,7 +484,7 @@ parseComments html =
                     )
                     (Html.Parser.findAll (isElement "div" "comment") [ row ]
                         |> List.head
-                        |> Maybe.map (\comment -> commentText (nodeChildren comment) |> String.trim)
+                        |> Maybe.map (\comment -> commentText (nodeChildren comment))
                     )
             )
         |> buildTree 0 0
@@ -543,38 +558,104 @@ nodeChildren node =
             []
 
 
-{-| A comment's text: a paragraph starts after an empty line, and the reply link is left out.
+{-| A comment's text: a paragraph starts after an empty line, links (`<a>`) and italics
+(`<i>`) are marked, and the reply link is left out.
 -}
-commentText : List Html.Parser.Node -> String
+commentText : List Html.Parser.Node -> List Span
 commentText nodes =
-    List.map
+    commentSpans Nothing False nodes |> mergeSpans
+
+
+commentSpans : Maybe String -> Bool -> List Html.Parser.Node -> List Span
+commentSpans link isItalic nodes =
+    List.concatMap
         (\node ->
             case node of
                 Html.Parser.Text text ->
-                    String.replace "\n" " " text
+                    [ { text = String.replace "\n" " " text, link = link, isItalic = isItalic } ]
 
                 Html.Parser.Comment _ ->
-                    ""
+                    []
 
                 Html.Parser.Element "p" _ nodes2 ->
-                    "\n\n" ++ commentText nodes2
+                    { text = "\n\n", link = Nothing, isItalic = False } :: commentSpans link isItalic nodes2
+
+                Html.Parser.Element "a" attributes nodes2 ->
+                    commentSpans
+                        (case Html.Parser.getAttribute "href" attributes of
+                            Just href ->
+                                Just href
+
+                            Nothing ->
+                                link
+                        )
+                        isItalic
+                        nodes2
+
+                Html.Parser.Element "i" _ nodes2 ->
+                    commentSpans link True nodes2
 
                 Html.Parser.Element _ attributes nodes2 ->
                     if Html.Parser.getAttribute "class" attributes == Just "reply" then
-                        ""
+                        []
 
                     else
-                        commentText nodes2
+                        commentSpans link isItalic nodes2
         )
         nodes
-        |> String.concat
+
+
+{-| Neighbouring spans in the same style become one, empty ones go, and the text is
+trimmed at both ends.
+-}
+mergeSpans : List Span -> List Span
+mergeSpans spans =
+    let
+        merged : List Span
+        merged =
+            List.foldr
+                (\span result ->
+                    case result of
+                        next :: rest ->
+                            if span.link == next.link && span.isItalic == next.isItalic then
+                                { text = span.text ++ next.text, link = span.link, isItalic = span.isItalic } :: rest
+
+                            else
+                                span :: result
+
+                        [] ->
+                            [ span ]
+                )
+                []
+                spans
+                |> List.filter (\span -> not (String.isEmpty span.text))
+    in
+    case merged of
+        [] ->
+            []
+
+        first :: rest ->
+            { text = String.trimLeft first.text, link = first.link, isItalic = first.isItalic } :: trimLast rest
+
+
+trimLast : List Span -> List Span
+trimLast spans =
+    case spans of
+        [] ->
+            []
+
+        [ last ] ->
+            [ { text = String.trimRight last.text, link = last.link, isItalic = last.isItalic } ]
+
+        first :: rest ->
+            first :: trimLast rest
 
 
 {-| Turn a flat list of comments with their indentation into a tree, a comment's
 children being the deeper ones that follow it, numbering them in order from `index`.
 Also gives the index after the last.
 -}
-buildTree : Int -> Int -> List { indent : Int, author : String, date : Maybe String, grey : Int, content : String } -> ( List Comment, Int )
+buildTree : Int -> Int -> List { indent : Int, author : String, date : Maybe String, grey : Int, content : List Span } -> ( List Comment, Int )
 buildTree indentation index rows =
     case rows of
         [] ->
@@ -731,7 +812,7 @@ postsView lazyCache windowSize data =
 
         title : Element id
         title =
-            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [] } ]
+            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
     in
     Ui.column
         titleSpacing
@@ -822,6 +903,7 @@ commentsView lazyCache windowSize postId title comments =
                   , color = Color.textColor
                   , font = Sans Bold
                   , decorations = []
+                  , link = Nothing
                   }
                 ]
             ]
@@ -876,8 +958,9 @@ commentView lazyCache width (Comment comment) =
                     Small
                     (Units.uiPixels textWidth)
                     (commentHeader comment.author comment.date
-                        ++ [ { text = comment.content, color = greyColor comment.grey, font = Sans Regular, decorations = [] } ]
+                        ++ List.map (spanSegment (greyColor comment.grey)) comment.content
                     )
+                    |> Ui.links (HackerNews HackerNews.Types.CommentLink)
                 ]
     in
     if comment.isExpanded then
@@ -902,14 +985,43 @@ commentView lazyCache width (Comment comment) =
             ]
 
 
+{-| A link is in the link color and underlined, italics in italic.
+-}
+spanSegment : Color.Color -> Span -> Sprite.Segment
+spanSegment color span =
+    { text = span.text
+    , color =
+        case span.link of
+            Just _ ->
+                Color.linkColor
+
+            Nothing ->
+                color
+    , font =
+        if span.isItalic then
+            Sans Italic
+
+        else
+            Sans Regular
+    , decorations =
+        case span.link of
+            Just _ ->
+                [ Sprite.Underline ]
+
+            Nothing ->
+                []
+    , link = span.link
+    }
+
+
 {-| A comment's author, in bold, and the date it was written if there is one.
 -}
 commentHeader : String -> Maybe String -> List Sprite.Segment
 commentHeader author date =
-    { text = author ++ "  ", color = Color.textColor, font = Sans Bold, decorations = [] }
+    { text = author ++ "  ", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing }
         :: (case date of
                 Just text ->
-                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular, decorations = [] } ]
+                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular, decorations = [], link = Nothing } ]
 
                 Nothing ->
                     []

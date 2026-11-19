@@ -54,10 +54,10 @@ port fromHost : (Bytes -> msg) -> Sub msg
 type Effect
     = -- What each display shows (by Display.id), in its own pixels.
       Render (() -> List { display : Int, triangles : List (Triangle DevicePixels) })
-      -- The mouse cursor: its picture (Cursor.image), fill colour and the UI scale. The host draws the
-      -- cursor on the display's cursor plane and moves it as the mouse moves, without
-      -- waiting for a frame. The scale sets the cursor's size and how fast the mouse
-      -- moves it, so moving the mouse the same distance crosses the same amount of UI
+      -- The mouse cursor: its picture for the UI scale (Cursor.image, where it is in the
+      -- atlas), fill colour and the UI scale. The host draws the cursor on the display's
+      -- cursor plane and moves it as the mouse moves, without waiting for a frame. The
+      -- scale sets how fast the mouse moves it, so moving the mouse the same distance crosses the same amount of UI
       -- at 1x and 2x. Sent with every frame; the host redraws the cursor only when it
       -- changes.
     | SetCursor { image : Cursor.Image, color : Color, scale : UiScale }
@@ -219,7 +219,12 @@ or 1 to blend the four around the point (`Sprite.Sampling`).
 -}
 renderBytes : List (Triangle DevicePixels) -> Bytes
 renderBytes triangles =
-    BE.encode (BE.sequence (List.map Sprite.encoder triangles))
+    let
+        -- A local list, so eco fuses the encoder into one loop over it.
+        inAtlas =
+            List.map (Sprite.inAtlas 1) triangles
+    in
+    BE.encode (BE.sequence (List.map Sprite.encoder inAtlas))
 
 
 {-| One Effect, as protocol::Effect: its variant's number there, then its fields.

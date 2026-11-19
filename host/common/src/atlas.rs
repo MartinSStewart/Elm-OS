@@ -6,14 +6,15 @@
 //!
 //!   x 0-300, y 0-200     town-collab's 10 x 18 pixel font, 25 glyphs to a row, each
 //!                        in a 12 x 20 cell, at 1, 1 in it (`mono_glyph`)
-//!   x 248-256, y 248-256 solid, for flat colours
-//!   x 256-272, y 224-240 a dot grid tile: one pixel at 8, 8 in it (`DOT_GRID`),
-//!                        drawn repeated (`Tri::tile`)
+//!   y 3584-4096          the sprites: everything drawn that isn't a glyph, such as
+//!                        the solid block for flat colours, the dot grid tile and
+//!                        the cursors, packed from the files in sprites/
+//!                        (sprites.rs)
 //!   everywhere else      Noto Sans (regular, bold, italic, bold italic) at a few
 //!                        sizes, antialiased, each glyph at four quarter-pixel
 //!                        offsets (tools/make-noto-sans.py, which keeps clear of the
-//!                        top left 304 x 256; elm/src/NotoSans.elm says where each
-//!                        glyph is)
+//!                        top left 304 x 256 and of the rows from 3584 down;
+//!                        elm/src/NotoSans.elm says where each glyph is)
 //!
 //! Every glyph has its edge pixels repeated once more around it (the
 //! pixel font's by `bleed` here, Noto Sans's by make-noto-sans.py). A
@@ -28,9 +29,6 @@ use crate::font;
 
 pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 4096;
-
-/// Left, top, width and height of the dot grid tile (elm/src/Sprite.elm has it too).
-pub const DOT_GRID: [usize; 4] = [256, 224, 16, 16];
 
 /// Noto Sans's glyphs over the whole atlas, run-length coded: a 0 byte is followed by
 /// how many 0s (1-255) it stands for, and any other byte is itself.
@@ -50,7 +48,7 @@ pub fn mono_glyph(index: usize) -> (usize, usize) {
 
 /// Copies the edge pixels of the atlas's w x h rectangle at x, y out by one pixel all
 /// round, corners too (see the top of this file).
-fn bleed(a: &mut [u8], x: usize, y: usize, w: usize, h: usize) {
+pub(crate) fn bleed(a: &mut [u8], x: usize, y: usize, w: usize, h: usize) {
     for row in y..y + h {
         a[row * ATLAS_W + x - 1] = a[row * ATLAS_W + x];
         a[row * ATLAS_W + x + w] = a[row * ATLAS_W + x + w - 1];
@@ -84,12 +82,21 @@ pub fn build() -> Vec<u8> {
         }
         bleed(&mut a, ax, ay, MONO_W, MONO_H);
     }
-    for y in 248..256 {
-        a[y * ATLAS_W + 248..y * ATLAS_W + 256].fill(255);
-    }
-    let [x, y, w, h] = DOT_GRID;
-    a[(y + h / 2) * ATLAS_W + x + w / 2] = 255;
+    crate::sprites::draw(&mut a);
     a
+}
+
+/// The atlas, built once for the whole program (by the first to ask).
+pub fn shared() -> &'static [u8] {
+    static ATLAS: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    ATLAS.get_or_init(build)
+}
+
+/// The middle of the solid block (sprites/solid.1x.webp) in the atlas: a triangle with
+/// every corner here is a flat colour.
+pub fn solid() -> [f32; 2] {
+    let s = crate::sprites::find("solid", 1);
+    [(s.fill[0] + s.width / 2) as f32, (s.fill[1] + s.height / 2) as f32]
 }
 
 /// One triangle as /init hands it to a renderer: what Elm sends per triangle
@@ -129,10 +136,22 @@ mod tests {
             n += if b == 0 { *bytes.next().unwrap() as usize } else { 1 };
         }
         assert_eq!(n, ATLAS_W * ATLAS_H);
+        // and it leaves the sprites' rows clear
+        let mut at = 0;
+        let mut bytes = NOTO_SANS.iter();
+        while let Some(&b) = bytes.next() {
+            if b == 0 {
+                at += *bytes.next().unwrap() as usize;
+            } else {
+                assert!(at < crate::sprites::TOP * ATLAS_W, "Noto Sans draws in the sprites' rows");
+                at += 1;
+            }
+        }
         // and it leaves the pixel font's corner alone
         let a = build();
         assert_eq!(a.len(), ATLAS_W * ATLAS_H);
-        assert_eq!(a[250 * ATLAS_W + 250], 255);
+        let [u, v] = solid();
+        assert_eq!(a[v as usize * ATLAS_W + u as usize], 255);
     }
 
     /// Every pixel of a w x h rectangle's border is the rectangle's pixel nearest it.

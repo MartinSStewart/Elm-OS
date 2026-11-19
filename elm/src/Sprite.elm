@@ -8,17 +8,21 @@ module Sprite exposing
     , Tile
     , Triangle
     , asciiChar
+    , atlasRectangle
     , asciiIndex
     , caretPositions
     , circle
-    , block
     , clipTo
     , customText
     , customTextSize
+    , findMatches
+    , foundText
     , dotGrid
     , ellipsis
     , encoder
+    , inAtlas
     , lineHeight
+    , linkAt
     , monoChar
     , move
     , rectangle
@@ -41,8 +45,11 @@ pixels) and multiplies the sample by its colour:
 
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-300, y 0-200, 25 to a row,
     in the order of `asciiChars` below, each at 1, 1 in a 12 x 20 cell
-  - a solid white block at x 248-256, y 248-256, for flat colours
-  - a 16 x 16 tile at x 256, y 224 with one pixel in the middle, repeated for `dotGrid`
+  - the sprites (sprites/ at the top of the repository), at the bottom: everything
+    that isn't a glyph, such as the solid block for flat colours, the dot grid tile
+    and the cursors, each drawn at UI scale 1 and 2. Sprites.elm (generated) says where
+    each is. Shapes sample a sprite in its 1x picture's pixels (`InSprite`), which
+    `toDevice` turns into the picture for the UI scale.
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
@@ -65,6 +72,7 @@ import Coord exposing (Coord)
 import Dict exposing (Dict)
 import NotoSans
 import Quantity exposing (Quantity(..))
+import Sprites
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
@@ -75,7 +83,67 @@ type alias Vertex =
 
 
 type Triangle units
-    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling, tile : Maybe Tile }
+    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling, tile : Maybe Tile, uvSpace : UvSpace }
+
+
+{-| What a triangle's u, v (and tile) are measured in: atlas pixels, or the pixels of a
+sprite's 1x picture (sprites/NAME.1x.webp). `toDevice` turns the second into atlas
+pixels in the sprite's picture for the UI scale: at scale 2, the same place in the 2x
+picture, which is twice the size. Anything not made in UI pixels is drawn from the 1x
+picture.
+-}
+type UvSpace
+    = AtlasPixels
+    | InSprite Sprites.Name
+
+
+{-| The triangle sampling atlas pixels, from the sprite's picture for this UI scale if
+it samples a sprite.
+-}
+inAtlas : Int -> Triangle a -> Triangle a
+inAtlas scale (Triangle t) =
+    case t.uvSpace of
+        AtlasPixels ->
+            Triangle t
+
+        InSprite name ->
+            let
+                sprite_ =
+                    Sprites.get scale name
+
+                ( left, top ) =
+                    sprite_.fill
+
+                k =
+                    sprite_.width // max 1 (Sprites.get 1 name).width
+
+                f v =
+                    { v | u = toFloat left + v.u * toFloat k, v = toFloat top + v.v * toFloat k }
+            in
+            Triangle
+                { t
+                    | a = f t.a
+                    , b = f t.b
+                    , c = f t.c
+                    , tile =
+                        Maybe.map
+                            (\tile ->
+                                { left = left + tile.left * k
+                                , top = top + tile.top * k
+                                , width = tile.width * k
+                                , height = tile.height * k
+                                }
+                            )
+                            t.tile
+                    , uvSpace = AtlasPixels
+                }
+
+
+{-| The triangles sampling a sprite (their u, v are in its 1x picture's pixels).
+-}
+fromSprite : Sprites.Name -> List (Triangle units) -> List (Triangle units)
+fromSprite name =
+    List.map (\(Triangle t) -> Triangle { t | uvSpace = InSprite name })
 
 
 {-| A rectangle of the atlas, in atlas pixels, that a triangle repeats: its u, v can go
@@ -107,6 +175,8 @@ height \* 2^16 + 2^31 if `Linear`; all little-endian. No tile is all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
 encoder (Triangle t) =
+    -- Its u, v must already be atlas pixels (`inAtlas`); Effect.renderBytes does that.
+    -- Calling inAtlas here instead makes eco's bytes fusion compute it once per field.
     let
         f =
             BE.float32 LE
@@ -146,7 +216,7 @@ encoder (Triangle t) =
 
 mapCorners : (Vertex -> Vertex) -> List (Triangle a) -> List (Triangle b)
 mapCorners f =
-    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color, sampling = t.sampling, tile = t.tile })
+    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color, sampling = t.sampling, tile = t.tile, uvSpace = t.uvSpace })
 
 
 {-| The triangles sampling the atlas the given way.
@@ -206,7 +276,7 @@ clipTriangle area (Triangle t) =
             first :: second :: rest ->
                 -- A fan of triangles around the polygon's first corner.
                 List.map2
-                    (\b c -> Triangle { a = first, b = b, c = c, color = t.color, sampling = t.sampling, tile = t.tile })
+                    (\b c -> Triangle { a = first, b = b, c = c, color = t.color, sampling = t.sampling, tile = t.tile, uvSpace = t.uvSpace })
                     (second :: rest)
                     rest
 
@@ -283,13 +353,15 @@ toDevice scale triangles =
             toFloat (Units.scaleInt scale)
     in
     mapCorners (\v -> { v | x = v.x * s, y = v.y * s }) triangles
+        |> List.map (inAtlas (Units.scaleInt scale))
 
 
-{-| The middle of the atlas's white block. A triangle with every corner here is a flat colour.
+{-| The middle of the solid block (sprites/solid.1x.webp, 8 x 8), in its pixels. A
+triangle with every corner here is a flat colour.
 -}
 solidTexturePosition : { u : Float, v : Float }
 solidTexturePosition =
-    { u = 252, v = 252 }
+    { u = 4, v = 4 }
 
 
 {-| A flat coloured triangle.
@@ -307,6 +379,7 @@ triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
         , color = color
         , sampling = Nearest
         , tile = Nothing
+        , uvSpace = InSprite Sprites.Solid
         }
 
 
@@ -345,8 +418,8 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
         bottomRight =
             { x = right, y = bottom, u = uRight, v = vBottom }
     in
-    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest, tile = Nothing }
-    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest, tile = Nothing }
+    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest, tile = Nothing, uvSpace = AtlasPixels }
+    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest, tile = Nothing, uvSpace = AtlasPixels }
     ]
 
 
@@ -361,22 +434,25 @@ rectangle color clip position size =
         }
         (Coord.toTuple position)
         (Coord.toTuple size)
-        ( 250, 250 )
+        ( 2, 2 )
         ( 4, 4 )
+        |> fromSprite Sprites.Solid
 
 
-{-| The atlas's dot grid tile (host/common/src/atlas.rs DOT\_GRID): 16 x 16, with one
-pixel at 8, 8 in it.
+{-| The dot grid tile (sprites/dot-grid.1x.webp), all of it, in its pixels.
 -}
 dotGridTile : Tile
 dotGridTile =
-    { left = 256, top = 224, width = 16, height = 16 }
+    let
+        { width, height } =
+            Sprites.get 1 Sprites.DotGrid
+    in
+    { left = 0, top = 0, width = width, height = height }
 
 
-{-| A rectangle (position, size) covered in a grid of dots one atlas pixel across, 16
-apart, the first 8, 8 from its top left corner, cut to `clip`. Two triangles, however
-big the rectangle: they repeat the atlas's dot grid tile. Made in UI pixels, so on a
-2x screen the dots are 2 x 2 device pixels and 32 apart.
+{-| A rectangle (position, size) covered in the dot grid tile (sprites/dot-grid.*.webp),
+repeated from its top left corner, cut to `clip`: two triangles, however big the
+rectangle. Made in UI pixels, so on a 2x screen it shows the 2x picture.
 -}
 dotGrid : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
 dotGrid color clip position size =
@@ -391,14 +467,16 @@ dotGrid color clip position size =
         (Coord.toTuple size)
         ( dotGridTile.left, dotGridTile.top )
         (Coord.toTuple size)
-        |> List.map (\(Triangle t) -> Triangle { t | tile = Just dotGridTile })
+        |> List.map (\(Triangle t) -> Triangle { t | tile = Just dotGridTile, uvSpace = InSprite Sprites.DotGrid })
 
 
-{-| A solid rectangle (x, y, w, h) in one colour.
+{-| A rectangle the size of `size` showing the same size of the atlas, with its top left
+corner at `atlasTopLeft` (atlas pixels), pixel for pixel: such as a sprite at a UI
+scale (Sprites.get), drawn in device pixels.
 -}
-block : Color -> Coord units -> Coord units -> List (Triangle units)
-block color position size =
-    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 250, 250 ) ( 4, 4 )
+atlasRectangle : Color -> Coord units -> Coord units -> ( Int, Int ) -> List (Triangle units)
+atlasRectangle color position size atlasTopLeft =
+    sprite color (Coord.toTuple position) (Coord.toTuple size) atlasTopLeft (Coord.toTuple size)
 
 
 
@@ -446,7 +524,7 @@ type FontSize
 {-| A run of text in one font and colour, for `customText`, with lines drawn across it.
 -}
 type alias Segment =
-    { text : String, color : Color, font : Font, decorations : List Decoration }
+    { text : String, color : Color, font : Font, decorations : List Decoration, link : Maybe String }
 
 
 {-| A line drawn across text, in the text's colour, where Noto Sans says it goes (for the
@@ -710,26 +788,72 @@ layoutSegments fontSize segments =
         |> Tuple.mapFirst List.reverse
 
 
+{-| The address of the link under a point, given from the top left of the text in UI
+pixels, if there is one: segments with a `link` are links. `segments` are laid out as
+`customText` does.
+-}
+linkAt : FontSize -> List Segment -> Coord UiPixels -> Maybe String
+linkAt fontSize segments point =
+    let
+        lineIndex : Int
+        lineIndex =
+            Coord.yRaw point // lineHeightRaw fontSize
+
+        x64 : Int
+        x64 =
+            Coord.xRaw point * 64
+    in
+    if Coord.yRaw point < 0 then
+        Nothing
+
+    else
+        segmentLines segments
+            |> List.drop lineIndex
+            |> List.head
+            |> Maybe.andThen
+                (\line ->
+                    let
+                        ( placed, end ) =
+                            layoutSegments fontSize line
+                    in
+                    List.map2
+                        (\( start, segment ) next -> { start = start, end = next, segment = segment })
+                        placed
+                        (List.map Tuple.first (List.drop 1 placed) ++ [ end ])
+                        |> List.filter (\span -> x64 >= span.start && x64 < span.end)
+                        |> List.head
+                        |> Maybe.andThen (\span -> span.segment.link)
+                )
+
+
 {-| Segments broken into lines at each '\\n'.
 -}
 segmentLines : List Segment -> List (List Segment)
 segmentLines segments =
+    linesOf .text (\part segment -> { segment | text = part }) segments
+
+
+{-| Pieces of text broken into lines at each '\\n', given how to get a piece's text and
+how to make a piece with other text.
+-}
+linesOf : (a -> String) -> (String -> a -> a) -> List a -> List (List a)
+linesOf getText withText pieces =
     let
         ( current, done ) =
             List.foldl
-                (\segment state ->
-                    case String.split "\n" segment.text of
+                (\piece state ->
+                    case String.split "\n" (getText piece) of
                         first :: rest ->
                             List.foldl
-                                (\part ( line, lines ) -> ( [ { segment | text = part } ], List.reverse line :: lines ))
-                                (Tuple.mapFirst ((::) { segment | text = first }) state)
+                                (\part ( line, lines ) -> ( [ withText part piece ], List.reverse line :: lines ))
+                                (Tuple.mapFirst ((::) (withText first piece)) state)
                                 rest
 
                         [] ->
                             state
                 )
                 ( [], [] )
-                segments
+                pieces
     in
     List.reverse (List.reverse current :: done)
 
@@ -769,7 +893,7 @@ caretPositions fontSize font string =
 -}
 text : UiScale -> Color -> FontSize -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
 text uiScale color fontSize font clip string position =
-    customText uiScale fontSize clip [ { text = string, color = color, font = font, decorations = [] } ] position
+    customText uiScale fontSize clip [ { text = string, color = color, font = font, decorations = [], link = Nothing } ] position
 
 
 {-| Runs of text, each in its own colour and font but all the same size, one after
@@ -832,6 +956,220 @@ customText uiScale fontSize clip segments position =
         |> List.concat
 
 
+{-| Where `query` is in some text, as ranges of the text's characters (start, end) in
+order, with ones that touch or overlap joined. Case is ignored, and a '\\n' in the text counts as
+a space, so a match can go from one line to the next, as wrapped text has a '\\n' where
+the space was. An empty query is found nowhere.
+-}
+findMatches : String -> List Segment -> List ( Int, Int )
+findMatches query segments =
+    let
+        needle : String
+        needle =
+            findKey query
+    in
+    if String.isEmpty needle then
+        []
+
+    else
+        let
+            length : Int
+            length =
+                String.length needle
+        in
+        String.indexes needle (findKey (String.concat (List.map .text segments)))
+            |> List.foldl
+                (\start acc ->
+                    case acc of
+                        ( lastStart, lastEnd ) :: rest ->
+                            if start <= lastEnd then
+                                ( lastStart, max lastEnd (start + length) ) :: rest
+
+                            else
+                                ( start, start + length ) :: acc
+
+                        [] ->
+                            [ ( start, start + length ) ]
+                )
+                []
+            |> List.reverse
+
+
+{-| Text as `findMatches` compares it: lower case, with '\\n' as a space. Each character
+stays one character (one whose lower case is longer is kept as it is), so positions in
+it are positions in the text.
+-}
+findKey : String -> String
+findKey string =
+    String.map
+        (\char ->
+            if char == '\n' then
+                ' '
+
+            else
+                let
+                    lower : Char
+                    lower =
+                        Char.toLower char
+                in
+                if String.length (String.fromChar lower) == String.length (String.fromChar char) then
+                    lower
+
+                else
+                    char
+        )
+        string
+
+
+{-| `customText` with each match of `query` (see `findMatches`) on an `otherBackground`
+rectangle as tall as the line, except the `selected` one (an index into `findMatches`),
+which is on `background`, in `color`. With no matches it's just `customText`.
+The matched characters are laid out as segments of their own, so there is no kerning
+between them and the characters next to them.
+-}
+foundText :
+    UiScale
+    -> { query : String, selected : Maybe Int, background : Color, color : Color, otherBackground : Color }
+    -> FontSize -> Bounds UiPixels -> List Segment -> Coord UiPixels -> List (Triangle DevicePixels)
+foundText uiScale found fontSize clip segments position =
+    case findMatches found.query segments of
+        [] ->
+            customText uiScale fontSize clip segments position
+
+        matches ->
+            let
+                pieces : List ( Maybe Int, Segment )
+                pieces =
+                    splitAtMatches matches segments
+
+                s =
+                    Units.scaleInt uiScale
+
+                ( x, y ) =
+                    Coord.toTuple position
+
+                deviceClip =
+                    { left = Quantity.unwrap (Coord.x clip.topLeft) * s
+                    , right = Quantity.unwrap (Coord.x clip.bottomRight) * s
+                    , top = Quantity.unwrap (Coord.y clip.topLeft) * s
+                    , bottom = Quantity.unwrap (Coord.y clip.bottomRight) * s
+                    }
+
+                height =
+                    lineHeightRaw fontSize
+
+                backgrounds : List (Triangle DevicePixels)
+                backgrounds =
+                    List.indexedMap
+                        (\lineIndex line ->
+                            let
+                                ( placed, end ) =
+                                    layoutSegments fontSize (List.map Tuple.second line)
+
+                                starts : List Int
+                                starts =
+                                    List.map Tuple.first placed
+                            in
+                            List.map3
+                                (\( match, _ ) start next ->
+                                    if match /= Nothing && next > start then
+                                        let
+                                            left =
+                                                ((x * 64 + start) * s + 32) // 64
+
+                                            right =
+                                                ((x * 64 + next) * s + 32) // 64
+                                        in
+                                        clippedSprite
+                                            (if match == found.selected then
+                                                found.background
+
+                                             else
+                                                found.otherBackground
+                                            )
+                                            deviceClip ( left, (y + lineIndex * height) * s ) ( right - left, height * s ) ( 2, 2 ) ( 4, 4 )
+                                            |> fromSprite Sprites.Solid
+
+                                    else
+                                        []
+                                )
+                                line
+                                starts
+                                (List.drop 1 starts ++ [ end ])
+                                |> List.concat
+                        )
+                        (linesOf (\( _, segment ) -> segment.text) (\part ( match, segment ) -> ( match, { segment | text = part } )) pieces)
+                        |> List.concat
+            in
+            backgrounds
+                ++ customText
+                    uiScale
+                    fontSize
+                    clip
+                    (List.map
+                        (\( match, segment ) ->
+                            if match /= Nothing && match == found.selected then
+                                { segment | color = found.color }
+
+                            else
+                                segment
+                        )
+                        pieces
+                    )
+                    position
+
+
+{-| Segments cut where the matches (ranges of their characters, in order, not
+overlapping) start and end, each piece saying which match it is in, if any (counted
+from 0). Empty pieces are left out.
+-}
+splitAtMatches : List ( Int, Int ) -> List Segment -> List ( Maybe Int, Segment )
+splitAtMatches matches segments =
+    List.foldl
+        (\segment ( offset, remaining, acc ) ->
+            let
+                length =
+                    String.length segment.text
+
+                segmentEnd =
+                    offset + length
+
+                -- The pieces from `at` to the segment's end, and the matches left
+                -- for the next segments.
+                cut : Int -> List ( Int, Int, Int ) -> List ( Maybe Int, Segment ) -> ( List ( Int, Int, Int ), List ( Maybe Int, Segment ) )
+                cut at matches2 pieces =
+                    case matches2 of
+                        ( index, start, end ) :: rest ->
+                            if start >= segmentEnd then
+                                ( matches2, piece Nothing at segmentEnd pieces )
+
+                            else if end > segmentEnd then
+                                ( matches2, piece (Just index) (max at start) segmentEnd (piece Nothing at (max at start) pieces) )
+
+                            else
+                                cut end rest (piece (Just index) (max at start) end (piece Nothing at (max at start) pieces))
+
+                        [] ->
+                            ( [], piece Nothing at segmentEnd pieces )
+
+                piece : Maybe Int -> Int -> Int -> List ( Maybe Int, Segment ) -> List ( Maybe Int, Segment )
+                piece match from to pieces =
+                    if to > from then
+                        ( match, { segment | text = String.slice (from - offset) (to - offset) segment.text } ) :: pieces
+
+                    else
+                        pieces
+
+                ( remaining2, acc2 ) =
+                    cut offset remaining acc
+            in
+            ( segmentEnd, remaining2, acc2 )
+        )
+        ( 0, List.indexedMap (\index ( start, end ) -> ( index, start, end )) matches, [] )
+        segments
+        |> (\( _, _, acc ) -> List.reverse acc)
+
+
 {-| One kind of line across one line of text: a rectangle for each run of segments next to
 each other that have it and share a colour. It's as thick as the font says, rounded to
 whole device pixels (at least one), and its edges are on whole pixels.
@@ -883,7 +1221,8 @@ decorationRun s fontSize deviceClip baseline decoration line spans =
                 left =
                     (run.left64 + 32) // 64
             in
-            clippedSprite run.color deviceClip ( left, top ) ( (run.right64 + 32) // 64 - left, thickness ) ( 250, 250 ) ( 4, 4 )
+            clippedSprite run.color deviceClip ( left, top ) ( (run.right64 + 32) // 64 - left, thickness ) ( 2, 2 ) ( 4, 4 )
+                |> fromSprite Sprites.Solid
         )
         runs
 
@@ -1002,7 +1341,7 @@ monoChar color position char =
 -}
 textSize : FontSize -> Font -> String -> Coord UiPixels
 textSize fontSize font string =
-    customTextSize fontSize [ { text = string, color = Color.textColor, font = font, decorations = [] } ]
+    customTextSize fontSize [ { text = string, color = Color.textColor, font = font, decorations = [], link = Nothing } ]
 
 
 {-| The size of `customText`'s segments: its widest line by its lines.
@@ -1139,7 +1478,7 @@ joinLines lines =
 
         style : Segment
         style =
-            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [] }
+            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [], link = Nothing }
     in
     case lines of
         first :: rest ->
@@ -1339,7 +1678,7 @@ pushSegment : Segment -> List Segment -> List Segment
 pushSegment segment line =
     case line of
         last :: rest ->
-            if last.color == segment.color && last.font == segment.font then
+            if last.color == segment.color && last.font == segment.font && last.decorations == segment.decorations && last.link == segment.link then
                 { last | text = last.text ++ segment.text } :: rest
 
             else

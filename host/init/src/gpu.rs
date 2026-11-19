@@ -8,8 +8,8 @@
 //!                 "ok CURSOR RENDERER" once they are up; then "f GPU_NS" for each
 //!                 frame shown, or "d" for one skipped
 //!   its fd 3   <- cursor commands: "m CONNECTOR X Y" shows it at X, Y on that display
-//!                 (and on no other), "c RGBA S W H PIXELS" redraws it: fill colour,
-//!                 scale and the picture (common::cursor::Picture::line)
+//!                 (and on no other), "c RGBA W H HX HY PIXELS" redraws it: fill colour
+//!                 and the picture (common::cursor::Picture::line)
 
 use common::atlas::Tri;
 use common::cursor::Picture;
@@ -221,8 +221,8 @@ impl Gpu {
     }
 
     /// False if the renderer didn't get it (try again later).
-    pub fn cursor_redraw(&mut self, fill: u32, scale: usize, picture: &Picture) -> bool {
-        self.cursor_command(&format!("c {fill} {scale} {}\n", picture.line()))
+    pub fn cursor_redraw(&mut self, fill: u32, picture: &Picture) -> bool {
+        self.cursor_command(&format!("c {fill} {}\n", picture.line()))
     }
 
     /// Reads the renderer's "f GPU_NS" (shown) and "d" (skipped) lines. Returns how

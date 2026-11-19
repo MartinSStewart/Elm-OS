@@ -18,6 +18,7 @@ import HackerNews.Types
 import News.Types
 import ScreenshotViewer.Types
 import TicTacToe.Types
+import WebViewer.Types
 import Wifi exposing (Ssid)
 
 
@@ -52,12 +53,18 @@ type UiId
     | CloseNetworkButton
     | WeatherAppButton
     | CloseWeatherButton
+      -- The find bar (Ctrl+F): its text box and buttons.
+    | FindInput
+    | FindPreviousButton
+    | FindNextButton
+    | CloseFindButton
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId
     | Email Email.Types.UiId
+    | WebViewer WebViewer.Types.UiId
     | ScreenshotViewer ScreenshotViewer.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
