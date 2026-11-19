@@ -738,7 +738,7 @@ postsView lazyCache windowSize data =
 
         title : Element id
         title =
-            Ui.customText Small [ { text = "Hacker News", color = Color.black, font = Sans Bold } ]
+            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold } ]
     in
     Ui.column
         titleSpacing
@@ -770,7 +770,7 @@ postView width index { id, title, comments } =
         (Ui.row
             spacing
             [ Ui.colorText
-                Color.lightFont
+                Color.dimTextColor
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
             , Ui.text
                 (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
@@ -779,7 +779,7 @@ postView width index { id, title, comments } =
         (Ui.right
             { width = countWidth }
             (Ui.colorText
-                Color.lightFont
+                Color.dimTextColor
                 (String.fromInt comments
                     ++ (if comments == 1 then
                             " comment"
@@ -795,7 +795,7 @@ postView width index { id, title, comments } =
             , padding = Ui.paddingXY 0 postPadding
             , inFront = []
             , borderAndFill = Ui.NoBorderOrFill
-            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.white }
+            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
             }
 
 
@@ -826,7 +826,7 @@ commentsView lazyCache windowSize postId title comments =
             , Ui.customText
                 Small
                 [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title
-                  , color = Color.black
+                  , color = Color.textColor
                   , font = Sans Bold
                   }
                 ]
@@ -912,10 +912,10 @@ commentView lazyCache width (Comment comment) =
 -}
 commentHeader : String -> Maybe String -> List { text : String, color : Color.Color, font : Font }
 commentHeader author date =
-    { text = author ++ "  ", color = Color.black, font = Sans Bold }
+    { text = author ++ "  ", color = Color.textColor, font = Sans Bold }
         :: (case date of
                 Just text ->
-                    [ { text = text ++ "  ", color = Color.lightFont, font = Sans Regular } ]
+                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular } ]
 
                 Nothing ->
                     []
@@ -923,24 +923,37 @@ commentHeader author date =
 
 
 {-| The color of comment text that is `grey` light on Hacker News's page: that share of
-the way from black to the window's fill, so that it fades the same on our background.
+the way from black to white there, so here that share of the way from our text color to
+the window's fill, so that it fades the same into our background.
 -}
 greyColor : Int -> Color.Color
 greyColor grey =
     let
+        textInt : Int
+        textInt =
+            Color.toInt Color.textColor
+
         fill : Int
         fill =
             Color.toInt Color.fillColor
+
+        channel : Int -> Int
+        channel shift =
+            let
+                from =
+                    modBy 256 (textInt // shift)
+
+                to =
+                    modBy 256 (fill // shift)
+            in
+            from + (to - from) * grey // 255
     in
-    Color.rgb255
-        (fill // 16777216 * grey // 255)
-        (modBy 256 (fill // 65536) * grey // 255)
-        (modBy 256 (fill // 256) * grey // 255)
+    Color.rgb255 (channel 16777216) (channel 65536) (channel 256)
 
 
 toggleButton : Int -> String -> Element UiId
 toggleButton index label =
-    Ui.monoColorText Color.lightFont label
+    Ui.monoColorText Color.dimTextColor label
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.CommentToggle index)
             , padding = Ui.noPadding

@@ -874,7 +874,7 @@ monoChar color position char =
 -}
 textSize : FontSize -> Font -> String -> Coord UiPixels
 textSize fontSize font string =
-    customTextSize fontSize [ { text = string, color = Color.black, font = font } ]
+    customTextSize fontSize [ { text = string, color = Color.textColor, font = font } ]
 
 
 {-| The size of `customText`'s segments: its widest line by its lines.
@@ -1011,7 +1011,7 @@ joinLines lines =
 
         style : Segment
         style =
-            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.black, font = Sans Regular }
+            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular }
     in
     case lines of
         first :: rest ->

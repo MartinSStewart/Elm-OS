@@ -706,7 +706,7 @@ view scale viewport style offset hasFocus model =
                 (size style)
                 ++ Sprite.rectangle
                     (if hasFocus then
-                        Color.highlightColor
+                        Color.focusedInputColor
 
                      else
                         Color.fillColor3
@@ -756,7 +756,7 @@ view scale viewport style offset hasFocus model =
 
                             else
                                 Sprite.rectangle
-                                    (Color.rgb255 170 210 255)
+                                    (Color.selectionColor)
                                     viewport
                                     (Coord.xy (max clip.left left) (top l.line))
                                     (Coord.xy (min clip.right right - max clip.left left) height)
@@ -768,7 +768,7 @@ view scale viewport style offset hasFocus model =
         caret =
             if hasFocus && cursorLine >= scroll && cursorLine < scroll + style.lines then
                 Sprite.rectangle
-                    Color.black
+                    Color.textColor
                     viewport
                     (Coord.xy
                         (textLeft + caretX (carets style (lineAt ls cursorLine)) cursorColumn - caretWidth style)
@@ -792,7 +792,7 @@ view scale viewport style offset hasFocus model =
             (\l ->
                 Sprite.text
                     scale
-                    Color.black
+                    Color.textColor
                     style.fontSize
                     style.font
                     { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }

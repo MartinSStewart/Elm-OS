@@ -2403,7 +2403,7 @@ headingSize =
 -}
 heading : String -> Ui.Element id
 heading string =
-    Ui.customText headingSize [ { text = string, color = Color.black, font = sans } ]
+    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans } ]
 
 
 {-| Everything the UI framework draws on a display: the toolbar along the top, each
@@ -3243,7 +3243,7 @@ wiredRows model =
 
 connectedColor : Color
 connectedColor =
-    Color.rgb255 30 120 60
+    Color.successColor
 
 
 networkRow : Model -> Wifi.Network -> Ui.Element UiId
@@ -3322,7 +3322,7 @@ signalBars dbm =
             in
             Sprite.rectangle
                 (if i < filled then
-                    Color.rgb255 40 40 40
+                    Color.textColor
 
                  else
                     Color.outlineColor
@@ -3542,7 +3542,7 @@ toolbar model display =
                         , padding = small
                         , inFront = []
                         , borderAndFill =
-                            Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.rgb255 230 150 140 }
+                            Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.dangerColor }
                         , borderAndFillFocus = Ui.defaultButtonBorderAndFillFocus
                         }
                         (Ui.text "Yes")

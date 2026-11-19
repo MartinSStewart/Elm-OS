@@ -631,10 +631,10 @@ view focused model =
 
         bigLine =
             if Coord.xRaw (Sprite.textSize Big sans big) <= inner then
-                line Big Color.black big
+                line Big Color.textColor big
 
             else
-                line Small Color.black (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
+                line Small Color.textColor (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
 
         displayBox =
             Ui.el
@@ -648,10 +648,10 @@ view focused model =
 
                             else
                                 Color.outlineColor
-                        , fillColor = Color.white
+                        , fillColor = Color.fillColor3
                         }
                 }
-                (Ui.column 0 [ line Small (Color.rgb255 110 100 90) (expression model), bigLine ])
+                (Ui.column 0 [ line Small (Color.dimTextColor) (expression model), bigLine ])
 
         title =
             Ui.leftAndRight (Units.uiPixels width)
@@ -699,7 +699,7 @@ keyRow model row =
                 Ui.selectableButton
                     { id = Calculator (Calculator.Types.KeyButton key), padding = Ui.noPadding }
                     (isPendingOperator model key)
-                    (Ui.center { size = size } (Ui.customText fontSize [ { text = label, color = Color.black, font = sans } ]))
+                    (Ui.center { size = size } (Ui.customText fontSize [ { text = label, color = Color.textColor, font = sans } ]))
             )
             row
         )

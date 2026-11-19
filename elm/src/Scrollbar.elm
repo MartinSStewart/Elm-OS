@@ -215,7 +215,7 @@ view clip trackPosition geometry scrolled state =
                 in
                 (if state.scrollbarWidened > 0 then
                     Sprite.rectangle
-                        (Color.rgba255 60 50 45 (alpha (40 * state.scrollbarWidened)))
+                        (Color.scrollbarColor (alpha (40 * state.scrollbarWidened)))
                         clip
                         trackPosition
                         (Coord.xy width geometry.track)
@@ -224,7 +224,7 @@ view clip trackPosition geometry scrolled state =
                     []
                 )
                     ++ Sprite.rectangle
-                        (Color.rgba255 60 50 45 (alpha 150))
+                        (Color.scrollbarColor (alpha 150))
                         clip
                         (Coord.plus (Coord.xy (width - thumbMargin - thumbWidth) (thumb2.top + 1)) trackPosition)
                         (Coord.xy thumbWidth (thumb2.height - 2))

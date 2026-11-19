@@ -554,7 +554,7 @@ view scale viewport style offset hasFocus isValid current =
                 (size style)
                 ++ Sprite.rectangle
                     (if hasFocus then
-                        Color.highlightColor
+                        Color.focusedInputColor
 
                      else
                         Color.fillColor3
@@ -567,7 +567,7 @@ view scale viewport style offset hasFocus isValid current =
 
                     else
                         Sprite.rectangle
-                            (Color.rgb255 170 210 255)
+                            (Color.selectionColor)
                             viewport
                             (Coord.xy (max clip.left selectionStart) (y + padding))
                             (Coord.xy (min clip.right selectionEnd - max clip.left selectionStart) height)
@@ -576,7 +576,7 @@ view scale viewport style offset hasFocus isValid current =
         caret =
             if hasFocus then
                 Sprite.rectangle
-                    Color.black
+                    Color.textColor
                     viewport
                     (Coord.xy (textLeft + caretX positions current.cursorPosition - caretWidth style) (y + padding))
                     (Coord.xy (caretWidth style) height)
@@ -587,7 +587,7 @@ view scale viewport style offset hasFocus isValid current =
     Sprite.toDevice scale box
         ++ Sprite.text
             scale
-            Color.black
+            Color.textColor
             style.fontSize
             style.font
             { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }

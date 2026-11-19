@@ -1162,7 +1162,7 @@ size or font use `monoText` or `customText`.
 -}
 text : String -> Element id
 text =
-    colorText Color.black
+    colorText Color.textColor
 
 
 {-| `text` in a given colour.
@@ -1176,7 +1176,7 @@ colorText color text2 =
 -}
 monoText : String -> Element id
 monoText =
-    monoColorText Color.black
+    monoColorText Color.textColor
 
 
 {-| `monoText` in a given colour.
@@ -1191,9 +1191,9 @@ font size, so every line is the same height whichever fonts it mixes. '\\n' in a
 them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
     Ui.customText Sprite.Small
-        [ { text = "Run ", color = Color.black, font = Sprite.Sans Sprite.Regular }
-        , { text = "make check", color = Color.black, font = Sprite.Mono }
-        , { text = " first.", color = Color.black, font = Sprite.Sans Sprite.Italic }
+        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular }
+        , { text = "make check", color = Color.textColor, font = Sprite.Mono }
+        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic }
         ]
 
 -}
@@ -2239,7 +2239,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             scale
                             viewport3
                             position
-                            (BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 })
+                            (BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor })
                             data.cachedSize
 
                      else
@@ -2279,7 +2279,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                     in
                                     if opacity > 0 then
                                         Sprite.circle
-                                            (Color.rgba255 251 241 233 opacity)
+                                            (Color.pressColor opacity)
                                             1
                                             (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
                                             (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUiPixels |> min 100)
@@ -2312,16 +2312,16 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         (if showUiBorder then
                             case data.borderAndFill of
                                 NoBorderOrFill ->
-                                    BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 }
+                                    BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor }
 
                                 BorderOnly _ ->
-                                    BorderOnly { borderWidth = 1, borderColor = Color.rgb255 0 0 255 }
+                                    BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor }
 
                                 FillOnly fillColor ->
-                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = fillColor }
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.focusedUiColor, fillColor = fillColor }
 
                                 BorderAndFill data2 ->
-                                    BorderAndFill { borderWidth = 1, borderColor = Color.rgb255 0 0 255, fillColor = data2.fillColor }
+                                    BorderAndFill { borderWidth = 1, borderColor = Color.focusedUiColor, fillColor = data2.fillColor }
 
                          else
                             data.borderAndFill
