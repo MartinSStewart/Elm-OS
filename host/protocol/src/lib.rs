@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(scenes.iter().map(|s| s.display).collect::<Vec<_>>(), vec![33, 34]);
         assert_eq!(read_render(&scenes[1].triangles), Some(vec![]));
         let bytes = &scenes[0].triangles;
-        let at = |x, y| [x, y, 252.0, 252.0];
+        let at = |x, y| [x, y, 4.0, 3588.0];
         assert_eq!(
             read_render(bytes),
             Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff, linear: 0, tile: [0; 4] }])

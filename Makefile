@@ -429,7 +429,7 @@ release: check-migration
 # assembly, which cargo compiles with musl-gcc.
 CARGO       ?= cargo
 RUST_TARGET := x86_64-unknown-linux-musl
-HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu -name '*.rs' -o -name '*.rle' -o -name Cargo.toml)
+HOST_SRC    := host/Cargo.toml host/Cargo.lock $(shell find host/common host/protocol host/init host/link host/gpu -name '*.rs' -o -name '*.rle' -o -name '*.webp' -o -name Cargo.toml)
 # Paths to this checkout and to cargo's crate sources end up in panic messages and in
 # ring's C code; map them to fixed names so the output doesn't depend on where they are.
 CARGO_HOME_DIR := $(or $(CARGO_HOME),$(HOME)/.cargo)
