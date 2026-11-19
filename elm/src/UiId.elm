@@ -18,6 +18,7 @@ import HackerNews.Types
 import News.Types
 import ScreenshotViewer.Types
 import TicTacToe.Types
+import WebViewer.Types
 import Wifi exposing (Ssid)
 
 
@@ -58,6 +59,7 @@ type UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId
     | Email Email.Types.UiId
+    | WebViewer WebViewer.Types.UiId
     | ScreenshotViewer ScreenshotViewer.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey

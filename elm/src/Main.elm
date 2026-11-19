@@ -55,6 +55,8 @@ import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
+import WebViewer
+import WebViewer.Types
 import Weather
 import Wifi exposing (Ssid)
 import Wired
@@ -340,6 +342,7 @@ type alias Model =
     , news : NewsState
     , hackerNews : HackerNews.Model
     , email : Email.Model
+    , webViewer : WebViewer.Model
     , asciiCollab : AsciiCollab.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
@@ -384,6 +387,7 @@ type App
     | NewsApp
     | HackerNewsApp
     | EmailApp
+    | WebViewerApp
     | AsciiCollabApp
     | CalculatorApp
     | TicTacToeApp
@@ -398,7 +402,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
 
 
 type WeatherState
@@ -454,6 +458,7 @@ init =
     , news = NewsNotRequested
     , hackerNews = HackerNews.init
     , email = Email.init
+    , webViewer = WebViewer.init
     , asciiCollab = AsciiCollab.init
     , calculator = Calculator.init
     , calculatorOpen = False
@@ -661,6 +666,11 @@ step event model =
 
                         HackerNewsRequest request2 ->
                             ( { model | hackerNews = HackerNews.gotHttpRequest request2 result model.hackerNews }
+                            , []
+                            )
+
+                        WebViewerRequest count ->
+                            ( { model | webViewer = WebViewer.gotHttpRequest count result model.webViewer }
                             , []
                             )
 
@@ -878,6 +888,9 @@ step event model =
 
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
+
+            else if model.uiState.focus == Just (WebViewer WebViewer.Types.UrlInput) && model.webViewer.isOpen then
+                webViewerKey key model
 
             else if emailFieldFocused model /= Nothing then
                 case emailFieldFocused model of
@@ -1236,6 +1249,14 @@ appButton id =
                 _ ->
                     Nothing
 
+        WebViewer id2 ->
+            case id2 of
+                WebViewer.Types.OpenButton ->
+                    Just WebViewerApp
+
+                _ ->
+                    Nothing
+
         AsciiCollab id2 ->
             case id2 of
                 AsciiCollab.Types.OpenButton ->
@@ -1328,6 +1349,9 @@ appIsOpen app model =
 
         EmailApp ->
             model.email.isOpen
+
+        WebViewerApp ->
+            model.webViewer.isOpen
 
         AsciiCollabApp ->
             model.asciiCollab.isOpen
@@ -1612,6 +1636,9 @@ clickElement model id =
         Email uiId2 ->
             emailClick uiId2 model
 
+        WebViewer uiId2 ->
+            webViewerClick uiId2 model
+
         ScreenshotViewer uiId2 ->
             ( { model
                 | screenshotViewer =
@@ -1664,6 +1691,127 @@ hackerNewsClick uiId model =
         ( { model | hackerNews = hackerNews }, [] )
         effects
         |> Tuple.mapSecond List.reverse
+
+
+{-| A click on one of the website viewer's elements. The address box and Go button
+need the text typed in the box, which Ui keeps.
+-}
+webViewerClick : WebViewer.Types.UiId -> Model -> ( Model, List Effect )
+webViewerClick uiId model =
+    case uiId of
+        WebViewer.Types.UrlInput ->
+            ( { model | uiState = Ui.setFocus (Just (WebViewer uiId)) model.uiState }, [] )
+
+        WebViewer.Types.GoButton ->
+            webViewerGo model
+
+        _ ->
+            ( { model | webViewer = WebViewer.onClick uiId model.webViewer }, [] )
+
+
+{-| Loads the page whose address is in the box.
+-}
+webViewerGo : Model -> ( Model, List Effect )
+webViewerGo model =
+    let
+        typed : String
+        typed =
+            Ui.getTextInput (WebViewer WebViewer.Types.UrlInput) model.uiState |> .current |> .text
+
+        ( webViewer, request ) =
+            WebViewer.go typed model.webViewer
+    in
+    ( { model | webViewer = webViewer }
+    , case request of
+        Just ( count, url ) ->
+            [ httpGet (WebViewerRequest count) url ]
+
+        Nothing ->
+            []
+    )
+
+
+{-| A key typed in the website viewer's address box.
+-}
+webViewerKey : Key -> Model -> ( Model, List Effect )
+webViewerKey key model =
+    let
+        id : UiId
+        id =
+            WebViewer WebViewer.Types.UrlInput
+    in
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
+            webViewerGo model
+
+        ( False, Keyboard.Escape ) ->
+            ( { model | uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        ( True, Keyboard.Character "v" ) ->
+            ( { model
+                | uiState =
+                    Ui.updateElement
+                        id
+                        (\maybe ->
+                            TextInput.paste
+                                model.clipboard
+                                (case maybe of
+                                    Just (TextInputState state) ->
+                                        state
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+              }
+            , []
+            )
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput id model.uiState)
+            in
+            ( { model
+                | uiState = Ui.insertElement id (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+            , []
+            )
+
+
+dragSelectWebViewer : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectWebViewer focus mouse position model =
+    { model
+        | uiState =
+            Ui.updateElement
+                focus
+                (\maybe ->
+                    TextInput.mouseDownMove
+                        (WebViewer.urlStyle (appUiSize WebViewerApp model))
+                        mouse
+                        position
+                        (case maybe of
+                            Just (TextInputState state) ->
+                                state
+
+                            _ ->
+                                TextInput.init
+                        )
+                        |> TextInputState
+                        |> Just
+                )
+                model.uiState
+    }
 
 
 {-| A click on one of the email app's elements. The form's boxes and Link button need
@@ -1852,6 +2000,7 @@ type HttpRequestId
     | ForecastRequest
     | NewsRequest
     | HackerNewsRequest HackerNews.HttpRequestId
+    | WebViewerRequest Int
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -1869,6 +2018,9 @@ httpRequestIdToString request =
         HackerNewsRequest request2 ->
             "hackernews_" ++ HackerNews.httpRequestIdToString request2
 
+        WebViewerRequest count ->
+            "webviewer_" ++ WebViewer.requestIdToString count
+
 
 stringToHttpRequestId : String -> Maybe HttpRequestId
 stringToHttpRequestId string =
@@ -1884,6 +2036,9 @@ stringToHttpRequestId string =
 
         "hackernews" :: rest ->
             HackerNews.stringToHttpRequestId rest |> Maybe.map HackerNewsRequest
+
+        "webviewer" :: rest ->
+            WebViewer.stringToRequestId rest |> Maybe.map WebViewerRequest
 
         _ ->
             Nothing
@@ -2158,6 +2313,12 @@ dragSelect focus mouse position model =
             model
 
         HackerNews _ ->
+            model
+
+        WebViewer WebViewer.Types.UrlInput ->
+            dragSelectWebViewer focus mouse position model
+
+        WebViewer _ ->
             model
 
         Email (Email.Types.InputField _) ->
@@ -2750,6 +2911,9 @@ appLimits app model =
         EmailApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy 900 700, max = Coord.xy 1200 100000 }
 
+        WebViewerApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy 900 900, max = Coord.xy 1400 100000 }
+
         HackerNewsApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
 
@@ -2798,6 +2962,9 @@ appView app size model =
 
         EmailApp ->
             Email.view size model.email
+
+        WebViewerApp ->
+            WebViewer.view size model.webViewer
 
         AsciiCollabApp ->
             AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
@@ -3811,6 +3978,10 @@ toolbar model display =
                         { id = Email Email.Types.OpenButton, padding = small }
                         (openHere EmailApp)
                         (Ui.text "Email")
+                    , Ui.selectableButton
+                        { id = WebViewer WebViewer.Types.OpenButton, padding = small }
+                        (openHere WebViewerApp)
+                        (Ui.text "Web viewer")
                     , Ui.selectableButton
                         { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small }
                         (openHere AsciiCollabApp)
