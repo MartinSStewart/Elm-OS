@@ -1,5 +1,6 @@
 module TextInputMultiline exposing
-    ( Model
+    ( Glide(..)
+    , Model
     , Style
     , init
     , keyMsg
@@ -7,12 +8,15 @@ module TextInputMultiline exposing
     , mouseDown
     , mouseDownMove
     , mouseUp
+    , animate
+    , momentum
     , overScrollbar
     , paste
     , size
     , withText
     , view
     , scrollPixels
+    , stopGlide
     , wheel
     )
 
@@ -40,16 +44,18 @@ import TextInput
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
-{-| The text and its history, the first line in view, and while Up, Down, Page Up and
-Page Down are moving the cursor, how far along the line (in UI pixels) it was before
+{-| The text and its history, the first line in view once the box stops scrolling
+(always a whole line) and where it is on the way there, and while Up, Down, Page Up
+and Page Down are moving the cursor, how far along the line (in UI pixels) it was before
 the first of them, so passing through a shorter line doesn't lose the column.
 -}
 type alias Model =
     { input : TextInput.Model
     , scroll : Int
 
-    -- Touchpad scrolling (scrollPixels) not yet a whole line, in UI pixels.
-    , scrollRemainder : Float
+    -- The first line in view now: between lines while it moves.
+    , position : Float
+    , glide : Glide
     , goalX : Maybe Int
 
     -- The overlay scroll bar (Scrollbar.elm), as viewports have.
@@ -57,6 +63,16 @@ type alias Model =
     , scrollbarShown : Float
     , scrollbarWidened : Float
     }
+
+
+{-| How the text is moving: not at all, following two fingers on a touchpad (and how
+long since they last moved), or easing to `scroll`, keeping this much of the distance
+left after a second.
+-}
+type Glide
+    = Still
+    | Fingers Float
+    | Easing Float
 
 
 {-| How the box looks: its font and size, its width, and how many lines tall it is.
@@ -69,7 +85,8 @@ init : Model
 init =
     { input = TextInput.init
     , scroll = 0
-    , scrollRemainder = 0
+    , position = 0
+    , glide = Still
     , goalX = Nothing
     , grab = Nothing
     , scrollbarShown = 0
@@ -419,7 +436,18 @@ scrollToCursor style model =
             else
                 model.scroll
     in
-    { model | scroll = clampScroll style state scroll }
+    if scroll == model.scroll then
+        model
+
+    else
+        jumpTo (clampScroll style state scroll) model
+
+
+{-| Show line `scroll` first, at once.
+-}
+jumpTo : Int -> Model -> Model
+jumpTo scroll model =
+    { model | scroll = scroll, position = toFloat scroll, glide = Still }
 
 
 clampScroll : Style -> TextInput.State -> Int -> Int
@@ -427,41 +455,124 @@ clampScroll style state scroll =
     clamp 0 (max 0 (List.length (lines state.text) - style.lines)) scroll
 
 
-{-| The mouse wheel turned `clicks` (positive is up): scroll three lines a click.
+{-| The mouse wheel turned `clicks` (positive is up): glide three lines a click.
 -}
 wheel : Style -> Int -> Model -> Model
 wheel style clicks model =
-    { model | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks), scrollRemainder = 0 }
+    { model
+        | scroll = clampScroll style model.input.current (model.scroll - 3 * clicks)
+        , glide = Easing wheelKept
+    }
 
 
-{-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down, the text
-following them): scroll a line for each line height they moved.
+{-| How much of the distance left a glide from the wheel (or to the nearest line once
+fingers rest) keeps after a second: a three line step takes about a third of a second.
+-}
+wheelKept : Float
+wheelKept =
+    0.0001
+
+
+{-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down): the text
+moves up as they move down, as a page under a magnifying glass would, and follows them
+smoothly. Once they rest (or lift without a flick) it settles on the nearest line.
 -}
 scrollPixels : Style -> Float -> Model -> Model
 scrollPixels style pixels model =
     let
-        total : Float
-        total =
-            model.scrollRemainder + pixels
+        position : Float
+        position =
+            model.position
+                + pixels
+                / toFloat (lineHeight style)
+                |> clamp 0 (toFloat (clampScroll style model.input.current 1000000000))
+    in
+    { model | position = position, scroll = round position, glide = Fingers 0 }
 
-        lineCount : Int
-        lineCount =
-            truncate (total / toFloat (lineHeight style))
 
-        scroll : Int
-        scroll =
-            clampScroll style model.input.current (model.scroll - lineCount)
+{-| Two fingers lifted from the touchpad at `velocity` UI pixels a second (positive is
+down): glide on, slowing down as a viewport does (keeping `kept` of its speed after a
+second), and stop on the whole line nearest to where that would stop.
+-}
+momentum : Style -> Float -> Float -> Model -> Model
+momentum style kept velocity model =
+    let
+        -- Slowing down like that, it goes velocity / ln (1 / kept) in all.
+        distance : Float
+        distance =
+            velocity / toFloat (lineHeight style) / -(logBase e kept)
     in
     { model
-        | scroll = scroll
-        , scrollRemainder =
-            if scroll == model.scroll - lineCount then
-                total - toFloat (lineCount * lineHeight style)
+        | scroll = clampScroll style model.input.current (round (model.position + distance))
+        , glide = Easing kept
+    }
+
+
+{-| A finger touched the touchpad: stop gliding (where it is, until the fingers move it
+or rest and it settles on a line).
+-}
+stopGlide : Model -> Model
+stopGlide model =
+    case model.glide of
+        Easing _ ->
+            { model | scroll = round model.position, glide = Fingers 0 }
+
+        Fingers _ ->
+            model
+
+        Still ->
+            model
+
+
+{-| A frame, `seconds` after the last: move on towards `scroll`.
+-}
+animate : Float -> Model -> Model
+animate seconds model =
+    case model.glide of
+        Still ->
+            model
+
+        Fingers resting ->
+            if resting + seconds > fingersRest then
+                { model | glide = Easing wheelKept }
 
             else
-                -- at the top or bottom: don't save up scrolling past it
-                0
-    }
+                { model | glide = Fingers (resting + seconds) }
+
+        Easing kept ->
+            let
+                left : Float
+                left =
+                    toFloat model.scroll - model.position
+
+                -- The distance shrinks by `kept` a second, but never slower than
+                -- minimumSpeed, so it doesn't creep up on the line.
+                step : Float
+                step =
+                    max (abs left * (1 - kept ^ seconds)) (minimumSpeed * seconds)
+            in
+            if step >= abs left || isNaN step then
+                { model | position = toFloat model.scroll, glide = Still }
+
+            else if left > 0 then
+                { model | position = model.position + step }
+
+            else
+                { model | position = model.position - step }
+
+
+{-| Fingers that haven't moved for this many seconds are resting: the text settles on a line.
+-}
+fingersRest : Float
+fingersRest =
+    0.15
+
+
+{-| Lines a second.
+-}
+minimumSpeed : Float
+minimumSpeed =
+    3
 
 
 
@@ -487,13 +598,7 @@ indexAt style mousePosition position model =
 
         line =
             -- rounded down, so above the box is the line before the first in view
-            (if relativeY < 0 then
-                relativeY // lineHeight style - 1
-
-             else
-                relativeY // lineHeight style
-            )
-                + model.scroll
+            floor (toFloat (relativeY + shownPixels style model) / toFloat (lineHeight style))
     in
     if line < 0 then
         0
@@ -593,17 +698,28 @@ scrollbarPosition style =
 -}
 scrolledPixels : Style -> Model -> Float
 scrolledPixels style model =
-    toFloat (model.scroll * lineHeight style)
+    model.position * toFloat (lineHeight style)
+
+
+{-| How far the text is scrolled down now, in whole UI pixels.
+-}
+shownPixels : Style -> Model -> Int
+shownPixels style model =
+    round (scrolledPixels style model)
+
+
+{-| The first line (even partly) in view now.
+-}
+firstLine : Model -> Int
+firstLine model =
+    floor model.position
 
 
 {-| Scroll to the line nearest `pixels` down (the box moves a line at a time).
 -}
 scrollToPixels : Style -> Float -> Model -> Model
 scrollToPixels style pixels model =
-    { model
-        | scroll = clampScroll style model.input.current (round (pixels / toFloat (lineHeight style)))
-        , scrollRemainder = 0
-    }
+    jumpTo (clampScroll style model.input.current (round (pixels / toFloat (lineHeight style)))) model
 
 
 
@@ -657,8 +773,8 @@ view scale viewport style offset hasFocus model =
         state =
             model.input.current
 
-        scroll =
-            model.scroll
+        first =
+            firstLine model
 
         ls =
             lines state.text
@@ -675,6 +791,15 @@ view scale viewport style offset hasFocus model =
         clip =
             { left = x + padding, right = x + width style - padding }
 
+        -- The text area, where lines partly scrolled out of it are cut off.
+        textArea : Bounds UiPixels
+        textArea =
+            Bounds.fromTopLeftAndSize
+                (Coord.xy (x + padding) (y + padding))
+                (Coord.xy (width style - 2 * padding) (height * style.lines))
+                |> Bounds.intersection viewport
+                |> Maybe.withDefault (Bounds.fromTopLeftAndSize offset Coord.origin)
+
         selectionStart =
             TextInput.selectionMin state
 
@@ -684,11 +809,11 @@ view scale viewport style offset hasFocus model =
         visible =
             List.map2 (\start l -> ( start, l )) (lineStarts ls) ls
                 |> List.indexedMap (\n ( start, l ) -> { line = n, start = start, text = l })
-                |> List.drop scroll
-                |> List.take style.lines
+                |> List.drop first
+                |> List.take (style.lines + 1)
 
         top n =
-            y + padding + (n - scroll) * height
+            y + padding + n * height - shownPixels style model
 
         ( boxWidth, boxHeight ) =
             Coord.toTuple (size style)
@@ -756,8 +881,8 @@ view scale viewport style offset hasFocus model =
 
                             else
                                 Sprite.rectangle
-                                    (Color.selectionColor)
-                                    viewport
+                                    Color.selectionColor
+                                    textArea
                                     (Coord.xy (max clip.left left) (top l.line))
                                     (Coord.xy (min clip.right right - max clip.left left) height)
                         )
@@ -766,10 +891,10 @@ view scale viewport style offset hasFocus model =
             lineAndColumn state.text state.cursorPosition
 
         caret =
-            if hasFocus && cursorLine >= scroll && cursorLine < scroll + style.lines then
+            if hasFocus && cursorLine >= first && cursorLine <= first + style.lines then
                 Sprite.rectangle
                     Color.textColor
-                    viewport
+                    textArea
                     (Coord.xy
                         (textLeft + caretX (carets style (lineAt ls cursorLine)) cursorColumn - caretWidth style)
                         (top cursorLine)
@@ -795,7 +920,7 @@ view scale viewport style offset hasFocus model =
                     Color.textColor
                     style.fontSize
                     style.font
-                    { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }
+                    textArea
                     l.text
                     (Coord.xy textLeft (top l.line))
             )

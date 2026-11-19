@@ -1,4 +1,4 @@
-module Bounds exposing (Bounds, fix, fromTopLeftAndSize, intersection, shrink)
+module Bounds exposing (Bounds, fromTopLeftAndSize, intersection, shrink)
 
 import Coord exposing (Coord)
 import Quantity exposing (Quantity)

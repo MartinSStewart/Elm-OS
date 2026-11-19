@@ -50,6 +50,18 @@ textLineHeight =
     Sprite.lineHeight style.fontSize |> Quantity.unwrap
 
 
+lineHeight : Float
+lineHeight =
+    toFloat textLineHeight
+
+
+{-| `seconds` of frames at 60 a second.
+-}
+frames : Float -> TextInputMultiline.Model -> TextInputMultiline.Model
+frames seconds model =
+    List.foldl (\_ m -> TextInputMultiline.animate (1 / 60) m) model (List.range 1 (round (seconds * 60)))
+
+
 cursor : TextInputMultiline.Model -> ( Int, Int )
 cursor model =
     TextInputMultiline.lineAndColumn model.input.current.text model.input.current.cursorPosition
@@ -58,24 +70,63 @@ cursor model =
 suite : Test
 suite =
     describe "TextInputMultiline"
-        [ test "touchpad scrolling goes a line per line height, saving up the rest"
+        [ test "fingers moving down move the text up, following them smoothly"
             (\_ ->
                 let
-                    lineHeight =
-                        Sprite.lineHeight style.fontSize |> Quantity.unwrap |> toFloat
-
                     atBottom =
                         after (String.repeat 30 "a\n") []
 
-                    once =
-                        TextInputMultiline.scrollPixels style (2.5 * lineHeight) atBottom
-
-                    twice =
-                        TextInputMultiline.scrollPixels style (0.5 * lineHeight) once
+                    down =
+                        TextInputMultiline.scrollPixels style (2.5 * lineHeight) long
                 in
                 Expect.equal
-                    [ atBottom.scroll - 2, atBottom.scroll - 3, 0 ]
-                    [ once.scroll, twice.scroll, (TextInputMultiline.scrollPixels style (100 * lineHeight) twice).scroll ]
+                    [ ( 2.5, 3 ), ( toFloat atBottom.scroll - 2.5, atBottom.scroll - 2 ), ( 91, 91 ), ( 0, 0 ) ]
+                    [ ( down.position, down.scroll )
+                    , TextInputMultiline.scrollPixels style (-2.5 * lineHeight) atBottom |> (\m -> ( m.position, m.scroll ))
+                    , TextInputMultiline.scrollPixels style (100 * lineHeight) long |> (\m -> ( m.position, m.scroll ))
+                    , TextInputMultiline.scrollPixels style (-1 * lineHeight) long |> (\m -> ( m.position, m.scroll ))
+                    ]
+            )
+        , test "resting fingers let the text settle on a whole line"
+            (\_ ->
+                let
+                    moved =
+                        TextInputMultiline.scrollPixels style (2.4 * lineHeight) long
+                in
+                Expect.equal
+                    [ ( 2.4, 2, False ), ( 2, 2, True ) ]
+                    (List.map
+                        (\m -> ( m.position, m.scroll, m.glide == TextInputMultiline.Still ))
+                        [ frames 0.1 moved, frames 1 moved ]
+                    )
+            )
+        , test "a flick glides on and stops on a whole line"
+            (\_ ->
+                let
+                    -- 20 lines a second, slowing down as viewports do: 6.6 lines in all
+                    flicked =
+                        TextInputMultiline.momentum style (0.997 ^ 1000) (20 * lineHeight) long
+                in
+                Expect.equal
+                    ( 7, 7, TextInputMultiline.Still )
+                    (flicked |> frames 4 |> (\m -> ( m.position, m.scroll, m.glide )))
+            )
+        , test "a touch stops a glide where it is"
+            (\_ ->
+                TextInputMultiline.momentum style (0.997 ^ 1000) (20 * lineHeight) long
+                    |> frames 0.2
+                    |> TextInputMultiline.stopGlide
+                    |> frames 1
+                    |> .position
+                    |> Expect.equal 3
+            )
+        , test "the wheel glides three lines a click"
+            (\_ ->
+                let
+                    turned =
+                        TextInputMultiline.wheel style -1 long
+                in
+                Expect.equal ( ( 0, 3 ), 3 ) ( ( turned.position, turned.scroll ), (frames 1 turned).position )
             )
         , test "Up and Down keep the column through a shorter line"
             (\_ ->

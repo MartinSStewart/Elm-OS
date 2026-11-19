@@ -9,7 +9,6 @@ module Ui exposing
     , LazyCache
     , Model
     , Padding
-    , RowColumn
     , Screenshot
     , ScrollBy(..)
     , Source
@@ -41,7 +40,6 @@ module Ui exposing
     , init
     , insertElement
     , inspect
-    , lazy
     , lazy2
     , lazy3
     , lazyCache
@@ -423,12 +421,13 @@ type ScrollBy
     | Momentum Float
 
 
-{-| How much of its speed a glide keeps after a second: it keeps 0.998 of it a
-millisecond, as on iOS.
+{-| How much of its speed a glide keeps after a second: it keeps 0.997 of it a
+millisecond, so it stops sooner than on iOS (0.998), which glided too far (Martin,
+2026-11-19). A flick goes 1/3 of a second's worth of its speed, not 1/2.
 -}
 momentumKeptPerSecond : Float
 momentumKeptPerSecond =
-    0.998 ^ 1000
+    0.997 ^ 1000
 
 
 {-| Stop every glide (a finger touched the touchpad).
@@ -446,8 +445,8 @@ stopMomentum model =
                         TextInputState _ ->
                             value
 
-                        TextInputMultilineState _ ->
-                            value
+                        TextInputMultilineState multiline ->
+                            TextInputMultilineState (TextInputMultiline.stopGlide multiline)
 
                         ButtonState _ ->
                             value
@@ -611,7 +610,8 @@ onAnimationFrame timeElapsed mouse hovered model =
                             value
 
                         TextInputMultilineState multiline ->
-                            Scrollbar.fade timeElapsed (scrollbarHovered id) multiline
+                            TextInputMultiline.animate (Duration.inSeconds timeElapsed) multiline
+                                |> Scrollbar.fade timeElapsed (scrollbarHovered id)
                                 |> TextInputMultilineState
 
                         ButtonState _ ->
@@ -846,9 +846,8 @@ onWheelHelper id scrollBy element model =
                         ScrollPixels pixels ->
                             TextInputMultiline.scrollPixels textInput2.style (Quantity.unwrap pixels)
 
-                        Momentum _ ->
-                            -- it moves a whole line at a time, so it doesn't glide
-                            identity
+                        Momentum velocity ->
+                            TextInputMultiline.momentum textInput2.style momentumKeptPerSecond velocity
                     )
                         (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
@@ -860,7 +859,6 @@ onWheelHelper id scrollBy element model =
             in
             { model | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState }
 
-        -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
         Text _ ->
             model
 
@@ -1585,11 +1583,6 @@ lazy3 _ f a b c =
 lazy2 : LazyCache id -> (a -> b -> Element id) -> a -> b -> Element id
 lazy2 _ f a b =
     f a b
-
-
-lazy : LazyCache id -> (a -> Element id) -> a -> Element id
-lazy _ f a =
-    f a
 
 
 {-| What the code generator turns a `lazy` call into: the element that last frame's

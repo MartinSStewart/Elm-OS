@@ -71,6 +71,9 @@ const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
 const CRASH_LOOP: u32 = 5;
 /// Lines of the program's output kept for the error screen.
 const OUTPUT_LINES: usize = 15;
+/// How long pointer motion and scrolling wait for the program to answer a frame
+/// (see `coalesces`), at most.
+const HOLD_INPUT_MAX: Duration = Duration::from_millis(100);
 
 /// How long a frame can go unanswered before the program counts as hung.
 fn hang_after() -> Duration {
@@ -130,6 +133,35 @@ fn only_now(msg: &ToElm) -> bool {
     matches!(msg, ToElm::Frame { .. } | ToElm::Stats { .. } | ToElm::Switching { .. } | ToElm::Tick { .. })
 }
 
+/// Pointer motion and touchpad scrolling come faster than the screen refreshes (a
+/// touchpad reports 100 times a second or more, a mouse up to 1000), and the program
+/// works out what is under the pointer for each (a whole layout). While it is still
+/// busy with a frame they wait here, and later ones join them: the newest position
+/// replaces the one waiting, scrolling adds up. So the program gets at most one of
+/// each per frame, however slow its frames are. Before this, scrolling with frames a
+/// little slower than 60 a second queued more work than the program could do, and
+/// everything froze until the fingers lifted.
+fn coalesces(msg: &ToElm) -> bool {
+    matches!(msg, ToElm::Mouse { .. } | ToElm::Scroll { .. })
+}
+
+/// Joins `msg` to the same kind of message waiting at the end of the queue (only
+/// ticks and stats after it), if there is one: whether it did.
+fn coalesce(queue: &mut VecDeque<Queued>, msg: &ToElm) -> bool {
+    let waiting = queue
+        .iter_mut()
+        .rev()
+        .take_while(|q| q.fresh)
+        .find(|q| !matches!(q.msg, ToElm::Tick { .. } | ToElm::Stats { .. }));
+    let Some(q) = waiting else { return false };
+    match (&mut q.msg, msg) {
+        (ToElm::Scroll { dy }, ToElm::Scroll { dy: more }) => *dy += more,
+        (ToElm::Mouse { x, y }, ToElm::Mouse { x: x2, y: y2 }) => (*x, *y) = (*x2, *y2),
+        _ => return false,
+    }
+    true
+}
+
 fn http_answer(msg: &ToElm) -> Option<&str> {
     match msg {
         ToElm::HttpResponse { id, .. } | ToElm::HttpError { id, .. } => Some(id),
@@ -180,6 +212,9 @@ struct State {
     unanswered_since: Option<Instant>,
     /// The program (its number) the watchdog stopped for hanging.
     hung: Option<u64>,
+    /// Since when a frame has gone to the program running now without it drawing
+    /// one: pointer motion and scrolling wait meanwhile (`coalesces`).
+    frame_out: Option<Instant>,
 }
 
 struct Switch {
@@ -221,6 +256,9 @@ pub fn send(msg: &ToElm) {
             return; // the next program gets it when it starts
         }
     } else if s.to_elm.is_none() && only_now(msg) {
+        return;
+    }
+    if coalesces(msg) && coalesce(&mut s.queue, msg) {
         return;
     }
     if s.queue.len() >= MAX_QUEUE && http_answer(msg).is_none() {
@@ -302,19 +340,31 @@ fn writer() {
     loop {
         let mut s = state();
         let next = loop {
+            // Pointer motion or scrolling first in line, while a frame is out: wait for
+            // the program to draw it (or for HOLD_INPUT_MAX), so more can join it.
+            let mut hold_for = None;
             if s.to_elm.is_some() {
                 let found = if s.holding {
                     s.queue.iter().position(|m| matches!(m.msg, ToElm::Frame { .. }))
                 } else if s.queue.is_empty() {
                     None
                 } else {
-                    Some(0)
+                    let waited = s.frame_out.map_or(HOLD_INPUT_MAX, |t| t.elapsed());
+                    if coalesces(&s.queue[0].msg) && s.queue[0].fresh && waited < HOLD_INPUT_MAX {
+                        hold_for = Some(HOLD_INPUT_MAX - waited);
+                        None
+                    } else {
+                        Some(0)
+                    }
                 };
                 if let Some(i) = found {
                     break i;
                 }
             }
-            s = link().ready.wait(s).unwrap_or_else(|e| e.into_inner());
+            s = match hold_for {
+                Some(d) => link().ready.wait_timeout(s, d).map(|(s, _)| s).unwrap_or_else(|e| e.into_inner().0),
+                None => link().ready.wait(s).unwrap_or_else(|e| e.into_inner()),
+            };
         };
         let stream = s.to_elm.clone().unwrap();
         let program = s.program;
@@ -335,8 +385,13 @@ fn writer() {
         let mut s = state();
         match written {
             Ok(()) => {
-                if matches!(msg, ToElm::Frame { .. }) && s.program == program && s.unanswered_since.is_none() {
-                    s.unanswered_since = Some(Instant::now());
+                if matches!(msg, ToElm::Frame { .. }) && s.program == program {
+                    if s.unanswered_since.is_none() {
+                        s.unanswered_since = Some(Instant::now());
+                    }
+                    if s.frame_out.is_none() {
+                        s.frame_out = Some(Instant::now());
+                    }
                 }
                 if let Some(id) = http_answer(&msg) {
                     if let Some(i) = s.http_in_flight.iter().position(|x| x == id) {
@@ -812,6 +867,7 @@ fn connect(stream: &UnixStream, pid: u32) -> u64 {
     s.drawn = false;
     s.holding = false;
     s.unanswered_since = None;
+    s.frame_out = None;
     s.hung = None;
     // Messages an earlier program got (logged) come again in the replay instead.
     s.queue.retain(|m| !only_now(&m.msg) && (m.fresh || m.seq.is_none()));
@@ -840,11 +896,14 @@ fn disconnect(program: u64) -> bool {
     drawn
 }
 
-/// The program drew a frame: on the first one of the first program, the switch to a
-/// build waiting in programs/next starts.
+/// The program drew a frame (input held back for it can go): on the first one of the
+/// first program, the switch to a build waiting in programs/next starts.
 fn first_frame(program: u64) {
     let mut s = state();
     s.renders += 1;
+    if s.program == program && s.frame_out.take().is_some() {
+        link().ready.notify_all(); // what was held back can go
+    }
     if s.drawn || s.program != program {
         return;
     }
@@ -891,5 +950,111 @@ fn read(mut stream: UnixStream, program: u64) {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue(msgs: &[ToElm]) -> VecDeque<Queued> {
+        msgs.iter().cloned().map(Queued::new).collect()
+    }
+
+    fn joined(q: &mut VecDeque<Queued>, msg: ToElm) -> Vec<ToElm> {
+        if !coalesce(q, &msg) {
+            q.push_back(Queued::new(msg));
+        }
+        q.iter().map(|q| q.msg.clone()).collect()
+    }
+
+    #[test]
+    fn scrolling_adds_up_while_it_waits() {
+        let mut q = queue(&[ToElm::Scroll { dy: 2.0 }, ToElm::tick_now()]);
+        let msgs = joined(&mut q, ToElm::Scroll { dy: 3.5 });
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(msgs[0], ToElm::Scroll { dy } if dy == 5.5));
+    }
+
+    #[test]
+    fn the_newest_pointer_position_replaces_the_waiting_one() {
+        let mut q = queue(&[ToElm::Mouse { x: 1, y: 2 }]);
+        let msgs = joined(&mut q, ToElm::Mouse { x: 5, y: 6 });
+        assert!(matches!(msgs[..], [ToElm::Mouse { x: 5, y: 6 }]));
+    }
+
+    #[test]
+    fn nothing_joins_across_a_click() {
+        // The click must land where the pointer was when it happened.
+        let mut q = queue(&[ToElm::Mouse { x: 1, y: 2 }, ToElm::Button { b: 0, down: true }]);
+        let msgs = joined(&mut q, ToElm::Mouse { x: 5, y: 6 });
+        assert_eq!(msgs.len(), 3);
+        let mut q = queue(&[ToElm::Scroll { dy: 1.0 }, ToElm::Mouse { x: 0, y: 0 }]);
+        assert_eq!(joined(&mut q, ToElm::Scroll { dy: 1.0 }).len(), 3);
+    }
+
+    /// A program whose frames take 20 ms (50 a second) and which spends 10 ms on each
+    /// scroll (finding what's under the pointer), with two fingers reporting 125 times
+    /// a second for 2 s: without holding scrolling back that is more work than there
+    /// is time, and the program falls further behind until the fingers lift (it was
+    /// 0.7 s behind and drawing 5 frames a second at the end). Ignored because it runs the real writer on the shared
+    /// queue, which the other tests use: `cargo test -p elmos-host -- --ignored`.
+    #[test]
+    #[ignore]
+    fn scrolling_keeps_up_with_slow_frames() {
+        use std::sync::mpsc;
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        std::thread::spawn(writer);
+        let program = connect(&ours, 0);
+        let (rendered, renders) = mpsc::channel();
+        let elm = std::thread::spawn(move || {
+            let mut stream = theirs;
+            let (mut scrolled, mut scrolls, mut frames) = (0.0, 0, 0);
+            loop {
+                let (_, payload) = link::read_message(&mut stream).unwrap();
+                let (_, message) = protocol::read_from_host_payload(&payload).unwrap();
+                match ToElm::from_bytes(message).unwrap() {
+                    ToElm::Scroll { dy } => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        scrolled += dy;
+                        scrolls += 1;
+                    }
+                    ToElm::Frame { .. } => {
+                        std::thread::sleep(Duration::from_millis(20));
+                        frames += 1;
+                        first_frame(program);
+                        let _ = rendered.send(());
+                    }
+                    ToElm::Key { code: 0xffff, .. } => return (Instant::now(), scrolled, scrolls, frames),
+                    _ => {}
+                }
+            }
+        });
+        // The host asks for the next frame once one is drawn.
+        std::thread::spawn(move || loop {
+            send(&ToElm::frame_now(0.0));
+            if renders.recv().is_err() {
+                return;
+            }
+        });
+        for _ in 0..250 {
+            send(&ToElm::Scroll { dy: 1.0 });
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        let lifted = Instant::now();
+        send(&ToElm::Key { code: 0xffff, down: true, repeat: false });
+        let (caught_up, scrolled, scrolls, frames) = elm.join().unwrap();
+        let behind = caught_up - lifted;
+        eprintln!("{scrolls} scrolls, {frames} frames, {} ms behind as the fingers lifted", behind.as_millis());
+        disconnect(program);
+        assert_eq!(scrolled, 250.0, "no scrolling is lost");
+        assert!(behind < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn what_has_been_logged_is_left_alone() {
+        let mut q = queue(&[ToElm::Scroll { dy: 1.0 }]);
+        q[0].fresh = false;
+        assert_eq!(joined(&mut q, ToElm::Scroll { dy: 1.0 }).len(), 2);
     }
 }
