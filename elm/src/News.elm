@@ -54,7 +54,7 @@ view lazyCache width height news =
         }
         (Ui.column
             4
-            [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.textColor, font = Sprite.Sans Sprite.Bold } ]
+            [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [] } ]
                 |> Ui.el { padding = Ui.paddingXY 12 0, borderAndFill = Ui.NoBorderOrFill }
             , case news of
                 NewsNotRequested ->
@@ -67,14 +67,14 @@ view lazyCache width height news =
                                 |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                         Nothing ->
-                            Ui.customText Sprite.Small [ { text = "Loading...", color = Color.textColor, font = Sprite.Sans Sprite.Italic } ]
+                            Ui.customText Sprite.Small [ { text = "Loading...", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] } ]
 
                 LoadedNews days ->
                     Ui.lazy2 lazyCache daysView width days
                         |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                 NewsFailed string ->
-                    Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.textColor, font = Sprite.Sans Sprite.Italic } ]
+                    Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] } ]
             ]
         )
 
@@ -94,7 +94,7 @@ daysView width days =
                         (\topic ->
                             Ui.column
                                 8
-                                [ Ui.customText Sprite.Small [ { text = topic.heading, color = Color.textColor, font = Sprite.Sans Sprite.Bold } ]
+                                [ Ui.customText Sprite.Small [ { text = topic.heading, color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [] } ]
                                 , Ui.column
                                     itemSpacing
                                     (List.map
@@ -196,7 +196,7 @@ itemView width (Item item) =
             , Ui.customTextWrapped
                 Sprite.Small
                 (width |> Quantity.minus (Quantity.plus (Units.uiPixels spacing) (Coord.x (Ui.size bullet))))
-                [ { text = plainText item.content, color = Color.textColor, font = Sprite.Sans Sprite.Regular } ]
+                [ { text = plainText item.content, color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
             ]
         , Ui.column
             itemSpacing

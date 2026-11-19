@@ -19,7 +19,7 @@ wrapMono width segments =
 
 mono : String -> Segment
 mono text =
-    { text = text, color = Color.black, font = Mono }
+    { text = text, color = Color.black, font = Mono, decorations = [] }
 
 
 suite : Test
@@ -31,12 +31,12 @@ suite =
         , test "breaks a word wider than a line between characters" (\() -> wrapMono 40 [ mono "abcdefghij x" ] |> Expect.equal [ "abcd", "efgh", "ij x" ])
         , test "a word split across segments stays together"
             (\() ->
-                wrapMono 60 [ mono "aa b", { text = "bb", color = Color.white, font = Mono }, mono "b" ]
+                wrapMono 60 [ mono "aa b", { text = "bb", color = Color.white, font = Mono, decorations = [] }, mono "b" ]
                     |> Expect.equal [ "aa", "bbbb" ]
             )
         , test "joins segments of the same look, keeps others apart"
             (\() ->
-                Sprite.wrapLines Small (Units.uiPixels 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono } ]
+                Sprite.wrapLines Small (Units.uiPixels 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono, decorations = [] } ]
                     |> List.map (List.map .text)
                     |> Expect.equal [ [ "a b", "c" ] ]
             )
@@ -53,7 +53,7 @@ suite =
 
 fitsWidth : Expect.Expectation
 fitsWidth =
-    Sprite.wrapSegments Small (Units.uiPixels 200) [ { text = String.repeat 20 "lorem ipsum dolor ", color = Color.black, font = Sans Regular } ]
+    Sprite.wrapSegments Small (Units.uiPixels 200) [ { text = String.repeat 20 "lorem ipsum dolor ", color = Color.black, font = Sans Regular, decorations = [] } ]
         |> List.map .text
         |> String.concat
         |> String.split "\n"

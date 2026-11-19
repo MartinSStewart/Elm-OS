@@ -738,7 +738,7 @@ postsView lazyCache windowSize data =
 
         title : Element id
         title =
-            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold } ]
+            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [] } ]
     in
     Ui.column
         titleSpacing
@@ -828,6 +828,7 @@ commentsView lazyCache windowSize postId title comments =
                 [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title
                   , color = Color.textColor
                   , font = Sans Bold
+                  , decorations = []
                   }
                 ]
             ]
@@ -882,7 +883,7 @@ commentView lazyCache width (Comment comment) =
                     Small
                     (Units.uiPixels textWidth)
                     (commentHeader comment.author comment.date
-                        ++ [ { text = comment.content, color = greyColor comment.grey, font = Sans Regular } ]
+                        ++ [ { text = comment.content, color = greyColor comment.grey, font = Sans Regular, decorations = [] } ]
                     )
                 ]
     in
@@ -910,12 +911,12 @@ commentView lazyCache width (Comment comment) =
 
 {-| A comment's author, in bold, and the date it was written if there is one.
 -}
-commentHeader : String -> Maybe String -> List { text : String, color : Color.Color, font : Font }
+commentHeader : String -> Maybe String -> List Sprite.Segment
 commentHeader author date =
-    { text = author ++ "  ", color = Color.textColor, font = Sans Bold }
+    { text = author ++ "  ", color = Color.textColor, font = Sans Bold, decorations = [] }
         :: (case date of
                 Just text ->
-                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular } ]
+                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular, decorations = [] } ]
 
                 Nothing ->
                     []

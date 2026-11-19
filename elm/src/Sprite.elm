@@ -1,5 +1,6 @@
 module Sprite exposing
-    ( Font(..)
+    ( Decoration(..)
+    , Font(..)
     , FontSize(..)
     , Sampling(..)
     , Segment
@@ -390,10 +391,20 @@ type FontSize
     | Big
 
 
-{-| A run of text in one font and colour, for `customText`.
+{-| A run of text in one font and colour, for `customText`, with lines drawn across it.
 -}
 type alias Segment =
-    { text : String, color : Color, font : Font }
+    { text : String, color : Color, font : Font, decorations : List Decoration }
+
+
+{-| A line drawn across text, in the text's colour, where Noto Sans says it goes (for the
+pixel font too, so one line runs straight across mixed fonts). Each is one solid
+rectangle per line of text for every run of segments next to each other that have it and
+share a colour, drawn on top of the glyphs rather than baked into the atlas.
+-}
+type Decoration
+    = Underline
+    | Strikethrough
 
 
 {-| The pixel font's pixels per UI pixel.
@@ -706,7 +717,7 @@ caretPositions fontSize font string =
 -}
 text : UiScale -> Color -> FontSize -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
 text uiScale color fontSize font clip string position =
-    customText uiScale fontSize clip [ { text = string, color = color, font = font } ] position
+    customText uiScale fontSize clip [ { text = string, color = color, font = font, decorations = [] } ] position
 
 
 {-| Runs of text, each in its own colour and font but all the same size, one after
@@ -739,25 +750,90 @@ customText uiScale fontSize clip segments position =
             let
                 top =
                     y + lineIndex * height
-            in
-            layoutSegments fontSize line
-                |> Tuple.first
-                |> List.concatMap
-                    (\( start, segment ) ->
-                        let
-                            left64 =
-                                (x * 64 + start) * s
-                        in
-                        case segment.font of
-                            Mono ->
-                                monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+                ( placed, end ) =
+                    layoutSegments fontSize line
 
-                            Sans style ->
-                                sansRun s fontSize (variant style) deviceClip segment.color ( left64, (top + ascent) * s ) segment.text
-                    )
+                -- where each segment starts and ends, in 1/64 device pixels
+                spans =
+                    List.map2
+                        (\( start, segment ) next -> { left64 = (x * 64 + start) * s, right64 = (x * 64 + next) * s, segment = segment })
+                        placed
+                        (List.map Tuple.first (List.drop 1 placed) ++ [ end ])
+
+                baseline =
+                    (top + ascent) * s
+            in
+            List.concatMap
+                (\{ left64, segment } ->
+                    case segment.font of
+                        Mono ->
+                            monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+
+                        Sans style ->
+                            sansRun s fontSize (variant style) deviceClip segment.color ( left64, baseline ) segment.text
+                )
+                spans
+                ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
+                ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
         )
         (segmentLines segments)
         |> List.concat
+
+
+{-| One kind of line across one line of text: a rectangle for each run of segments next to
+each other that have it and share a colour. It's as thick as the font says, rounded to
+whole device pixels (at least one), and its edges are on whole pixels.
+-}
+decorationRun :
+    Int
+    -> FontSize
+    -> { left : Int, right : Int, top : Int, bottom : Int }
+    -> Int
+    -> Decoration
+    -> NotoSans.Line
+    -> List { left64 : Int, right64 : Int, segment : Segment }
+    -> List (Triangle DevicePixels)
+decorationRun s fontSize deviceClip baseline decoration line spans =
+    let
+        size =
+            sansSize fontSize * s
+
+        thickness =
+            max 1 (round (toFloat (line.thickness * size) / 1000))
+
+        top =
+            baseline + round (toFloat (-line.middle * size) / 1000 - toFloat thickness / 2)
+
+        runs =
+            List.foldr
+                (\{ left64, right64, segment } acc ->
+                    if not (List.member decoration segment.decorations) || right64 <= left64 then
+                        acc
+
+                    else
+                        case acc of
+                            next :: rest ->
+                                if next.left64 == right64 && next.color == segment.color then
+                                    { next | left64 = left64 } :: rest
+
+                                else
+                                    { left64 = left64, right64 = right64, color = segment.color } :: acc
+
+                            [] ->
+                                [ { left64 = left64, right64 = right64, color = segment.color } ]
+                )
+                []
+                spans
+    in
+    List.concatMap
+        (\run ->
+            let
+                left =
+                    (run.left64 + 32) // 64
+            in
+            clippedSprite run.color deviceClip ( left, top ) ( (run.right64 + 32) // 64 - left, thickness ) ( 250, 250 ) ( 4, 4 )
+        )
+        runs
 
 
 {-| One line of the pixel font, from its top left in device pixels.
@@ -874,7 +950,7 @@ monoChar color position char =
 -}
 textSize : FontSize -> Font -> String -> Coord UiPixels
 textSize fontSize font string =
-    customTextSize fontSize [ { text = string, color = Color.textColor, font = font } ]
+    customTextSize fontSize [ { text = string, color = Color.textColor, font = font, decorations = [] } ]
 
 
 {-| The size of `customText`'s segments: its widest line by its lines.
@@ -1011,7 +1087,7 @@ joinLines lines =
 
         style : Segment
         style =
-            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular }
+            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [] }
     in
     case lines of
         first :: rest ->

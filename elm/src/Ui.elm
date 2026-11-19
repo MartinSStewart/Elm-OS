@@ -1169,7 +1169,7 @@ text =
 -}
 colorText : Color -> String -> Element id
 colorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular } ]
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
 
 
 {-| Black text in the small monospace font. '\\n' starts a new line.
@@ -1183,7 +1183,7 @@ monoText =
 -}
 monoColorText : Color -> String -> Element id
 monoColorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono } ]
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [] } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
@@ -1191,10 +1191,12 @@ font size, so every line is the same height whichever fonts it mixes. '\\n' in a
 them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
     Ui.customText Sprite.Small
-        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular }
-        , { text = "make check", color = Color.textColor, font = Sprite.Mono }
-        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic }
+        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] }
+        , { text = "make check", color = Color.textColor, font = Sprite.Mono, decorations = [ Sprite.Underline ] }
+        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] }
         ]
+
+Each segment's `decorations` underline it or strike it through (see Sprite.Decoration).
 
 -}
 customText : Sprite.FontSize -> List Sprite.Segment -> Element id

@@ -360,7 +360,7 @@ previewList scale height screenshots model =
                     { padding = Ui.paddingXY buttonPadding buttonPadding, borderAndFill = Ui.NoBorderOrFill }
                     (Ui.customTextWrapped Sprite.Small
                         (Units.uiPixels (Coord.xRaw previewSize))
-                        [ { text = "No screenshots yet. Press Print Screen, then click what to capture.", color = Color.textColor, font = Sprite.Sans Sprite.Regular } ]
+                        [ { text = "No screenshots yet. Press Print Screen, then click what to capture.", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
                     )
                 ]
 

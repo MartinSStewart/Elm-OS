@@ -249,4 +249,4 @@ squareView model i =
     in
     Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), padding = Ui.noPadding }
         isWinning
-        (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.textColor, font = sans } ]))
+        (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.textColor, font = sans, decorations = [] } ]))

@@ -2403,7 +2403,7 @@ headingSize =
 -}
 heading : String -> Ui.Element id
 heading string =
-    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans } ]
+    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [] } ]
 
 
 {-| Everything the UI framework draws on a display: the toolbar along the top, each
@@ -3794,10 +3794,10 @@ editorWindow model =
             , Ui.leftAndRight style.width
                 (t status)
                 (Ui.customText bodySize
-                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
-                    , { text = " undo, ", color = Color.outlineColor, font = sans }
-                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold }
-                    , { text = " redo", color = Color.outlineColor, font = sans }
+                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
+                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [] }
+                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
+                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [] }
                     ]
                 )
             ]
