@@ -7,19 +7,30 @@ fn edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (bx - ax) * (py - ay) - (by - ay) * (px - ax)
 }
 
-fn sample(atlas: &[u8], u: f32, v: f32) -> u32 {
-    let x = (u as i32).clamp(0, ATLAS_W as i32 - 1) as usize;
-    let y = (v as i32).clamp(0, ATLAS_H as i32 - 1) as usize;
+/// Atlas pixel `i` along one axis, wrapped into `start..start + len` if len isn't 0.
+fn wrap(i: i32, start: u16, len: u16) -> i32 {
+    if len == 0 {
+        i
+    } else {
+        start as i32 + (i - start as i32).rem_euclid(len as i32)
+    }
+}
+
+/// The atlas pixel at u, v (wrapped into the triangle's tile, if it has one).
+fn sample(atlas: &[u8], tile: [u16; 4], u: f32, v: f32) -> u32 {
+    let x = wrap(u.floor() as i32, tile[0], tile[2]).clamp(0, ATLAS_W as i32 - 1) as usize;
+    let y = wrap(v.floor() as i32, tile[1], tile[3]).clamp(0, ATLAS_H as i32 - 1) as usize;
     atlas[y * ATLAS_W + x] as u32
 }
 
 /// The atlas at u, v with bilinear filtering: the four pixels around that point (atlas
 /// pixel i covers u from i to i + 1, so its middle is at i + 0.5), blended by distance.
-fn sample_linear(atlas: &[u8], u: f32, v: f32) -> u32 {
+/// In a tile, each of the four wraps round on its own, so the pattern repeats seamlessly.
+fn sample_linear(atlas: &[u8], tile: [u16; 4], u: f32, v: f32) -> u32 {
     let (u, v) = (u - 0.5, v - 0.5);
     let (x0, y0) = (u.floor(), v.floor());
     let (fx, fy) = (u - x0, v - y0);
-    let at = |dx: f32, dy: f32| sample(atlas, x0 + dx, y0 + dy) as f32;
+    let at = |dx: f32, dy: f32| sample(atlas, tile, x0 + dx, y0 + dy) as f32;
     let top = at(0.0, 0.0) * (1.0 - fx) + at(1.0, 0.0) * fx;
     let bottom = at(0.0, 1.0) * (1.0 - fx) + at(1.0, 1.0) * fx;
     (top * (1.0 - fy) + bottom * fy + 0.5) as u32
@@ -56,7 +67,8 @@ pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: 
     // A flat colour (every corner samples the same atlas pixel) needs no interpolation.
     let flat = p0[2] == p1[2] && p1[2] == p2[2] && p0[3] == p1[3] && p1[3] == p2[3];
     let sample = if t.linear != 0 { sample_linear } else { sample };
-    let flat_cover = sample(atlas, p0[2], p0[3]);
+    let tile = t.tile;
+    let flat_cover = sample(atlas, tile, p0[2], p0[3]);
     let inv = 1.0 / area;
     if minx >= maxx || miny >= maxy {
         return;
@@ -92,7 +104,7 @@ pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: 
             } else {
                 let u = (w0 * p0[2] + w1 * p1[2] + w2 * p2[2]) * inv;
                 let v = (w0 * p0[3] + w1 * p1[3] + w2 * p2[3]) * inv;
-                sample(atlas, u, v)
+                sample(atlas, tile, u, v)
             };
             if cover == 0 {
                 continue;
@@ -107,6 +119,38 @@ pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: 
             let ng = (g * k + dg * (65025 - k)) / 65025;
             let nb = (b * k + db * (65025 - k)) / 65025;
             *dst = (nr << 16) | (ng << 8) | nb;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atlas::{self, DOT_GRID};
+
+    /// A 64 x 40 rectangle showing the dot grid tile repeated: a dot every 16 pixels,
+    /// nothing else, whether sampled by the nearest pixel or bilinearly.
+    #[test]
+    fn a_tile_repeats() {
+        let a = atlas::build();
+        let [tx, ty, tw, th] = DOT_GRID.map(|n| n as u16);
+        let (u0, v0) = (tx as f32, ty as f32);
+        let (w, h) = (64u32, 40u32);
+        for linear in [0, 1] {
+            let corner = |x: f32, y: f32| [x, y, u0 + x, v0 + y];
+            let tri = |p: [[f32; 4]; 3]| Tri { p, rgba: 0xffff_ffff, linear, tile: [tx, ty, tw, th] };
+            let (tl, tr, bl, br) =
+                (corner(0.0, 0.0), corner(w as f32, 0.0), corner(0.0, h as f32), corner(w as f32, h as f32));
+            let mut back = vec![0u32; (w * h) as usize];
+            fill_triangle(&mut back, w as usize, w, h, &a, &tri([tl, tr, br]));
+            fill_triangle(&mut back, w as usize, w, h, &a, &tri([tl, br, bl]));
+            for y in 0..h {
+                for x in 0..w {
+                    let dot = x % 16 == 8 && y % 16 == 8;
+                    let want = if dot { 0xff_ffff } else { 0 };
+                    assert_eq!(back[(y * w + x) as usize], want, "{x}, {y} (linear {linear})");
+                }
+            }
         }
     }
 }

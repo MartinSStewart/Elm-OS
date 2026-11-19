@@ -3,6 +3,7 @@ module Color exposing
     , black
     , dangerColor
     , dimTextColor
+    , dotGridColor
     , errorColor
     , fillColor
     , fillColor2
@@ -108,6 +109,13 @@ outlineColor =
 fillColor : Color
 fillColor =
     rgb255 44 41 39
+
+
+{-| The faint dots over windows (Ui.windowBorderAndFill), a little lighter than `fillColor`.
+-}
+dotGridColor : Color
+dotGridColor =
+    rgb255 78 73 69
 
 
 {-| Buttons.

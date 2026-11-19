@@ -11,8 +11,8 @@
 //!             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
 //!             a frame skipped because a newer one was already waiting.
 //!   stdin  <- frames: u32 n, then n Tri (common/src/atlas.rs): per triangle x, y, u, v
-//!             for each corner, an 0xRRGGBBAA colour as Elm sends them, and whether
-//!             to sample the atlas bilinearly.
+//!             for each corner, an 0xRRGGBBAA colour as Elm sends them, whether
+//!             to sample the atlas bilinearly, and the atlas rectangle it repeats.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m CONNECTOR X Y" moves it,
 //!             "c RGBA S W H PIXELS" redraws it with that fill colour at scale S
@@ -68,20 +68,27 @@ const VS: &str = "attribute vec2 pos;
 attribute vec2 uv;
 attribute vec4 col;
 attribute float lin;
+attribute vec4 tile;
 uniform vec2 screen;
 varying vec2 v_uv;
 varying vec4 v_col;
 varying float v_lin;
+varying vec4 v_tile;
 void main() {
     vec2 ndc = pos / screen * 2.0 - 1.0;
     gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0); // y grows downwards in Elm's pixels
-    v_uv = uv / vec2(2048.0, 4096.0); // ATLAS_W, ATLAS_H
+    v_uv = uv; // atlas pixels
     v_col = col;
     v_lin = lin;
+    v_tile = tile;
 }
 ";
 
 /// The atlas holds coverage only (GL_ALPHA): it scales the colour's alpha.
+///
+/// The shader works in atlas pixels and fetches whole pixels (`at`), so that a triangle
+/// with a tile (`Tri::tile`) can wrap each pixel it reads round into the tile: its
+/// pattern repeats, seamlessly even when blended bilinearly.
 // highp where there is one: mediump can be a texel out across a 2048 pixel atlas (and
 // two across its 4096 rows).
 const FS: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -93,19 +100,27 @@ uniform sampler2D atlas;
 varying vec2 v_uv;
 varying vec4 v_col;
 varying float v_lin;
+varying vec4 v_tile;
 const vec2 texel = vec2(1.0 / 2048.0, 1.0 / 4096.0); // ATLAS_W, ATLAS_H
+// Atlas pixel i (whole numbers), wrapped into the tile if there is one.
+float at(vec2 i) {
+    if (v_tile.z > 0.5) {
+        i = v_tile.xy + mod(i - v_tile.xy, v_tile.zw);
+    }
+    return texture2D(atlas, (i + 0.5) * texel).a;
+}
 void main() {
     float cover;
     if (v_lin > 0.5) {
-        // Bilinear by hand, from four nearest samples: atlas pixel i is centred at i + 0.5.
-        vec2 p = v_uv / texel - 0.5;
-        vec2 f = fract(p);
-        vec2 at = (floor(p) + 0.5) * texel;
-        float top = mix(texture2D(atlas, at).a, texture2D(atlas, at + vec2(texel.x, 0.0)).a, f.x);
-        float bottom = mix(texture2D(atlas, at + vec2(0.0, texel.y)).a, texture2D(atlas, at + texel).a, f.x);
+        // Bilinear by hand, from four nearest pixels: atlas pixel i is centred at i + 0.5.
+        vec2 p = v_uv - 0.5;
+        vec2 i = floor(p);
+        vec2 f = p - i;
+        float top = mix(at(i), at(i + vec2(1.0, 0.0)), f.x);
+        float bottom = mix(at(i + vec2(0.0, 1.0)), at(i + vec2(1.0, 1.0)), f.x);
         cover = mix(top, bottom, f.y);
     } else {
-        cover = texture2D(atlas, v_uv).a;
+        cover = at(floor(v_uv));
     }
     gl_FragColor = vec4(v_col.rgb, v_col.a * cover);
 }
@@ -329,6 +344,8 @@ struct Vertex {
     rgba: [u8; 4],
     /// 1.0 to sample the atlas bilinearly (`Tri::linear`), 0.0 for the nearest pixel.
     linear: f32,
+    /// `Tri::tile`: left, top, width, height in atlas pixels, width 0 for none.
+    tile: [f32; 4],
 }
 
 fn read_u32(input: &mut File) -> Option<u32> {
@@ -512,7 +529,7 @@ fn main() {
         let prog = glCreateProgram();
         glAttachShader(prog, compile(GL_VERTEX_SHADER, VS));
         glAttachShader(prog, compile(GL_FRAGMENT_SHADER, FS));
-        for (i, name) in [c"pos", c"uv", c"col", c"lin"].iter().enumerate() {
+        for (i, name) in [c"pos", c"uv", c"col", c"lin", c"tile"].iter().enumerate() {
             glBindAttribLocation(prog, i as GLuint, name.as_ptr());
         }
         glLinkProgram(prog);
@@ -521,7 +538,7 @@ fn main() {
         glUniform1i(glGetUniformLocation(prog, c"atlas".as_ptr()), 0);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        for i in 0..4 {
+        for i in 0..5 {
             glEnableVertexAttribArray(i);
         }
         let mut vbo = 0;
@@ -559,6 +576,14 @@ fn main() {
             GL_FALSE,
             stride,
             std::mem::offset_of!(Vertex, linear) as *const c_void,
+        );
+        glVertexAttribPointer(
+            4,
+            4,
+            GL_FLOAT,
+            GL_FALSE,
+            stride,
+            std::mem::offset_of!(Vertex, tile) as *const c_void,
         );
 
         // The atlas, sampled pixel for pixel: Elm puts glyphs on whole pixels.
@@ -705,6 +730,7 @@ fn main() {
                                 v: p[3],
                                 rgba,
                                 linear: t.linear as f32,
+                                tile: t.tile.map(|n| n as f32),
                             });
                         }
                     }

@@ -1127,6 +1127,8 @@ type BorderAndFill
     | BorderOnly { borderWidth : Int, borderColor : Color }
     | FillOnly Color
     | BorderAndFill { borderWidth : Int, borderColor : Color, fillColor : Color }
+      -- A fill with a faint grid of dots over it (Sprite.dotGrid): app windows.
+    | BorderFillAndDots { borderWidth : Int, borderColor : Color, fillColor : Color, dotColor : Color }
 
 
 {-| Room left empty around an element's child, on each side (UI pixels).
@@ -1281,7 +1283,7 @@ defaultButtonBorderAndFillHover =
 
 windowBorderAndFill : BorderAndFill
 windowBorderAndFill =
-    BorderAndFill { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+    BorderFillAndDots { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor, dotColor = Color.dotGridColor }
 
 
 customButton :
@@ -1892,6 +1894,9 @@ inspectHelper model point clip position element found =
                     BorderAndFill _ ->
                         orItself inChild
 
+                    BorderFillAndDots _ ->
+                        orItself inChild
+
             InFront _ children ->
                 firstOf (List.reverse (List.map (\( coord, child ) -> ( Coord.plus coord position, child )) children))
 
@@ -2331,6 +2336,9 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 BorderAndFill data2 ->
                                     BorderAndFill { borderWidth = 1, borderColor = Color.focusedUiColor, fillColor = data2.fillColor }
 
+                                BorderFillAndDots data2 ->
+                                    BorderFillAndDots { data2 | borderWidth = 1, borderColor = Color.focusedUiColor }
+
                          else
                             data.borderAndFill
                         )
@@ -2457,6 +2465,19 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                     viewport2
                     (Coord.plus (Coord.xy borderWidth borderWidth) position)
                     (size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth)))
+                |> Sprite.toDevice scale
+
+        BorderFillAndDots { borderWidth, borderColor, fillColor, dotColor } ->
+            let
+                inside =
+                    Coord.plus (Coord.xy borderWidth borderWidth) position
+
+                insideSize =
+                    size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth))
+            in
+            Sprite.rectangle borderColor viewport2 position size2
+                ++ Sprite.rectangle fillColor viewport2 inside insideSize
+                ++ Sprite.dotGrid dotColor viewport2 inside insideSize
                 |> Sprite.toDevice scale
 
 

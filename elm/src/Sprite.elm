@@ -5,6 +5,7 @@ module Sprite exposing
     , Sampling(..)
     , Segment
     , Style(..)
+    , Tile
     , Triangle
     , asciiChar
     , asciiIndex
@@ -14,6 +15,7 @@ module Sprite exposing
     , clipTo
     , customText
     , customTextSize
+    , dotGrid
     , ellipsis
     , encoder
     , lineHeight
@@ -40,6 +42,7 @@ pixels) and multiplies the sample by its colour:
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-300, y 0-200, 25 to a row,
     in the order of `asciiChars` below, each at 1, 1 in a 12 x 20 cell
   - a solid white block at x 248-256, y 248-256, for flat colours
+  - a 16 x 16 tile at x 256, y 224 with one pixel in the middle, repeated for `dotGrid`
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
@@ -72,7 +75,16 @@ type alias Vertex =
 
 
 type Triangle units
-    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling }
+    = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling, tile : Maybe Tile }
+
+
+{-| A rectangle of the atlas, in atlas pixels, that a triangle repeats: its u, v can go
+past the rectangle, and wrap round into it, so the triangle shows it tiled over and
+over (a pattern, as in `dotGrid`). Each pixel wraps on its own, so even `Linear`
+sampling repeats seamlessly. Width and height are at most 32767.
+-}
+type alias Tile =
+    { left : Int, top : Int, width : Int, height : Int }
 
 
 {-| How a triangle reads the atlas between its pixels: the nearest pixel (what text and
@@ -88,14 +100,19 @@ type Sampling
     | Linear
 
 
-{-| A triangle as Effect.renderBytes sends it: x, y, u, v of each corner as 32-bit
-floats, then the colour as an unsigned 32-bit 0xRRGGBBAA, all little-endian.
+{-| A triangle as Effect.renderBytes sends it (60 bytes, host/protocol/src/lib.rs
+read\_render): x, y, u, v of each corner as 32-bit floats, then as unsigned 32-bit
+integers the colour (0xRRGGBBAA), the tile's left + top \* 2^16, and its width +
+height \* 2^16 + 2^31 if `Linear`; all little-endian. No tile is all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
 encoder (Triangle t) =
     let
         f =
             BE.float32 LE
+
+        tile =
+            Maybe.withDefault { left = 0, top = 0, width = 0, height = 0 } t.tile
     in
     BE.sequence
         [ f t.a.x
@@ -111,20 +128,25 @@ encoder (Triangle t) =
         , f t.c.u
         , f t.c.v
         , BE.unsignedInt32 LE (Color.toInt t.color)
+        , BE.unsignedInt32 LE (tile.left + tile.top * 65536)
         , BE.unsignedInt32 LE
-            (case t.sampling of
-                Nearest ->
-                    0
+            (tile.width
+                + tile.height
+                * 65536
+                + (case t.sampling of
+                    Nearest ->
+                        0
 
-                Linear ->
-                    1
+                    Linear ->
+                        2147483648
+                  )
             )
         ]
 
 
 mapCorners : (Vertex -> Vertex) -> List (Triangle a) -> List (Triangle b)
 mapCorners f =
-    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color, sampling = t.sampling })
+    List.map (\(Triangle t) -> Triangle { a = f t.a, b = f t.b, c = f t.c, color = t.color, sampling = t.sampling, tile = t.tile })
 
 
 {-| The triangles sampling the atlas the given way.
@@ -184,7 +206,7 @@ clipTriangle area (Triangle t) =
             first :: second :: rest ->
                 -- A fan of triangles around the polygon's first corner.
                 List.map2
-                    (\b c -> Triangle { a = first, b = b, c = c, color = t.color, sampling = t.sampling })
+                    (\b c -> Triangle { a = first, b = b, c = c, color = t.color, sampling = t.sampling, tile = t.tile })
                     (second :: rest)
                     rest
 
@@ -284,6 +306,7 @@ triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
         , c = { x = cx, y = cy, u = u, v = v }
         , color = color
         , sampling = Nearest
+        , tile = Nothing
         }
 
 
@@ -322,8 +345,8 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
         bottomRight =
             { x = right, y = bottom, u = uRight, v = vBottom }
     in
-    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest }
-    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest }
+    [ Triangle { a = topLeft, b = { x = right, y = top, u = uRight, v = vTop }, c = bottomRight, color = color, sampling = Nearest, tile = Nothing }
+    , Triangle { a = topLeft, b = bottomRight, c = { x = left, y = bottom, u = uLeft, v = vBottom }, color = color, sampling = Nearest, tile = Nothing }
     ]
 
 
@@ -340,6 +363,35 @@ rectangle color clip position size =
         (Coord.toTuple size)
         ( 250, 250 )
         ( 4, 4 )
+
+
+{-| The atlas's dot grid tile (host/common/src/atlas.rs DOT\_GRID): 16 x 16, with one
+pixel at 8, 8 in it.
+-}
+dotGridTile : Tile
+dotGridTile =
+    { left = 256, top = 224, width = 16, height = 16 }
+
+
+{-| A rectangle (position, size) covered in a grid of dots one atlas pixel across, 16
+apart, the first 8, 8 from its top left corner, cut to `clip`. Two triangles, however
+big the rectangle: they repeat the atlas's dot grid tile. Made in UI pixels, so on a
+2x screen the dots are 2 x 2 device pixels and 32 apart.
+-}
+dotGrid : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
+dotGrid color clip position size =
+    clippedSprite
+        color
+        { left = Coord.x clip.topLeft |> Quantity.unwrap
+        , right = Coord.x clip.bottomRight |> Quantity.unwrap
+        , top = Coord.y clip.topLeft |> Quantity.unwrap
+        , bottom = Coord.y clip.bottomRight |> Quantity.unwrap
+        }
+        (Coord.toTuple position)
+        (Coord.toTuple size)
+        ( dotGridTile.left, dotGridTile.top )
+        (Coord.toTuple size)
+        |> List.map (\(Triangle t) -> Triangle { t | tile = Just dotGridTile })
 
 
 {-| A solid rectangle (x, y, w, h) in one colour.

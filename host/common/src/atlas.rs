@@ -7,6 +7,8 @@
 //!   x 0-300, y 0-200     town-collab's 10 x 18 pixel font, 25 glyphs to a row, each
 //!                        in a 12 x 20 cell, at 1, 1 in it (`mono_glyph`)
 //!   x 248-256, y 248-256 solid, for flat colours
+//!   x 256-272, y 224-240 a dot grid tile: one pixel at 8, 8 in it (`DOT_GRID`),
+//!                        drawn repeated (`Tri::tile`)
 //!   everywhere else      Noto Sans (regular, bold, italic, bold italic) at a few
 //!                        sizes, antialiased, each glyph at four quarter-pixel
 //!                        offsets (tools/make-noto-sans.py, which keeps clear of the
@@ -26,6 +28,9 @@ use crate::font;
 
 pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 4096;
+
+/// Left, top, width and height of the dot grid tile (elm/src/Sprite.elm has it too).
+pub const DOT_GRID: [usize; 4] = [256, 224, 16, 16];
 
 /// Noto Sans's glyphs over the whole atlas, run-length coded: a 0 byte is followed by
 /// how many 0s (1-255) it stands for, and any other byte is itself.
@@ -82,12 +87,15 @@ pub fn build() -> Vec<u8> {
     for y in 248..256 {
         a[y * ATLAS_W + 248..y * ATLAS_W + 256].fill(255);
     }
+    let [x, y, w, h] = DOT_GRID;
+    a[(y + h / 2) * ATLAS_W + x + w / 2] = 255;
     a
 }
 
-/// One triangle as /init hands it to a renderer: the 13 values Elm sends per triangle,
-/// x, y, u, v for each corner (screen and atlas pixels), then the colour as 0xRRGGBBAA.
-/// elmos-gpu reads these from a pipe, so the layout is fixed (56 bytes).
+/// One triangle as /init hands it to a renderer: what Elm sends per triangle
+/// (protocol::RenderTriangle), x, y, u, v for each corner (screen and atlas pixels),
+/// the colour as 0xRRGGBBAA, the sampling and the tile. elmos-gpu reads these from a
+/// pipe, so the layout is fixed (64 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Tri {
@@ -95,13 +103,16 @@ pub struct Tri {
     pub rgba: u32,
     /// 1 to sample the atlas with bilinear filtering, 0 for the nearest pixel (`Scene::linear`).
     pub linear: u32,
+    /// Left, top, width, height of the atlas rectangle that u, v wrap round into, so
+    /// the triangle shows it repeated; width 0 for none (`RenderTriangle::tile`).
+    pub tile: [u16; 4],
 }
 
 impl Tri {
     pub const SIZE: usize = std::mem::size_of::<Tri>();
 
     pub fn as_bytes(tris: &[Tri]) -> &[u8] {
-        // SAFETY: Tri is repr(C), made of f32s and u32s with no padding.
+        // SAFETY: Tri is repr(C), made of f32s, u32s and u16s with no padding.
         unsafe { std::slice::from_raw_parts(tris.as_ptr() as *const u8, tris.len() * Tri::SIZE) }
     }
 }

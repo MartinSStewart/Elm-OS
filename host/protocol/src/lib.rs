@@ -33,15 +33,21 @@ pub struct RenderTriangle {
     pub rgba: u32,
     /// 1 to sample the atlas bilinearly, 0 for the nearest pixel.
     pub linear: u32,
+    /// Left, top, width and height of the atlas rectangle the triangle repeats, in
+    /// atlas pixels: u, v outside it wrap round into it, so the triangle shows the
+    /// rectangle tiled (a pattern). Width 0 for none: u, v are used as they are.
+    pub tile: [u16; 4],
 }
 
 /// How many bytes each triangle takes in `Effect::Render`.
-pub const RENDER_TRIANGLE_BYTES: usize = 56;
+pub const RENDER_TRIANGLE_BYTES: usize = 60;
 
-/// Reads the scene in `Effect::Render`: 56 bytes a triangle, the 12 numbers of its
-/// corners as 32-bit floats, then its colour and whether it samples the atlas
-/// bilinearly (1) or by the nearest pixel (0) as unsigned 32-bit integers, all
-/// little-endian. None if the length isn't a whole number of triangles.
+/// Reads the scene in `Effect::Render`: 60 bytes a triangle, all little-endian. First
+/// the 12 numbers of its corners as 32-bit floats, then three unsigned 32-bit integers:
+/// its colour; its tile's left (low 16 bits) and top (high 16 bits); and its tile's
+/// width (bits 0-15), height (bits 16-30) and whether it samples the atlas bilinearly
+/// (bit 31 set) or by the nearest pixel. None if the length isn't a whole number of
+/// triangles.
 pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
     if bytes.len() % RENDER_TRIANGLE_BYTES != 0 {
         return None;
@@ -56,7 +62,9 @@ pub fn read_render(bytes: &[u8]) -> Option<Vec<RenderTriangle>> {
                     t.corners[k / 4][k % 4] = f32::from_le_bytes(word(b, k));
                 }
                 t.rgba = u32::from_le_bytes(word(b, 12));
-                t.linear = u32::from_le_bytes(word(b, 13));
+                let (at, size) = (u32::from_le_bytes(word(b, 13)), u32::from_le_bytes(word(b, 14)));
+                t.tile = [at as u16, (at >> 16) as u16, size as u16, (size >> 16) as u16 & 0x7fff];
+                t.linear = size >> 31;
                 t
             })
             .collect(),
@@ -567,9 +575,19 @@ mod tests {
         let at = |x, y| [x, y, 252.0, 252.0];
         assert_eq!(
             read_render(bytes),
-            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff, linear: 0 }])
+            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff, linear: 0, tile: [0; 4] }])
         );
         assert_eq!(read_render(&bytes[1..]), None);
+    }
+
+    #[test]
+    fn reads_a_tile_and_linear_sampling() {
+        // As Sprite.encoder packs them: left + top * 2^16, width + height * 2^16 + 2^31.
+        let mut bytes = vec![0u8; 52];
+        bytes.extend((256u32 + 224 * 65536).to_le_bytes());
+        bytes.extend((16u32 + 20 * 65536 + (1 << 31)).to_le_bytes());
+        let t = read_render(&bytes).unwrap()[0];
+        assert_eq!((t.tile, t.linear), ([256, 224, 16, 20], 1));
     }
 
     #[test]
