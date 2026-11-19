@@ -9,7 +9,6 @@ module Ui exposing
     , LazyCache
     , Model
     , Padding
-    , RowColumn
     , Screenshot
     , ScrollBy(..)
     , Source
@@ -41,7 +40,6 @@ module Ui exposing
     , init
     , insertElement
     , inspect
-    , lazy
     , lazy2
     , lazy3
     , lazyCache
@@ -1585,11 +1583,6 @@ lazy3 _ f a b c =
 lazy2 : LazyCache id -> (a -> b -> Element id) -> a -> b -> Element id
 lazy2 _ f a b =
     f a b
-
-
-lazy : LazyCache id -> (a -> Element id) -> a -> Element id
-lazy _ f a =
-    f a
 
 
 {-| What the code generator turns a `lazy` call into: the element that last frame's
