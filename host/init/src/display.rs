@@ -143,21 +143,22 @@ impl CpuDisplay {
     }
 
     /// Puts the cursor on each display's cursor plane. False unless every display has one.
-    pub fn cursor_init(&mut self, img: &[u32]) -> bool {
+    pub fn cursor_init(&mut self, img: &[u32], hot: [usize; 2]) -> bool {
         for o in &mut self.outputs {
             let Some(dumb) = drm::create_dumb(&self.card, CURSOR_PLANE as u32, CURSOR_PLANE as u32) else {
                 return false;
             };
             o.cursor_handle = dumb.handle;
         }
-        self.cursor_draw(img)
+        self.cursor_draw(img, hot)
     }
 
-    /// Puts this image (cursor::Picture::plane_image) on every display's cursor plane.
-    pub fn cursor_draw(&mut self, img: &[u32]) -> bool {
+    /// Puts this image (cursor::Picture::plane_image) on every display's cursor plane,
+    /// its hot spot `hot` (drm::set_cursor).
+    pub fn cursor_draw(&mut self, img: &[u32], hot: [usize; 2]) -> bool {
         self.outputs
             .iter()
-            .all(|o| o.cursor_handle != 0 && drm::draw_cursor(&self.card, o.out.crtc, o.cursor_handle, img))
+            .all(|o| o.cursor_handle != 0 && drm::draw_cursor(&self.card, o.out.crtc, o.cursor_handle, img, hot))
     }
 
     /// Shows the cursor at (x, y) on output `on`, and hides it on the others.

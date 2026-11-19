@@ -728,6 +728,7 @@ impl Runner {
             atlas::shared(),
             image.width as usize,
             image.height as usize,
+            spot([image.hot_x, image.hot_y]),
             spot(image.fill),
             image.outline.map(spot),
         );
@@ -742,7 +743,7 @@ impl Runner {
                 bytes.extend_from_slice(&[un(p >> 16 & 255), un(p >> 8 & 255), un(p & 255), a as u8]);
             }
         }
-        let hot = ((image.hot_x as usize).min(w.saturating_sub(1)) as u16, (image.hot_y as usize).min(h.saturating_sub(1)) as u16);
+        let hot = (picture.hot[0] as u16, picture.hot[1] as u16);
         if w == 0 || h == 0 {
             return;
         }

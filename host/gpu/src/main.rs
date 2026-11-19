@@ -15,7 +15,7 @@
 //!             to sample the atlas bilinearly, and the atlas rectangle it repeats.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m CONNECTOR X Y" moves it,
-//!             "c RGBA W H PIXELS" redraws it with that fill colour (W H PIXELS is
+//!             "c RGBA W H HX HY PIXELS" redraws it with that fill colour (W H HX HY PIXELS is
 //!             the picture, common::cursor::Picture::line).
 //!
 //! Every triangle samples the texture atlas, which we upload once.
@@ -274,15 +274,15 @@ impl CursorPlane {
             GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE,
         );
         let c = CursorPlane { connector: out.connector, crtc: out.crtc, bo };
-        if bo.is_null() || !c.draw(card, &Picture::default().plane_image(0)) {
+        if bo.is_null() || !c.draw(card, &Picture::default().plane_image(0), [0, 0]) {
             eprintln!("[gpu] no cursor plane on {}", out.name);
             return None;
         }
         Some(c)
     }
 
-    /// Puts this image (Picture::plane_image) on the plane.
-    fn draw(&self, card: &File, img: &[u32]) -> bool {
+    /// Puts this image (Picture::plane_image) on the plane, its hot spot `hot`.
+    fn draw(&self, card: &File, img: &[u32], hot: [usize; 2]) -> bool {
         // SAFETY: the buffer is 64 x 64 ARGB, the size of img.
         unsafe {
             if gbm_bo_write(self.bo, img.as_ptr() as *const c_void, img.len() * 4) != 0 {
@@ -290,7 +290,7 @@ impl CursorPlane {
             }
         }
         // Setting the cursor again makes drivers that copy it (virtio-gpu) take the new image.
-        drm::set_cursor(card, self.crtc, unsafe { gbm_bo_get_handle(self.bo) } as u32, CURSOR_PLANE as u32)
+        drm::set_cursor(card, self.crtc, unsafe { gbm_bo_get_handle(self.bo) } as u32, CURSOR_PLANE as u32, hot)
     }
 }
 
@@ -307,7 +307,7 @@ impl Cursors {
                 };
                 let img = picture.plane_image(fill);
                 for p in &self.planes {
-                    p.draw(&self.card, &img);
+                    p.draw(&self.card, &img, picture.hot);
                 }
                 continue;
             }

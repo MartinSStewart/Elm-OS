@@ -11,20 +11,32 @@ pub const PLANE: usize = 64;
 
 /// A cursor's picture: `width` x `height` device pixels, two bytes each, row by row: how
 /// much of the pixel the black outline covers, then how much the fill colour does
-/// (0-255). `from_atlas` cuts it out of the texture atlas, where Elm says it is.
+/// (0-255). `from_atlas` cuts it out of the texture atlas, where Elm says it is. `hot`
+/// is the pixel that points (the hot spot): the plane goes that far up and left of the
+/// mouse, and the driver is told it too (drm::set_cursor), because a virtual GPU
+/// (QEMU's virtio-gpu) shows the cursor as the host's own pointer, placed by it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Picture {
     pub width: usize,
     pub height: usize,
+    pub hot: [usize; 2],
     pub pixels: Vec<u8>,
 }
 
 impl Picture {
     /// The picture whose fill (and outline, if it has one) is the width x height
     /// rectangle of the atlas with its top left corner there (protocol::CursorImage).
-    /// Cut to the cursor plane's size.
-    pub fn from_atlas(atlas: &[u8], width: usize, height: usize, fill: [usize; 2], outline: Option<[usize; 2]>) -> Picture {
+    /// Cut to the cursor plane's size, the hot spot kept inside it.
+    pub fn from_atlas(
+        atlas: &[u8],
+        width: usize,
+        height: usize,
+        hot: [usize; 2],
+        fill: [usize; 2],
+        outline: Option<[usize; 2]>,
+    ) -> Picture {
         let (width, height) = (width.min(PLANE), height.min(PLANE));
+        let hot = [hot[0].min(width.saturating_sub(1)), hot[1].min(height.saturating_sub(1))];
         let at = |[x, y]: [usize; 2], dx: usize, dy: usize| {
             let (x, y) = (x + dx, y + dy);
             if x < ATLAS_W && y < ATLAS_H {
@@ -40,22 +52,24 @@ impl Picture {
                 pixels.push(at(fill, dx, dy));
             }
         }
-        Picture { width, height, pixels }
+        Picture { width, height, hot, pixels }
     }
 
-    /// The picture as one line of text, "W H P", P two hex digits a byte (`parse` reads it).
+    /// The picture as one line of text, "W H HX HY P", P two hex digits a byte (`parse` reads it).
     pub fn line(&self) -> String {
         let hex: String = self.pixels.iter().map(|p| format!("{p:02x}")).collect();
-        format!("{} {} {}", self.width, self.height, if hex.is_empty() { "-" } else { &hex })
+        let [hx, hy] = self.hot;
+        format!("{} {} {hx} {hy} {}", self.width, self.height, if hex.is_empty() { "-" } else { &hex })
     }
 
     /// Reads what `line` wrote, split into words.
     pub fn parse(words: &[&str]) -> Option<Picture> {
-        let [w, h, hex] = words else { return None };
+        let [w, h, hx, hy, hex] = words else { return None };
         let (width, height): (usize, usize) = (w.parse().ok()?, h.parse().ok()?);
+        let hot = [hx.parse().ok()?, hy.parse().ok()?];
         let hex = if *hex == "-" { "" } else { hex };
         let pixels: Vec<u8> = (0..hex.len() / 2).map(|i| u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()).collect::<Option<_>>()?;
-        (pixels.len() == width * height * 2).then_some(Picture { width, height, pixels })
+        (pixels.len() == width * height * 2).then_some(Picture { width, height, hot, pixels })
     }
 
     /// The 64 x 64 ARGB8888 image for a cursor plane: the picture at its top left, the
@@ -88,19 +102,19 @@ mod tests {
 
     #[test]
     fn a_picture_goes_through_a_line_of_text() {
-        let p = Picture { width: 2, height: 1, pixels: vec![255, 0, 0, 128] };
+        let p = Picture { width: 2, height: 1, hot: [1, 0], pixels: vec![255, 0, 0, 128] };
         let line = p.line();
-        assert_eq!(line, "2 1 ff000080");
+        assert_eq!(line, "2 1 1 0 ff000080");
         assert_eq!(Picture::parse(&line.split(' ').collect::<Vec<_>>()), Some(p));
         let empty = Picture::default();
         assert_eq!(Picture::parse(&empty.line().split(' ').collect::<Vec<_>>()), Some(empty));
-        assert_eq!(Picture::parse(&["2", "2", "ff00"]), None);
+        assert_eq!(Picture::parse(&["2", "2", "0", "0", "ff00"]), None);
     }
 
     #[test]
     fn the_plane_image_is_premultiplied() {
         // outline, half-covered fill, fill over outline, nothing
-        let p = Picture { width: 4, height: 1, pixels: vec![255, 0, 0, 128, 255, 255, 0, 0] };
+        let p = Picture { width: 4, height: 1, hot: [0, 0], pixels: vec![255, 0, 0, 128, 255, 255, 0, 0] };
         let img = p.plane_image(0xff00_00ff);
         assert_eq!(img[0], 0xff00_0000);
         assert_eq!(img[1], 0x8080_0000);
@@ -111,7 +125,7 @@ mod tests {
     #[test]
     fn the_arrow_comes_out_of_the_atlas() {
         let arrow = crate::sprites::find("cursor-arrow", 1);
-        let p = Picture::from_atlas(crate::atlas::shared(), arrow.width, arrow.height, arrow.fill, arrow.outline);
+        let p = Picture::from_atlas(crate::atlas::shared(), arrow.width, arrow.height, arrow.hot_spot, arrow.fill, arrow.outline);
         // Its tip is outline, the middle of its third row fill.
         assert_eq!(&p.pixels[0..2], &[255, 0]);
         let i = 2 * (2 * p.width + 1);

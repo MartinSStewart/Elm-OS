@@ -8,7 +8,7 @@
 //!                 "ok CURSOR RENDERER" once they are up; then "f GPU_NS" for each
 //!                 frame shown, or "d" for one skipped
 //!   its fd 3   <- cursor commands: "m CONNECTOR X Y" shows it at X, Y on that display
-//!                 (and on no other), "c RGBA W H PIXELS" redraws it: fill colour
+//!                 (and on no other), "c RGBA W H HX HY PIXELS" redraws it: fill colour
 //!                 and the picture (common::cursor::Picture::line)
 
 use common::atlas::Tri;

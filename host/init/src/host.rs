@@ -98,7 +98,7 @@ impl Host {
             log!("host", "ELMOS_CURSOR=software: Elm draws the cursor");
             false
         } else {
-            let on_plane = d.cursor_init(&self.cursor_picture.plane_image(self.cursor_fill));
+            let on_plane = d.cursor_init(&self.cursor_picture.plane_image(self.cursor_fill), self.cursor_picture.hot);
             log!(
                 "host",
                 "{}",
@@ -164,7 +164,7 @@ impl Host {
         match &mut self.renderer {
             Renderer::Gpu(g) => self.cursor_stale = !g.cursor_redraw(fill, &self.cursor_picture),
             Renderer::Cpu(d, _) => {
-                if !d.cursor_draw(&self.cursor_picture.plane_image(fill)) {
+                if !d.cursor_draw(&self.cursor_picture.plane_image(fill), self.cursor_picture.hot) {
                     self.hw_cursor = false;
                 }
             }
@@ -352,10 +352,11 @@ impl Host {
                         atlas::shared(),
                         image.width as usize,
                         image.height as usize,
+                        spot([image.hot_x, image.hot_y]),
                         spot(image.fill),
                         image.outline.map(spot),
                     );
-                    let hot = (image.hot_x.min(64) as i32, image.hot_y.min(64) as i32);
+                    let hot = (picture.hot[0] as i32, picture.hot[1] as i32);
                     // Elm sends it every frame: only redraw it when it changes.
                     if self.cursor_stale
                         || rgba != self.cursor_fill
