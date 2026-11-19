@@ -41,8 +41,8 @@ SUBPIXELS = 4
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_W, ATLAS_H = 2048, 4096
-# The pixel font lives in the top left RESERVED_W x RESERVED_H, and the sprite sheets
-# in the rows from SPRITES_TOP down (host/common/src/atlas.rs).
+# The pixel font lives in the top left RESERVED_W x RESERVED_H, and the sprites
+# (sprites/) in the rows from SPRITES_TOP down (host/common/src/atlas.rs, sprites.rs TOP).
 RESERVED_W, RESERVED_H = 304, 256
 SPRITES_TOP = 3584
 SIZES = [16, 24, 32, 48]

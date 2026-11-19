@@ -3,6 +3,7 @@ module CursorTest exposing (suite)
 import Coord
 import Cursor exposing (Cursor)
 import Expect
+import Quantity
 import Test exposing (Test, describe, test)
 import Sprite
 import Ui
@@ -40,26 +41,28 @@ suite =
         [ test "an I-beam over a text input" (\_ -> cursorAt 5 5 |> Expect.equal Cursor.Text)
         , test "a hand over a button, its label too" (\_ -> cursorAt 215 15 |> Expect.equal Cursor.Pointer)
         , test "the arrow elsewhere" (\_ -> cursorAt 5000 5 |> Expect.equal Cursor.Arrow)
-        , test "every picture is a rectangle of X, o and spaces, its hot spot on it"
+        , test "every picture has an outline, its hot spot on it, and its 2x picture is twice the size"
             (\_ ->
                 Cursor.all
                     |> List.filter
                         (\cursor ->
                             let
-                                image =
-                                    Cursor.image cursor
+                                small =
+                                    Cursor.image (Units.scaleFor (Quantity.Quantity 1280)) cursor
+
+                                big =
+                                    Cursor.image (Units.scaleFor (Quantity.Quantity 2560)) cursor
 
                                 ( hx, hy ) =
-                                    image.hotSpot
+                                    big.hotSpot
                             in
                             not
-                                (List.length image.rows
-                                    == image.height
-                                    && List.all (\row -> String.length row == image.width) image.rows
-                                    && List.all (String.all (\c -> c == 'X' || c == 'o' || c == ' ')) image.rows
-                                    && (hx >= 0 && hy >= 0 && hx < image.width && hy < image.height)
-                                    && image.width <= 32
-                                    && image.height <= 32
+                                (small.outline /= Nothing
+                                    && big.width == 2 * small.width
+                                    && big.height == 2 * small.height
+                                    && (hx >= 0 && hy >= 0 && hx < big.width && hy < big.height)
+                                    && big.width <= 64
+                                    && big.height <= 64
                                 )
                         )
                     |> Expect.equal []

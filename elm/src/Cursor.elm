@@ -1,21 +1,22 @@
-module Cursor exposing (Cursor(..), Image, all, encode, image, makeImage, view)
+module Cursor exposing (Cursor(..), Image, all, encode, image, view)
 
 {-| The mouse cursor's shapes, the usual set a desktop has: which one shows is up to
 `Ui.cursorAt` (a hand over buttons, an I-beam over text inputs) and Main.
 
-Each shape is a small picture in UI pixels: a black outline (`X`) around a fill (`o`)
-drawn in the cursor's colour, and a hot spot, the pixel that points. The host draws it
-on the display's cursor plane (host/common/src/cursor.rs) from what `encode` sends, so
-the pictures live only here; where there is no cursor plane, `view` draws it.
+Each shape is a sprite, sprites/cursor-NAME.1x.webp and .2x.webp: a black outline
+around a white fill, which is drawn in the cursor's colour, and a hot spot, the pixel
+that points (sprites/hot-spots.txt). The host draws it on the display's cursor plane
+(host/common/src/cursor.rs) from the atlas, where `encode` says it is; where there is no
+cursor plane, `view` draws it.
 
 -}
 
-import Bytes exposing (Bytes)
 import Bytes.Encode as BE
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Postcard
 import Sprite exposing (Triangle)
+import Sprites
 import Units exposing (DevicePixels, UiScale)
 
 
@@ -51,419 +52,97 @@ all =
     ]
 
 
-{-| A shape's picture: `rows` of the same length (`width`), each character `X`
-(outline), `o` (fill) or a space, and the hot spot's column and row in it.
+{-| A shape's picture at one UI scale: where it is in the atlas (Sprites.Sprite).
 -}
 type alias Image =
-    { width : Int
-    , height : Int
-    , hotSpot : ( Int, Int )
-    , rows : List String
-    }
+    Sprites.Sprite
 
 
 {-| What the host needs to draw the cursor (protocol's `CursorImage`): the picture's
-size and hot spot, then a byte per pixel, row by row: 0 nothing, 1 outline, 2 fill.
+size and hot spot in device pixels, then where its fill and outline are in the atlas.
 -}
 encode : Image -> List BE.Encoder
-encode { width, height, hotSpot, rows } =
+encode { width, height, hotSpot, fill, outline } =
+    let
+        spot ( x, y ) =
+            BE.sequence [ Postcard.unsigned x, Postcard.unsigned y ]
+    in
     [ Postcard.unsigned width
     , Postcard.unsigned height
     , Postcard.unsigned (Tuple.first hotSpot)
     , Postcard.unsigned (Tuple.second hotSpot)
-    , Postcard.bytes (pixels rows)
+    , spot fill
+    , Postcard.maybe spot outline
     ]
 
 
-pixels : List String -> Bytes
-pixels rows =
-    List.concatMap
-        (\row ->
-            String.toList row
-                |> List.map
-                    (\char ->
-                        case char of
-                            'X' ->
-                                BE.unsignedInt8 1
-
-                            'o' ->
-                                BE.unsignedInt8 2
-
-                            _ ->
-                                BE.unsignedInt8 0
-                    )
-        )
-        rows
-        |> BE.sequence
-        |> BE.encode
-
-
 {-| The cursor drawn with its hot spot at `position`, for when the host has no cursor
-plane to put it on: a rectangle for each run of outline or fill pixels in a row.
+plane to put it on: its outline in black, then its fill in the given colour.
 -}
 view : Color -> UiScale -> Coord DevicePixels -> Cursor -> List (Triangle DevicePixels)
 view fill scale position cursor =
     let
-        { hotSpot, rows } =
-            image cursor
-
-        s =
-            Units.scaleInt scale
+        { width, height, hotSpot, outline } =
+            image scale cursor
 
         ( x0, y0 ) =
             Coord.toTuple position
 
-        topLeft =
-            ( x0 - Tuple.first hotSpot * s, y0 - Tuple.second hotSpot * s )
+        at =
+            Coord.xy (x0 - Tuple.first hotSpot) (y0 - Tuple.second hotSpot)
+
+        layer color spot =
+            Sprite.atlasRectangle color at (Coord.xy width height) spot
     in
-    List.indexedMap (\y row -> runs (String.toList row) 0 [] |> List.concatMap (runView fill s topLeft y)) rows
-        |> List.concat
+    (case outline of
+        Just spot ->
+            layer Color.black spot
 
-
-runView : Color -> Int -> ( Int, Int ) -> Int -> { char : Char, start : Int, length : Int } -> List (Triangle DevicePixels)
-runView fill s ( left, top ) y run =
-    let
-        draw color =
-            Sprite.block color (Coord.xy (left + run.start * s) (top + y * s)) (Coord.xy (run.length * s) s)
-    in
-    case run.char of
-        'X' ->
-            draw Color.black
-
-        'o' ->
-            draw fill
-
-        _ ->
+        Nothing ->
             []
+    )
+        ++ layer fill (image scale cursor).fill
 
 
-{-| Each stretch of the same character in a row, left to right.
+{-| A shape's picture for the UI scale.
 -}
-runs : List Char -> Int -> List { char : Char, start : Int, length : Int } -> List { char : Char, start : Int, length : Int }
-runs chars x acc =
-    case chars of
-        [] ->
-            List.reverse acc
-
-        char :: rest ->
-            case acc of
-                last :: earlier ->
-                    if last.char == char then
-                        runs rest (x + 1) ({ last | length = last.length + 1 } :: earlier)
-
-                    else
-                        runs rest (x + 1) ({ char = char, start = x, length = 1 } :: acc)
-
-                [] ->
-                    runs rest (x + 1) [ { char = char, start = x, length = 1 } ]
+image : UiScale -> Cursor -> Image
+image scale cursor =
+    Sprites.get (Units.scaleInt scale) (sprite cursor)
 
 
-image : Cursor -> Image
-image cursor =
+sprite : Cursor -> Sprites.Name
+sprite cursor =
     case cursor of
         Arrow ->
-            arrowImage
+            Sprites.CursorArrow
 
         Pointer ->
-            pointerImage
+            Sprites.CursorPointer
 
         Text ->
-            textImage
+            Sprites.CursorText
 
         Crosshair ->
-            crosshairImage
+            Sprites.CursorCrosshair
 
         Move ->
-            moveImage
+            Sprites.CursorMove
 
         NotAllowed ->
-            notAllowedImage
+            Sprites.CursorNotAllowed
 
         Wait ->
-            waitImage
+            Sprites.CursorWait
 
         ResizeNorthSouth ->
-            resizeNSImage
+            Sprites.CursorResizeNorthSouth
 
         ResizeEastWest ->
-            resizeEWImage
+            Sprites.CursorResizeEastWest
 
         ResizeNorthwestSoutheast ->
-            resizeNWSEImage
+            Sprites.CursorResizeNorthwestSoutheast
 
         ResizeNortheastSouthwest ->
-            resizeNESWImage
-
-
-{-| The rows padded with spaces to the widest, so every row has `width` pixels.
--}
-makeImage : ( Int, Int ) -> List String -> Image
-makeImage hotSpot rows =
-    let
-        width =
-            List.map String.length rows |> List.maximum |> Maybe.withDefault 0
-    in
-    { width = width
-    , height = List.length rows
-    , hotSpot = hotSpot
-    , rows = List.map (String.padRight width ' ') rows
-    }
-
-
-
--- THE PICTURES
-
-
-arrowImage : Image
-arrowImage =
-    makeImage ( 0, 0 )
-        [ "X"
-        , "XX"
-        , "XoX"
-        , "XooX"
-        , "XoooX"
-        , "XooooX"
-        , "XoooooX"
-        , "XooooooX"
-        , "XoooooooX"
-        , "XooooooooX"
-        , "XoooooooooX"
-        , "XooooooXXXXX"
-        , "XoooXooX"
-        , "XooXXooX"
-        , "XoX  XooX"
-        , "XX   XooX"
-        , "X     XooX"
-        , "      XooX"
-        , "       XX"
-        ]
-
-
-pointerImage : Image
-pointerImage =
-    makeImage ( 6, 0 )
-        [ "     XXXX"
-        , "    XXooXX"
-        , "    XooooX"
-        , "    XooooX"
-        , "    XooooX"
-        , "    XooooXXXX"
-        , "    XoooooooXXXXX"
-        , "    XoooooooooooXX"
-        , "    XooXooXooooooXX"
-        , " XXXXooXooXooXooooX"
-        , "XXooXooXooXooXooooX"
-        , "XoooooooooooooooooX"
-        , "XooooooooooooooooXX"
-        , "XXoooooooooooooooX"
-        , " XXooooooooooooooX"
-        , "  XoooooooooooooXX"
-        , "  XXooooooooooooX"
-        , "   XoooooooooooXX"
-        , "   XXooooooooooX"
-        , "    XXXXXXXXXXXX"
-        ]
-
-
-textImage : Image
-textImage =
-    makeImage ( 4, 9 )
-        [ "XXXXXXXXX"
-        , "XoooXoooX"
-        , "XXXXoXXXX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "   XoX"
-        , "XXXXoXXXX"
-        , "XoooXoooX"
-        , "XXXXXXXXX"
-        ]
-
-
-crosshairImage : Image
-crosshairImage =
-    makeImage ( 7, 7 )
-        [ "      XXX"
-        , "      XoX"
-        , "      XoX"
-        , "      XoX"
-        , "      XoX"
-        , "      XoX"
-        , "XXXXXXXXXXXXXXXX"
-        , "XooooooXoooooooX"
-        , "XXXXXXXXXXXXXXXX"
-        , "      XoX"
-        , "      XoX"
-        , "      XoX"
-        , "      XoX"
-        , "      XoX"
-        , "      XXX"
-        ]
-
-
-moveImage : Image
-moveImage =
-    makeImage ( 9, 9 )
-        [ "        XXX"
-        , "       XXoXX"
-        , "      XXoooXX"
-        , "     XXoooooXX"
-        , "     XoooooooX"
-        , "   XXXXXXoXXXXXX"
-        , "  XXoX  XoX  XoXX"
-        , " XXooX  XoX  XooXX"
-        , "XXoooXXXXoXXXXoooXX"
-        , "XoooooooooooooooooX"
-        , "XXoooXXXXoXXXXoooXX"
-        , " XXooX  XoX  XooXX"
-        , "  XXoX  XoX  XoXX"
-        , "   XXXXXXoXXXXXX"
-        , "     XoooooooX"
-        , "     XXoooooXX"
-        , "      XXoooXX"
-        , "       XXoXX"
-        , "        XXX"
-        ]
-
-
-notAllowedImage : Image
-notAllowedImage =
-    makeImage ( 10, 9 )
-        [ "      XXXXXXXXX"
-        , "    XXXoooooooXXX"
-        , "   XXoooooooooooXX"
-        , "  XXoooooXXXoooooXX"
-        , "  XoooooXX XXXooooX"
-        , "XXXooooooXX  XXoooXX"
-        , "XoooXoooooXX  XXoooX"
-        , "XoooXXoooooXX  XoooX"
-        , "XoooXXXoooooXX XoooX"
-        , "XoooX XXoooooXXXoooX"
-        , "XoooX  XXoooooXXoooX"
-        , "XoooXXX XXoooooXoooX"
-        , "XXXoooXX XXXooooooXX"
-        , "  XooooXXX XXoooooX"
-        , "  XXoooooXXXoooooXX"
-        , "   XXoooooooooooXX"
-        , "    XXXoooooooXXX"
-        , "      XXXXXXXXX"
-        ]
-
-
-waitImage : Image
-waitImage =
-    makeImage ( 7, 9 )
-        [ "XXXXXXXXXXXXXXX"
-        , "XoooooooooooooX"
-        , "XoooooooooooooX"
-        , "XXoooooooooooXX"
-        , " XoooooooooooX"
-        , " XooXXXXXXXooX"
-        , " XXooXXXXXooXX"
-        , "  XXooXXXooXX"
-        , "   XXooXooXX"
-        , "   XXooXooXX"
-        , "  XXoooXoooXX"
-        , " XXooooXooooXX"
-        , " XoooooXoooooX"
-        , " XooooXXXooooX"
-        , "XXooXXXXXXXooXX"
-        , "XoooooooooooooX"
-        , "XoooooooooooooX"
-        , "XXXXXXXXXXXXXXX"
-        ]
-
-
-resizeNSImage : Image
-resizeNSImage =
-    makeImage ( 5, 9 )
-        [ "    XXX"
-        , "   XXoXX"
-        , "  XXoooXX"
-        , " XXoooooXX"
-        , "XXoooooooXX"
-        , "XoooooooooX"
-        , "XXXXXoXXXXX"
-        , "    XoX"
-        , "    XoX"
-        , "    XoX"
-        , "    XoX"
-        , "    XoX"
-        , "XXXXXoXXXXX"
-        , "XoooooooooX"
-        , "XXoooooooXX"
-        , " XXoooooXX"
-        , "  XXoooXX"
-        , "   XXoXX"
-        , "    XXX"
-        ]
-
-
-resizeEWImage : Image
-resizeEWImage =
-    makeImage ( 9, 5 )
-        [ "    XXX     XXX"
-        , "   XXoX     XoXX"
-        , "  XXooX     XooXX"
-        , " XXoooX     XoooXX"
-        , "XXooooXXXXXXXooooXX"
-        , "XoooooooooooooooooX"
-        , "XXooooXXXXXXXooooXX"
-        , " XXoooX     XoooXX"
-        , "  XXooX     XooXX"
-        , "   XXoX     XoXX"
-        , "    XXX     XXX"
-        ]
-
-
-resizeNWSEImage : Image
-resizeNWSEImage =
-    makeImage ( 7, 7 )
-        [ "XXXXXXXX"
-        , "XooooooX"
-        , "XoooooXX"
-        , "XooooXX"
-        , "XoooooXX"
-        , "XooXoooXX"
-        , "XoXXXoooXX"
-        , "XXX XXoooXX"
-        , "     XXoooXX XXX"
-        , "      XXoooXXXoX"
-        , "       XXoooXooX"
-        , "        XXoooooX"
-        , "         XXooooX"
-        , "        XXoooooX"
-        , "        XooooooX"
-        , "        XXXXXXXX"
-        ]
-
-
-resizeNESWImage : Image
-resizeNESWImage =
-    makeImage ( 8, 7 )
-        [ "        XXXXXXXX"
-        , "        XooooooX"
-        , "        XXoooooX"
-        , "         XXooooX"
-        , "        XXoooooX"
-        , "       XXoooXooX"
-        , "      XXoooXXXoX"
-        , "     XXoooXX XXX"
-        , "XXX XXoooXX"
-        , "XoXXXoooXX"
-        , "XooXoooXX"
-        , "XoooooXX"
-        , "XooooXX"
-        , "XoooooXX"
-        , "XooooooX"
-        , "XXXXXXXX"
-        ]
+            Sprites.CursorResizeNortheastSouthwest

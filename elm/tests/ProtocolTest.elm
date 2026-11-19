@@ -10,7 +10,7 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
 import Color
-import Cursor
+import Coord
 import Duration
 import Effect exposing (Effect)
 import Expect
@@ -37,7 +37,7 @@ byteList list =
 -}
 effects : List Effect
 effects =
-    [ Effect.SetCursor { image = Cursor.makeImage ( 1, 2 ) [ "X", "oX", " o" ], color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
+    [ Effect.SetCursor { image = { width = 24, height = 38, hotSpot = ( 1, 2 ), fill = ( 1, 3585 ), outline = Just ( 27, 3585 ) }, color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
     , Effect.WifiScan
     , Effect.WifiConnect { ssid = Wifi.stringToSsid "Home", password = Unsafe.wpa2Password "password" |> Just }
     , Effect.WifiDisconnect
@@ -73,7 +73,7 @@ effects =
     , Effect.TlsClose "email"
     , Effect.Render
         (\() ->
-            [ { display = 33, triangles = [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ] }
+            [ { display = 33, triangles = Sprite.atlasRectangle Color.white (Coord.xy 0 0) (Coord.xy 10 10) ( 4, 3588 ) }
             , { display = 34, triangles = [] }
             ]
         )

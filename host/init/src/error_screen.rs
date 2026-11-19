@@ -214,7 +214,7 @@ fn triangles(s: &Screen, w: u32, h: u32) -> Vec<Tri> {
     lines.extend(footer);
 
     let mut tris = Vec::with_capacity(2 + lines.iter().map(|(l, _)| l.len() * 2).sum::<usize>());
-    let [su, sv] = atlas::SOLID;
+    let [su, sv] = atlas::solid();
     quad(&mut tris, 0.0, 0.0, wf, hf, su, sv, su, sv, BACKGROUND);
     for (i, (line, rgba)) in lines.iter().enumerate() {
         text(&mut tris, margin, margin + i as f32 * line_h, scale, line, *rgba);

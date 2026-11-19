@@ -56,7 +56,7 @@ const FRAME_TIMEOUT: f64 = 1.0;
 
 enum Renderer {
     Gpu(Gpu),
-    Cpu(CpuDisplay, Vec<u8>), // and the atlas
+    Cpu(CpuDisplay, &'static [u8]), // and the atlas
     Nothing,
 }
 
@@ -98,7 +98,7 @@ impl Host {
             log!("host", "ELMOS_CURSOR=software: Elm draws the cursor");
             false
         } else {
-            let on_plane = d.cursor_init(&self.cursor_picture.plane_image(self.cursor_scale, self.cursor_fill));
+            let on_plane = d.cursor_init(&self.cursor_picture.plane_image(self.cursor_fill));
             log!(
                 "host",
                 "{}",
@@ -115,7 +115,7 @@ impl Host {
             .iter()
             .map(|o| display(&o.out))
             .collect();
-        self.renderer = Renderer::Cpu(d, atlas::build());
+        self.renderer = Renderer::Cpu(d, atlas::shared());
         true
     }
 
@@ -148,8 +148,7 @@ impl Host {
         let (x, y) = (self.inputs.mouse_x, self.inputs.mouse_y);
         let Some(i) = self.area().find(x, y) else { return };
         let d = &self.displays[i];
-        let s = self.cursor_scale as i32;
-        let (id, lx, ly) = (d.id, x - d.x - self.cursor_hot.0 * s, y - d.y - self.cursor_hot.1 * s);
+        let (id, lx, ly) = (d.id, x - d.x - self.cursor_hot.0, y - d.y - self.cursor_hot.1);
         match &mut self.renderer {
             Renderer::Gpu(g) => g.cursor_move(id, lx, ly),
             Renderer::Cpu(d, _) => d.cursor_move(i, lx, ly),
@@ -161,11 +160,11 @@ impl Host {
         if !self.hw_cursor {
             return;
         }
-        let (fill, scale) = (self.cursor_fill, self.cursor_scale);
+        let fill = self.cursor_fill;
         match &mut self.renderer {
-            Renderer::Gpu(g) => self.cursor_stale = !g.cursor_redraw(fill, scale, &self.cursor_picture),
+            Renderer::Gpu(g) => self.cursor_stale = !g.cursor_redraw(fill, &self.cursor_picture),
             Renderer::Cpu(d, _) => {
-                if !d.cursor_draw(&self.cursor_picture.plane_image(scale, fill)) {
+                if !d.cursor_draw(&self.cursor_picture.plane_image(fill)) {
                     self.hw_cursor = false;
                 }
             }
@@ -348,11 +347,14 @@ impl Host {
                 Effect::Render(_) => {}
                 Effect::Cursor { rgba, scale, image } => {
                     let scale = scale.clamp(1, 4) as usize;
-                    let picture = Picture {
-                        width: image.width as usize,
-                        height: image.height as usize,
-                        pixels: image.pixels,
-                    };
+                    let spot = |[x, y]: [u32; 2]| [x as usize, y as usize];
+                    let picture = Picture::from_atlas(
+                        atlas::shared(),
+                        image.width as usize,
+                        image.height as usize,
+                        spot(image.fill),
+                        image.outline.map(spot),
+                    );
                     let hot = (image.hot_x.min(64) as i32, image.hot_y.min(64) as i32);
                     // Elm sends it every frame: only redraw it when it changes.
                     if self.cursor_stale

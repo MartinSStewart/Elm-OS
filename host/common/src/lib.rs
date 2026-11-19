@@ -6,3 +6,4 @@ pub mod drm;
 pub mod msglog;
 mod font;
 pub mod raster;
+pub mod sprites;

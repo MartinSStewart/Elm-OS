@@ -8,10 +8,10 @@ module Sprite exposing
     , Tile
     , Triangle
     , asciiChar
+    , atlasRectangle
     , asciiIndex
     , caretPositions
     , circle
-    , block
     , clipTo
     , customText
     , customTextSize
@@ -41,10 +41,11 @@ pixels) and multiplies the sample by its colour:
 
   - glyphs of town-collab's 10 x 18 pixel font fill x 0-300, y 0-200, 25 to a row,
     in the order of `asciiChars` below, each at 1, 1 in a 12 x 20 cell
-  - the sprite sheets (host/common/sprites/), at the bottom: everything that isn't a
-    glyph, such as the solid block for flat colours and the dot grid tile. There is
-    one sheet for each UI scale, and shapes say where they sample in the 1x sheet's
-    pixels (`SpritePixels`), which `toDevice` turns into the sheet for the scale.
+  - the sprites (sprites/ at the top of the repository), at the bottom: everything
+    that isn't a glyph, such as the solid block for flat colours, the dot grid tile
+    and the cursors, each drawn at UI scale 1 and 2. Sprites.elm (generated) says where
+    each is. Shapes sample a sprite in its 1x picture's pixels (`InSprite`), which
+    `toDevice` turns into the picture for the UI scale.
   - Noto Sans, in each style at a few sizes, everywhere else, where NotoSans.elm says
 
 A triangle's corners are in UI pixels or device pixels (see Units). Shapes are made in
@@ -67,6 +68,7 @@ import Coord exposing (Coord)
 import Dict exposing (Dict)
 import NotoSans
 import Quantity exposing (Quantity(..))
+import Sprites
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
@@ -80,30 +82,19 @@ type Triangle units
     = Triangle { a : Vertex, b : Vertex, c : Vertex, color : Color, sampling : Sampling, tile : Maybe Tile, uvSpace : UvSpace }
 
 
-{-| What a triangle's u, v (and tile) are measured in: atlas pixels, or pixels of the
-1x sprite sheet (host/common/sprites/sprites-1x.webp). `toDevice` turns the second
-into atlas pixels in the sheet for the UI scale: at scale 2, the same place doubled
-in sprites-2x.webp. Anything not made in UI pixels is drawn from the 1x sheet.
+{-| What a triangle's u, v (and tile) are measured in: atlas pixels, or the pixels of a
+sprite's 1x picture (sprites/NAME.1x.webp). `toDevice` turns the second into atlas
+pixels in the sprite's picture for the UI scale: at scale 2, the same place in the 2x
+picture, which is twice the size. Anything not made in UI pixels is drawn from the 1x
+picture.
 -}
 type UvSpace
     = AtlasPixels
-    | SpritePixels
+    | InSprite Sprites.Name
 
 
-{-| Where each sprite sheet's top left corner is in the atlas, and how many of its
-pixels make one of the 1x sheet's (host/common/src/atlas.rs SHEETS).
--}
-spriteSheet : Int -> { left : Float, top : Float, factor : Float }
-spriteSheet scale =
-    if scale >= 2 then
-        { left = 256, top = 3584, factor = 2 }
-
-    else
-        { left = 0, top = 3584, factor = 1 }
-
-
-{-| The triangle sampling atlas pixels, from the sprite sheet for this UI scale if it
-samples the sprite sheets.
+{-| The triangle sampling atlas pixels, from the sprite's picture for this UI scale if
+it samples a sprite.
 -}
 inAtlas : Int -> Triangle a -> Triangle a
 inAtlas scale (Triangle t) =
@@ -111,16 +102,19 @@ inAtlas scale (Triangle t) =
         AtlasPixels ->
             Triangle t
 
-        SpritePixels ->
+        InSprite name ->
             let
-                sheet =
-                    spriteSheet scale
+                sprite_ =
+                    Sprites.get scale name
+
+                ( left, top ) =
+                    sprite_.fill
 
                 k =
-                    round sheet.factor
+                    sprite_.width // max 1 (Sprites.get 1 name).width
 
                 f v =
-                    { v | u = sheet.left + v.u * sheet.factor, v = sheet.top + v.v * sheet.factor }
+                    { v | u = toFloat left + v.u * toFloat k, v = toFloat top + v.v * toFloat k }
             in
             Triangle
                 { t
@@ -130,8 +124,8 @@ inAtlas scale (Triangle t) =
                     , tile =
                         Maybe.map
                             (\tile ->
-                                { left = round sheet.left + tile.left * k
-                                , top = round sheet.top + tile.top * k
+                                { left = left + tile.left * k
+                                , top = top + tile.top * k
                                 , width = tile.width * k
                                 , height = tile.height * k
                                 }
@@ -141,11 +135,11 @@ inAtlas scale (Triangle t) =
                 }
 
 
-{-| The triangles sampling the sprite sheets (their u, v are in the 1x sheet's pixels).
+{-| The triangles sampling a sprite (their u, v are in its 1x picture's pixels).
 -}
-fromSprites : List (Triangle units) -> List (Triangle units)
-fromSprites =
-    List.map (\(Triangle t) -> Triangle { t | uvSpace = SpritePixels })
+fromSprite : Sprites.Name -> List (Triangle units) -> List (Triangle units)
+fromSprite name =
+    List.map (\(Triangle t) -> Triangle { t | uvSpace = InSprite name })
 
 
 {-| A rectangle of the atlas, in atlas pixels, that a triangle repeats: its u, v can go
@@ -359,8 +353,8 @@ toDevice scale triangles =
         |> List.map (inAtlas (Units.scaleInt scale))
 
 
-{-| The middle of the sprite sheet's solid block (8 x 8 at its top left corner), in
-`SpritePixels`. A triangle with every corner here is a flat colour.
+{-| The middle of the solid block (sprites/solid.1x.webp, 8 x 8), in its pixels. A
+triangle with every corner here is a flat colour.
 -}
 solidTexturePosition : { u : Float, v : Float }
 solidTexturePosition =
@@ -382,7 +376,7 @@ triangle color ( ax, ay ) ( bx, by ) ( cx, cy ) =
         , color = color
         , sampling = Nearest
         , tile = Nothing
-        , uvSpace = SpritePixels
+        , uvSpace = InSprite Sprites.Solid
         }
 
 
@@ -439,20 +433,23 @@ rectangle color clip position size =
         (Coord.toTuple size)
         ( 2, 2 )
         ( 4, 4 )
-        |> fromSprites
+        |> fromSprite Sprites.Solid
 
 
-{-| The sprite sheet's dot grid tile, in `SpritePixels`: 16 x 16, with a dot in the
-middle (host/common/sprites/README.md).
+{-| The dot grid tile (sprites/dot-grid.1x.webp), all of it, in its pixels.
 -}
 dotGridTile : Tile
 dotGridTile =
-    { left = 8, top = 0, width = 16, height = 16 }
+    let
+        { width, height } =
+            Sprites.get 1 Sprites.DotGrid
+    in
+    { left = 0, top = 0, width = width, height = height }
 
 
-{-| A rectangle (position, size) covered in the sprite sheet's dot grid tile, repeated
-from its top left corner, cut to `clip`: two triangles, however big the rectangle.
-Made in UI pixels, so on a 2x screen it shows the 2x sheet's tile.
+{-| A rectangle (position, size) covered in the dot grid tile (sprites/dot-grid.*.webp),
+repeated from its top left corner, cut to `clip`: two triangles, however big the
+rectangle. Made in UI pixels, so on a 2x screen it shows the 2x picture.
 -}
 dotGrid : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
 dotGrid color clip position size =
@@ -467,14 +464,16 @@ dotGrid color clip position size =
         (Coord.toTuple size)
         ( dotGridTile.left, dotGridTile.top )
         (Coord.toTuple size)
-        |> List.map (\(Triangle t) -> Triangle { t | tile = Just dotGridTile, uvSpace = SpritePixels })
+        |> List.map (\(Triangle t) -> Triangle { t | tile = Just dotGridTile, uvSpace = InSprite Sprites.DotGrid })
 
 
-{-| A solid rectangle (x, y, w, h) in one colour.
+{-| A rectangle the size of `size` showing the same size of the atlas, with its top left
+corner at `atlasTopLeft` (atlas pixels), pixel for pixel: such as a sprite at a UI
+scale (Sprites.get), drawn in device pixels.
 -}
-block : Color -> Coord units -> Coord units -> List (Triangle units)
-block color position size =
-    sprite color (Coord.toTuple position) (Coord.toTuple size) ( 2, 2 ) ( 4, 4 ) |> fromSprites
+atlasRectangle : Color -> Coord units -> Coord units -> ( Int, Int ) -> List (Triangle units)
+atlasRectangle color position size atlasTopLeft =
+    sprite color (Coord.toTuple position) (Coord.toTuple size) atlasTopLeft (Coord.toTuple size)
 
 
 
@@ -960,7 +959,7 @@ decorationRun s fontSize deviceClip baseline decoration line spans =
                     (run.left64 + 32) // 64
             in
             clippedSprite run.color deviceClip ( left, top ) ( (run.right64 + 32) // 64 - left, thickness ) ( 2, 2 ) ( 4, 4 )
-                |> fromSprites
+                |> fromSprite Sprites.Solid
         )
         runs
 

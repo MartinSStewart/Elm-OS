@@ -15,8 +15,8 @@
 //!             to sample the atlas bilinearly, and the atlas rectangle it repeats.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m CONNECTOR X Y" moves it,
-//!             "c RGBA S W H PIXELS" redraws it with that fill colour at scale S
-//!             (W H PIXELS is the picture, common::cursor::Picture::line).
+//!             "c RGBA W H PIXELS" redraws it with that fill colour (W H PIXELS is
+//!             the picture, common::cursor::Picture::line).
 //!
 //! Every triangle samples the texture atlas, which we upload once.
 //!
@@ -274,7 +274,7 @@ impl CursorPlane {
             GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE,
         );
         let c = CursorPlane { connector: out.connector, crtc: out.crtc, bo };
-        if bo.is_null() || !c.draw(card, &Picture::default().plane_image(1, 0)) {
+        if bo.is_null() || !c.draw(card, &Picture::default().plane_image(0)) {
             eprintln!("[gpu] no cursor plane on {}", out.name);
             return None;
         }
@@ -301,12 +301,11 @@ impl Cursors {
         for line in input.lines() {
             let Ok(line) = line else { break };
             let words: Vec<&str> = line.split(' ').collect();
-            if let ["c", fill, scale, picture @ ..] = words.as_slice() {
-                let (Ok(fill), Ok(scale), Some(picture)) = (fill.parse::<u32>(), scale.parse::<usize>(), Picture::parse(picture))
-                else {
+            if let ["c", fill, picture @ ..] = words.as_slice() {
+                let (Ok(fill), Some(picture)) = (fill.parse::<u32>(), Picture::parse(picture)) else {
                     continue;
                 };
-                let img = picture.plane_image(scale, fill);
+                let img = picture.plane_image(fill);
                 for p in &self.planes {
                     p.draw(&self.card, &img);
                 }

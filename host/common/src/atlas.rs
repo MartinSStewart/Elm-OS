@@ -6,11 +6,10 @@
 //!
 //!   x 0-300, y 0-200     town-collab's 10 x 18 pixel font, 25 glyphs to a row, each
 //!                        in a 12 x 20 cell, at 1, 1 in it (`mono_glyph`)
-//!   x 0-256, y 3584-3840 the sprite sheet for UI scale 1 (sprites/sprites-1x.webp)
-//!   x 256-768, y 3584-4096 the sprite sheet for UI scale 2 (sprites/sprites-2x.webp):
-//!                        everything drawn that isn't a glyph, such as the solid
-//!                        block for flat colours and the dot grid tile; see
-//!                        sprites/README.md
+//!   y 3584-4096          the sprites: everything drawn that isn't a glyph, such as
+//!                        the solid block for flat colours, the dot grid tile and
+//!                        the cursors, packed from the files in sprites/
+//!                        (sprites.rs)
 //!   everywhere else      Noto Sans (regular, bold, italic, bold italic) at a few
 //!                        sizes, antialiased, each glyph at four quarter-pixel
 //!                        offsets (tools/make-noto-sans.py, which keeps clear of the
@@ -31,21 +30,6 @@ use crate::font;
 pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 4096;
 
-/// The sprite sheets, as image files (lossless WebP, coverage in the alpha channel),
-/// with where each goes in the atlas and how big it may be. Elm draws from them by
-/// where things are in the 1x sheet (elm/src/Sprite.elm, `SpritePixels`); at UI scale 2
-/// that place doubled in the 2x sheet.
-static SHEETS: [(&[u8], [usize; 2], usize); 2] = [
-    (include_bytes!("../sprites/sprites-1x.webp"), [0, 3584], 256),
-    (include_bytes!("../sprites/sprites-2x.webp"), [256, 3584], 512),
-];
-
-/// The middle of the 1x sheet's solid block, in the atlas: a flat colour samples it.
-pub const SOLID: [f32; 2] = [4.0, 3588.0];
-
-/// Left, top, width and height of the 1x sheet's dot grid tile in the atlas.
-pub const DOT_GRID: [usize; 4] = [8, 3584, 16, 16];
-
 /// Noto Sans's glyphs over the whole atlas, run-length coded: a 0 byte is followed by
 /// how many 0s (1-255) it stands for, and any other byte is itself.
 static NOTO_SANS: &[u8] = include_bytes!("noto_sans.rle");
@@ -64,7 +48,7 @@ pub fn mono_glyph(index: usize) -> (usize, usize) {
 
 /// Copies the edge pixels of the atlas's w x h rectangle at x, y out by one pixel all
 /// round, corners too (see the top of this file).
-fn bleed(a: &mut [u8], x: usize, y: usize, w: usize, h: usize) {
+pub(crate) fn bleed(a: &mut [u8], x: usize, y: usize, w: usize, h: usize) {
     for row in y..y + h {
         a[row * ATLAS_W + x - 1] = a[row * ATLAS_W + x];
         a[row * ATLAS_W + x + w] = a[row * ATLAS_W + x + w - 1];
@@ -98,25 +82,21 @@ pub fn build() -> Vec<u8> {
         }
         bleed(&mut a, ax, ay, MONO_W, MONO_H);
     }
-    for (file, [x, y], max) in SHEETS {
-        let (w, h, alpha) = decode_sheet(file);
-        assert!(w <= max && h <= max, "a sprite sheet is {w} x {h}, more than {max} x {max}");
-        for row in 0..h {
-            a[(y + row) * ATLAS_W + x..(y + row) * ATLAS_W + x + w].copy_from_slice(&alpha[row * w..(row + 1) * w]);
-        }
-    }
+    crate::sprites::draw(&mut a);
     a
 }
 
-/// A sprite sheet's width, height and alpha channel (its coverage), row by row.
-fn decode_sheet(file: &[u8]) -> (usize, usize, Vec<u8>) {
-    let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(file)).expect("sprite sheet isn't a WebP");
-    let (w, h) = decoder.dimensions();
-    let (w, h) = (w as usize, h as usize);
-    let mut pixels = vec![0u8; decoder.output_buffer_size().expect("sprite sheet too big")];
-    decoder.read_image(&mut pixels).expect("sprite sheet can't be decoded");
-    let alpha = if decoder.has_alpha() { pixels.chunks_exact(4).map(|p| p[3]).collect() } else { vec![255; w * h] };
-    (w, h, alpha)
+/// The atlas, built once for the whole program (by the first to ask).
+pub fn shared() -> &'static [u8] {
+    static ATLAS: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    ATLAS.get_or_init(build)
+}
+
+/// The middle of the solid block (sprites/solid.1x.webp) in the atlas: a triangle with
+/// every corner here is a flat colour.
+pub fn solid() -> [f32; 2] {
+    let s = crate::sprites::find("solid", 1);
+    [(s.fill[0] + s.width / 2) as f32, (s.fill[1] + s.height / 2) as f32]
 }
 
 /// One triangle as /init hands it to a renderer: what Elm sends per triangle
@@ -156,10 +136,22 @@ mod tests {
             n += if b == 0 { *bytes.next().unwrap() as usize } else { 1 };
         }
         assert_eq!(n, ATLAS_W * ATLAS_H);
+        // and it leaves the sprites' rows clear
+        let mut at = 0;
+        let mut bytes = NOTO_SANS.iter();
+        while let Some(&b) = bytes.next() {
+            if b == 0 {
+                at += *bytes.next().unwrap() as usize;
+            } else {
+                assert!(at < crate::sprites::TOP * ATLAS_W, "Noto Sans draws in the sprites' rows");
+                at += 1;
+            }
+        }
         // and it leaves the pixel font's corner alone
         let a = build();
         assert_eq!(a.len(), ATLAS_W * ATLAS_H);
-        assert_eq!(a[SOLID[1] as usize * ATLAS_W + SOLID[0] as usize], 255);
+        let [u, v] = solid();
+        assert_eq!(a[v as usize * ATLAS_W + u as usize], 255);
     }
 
     /// Every pixel of a w x h rectangle's border is the rectangle's pixel nearest it.

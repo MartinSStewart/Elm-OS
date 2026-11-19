@@ -722,15 +722,17 @@ impl Runner {
             return;
         }
         self.cursor_shown = true;
-        let Some((rgba, scale, image)) = &self.cursor else { return };
-        let picture = common::cursor::Picture {
-            width: image.width as usize,
-            height: image.height as usize,
-            pixels: image.pixels.clone(),
-        };
-        let s = (*scale).clamp(1, 4) as usize;
-        let (w, h) = ((picture.width * s).min(common::cursor::PLANE), (picture.height * s).min(common::cursor::PLANE));
-        let plane = picture.plane_image(s, *rgba);
+        let Some((rgba, _, image)) = &self.cursor else { return };
+        let spot = |[x, y]: [u32; 2]| [x as usize, y as usize];
+        let picture = common::cursor::Picture::from_atlas(
+            atlas::shared(),
+            image.width as usize,
+            image.height as usize,
+            spot(image.fill),
+            image.outline.map(spot),
+        );
+        let (w, h) = (picture.width, picture.height);
+        let plane = picture.plane_image(*rgba);
         // Premultiplied ARGB to straight RGBA, cut to the picture's size.
         let mut bytes = Vec::with_capacity(w * h * 4);
         for y in 0..h {
@@ -740,7 +742,7 @@ impl Runner {
                 bytes.extend_from_slice(&[un(p >> 16 & 255), un(p >> 8 & 255), un(p & 255), a as u8]);
             }
         }
-        let hot = ((image.hot_x as usize * s).min(w.saturating_sub(1)) as u16, (image.hot_y as usize * s).min(h.saturating_sub(1)) as u16);
+        let hot = ((image.hot_x as usize).min(w.saturating_sub(1)) as u16, (image.hot_y as usize).min(h.saturating_sub(1)) as u16);
         if w == 0 || h == 0 {
             return;
         }
@@ -853,7 +855,7 @@ fn main() {
     let mut runner = Runner {
         o,
         screens: Vec::new(),
-        atlas: atlas::build(),
+        atlas: atlas::shared().to_vec(),
         data,
         run_dir,
         tx,

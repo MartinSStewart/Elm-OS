@@ -3112,7 +3112,7 @@ draw msg model =
                     cursorShape model uis
             in
             ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
-            , [ Effect.SetCursor { image = Cursor.image cursor, color = cursorColor model, scale = uiScale model }
+            , [ Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
               , Effect.Render (\() -> List.map (\( display, ui ) -> { display = display.id, triangles = view model cursor display ui }) uis)
               ]
             )

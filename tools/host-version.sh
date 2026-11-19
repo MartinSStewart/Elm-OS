@@ -9,7 +9,7 @@
 # what it needs from the host is that socket's protocol: the messages (Effect, ToElm)
 # and how they are framed, all in host/protocol (src/lib.rs, src/link.rs; host/link
 # includes link.rs), and the texture atlas Elm draws from (its size and Noto Sans's
-# glyphs, and its sprite sheets). So this is a SHA-256 of those, without comments, blank lines or tests: a
+# glyphs, and its sprites). So this is a SHA-256 of those, without comments, blank lines or tests: a
 # change to the rest of the host, the kernel or wpa_supplicant (or to a comment) keeps it, and devices keep taking new builds; they keep their own host
 # until the stick is flashed again.
 #
@@ -31,6 +31,7 @@ done
 # the pixel font and cursor, make-noto-sans.py (noto_sans.rle) the rest.
 sed -e 's://.*$::' -e 's/[[:space:]]*$//' -e '/^$/d' host/common/src/atlas.rs
 sha256sum < host/common/src/noto_sans.rle
-# The sprite sheets, which Elm draws from by where things are in them (Sprite.elm).
-cat host/common/sprites/*.webp | sha256sum
+# The sprites, which Elm draws from where the host packs them (elm/src/Sprites.elm,
+# made by host/common/src/sprites.rs).
+cat host/common/src/sprites.rs sprites/*.webp sprites/hot-spots.txt | sha256sum
 } | sha256sum | cut -d' ' -f1

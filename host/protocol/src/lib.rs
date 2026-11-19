@@ -109,9 +109,9 @@ pub enum Effect {
     /// The scene to draw on each display, once a frame (see `Scene`).
     Render(Vec<Scene>),
     /// The mouse cursor: its fill colour, 0xRRGGBBAA, the UI scale (1 or 2), which
-    /// sets the cursor's size and how far mouse motion moves it, and its picture (Elm
-    /// has the shapes, elm/src/Cursor.elm). Sent with every frame; the host redraws
-    /// the cursor only when it changes.
+    /// sets how far mouse motion moves it, and where its picture is in the texture
+    /// atlas (Elm picks the shape, elm/src/Cursor.elm, and the picture for the scale).
+    /// Sent with every frame; the host redraws the cursor only when it changes.
     Cursor { rgba: u32, scale: u32, image: CursorImage },
     WifiScan,
     WifiConnect { ssid: String, password: String },
@@ -183,9 +183,10 @@ pub enum Effect {
     TlsClose { id: String },
 }
 
-/// A mouse cursor's picture, in UI pixels: `width` x `height` of them, a byte each, row
-/// by row: 0 for nothing, 1 for the black outline, 2 for the fill colour. The hot spot
-/// (`hot_x`, `hot_y`) is the pixel that points, which goes where the mouse is.
+/// A mouse cursor's picture, `width` x `height` device pixels of the texture atlas: the
+/// fill colour where the rectangle with its top left corner at `fill` (x, y in atlas
+/// pixels) is covered, over black where the one at `outline` is. The hot spot (`hot_x`,
+/// `hot_y`) is the pixel that points, which goes where the mouse is.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CursorImage {
@@ -193,8 +194,8 @@ pub struct CursorImage {
     pub height: u32,
     pub hot_x: u32,
     pub hot_y: u32,
-    #[serde(with = "serde_bytes")]
-    pub pixels: Vec<u8>,
+    pub fill: [u32; 2],
+    pub outline: Option<[u32; 2]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -572,11 +573,10 @@ mod tests {
         assert_eq!(scenes.iter().map(|s| s.display).collect::<Vec<_>>(), vec![33, 34]);
         assert_eq!(read_render(&scenes[1].triangles), Some(vec![]));
         let bytes = &scenes[0].triangles;
-        let at = |x, y| [x, y, 4.0, 3588.0];
-        assert_eq!(
-            read_render(bytes),
-            Some(vec![RenderTriangle { corners: [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], rgba: 0xffff_ffff, linear: 0, tile: [0; 4] }])
-        );
+        let at = |x: f32, y: f32| [x, y, 4.0 + x, 3588.0 + y];
+        let tri = |corners| RenderTriangle { corners, rgba: 0xffff_ffff, linear: 0, tile: [0; 4] };
+        let (tl, tr, br, bl) = (at(0.0, 0.0), at(10.0, 0.0), at(10.0, 10.0), at(0.0, 10.0));
+        assert_eq!(read_render(bytes), Some(vec![tri([tl, tr, br]), tri([tl, br, bl])]));
         assert_eq!(read_render(&bytes[1..]), None);
     }
 
@@ -627,10 +627,11 @@ mod tests {
     #[test]
     fn the_wire_format_is_postcard() {
         // Variant 1 (Cursor), rgba 0xff0000ff as a varint, scale 2, then a 1 x 2
-        // image with its hot spot at 0, 1 and two pixels.
-        let image = CursorImage { width: 1, height: 2, hot_x: 0, hot_y: 1, pixels: vec![1, 2] };
+        // image with its hot spot at 0, 1, its fill at 5, 3600 and Some outline at
+        // 300, 3601.
+        let image = CursorImage { width: 1, height: 2, hot_x: 0, hot_y: 1, fill: [5, 3600], outline: Some([300, 3601]) };
         let cursor = Effect::Cursor { rgba: 0xff00_00ff, scale: 2, image };
-        assert_eq!(write_effects(&[cursor]), vec![1, 1, 0xff, 0x81, 0x80, 0xf8, 0x0f, 2, 1, 2, 0, 1, 2, 1, 2]);
+        assert_eq!(write_effects(&[cursor]), vec![1, 1, 0xff, 0x81, 0x80, 0xf8, 0x0f, 2, 1, 2, 0, 1, 5, 0x90, 0x1c, 1, 0xac, 0x02, 0x91, 0x1c]);
         // Variant 2 (Mouse), zigzagged -1 and 300.
         assert_eq!(ToElm::Mouse { x: -1, y: 300 }.to_bytes(), vec![2, 1, 0xd8, 0x04]);
         assert!(read_effects(&[1, 99]).is_err());

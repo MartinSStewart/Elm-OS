@@ -1,0 +1,13 @@
+# Hot spots: the pixel of a sprite that is its position (a cursor's point), as
+# name x y in the 1x picture's pixels; the 2x picture's is twice that.
+cursor-arrow 0 0
+cursor-pointer 6 0
+cursor-text 4 9
+cursor-crosshair 7 7
+cursor-move 9 9
+cursor-not-allowed 10 9
+cursor-wait 7 9
+cursor-resize-north-south 5 9
+cursor-resize-east-west 9 5
+cursor-resize-northwest-southeast 7 7
+cursor-resize-northeast-southwest 8 7
