@@ -1,4 +1,4 @@
-module News.Types exposing (Day, Inline(..), Item(..), NewsState(..), Topic, UiId(..))
+module News.Types exposing (Day, Emphasis(..), Inline(..), Item(..), NewsState(..), Topic, UiId(..))
 
 {-| The ids of the Wikipedia news app's elements: here rather than in News.elm, as
 UiId.elm can't import a module that imports it.
@@ -37,6 +37,15 @@ type Inline
     | WikiLink { article : String, label : String }
       -- To a news site: the story's source, with a label like "(Reuters)".
     | ExternalLink { url : String, label : String }
+      -- A `''` or `'''` in the wikitext: from here until the next one, the text is
+      -- italic or bold (or both, for `'''''`).
+    | Toggle Emphasis
+
+
+type Emphasis
+    = ToggleItalic
+    | ToggleBold
+    | ToggleBoldItalic
 
 
 type NewsState

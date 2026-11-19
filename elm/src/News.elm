@@ -30,7 +30,7 @@ import Date exposing (Date)
 import Duration
 import Effect
 import Json.Decode as D
-import News.Types exposing (Day, Inline(..), Item(..), NewsState(..), Topic)
+import News.Types exposing (Day, Emphasis(..), Inline(..), Item(..), NewsState(..), Topic)
 import Quantity exposing (Quantity)
 import Sprite
 import Time
@@ -194,13 +194,72 @@ itemView width (Item item) =
             , Ui.customTextWrapped
                 Sprite.Small
                 (width |> Quantity.minus (Quantity.plus (Units.uiPixels spacing) (Coord.x (Ui.size bullet))))
-                [ { text = plainText item.content, color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
+                (inlineSegments item.content)
             ]
         , Ui.column
             itemSpacing
             (List.map (itemView (width |> Quantity.minus (Units.uiPixels indentation))) item.children)
             |> Ui.el { padding = { top = 0, bottom = 0, left = indentation, right = 0 }, borderAndFill = Ui.NoBorderOrFill }
         ]
+
+
+{-| Text in the page's bold and italics, links in the link color and underlined.
+-}
+inlineSegments : List Inline -> List Sprite.Segment
+inlineSegments inlines2 =
+    inlineSegmentsHelp False False inlines2 []
+        |> List.reverse
+
+
+inlineSegmentsHelp : Bool -> Bool -> List Inline -> List Sprite.Segment -> List Sprite.Segment
+inlineSegmentsHelp isBold isItalic remaining done =
+    let
+        font : Sprite.Font
+        font =
+            Sprite.Sans
+                (if isBold && isItalic then
+                    Sprite.BoldItalic
+
+                 else if isBold then
+                    Sprite.Bold
+
+                 else if isItalic then
+                    Sprite.Italic
+
+                 else
+                    Sprite.Regular
+                )
+
+        plain : String -> Sprite.Segment
+        plain text =
+            { text = text, color = Color.textColor, font = font, decorations = [] }
+
+        link : String -> Sprite.Segment
+        link text =
+            { text = text, color = Color.linkColor, font = font, decorations = [ Sprite.Underline ] }
+    in
+    case remaining of
+        [] ->
+            done
+
+        (Text text) :: rest ->
+            inlineSegmentsHelp isBold isItalic rest (plain text :: done)
+
+        (WikiLink wikiLink2) :: rest ->
+            inlineSegmentsHelp isBold isItalic rest (link wikiLink2.label :: done)
+
+        (ExternalLink externalLink2) :: rest ->
+            inlineSegmentsHelp isBold isItalic rest (link externalLink2.label :: done)
+
+        (Toggle ToggleItalic) :: rest ->
+            inlineSegmentsHelp isBold (not isItalic) rest done
+
+        (Toggle ToggleBold) :: rest ->
+            inlineSegmentsHelp (not isBold) isItalic rest done
+
+        (Toggle ToggleBoldItalic) :: rest ->
+            -- Both flip, which is what `'''''` does to the usual case of neither or both being on.
+            inlineSegmentsHelp (not isBold) (not isItalic) rest done
 
 
 url : String
@@ -598,8 +657,23 @@ inlines chars text done =
                     inlines rest ('{' :: '{' :: text) done
 
         '\'' :: '\'' :: rest ->
-            -- Bold or italics: '' ''' or '''''.
-            inlines (dropWhile ((==) '\'') rest) text done
+            -- Italics, bold or both: '' ''' or '''''. Four are a bold with an apostrophe before it.
+            let
+                ( more, afterQuotes ) =
+                    span (\char -> char == '\'') rest
+            in
+            case List.length more of
+                0 ->
+                    continue afterQuotes [ Toggle ToggleItalic ]
+
+                1 ->
+                    continue afterQuotes [ Toggle ToggleBold ]
+
+                2 ->
+                    inlines afterQuotes [] (Toggle ToggleBold :: Text "'" :: flush)
+
+                _ ->
+                    continue afterQuotes [ Toggle ToggleBoldItalic ]
 
         '<' :: rest ->
             case splitAtClose [ '>' ] rest of
@@ -931,20 +1005,6 @@ span keep list =
     ( taken, List.drop (List.length taken) list )
 
 
-dropWhile : (a -> Bool) -> List a -> List a
-dropWhile drop list =
-    case list of
-        [] ->
-            []
-
-        first :: rest ->
-            if drop first then
-                dropWhile drop rest
-
-            else
-                list
-
-
 dropPrefix : String -> String -> String
 dropPrefix prefix text =
     if String.startsWith prefix text then
@@ -968,6 +1028,9 @@ plainText parts =
 
                     ExternalLink link ->
                         link.label
+
+                    Toggle _ ->
+                        ""
             )
         |> String.concat
 

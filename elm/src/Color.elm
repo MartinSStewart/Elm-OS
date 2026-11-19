@@ -11,6 +11,7 @@ module Color exposing
     , focusedInputColor
     , focusedUiColor
     , highlightColor
+    , linkColor
     , outlineColor
     , pressColor
     , rgb
@@ -85,6 +86,13 @@ textColor =
 dimTextColor : Color
 dimTextColor =
     rgb255 160 152 146
+
+
+{-| Links in text (underlined too).
+-}
+linkColor : Color
+linkColor =
+    rgb255 120 170 255
 
 
 errorColor : Color

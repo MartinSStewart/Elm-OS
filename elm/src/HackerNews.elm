@@ -27,7 +27,7 @@ import Color
 import Coord exposing (Coord)
 import Dict exposing (Dict)
 import Effect
-import HackerNews.Types exposing (Comment(..), Post, PostId(..))
+import HackerNews.Types exposing (Comment(..), Post, PostId(..), Span)
 import Hex
 import Html.Parser
 import Quantity exposing (Quantity)
@@ -469,7 +469,7 @@ parseComments html =
                     )
                     (Html.Parser.findAll (isElement "div" "comment") [ row ]
                         |> List.head
-                        |> Maybe.map (\comment -> commentText (nodeChildren comment) |> String.trim)
+                        |> Maybe.map (\comment -> commentText (nodeChildren comment))
                     )
             )
         |> buildTree 0 0
@@ -543,38 +543,95 @@ nodeChildren node =
             []
 
 
-{-| A comment's text: a paragraph starts after an empty line, and the reply link is left out.
+{-| A comment's text: a paragraph starts after an empty line, links (`<a>`) and italics
+(`<i>`) are marked, and the reply link is left out.
 -}
-commentText : List Html.Parser.Node -> String
+commentText : List Html.Parser.Node -> List Span
 commentText nodes =
-    List.map
+    commentSpans False False nodes |> mergeSpans
+
+
+commentSpans : Bool -> Bool -> List Html.Parser.Node -> List Span
+commentSpans isLink isItalic nodes =
+    List.concatMap
         (\node ->
             case node of
                 Html.Parser.Text text ->
-                    String.replace "\n" " " text
+                    [ { text = String.replace "\n" " " text, isLink = isLink, isItalic = isItalic } ]
 
                 Html.Parser.Comment _ ->
-                    ""
+                    []
 
                 Html.Parser.Element "p" _ nodes2 ->
-                    "\n\n" ++ commentText nodes2
+                    { text = "\n\n", isLink = False, isItalic = False } :: commentSpans isLink isItalic nodes2
+
+                Html.Parser.Element "a" _ nodes2 ->
+                    commentSpans True isItalic nodes2
+
+                Html.Parser.Element "i" _ nodes2 ->
+                    commentSpans isLink True nodes2
 
                 Html.Parser.Element _ attributes nodes2 ->
                     if Html.Parser.getAttribute "class" attributes == Just "reply" then
-                        ""
+                        []
 
                     else
-                        commentText nodes2
+                        commentSpans isLink isItalic nodes2
         )
         nodes
-        |> String.concat
+
+
+{-| Neighbouring spans in the same style become one, empty ones go, and the text is
+trimmed at both ends.
+-}
+mergeSpans : List Span -> List Span
+mergeSpans spans =
+    let
+        merged : List Span
+        merged =
+            List.foldr
+                (\span result ->
+                    case result of
+                        next :: rest ->
+                            if span.isLink == next.isLink && span.isItalic == next.isItalic then
+                                { text = span.text ++ next.text, isLink = span.isLink, isItalic = span.isItalic } :: rest
+
+                            else
+                                span :: result
+
+                        [] ->
+                            [ span ]
+                )
+                []
+                spans
+                |> List.filter (\span -> not (String.isEmpty span.text))
+    in
+    case merged of
+        [] ->
+            []
+
+        first :: rest ->
+            { text = String.trimLeft first.text, isLink = first.isLink, isItalic = first.isItalic } :: trimLast rest
+
+
+trimLast : List Span -> List Span
+trimLast spans =
+    case spans of
+        [] ->
+            []
+
+        [ last ] ->
+            [ { text = String.trimRight last.text, isLink = last.isLink, isItalic = last.isItalic } ]
+
+        first :: rest ->
+            first :: trimLast rest
 
 
 {-| Turn a flat list of comments with their indentation into a tree, a comment's
 children being the deeper ones that follow it, numbering them in order from `index`.
 Also gives the index after the last.
 -}
-buildTree : Int -> Int -> List { indent : Int, author : String, date : Maybe String, grey : Int, content : String } -> ( List Comment, Int )
+buildTree : Int -> Int -> List { indent : Int, author : String, date : Maybe String, grey : Int, content : List Span } -> ( List Comment, Int )
 buildTree indentation index rows =
     case rows of
         [] ->
@@ -876,7 +933,7 @@ commentView lazyCache width (Comment comment) =
                     Small
                     (Units.uiPixels textWidth)
                     (commentHeader comment.author comment.date
-                        ++ [ { text = comment.content, color = greyColor comment.grey, font = Sans Regular, decorations = [] } ]
+                        ++ List.map (spanSegment (greyColor comment.grey)) comment.content
                     )
                 ]
     in
@@ -900,6 +957,32 @@ commentView lazyCache width (Comment comment) =
                 (Units.uiPixels textWidth)
                 (commentHeader comment.author comment.date)
             ]
+
+
+{-| A link is in the link color and underlined, italics in italic.
+-}
+spanSegment : Color.Color -> Span -> Sprite.Segment
+spanSegment color span =
+    { text = span.text
+    , color =
+        if span.isLink then
+            Color.linkColor
+
+        else
+            color
+    , font =
+        if span.isItalic then
+            Sans Italic
+
+        else
+            Sans Regular
+    , decorations =
+        if span.isLink then
+            [ Sprite.Underline ]
+
+        else
+            []
+    }
 
 
 {-| A comment's author, in bold, and the date it was written if there is one.

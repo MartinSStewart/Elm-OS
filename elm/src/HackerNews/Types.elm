@@ -1,4 +1,4 @@
-module HackerNews.Types exposing (Comment(..), Post, PostId(..), UiId(..))
+module HackerNews.Types exposing (Comment(..), Post, PostId(..), Span, UiId(..))
 
 {-| The Hacker News app's data that its `Ui.lazy` views take, and its ids need: here
 rather than in HackerNews.elm, as UiId.elm can't import a module that imports it.
@@ -18,6 +18,13 @@ type alias Post =
     }
 
 
+{-| A run of a comment's text in one style: `isLink` for text inside an `<a>`, `isItalic`
+for text inside an `<i>`.
+-}
+type alias Span =
+    { text : String, isLink : Bool, isItalic : Bool }
+
+
 {-| A comment and its replies. `index` is its place in the page (from 0), which tells
 the buttons apart; `descendants` counts the replies at every depth under it. `date` is
 when it was written, as the page gives it (UTC), if it does. `grey` is how light its text
@@ -29,7 +36,7 @@ type Comment
         , author : String
         , date : Maybe String
         , grey : Int
-        , content : String
+        , content : List Span
         , children : List Comment
         , descendants : Int
         , isExpanded : Bool

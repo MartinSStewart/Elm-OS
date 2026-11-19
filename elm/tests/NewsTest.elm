@@ -8,7 +8,7 @@ import Effect
 import Expect
 import Json.Decode as D
 import News
-import News.Types exposing (Inline(..), Item(..), NewsState(..))
+import News.Types exposing (Emphasis(..), Inline(..), Item(..), NewsState(..))
 import Test exposing (Test, describe, test)
 import Time
 import Ui
@@ -70,7 +70,11 @@ suite =
                                     [ link "Israel" "Israeli"
                                     , Text " "
                                     , link "Isaac Herzog" "Isaac Herzog"
-                                    , Text " selects Gadi Eisenkot. "
+                                    , Text " selects "
+                                    , Toggle ToggleBold
+                                    , Text "Gadi Eisenkot"
+                                    , Toggle ToggleBold
+                                    , Text ". "
                                     , ExternalLink { url = "https://apnews.com/a", label = "(AP)" }
                                     , Text " "
                                     , ExternalLink { url = "https://www.reuters.com/b", label = "(Reuters)" }
