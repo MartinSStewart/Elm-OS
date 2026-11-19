@@ -447,8 +447,8 @@ stopMomentum model =
                         TextInputState _ ->
                             value
 
-                        TextInputMultilineState _ ->
-                            value
+                        TextInputMultilineState multiline ->
+                            TextInputMultilineState (TextInputMultiline.stopGlide multiline)
 
                         ButtonState _ ->
                             value
@@ -612,7 +612,8 @@ onAnimationFrame timeElapsed mouse hovered model =
                             value
 
                         TextInputMultilineState multiline ->
-                            Scrollbar.fade timeElapsed (scrollbarHovered id) multiline
+                            TextInputMultiline.animate (Duration.inSeconds timeElapsed) multiline
+                                |> Scrollbar.fade timeElapsed (scrollbarHovered id)
                                 |> TextInputMultilineState
 
                         ButtonState _ ->
@@ -847,9 +848,8 @@ onWheelHelper id scrollBy element model =
                         ScrollPixels pixels ->
                             TextInputMultiline.scrollPixels textInput2.style (Quantity.unwrap pixels)
 
-                        Momentum _ ->
-                            -- it moves a whole line at a time, so it doesn't glide
-                            identity
+                        Momentum velocity ->
+                            TextInputMultiline.momentum textInput2.style momentumKeptPerSecond velocity
                     )
                         (case SeqDict.get id model.uiState of
                             Just (TextInputMultilineState state2) ->
@@ -861,7 +861,6 @@ onWheelHelper id scrollBy element model =
             in
             { model | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState }
 
-        -- TextInputMultiline.wheel (editorStyle model) clicks model.editor
         Text _ ->
             model
 
