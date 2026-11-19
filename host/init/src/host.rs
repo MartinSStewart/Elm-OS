@@ -34,6 +34,7 @@ use crate::input::{Area, Inputs};
 use crate::stats::Stats;
 use crate::sys::{self, now};
 use crate::files::{self, Request};
+use crate::tls_socket;
 use crate::websocket;
 use common::raster;
 
@@ -403,6 +404,9 @@ impl Host {
                 Effect::WebSocketOpen { id, url, headers } => websocket::open(id, url, headers),
                 Effect::WebSocketSend { id, data } => websocket::send(&id, data),
                 Effect::WebSocketClose { id } => websocket::close(&id),
+                Effect::TlsOpen { id, host, port } => tls_socket::open(id, host, port),
+                Effect::TlsSend { id, data } => tls_socket::send(&id, data),
+                Effect::TlsClose { id } => tls_socket::close(&id),
             }
         }
         if cursor_dirty {

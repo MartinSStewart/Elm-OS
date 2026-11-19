@@ -46,6 +46,7 @@ mod programs;
 mod update;
 mod stats;
 mod sys;
+mod tls_socket;
 mod websocket;
 
 /// When /init started, in seconds on the monotonic clock (f64 bits).

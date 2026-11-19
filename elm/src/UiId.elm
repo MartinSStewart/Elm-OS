@@ -13,6 +13,7 @@ app keeps such types in `<App>/Types.elm`, not in `<App>.elm`.
 
 import AsciiCollab.Types
 import Calculator.Types
+import Email.Types
 import HackerNews.Types
 import News.Types
 import ScreenshotViewer.Types
@@ -56,6 +57,7 @@ type UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId
+    | Email Email.Types.UiId
     | ScreenshotViewer ScreenshotViewer.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey

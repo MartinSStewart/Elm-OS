@@ -51,6 +51,8 @@ macro_rules! log {
 mod files;
 #[path = "../../init/src/http.rs"]
 mod http;
+#[path = "../../init/src/tls_socket.rs"]
+mod tls_socket;
 #[path = "../../init/src/websocket.rs"]
 mod websocket;
 #[path = "../../init/src/stats.rs"]
@@ -453,6 +455,9 @@ impl Runner {
             Effect::WebSocketOpen { id, url, headers } => websocket::open(id, url, headers),
             Effect::WebSocketSend { id, data } => websocket::send(&id, data),
             Effect::WebSocketClose { id } => websocket::close(&id),
+            Effect::TlsOpen { id, host, port } => tls_socket::open(id, host, port),
+            Effect::TlsSend { id, data } => tls_socket::send(&id, data),
+            Effect::TlsClose { id } => tls_socket::close(&id),
             Effect::ListDir { path } => files::request(elm::program(), files::Request::ListDir { path }),
             Effect::ReadFiles { id, paths } => files::request(elm::program(), files::Request::ReadFiles { id, paths }),
             Effect::ReadBytes { path, offset, length } => {

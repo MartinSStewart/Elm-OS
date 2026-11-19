@@ -68,6 +68,9 @@ effects =
     , Effect.WebSocketOpen { id = "ascii-collab", url = "wss://ascii-collab.app/_w", headers = [ ( "Cookie", "sid=abc" ) ] }
     , Effect.WebSocketSend { id = "ascii-collab", data = byteList [ 2, 1, 0, 255 ] }
     , Effect.WebSocketClose "ascii-collab"
+    , Effect.TlsOpen { id = "email", host = "imap.fastmail.com", portNumber = 993 }
+    , Effect.TlsSend { id = "email", data = byteList [ 97, 49, 32, 76, 79, 71, 79, 85, 84, 13, 10 ] }
+    , Effect.TlsClose "email"
     , Effect.Render
         (\() ->
             [ { display = 33, triangles = [ Sprite.triangle Color.white ( 0, 0 ) ( 10, 0 ) ( 0, 10 ) ] }

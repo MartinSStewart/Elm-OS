@@ -28,6 +28,8 @@ import Date
 import Display exposing (Display)
 import Duration exposing (Duration)
 import Effect exposing (Effect, HttpError(..))
+import Email
+import Email.Types
 import HackerNews
 import HackerNews.Types
 import HostMessage
@@ -99,6 +101,10 @@ type Input
     | WebSocketOpened String (List ( String, String ))
     | WebSocketMessage String Bytes
     | WebSocketClosed String String
+      -- TLS connections (Effect.TlsOpen), only the email app's.
+    | TlsOpened String
+    | TlsData String Bytes
+    | TlsClosed String String
       -- Random bytes in hex, for AsciiCollab's client id.
     | RandomBytes (Maybe String)
 
@@ -269,6 +275,15 @@ toInput message =
         HostMessage.WebSocketClosed id reason ->
             Ok (WebSocketClosed id reason)
 
+        HostMessage.TlsOpened id ->
+            Ok (TlsOpened id)
+
+        HostMessage.TlsData id data ->
+            Ok (TlsData id data)
+
+        HostMessage.TlsClosed id reason ->
+            Ok (TlsClosed id reason)
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -324,6 +339,7 @@ type alias Model =
     , newsOpen : Bool
     , news : NewsState
     , hackerNews : HackerNews.Model
+    , email : Email.Model
     , asciiCollab : AsciiCollab.Model
     , calculator : Calculator.Model
     , calculatorOpen : Bool
@@ -367,6 +383,7 @@ type App
     = AboutApp
     | NewsApp
     | HackerNewsApp
+    | EmailApp
     | AsciiCollabApp
     | CalculatorApp
     | TicTacToeApp
@@ -381,7 +398,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
 
 
 type WeatherState
@@ -436,6 +453,7 @@ init =
     , newsOpen = False
     , news = NewsNotRequested
     , hackerNews = HackerNews.init
+    , email = Email.init
     , asciiCollab = AsciiCollab.init
     , calculator = Calculator.init
     , calculatorOpen = False
@@ -475,8 +493,13 @@ update msg model =
 
                 ( asciiCollab, asciiEffects ) =
                     AsciiCollab.tick time model.asciiCollab
+
+                ( email, emailEffects ) =
+                    Email.tick (Time.posixToMillis time) model.email
             in
-            ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab }, bootEffects ++ asciiEffects )
+            ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab, email = email }
+            , bootEffects ++ asciiEffects ++ emailEffects
+            )
 
         GotInput value ->
             case value of
@@ -856,6 +879,14 @@ step event model =
             else if model.uiState.focus == Just EditorInput then
                 ( editorKey key model, [] )
 
+            else if emailFieldFocused model /= Nothing then
+                case emailFieldFocused model of
+                    Just field ->
+                        emailKey field key model
+
+                    Nothing ->
+                        ( model, [] )
+
             else if model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea) && model.asciiCollab.isOpen then
                 AsciiCollab.key (appUiSize AsciiCollabApp model) model.ctrl key model.asciiCollab
                     |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
@@ -918,6 +949,15 @@ step event model =
 
         WebSocketClosed id reason ->
             webSocketInput (WebSocketClosed id reason) model
+
+        TlsOpened id ->
+            ( { model | email = Email.tlsOpened id model.email }, [] )
+
+        TlsData id data ->
+            Email.tlsData id data model.email |> Tuple.mapFirst (\email -> { model | email = email })
+
+        TlsClosed id reason ->
+            ( { model | email = Email.tlsClosed id reason model.email }, [] )
 
         RandomBytes hex ->
             AsciiCollab.gotRandomBytes hex model.asciiCollab |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
@@ -1188,6 +1228,14 @@ appButton id =
                 _ ->
                     Nothing
 
+        Email id2 ->
+            case id2 of
+                Email.Types.OpenButton ->
+                    Just EmailApp
+
+                _ ->
+                    Nothing
+
         AsciiCollab id2 ->
             case id2 of
                 AsciiCollab.Types.OpenButton ->
@@ -1278,6 +1326,9 @@ appIsOpen app model =
         HackerNewsApp ->
             model.hackerNews.isOpen
 
+        EmailApp ->
+            model.email.isOpen
+
         AsciiCollabApp ->
             model.asciiCollab.isOpen
 
@@ -1301,6 +1352,16 @@ appIsOpen app model =
 
         WeatherApp ->
             model.weatherOpen
+
+
+emailFieldFocused : Model -> Maybe Email.Types.Field
+emailFieldFocused model =
+    case model.uiState.focus of
+        Just (Email (Email.Types.InputField field)) ->
+            Just field
+
+        _ ->
+            Nothing
 
 
 clickElement : Model -> UiId -> ( Model, List Effect )
@@ -1548,6 +1609,9 @@ clickElement model id =
         HackerNews uiId2 ->
             hackerNewsClick uiId2 model
 
+        Email uiId2 ->
+            emailClick uiId2 model
+
         ScreenshotViewer uiId2 ->
             ( { model
                 | screenshotViewer =
@@ -1600,6 +1664,182 @@ hackerNewsClick uiId model =
         ( { model | hackerNews = hackerNews }, [] )
         effects
         |> Tuple.mapSecond List.reverse
+
+
+{-| A click on one of the email app's elements. The form's boxes and Link button need
+the text typed in them, which Ui keeps.
+-}
+emailClick : Email.Types.UiId -> Model -> ( Model, List Effect )
+emailClick uiId model =
+    case uiId of
+        Email.Types.InputField _ ->
+            ( { model | uiState = Ui.setFocus (Just (Email uiId)) model.uiState }, [] )
+
+        Email.Types.LinkButton ->
+            linkEmail model
+
+        _ ->
+            Email.onClick uiId model.email |> Tuple.mapFirst (\email -> { model | email = email })
+
+
+{-| Links the account the form describes, if the address and password are filled in.
+-}
+linkEmail : Model -> ( Model, List Effect )
+linkEmail model =
+    let
+        typed : Email.Types.Field -> String
+        typed field =
+            Ui.getTextInput (Email (Email.Types.InputField field)) model.uiState |> .current |> .text |> String.trim
+
+        address : String
+        address =
+            typed Email.Types.AddressField
+
+        password : String
+        password =
+            Ui.getTextInput (Email (Email.Types.InputField Email.Types.PasswordField)) model.uiState |> .current |> .text
+    in
+    if String.contains "@" address && not (String.isEmpty password) then
+        Email.link
+            { server =
+                case typed Email.Types.ServerField of
+                    "" ->
+                        Email.serverFor address
+
+                    server ->
+                        server
+            , address = address
+            , password = password
+            }
+            model.email
+            |> Tuple.mapFirst (\email -> { model | email = email })
+
+    else
+        let
+            email : Email.Model
+            email =
+                model.email
+        in
+        ( { model | email = { email | error = Just "Type your email address and an app password." } }, [] )
+
+
+emailStyle : Email.Types.Field -> TextInput.Style
+emailStyle field =
+    case field of
+        Email.Types.PasswordField ->
+            Email.passwordStyle
+
+        _ ->
+            Email.inputStyle
+
+
+{-| A key typed in the email form's box `field`.
+-}
+emailKey : Email.Types.Field -> Key -> Model -> ( Model, List Effect )
+emailKey field key model =
+    let
+        id : UiId
+        id =
+            Email (Email.Types.InputField field)
+
+        nextField : Email.Types.Field
+        nextField =
+            case field of
+                Email.Types.AddressField ->
+                    Email.Types.PasswordField
+
+                Email.Types.PasswordField ->
+                    Email.Types.ServerField
+
+                Email.Types.ServerField ->
+                    Email.Types.AddressField
+    in
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
+            linkEmail model
+
+        ( False, Keyboard.Tab ) ->
+            ( { model | uiState = Ui.setFocus (Just (Email (Email.Types.InputField nextField))) model.uiState }
+            , []
+            )
+
+        ( False, Keyboard.Escape ) ->
+            ( { model | uiState = Ui.setFocus Nothing model.uiState }, [] )
+
+        ( True, Keyboard.Character "v" ) ->
+            ( { model
+                | uiState =
+                    Ui.updateElement
+                        id
+                        (\maybe ->
+                            TextInput.paste
+                                model.clipboard
+                                (case maybe of
+                                    Just (TextInputState state) ->
+                                        state
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+              }
+            , []
+            )
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput id model.uiState)
+            in
+            ( { model
+                | uiState = Ui.insertElement id (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            if field == Email.Types.PasswordField then
+                                model.clipboard
+
+                            else
+                                text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+              }
+            , []
+            )
+
+
+dragSelectEmail : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectEmail focus mouse position model =
+    case focus of
+        Email (Email.Types.InputField field) ->
+            { model
+                | uiState =
+                    Ui.updateElement
+                        focus
+                        (\maybe ->
+                            TextInput.mouseDownMove
+                                (emailStyle field)
+                                mouse
+                                position
+                                (case maybe of
+                                    Just (TextInputState state) ->
+                                        state
+
+                                    _ ->
+                                        TextInput.init
+                                )
+                                |> TextInputState
+                                |> Just
+                        )
+                        model.uiState
+            }
+
+        _ ->
+            model
 
 
 httpGet : HttpRequestId -> String -> Effect
@@ -1918,6 +2158,12 @@ dragSelect focus mouse position model =
             model
 
         HackerNews _ ->
+            model
+
+        Email (Email.Types.InputField _) ->
+            dragSelectEmail focus mouse position model
+
+        Email _ ->
             model
 
         AsciiCollab _ ->
@@ -2501,6 +2747,9 @@ appLimits app model =
         NewsApp ->
             { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
 
+        EmailApp ->
+            { min = Coord.xy 400 300, preferred = Coord.xy 900 700, max = Coord.xy 1200 100000 }
+
         HackerNewsApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
 
@@ -2546,6 +2795,9 @@ appView app size model =
 
         HackerNewsApp ->
             HackerNews.view model.lazyCache size model.hackerNews
+
+        EmailApp ->
+            Email.view size model.email
 
         AsciiCollabApp ->
             AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
@@ -3555,6 +3807,10 @@ toolbar model display =
                         { id = HackerNews HackerNews.Types.OpenButton, padding = small }
                         (openHere HackerNewsApp)
                         (Ui.text "Hacker news")
+                    , Ui.selectableButton
+                        { id = Email Email.Types.OpenButton, padding = small }
+                        (openHere EmailApp)
+                        (Ui.text "Email")
                     , Ui.selectableButton
                         { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small }
                         (openHere AsciiCollabApp)

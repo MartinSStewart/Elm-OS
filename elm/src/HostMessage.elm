@@ -89,6 +89,12 @@ type ToElm
     | WebSocketMessage String Bytes
       -- id, why: it closed, or couldn't open. The id can be used again.
     | WebSocketClosed String String
+      -- id: the TLS connection is open (Effect.TlsOpen).
+    | TlsOpened String
+      -- id, bytes from the server as they came: a chunk can end anywhere.
+    | TlsData String Bytes
+      -- id, why: it closed, or couldn't open. The id can be used again.
+    | TlsClosed String String
       -- A display was plugged in or out: the displays now. Unlike Displays, not the
       -- start of a program.
     | DisplaysChanged (List Display)
@@ -260,6 +266,15 @@ decoder =
 
                     32 ->
                         BD.map ScrollMomentum P.decodeFloat64
+
+                    33 ->
+                        BD.map TlsOpened P.decodeString
+
+                    34 ->
+                        BD.map2 TlsData P.decodeString P.decodeBytes
+
+                    35 ->
+                        BD.map2 TlsClosed P.decodeString P.decodeString
 
                     _ ->
                         BD.fail

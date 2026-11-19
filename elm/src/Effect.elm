@@ -107,6 +107,13 @@ type Effect
     | WebSocketOpen { id : String, url : String, headers : List ( String, String ) }
     | WebSocketSend { id : String, data : Bytes }
     | WebSocketClose String
+      -- A TLS connection to a host and port (host/init/src/tls_socket.rs), for protocols
+      -- that aren't HTTP (IMAP, for the email app). Answered on `fromHost` with
+      -- tlsOpened, a tlsData for each chunk the server sends, and last tlsClosed, with
+      -- the same id. The host only moves bytes.
+    | TlsOpen { id : String, host : String, portNumber : Int }
+    | TlsSend { id : String, data : Bytes }
+    | TlsClose String
 
 
 type PowerAction
@@ -324,3 +331,12 @@ encode effect =
 
         WebSocketClose id ->
             Postcard.variant 21 [ Postcard.string id ]
+
+        TlsOpen { id, host, portNumber } ->
+            Postcard.variant 22 [ Postcard.string id, Postcard.string host, Postcard.unsigned portNumber ]
+
+        TlsSend { id, data } ->
+            Postcard.variant 23 [ Postcard.string id, Postcard.bytes data ]
+
+        TlsClose id ->
+            Postcard.variant 24 [ Postcard.string id ]

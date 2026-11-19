@@ -104,7 +104,13 @@ pub fn trim_log(upto: u64) {
 /// waits for the next program if none is.
 pub fn send(msg: &ToElm) {
     let mut s = state();
-    if let ToElm::WebSocketOpened { .. } | ToElm::WebSocketMessage { .. } | ToElm::WebSocketClosed { .. } = msg {
+    if let ToElm::WebSocketOpened { .. }
+    | ToElm::WebSocketMessage { .. }
+    | ToElm::WebSocketClosed { .. }
+    | ToElm::TlsOpened { .. }
+    | ToElm::TlsData { .. }
+    | ToElm::TlsClosed { .. } = msg
+    {
         if s.stream.is_none() {
             s.queue.push(msg.clone());
             return;

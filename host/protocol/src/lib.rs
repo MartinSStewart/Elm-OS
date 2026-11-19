@@ -159,6 +159,20 @@ pub enum Effect {
     },
     /// Closes a WebSocket; `ToElm::WebSocketClosed` follows.
     WebSocketClose { id: String },
+    /// Opens a TLS connection to `host`:`port` (certificate checked against the CAs
+    /// compiled in, as for HTTPS), for protocols like IMAP that aren't HTTP. Answered
+    /// with `ToElm::TlsOpened`, then a `ToElm::TlsData` for each chunk of bytes the
+    /// server sends, and last `ToElm::TlsClosed`, all with the same id. The host only
+    /// moves bytes: what they mean is up to Elm.
+    TlsOpen { id: String, host: String, port: u16 },
+    /// Bytes to send on an open TLS connection.
+    TlsSend {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// Closes a TLS connection; `ToElm::TlsClosed` follows.
+    TlsClose { id: String },
 }
 
 /// A mouse cursor's picture, in UI pixels: `width` x `height` of them, a byte each, row
@@ -311,6 +325,16 @@ pub enum ToElm {
     /// is down, as for `Scroll`), slowing down. 0 when the fingers had stopped. Also
     /// sent with 0 when a finger touches the pad again, which stops any glide.
     ScrollMomentum { velocity: f64 },
+    /// The TLS connection is open.
+    TlsOpened { id: String },
+    /// Bytes from the server, as they came: a chunk can end anywhere.
+    TlsData {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+    },
+    /// The TLS connection has closed, or couldn't open, and why. Its id can be used again.
+    TlsClosed { id: String, reason: String },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -484,9 +508,12 @@ mod tests {
             Effect::WebSocketOpen { .. } => "webSocketOpen",
             Effect::WebSocketSend { .. } => "webSocketSend",
             Effect::WebSocketClose { .. } => "webSocketClose",
+            Effect::TlsOpen { .. } => "tlsOpen",
+            Effect::TlsSend { .. } => "tlsSend",
+            Effect::TlsClose { .. } => "tlsClose",
         }
     }
-    const EFFECT_TAGS: usize = 22;
+    const EFFECT_TAGS: usize = 25;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -523,9 +550,12 @@ mod tests {
             ToElm::WebSocketMessage { .. } => "webSocketMessage",
             ToElm::WebSocketClosed { .. } => "webSocketClosed",
             ToElm::DisplaysChanged { .. } => "displaysChanged",
+            ToElm::TlsOpened { .. } => "tlsOpened",
+            ToElm::TlsData { .. } => "tlsData",
+            ToElm::TlsClosed { .. } => "tlsClosed",
         }
     }
-    const TO_ELM_TAGS: usize = 33;
+    const TO_ELM_TAGS: usize = 36;
 
     #[test]
     fn reads_the_render_example() {

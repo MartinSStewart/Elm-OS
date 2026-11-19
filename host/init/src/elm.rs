@@ -118,7 +118,10 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::ReplayDone { .. }
         | ToElm::WebSocketOpened { .. }
         | ToElm::WebSocketMessage { .. }
-        | ToElm::WebSocketClosed { .. } => return None,
+        | ToElm::WebSocketClosed { .. }
+        | ToElm::TlsOpened { .. }
+        | ToElm::TlsData { .. }
+        | ToElm::TlsClosed { .. } => return None,
     })
 }
 
