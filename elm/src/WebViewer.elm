@@ -90,7 +90,10 @@ onClick uiId model =
         Types.GoButton ->
             model
 
-        Types.Viewport ->
+        Types.TextViewport ->
+            model
+
+        Types.HtmlViewport ->
             model
 
 
@@ -463,7 +466,15 @@ view windowSize model =
             [ header
             , Ui.left (Units.uiPixels width) content
                 |> Ui.viewport
-                    { id = WebViewer Types.Viewport
+                    { id =
+                        WebViewer
+                            (case model.mode of
+                                TextMode ->
+                                    Types.TextViewport
+
+                                HtmlMode ->
+                                    Types.HtmlViewport
+                            )
                     , viewportHeight =
                         Units.uiPixels
                             (Coord.yRaw windowSize - 2 * windowPadding - Coord.yRaw (Ui.size header) - spacing)

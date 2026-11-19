@@ -12,4 +12,5 @@ type UiId
     | GoButton
     | TextModeButton
     | HtmlModeButton
-    | Viewport
+    | TextViewport
+    | HtmlViewport
