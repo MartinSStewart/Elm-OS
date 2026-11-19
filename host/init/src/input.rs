@@ -11,10 +11,16 @@
 //! A touchpad reports absolute finger positions too, but it should feel like a
 //! mouse: the pointer moves by how far the finger moves, and a quick tap clicks.
 //! Two fingers moving together scroll instead, "naturally" (the content follows the
-//! fingers, as on phones and by default on macOS, Windows and GNOME). This reads the
+//! fingers, as on phones and by default on macOS, Windows and GNOME).
+//! Each finger is followed on its own (the ABS_MT_* slots), so a finger landing or
+//! lifting never makes the pointer jump or lose motion, and while the pad is pressed
+//! down (a click held) the pointer follows whichever finger moves: the thumb holding
+//! the click rests, the other finger drags. Touchpads without slots fall back to the
 //! kernel's single-touch emulation (ABS_X/ABS_Y follow one finger, BTN_TOOL_DOUBLETAP
-//! says two are down) rather than every ABS_MT_* slot, which is enough while the
-//! fingers move together; pinches and swipes would need the slots.
+//! says two are down).
+//! Tap and drag: tap, then touch again straight away (within TAP_DRAG_WINDOW) and
+//! move: the button stays down until that finger lifts, as with libinput. Tapping
+//! twice is a double click.
 //!
 //! Sends Elm:
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
@@ -44,6 +50,14 @@ const REL_Y: u16 = 1;
 const REL_WHEEL: u16 = 8;
 const ABS_X: u16 = 0;
 const ABS_Y: u16 = 1;
+const ABS_MT_SLOT: u16 = 0x2f;
+const ABS_MT_POSITION_X: u16 = 0x35;
+const ABS_MT_POSITION_Y: u16 = 0x36;
+const ABS_MT_TRACKING_ID: u16 = 0x39;
+/// The most fingers followed at once.
+const MAX_SLOTS: usize = 16;
+/// How long a tap's click is held, and how soon after it a touch drags with it.
+const TAP_DRAG_WINDOW: f64 = 0.2;
 /// The fingers' speed as they lift is their scrolling over this many seconds before.
 const MOMENTUM_WINDOW: f64 = 0.1;
 /// If the fingers held still this long before lifting, nothing glides.
@@ -93,6 +107,24 @@ fn ioctl_read<T>(f: &File, request: u64, out: &mut T) -> bool {
     unsafe { libc::ioctl(f.as_raw_fd(), request as _, out as *mut T) >= 0 }
 }
 
+/// One finger on a touchpad (an ABS_MT_* slot).
+#[derive(Clone, Copy)]
+struct Contact {
+    id: i32, // the kernel's tracking id, -1: no finger
+    x: i32,
+    y: i32,
+    // where it was at the last SYN_REPORT, if it was down then
+    seen: bool,
+    prev_x: i32,
+    prev_y: i32,
+}
+
+impl Default for Contact {
+    fn default() -> Contact {
+        Contact { id: -1, x: 0, y: 0, seen: false, prev_x: 0, prev_y: 0 }
+    }
+}
+
 struct Device {
     file: File,
     name: String, // eventN
@@ -101,11 +133,12 @@ struct Device {
     ax: AbsInfo,
     ay: AbsInfo,
     // touchpad state
+    mt: bool, // reports each finger (ABS_MT_* slots), not only the emulated one
+    slot: usize,
+    contacts: Vec<Contact>, // by slot; one (the emulated finger) without slots
+    buttons: u8, // bit n: the pad's button n is pressed down
     touching: bool,
-    have_last: u8, // bit 1: x, bit 2: y
-    last_x: i32,
-    last_y: i32,
-    tap_moved: i32,
+    tap_moved: f64,
     tap_clicked: bool,
     fingers: i32, // most fingers down during this touch
     tools: u8,    // bit n: the BTN_TOOL_* for n + 1 fingers is down
@@ -145,6 +178,18 @@ impl Device {
         ioctl_read(&file, ior(0x09, props.len() as u64), &mut props);
         ioctl_read(&file, ior(0x20 + EV_KEY as u64, keys.len() as u64), &mut keys);
         let touchpad = has_abs && (test_bit(&props, INPUT_PROP_POINTER) || test_bit(&keys, BTN_TOOL_FINGER as usize));
+        // Slots, with the fingers' positions in their own ranges (usually ABS_X's).
+        let (mut mslot, mut mx, mut my) = (AbsInfo::default(), AbsInfo::default(), AbsInfo::default());
+        let mt = touchpad
+            && ioctl_read(&file, ior(0x40 + ABS_MT_SLOT as u64, size), &mut mslot)
+            && ioctl_read(&file, ior(0x40 + ABS_MT_POSITION_X as u64, size), &mut mx)
+            && ioctl_read(&file, ior(0x40 + ABS_MT_POSITION_Y as u64, size), &mut my)
+            && mslot.maximum > 0
+            && mx.maximum > mx.minimum
+            && my.maximum > my.minimum;
+        if mt {
+            (ax, ay) = (mx, my);
+        }
         let mut devname = [0u8; 128];
         ioctl_read(&file, ior(0x06, devname.len() as u64), &mut devname);
         let end = devname.iter().position(|&b| b == 0).unwrap_or(0);
@@ -158,18 +203,24 @@ impl Device {
             "input {}: {}{}",
             path,
             devname,
-            if touchpad {
-                " (touchpad)"
+            if mt {
+                format!(" (touchpad, {} fingers)", mslot.maximum + 1)
+            } else if touchpad {
+                " (touchpad)".into()
             } else if has_abs {
-                " (absolute)"
+                " (absolute)".into()
             } else {
-                ""
+                String::new()
             }
         );
-        Some(Device::new(file, name, has_abs, touchpad, ax, ay))
+        let slots = if mt { (mslot.maximum as usize + 1).min(MAX_SLOTS) } else { 1 };
+        let mut dev = Device::new(file, name, has_abs, touchpad, ax, ay, slots);
+        dev.mt = mt;
+        dev.slot = (mslot.value.max(0) as usize).min(slots - 1);
+        Some(dev)
     }
 
-    fn new(file: File, name: &str, has_abs: bool, touchpad: bool, ax: AbsInfo, ay: AbsInfo) -> Device {
+    fn new(file: File, name: &str, has_abs: bool, touchpad: bool, ax: AbsInfo, ay: AbsInfo, slots: usize) -> Device {
         Device {
             file,
             name: name.to_owned(),
@@ -177,11 +228,12 @@ impl Device {
             touchpad,
             ax,
             ay,
+            mt: false,
+            slot: 0,
+            contacts: vec![Contact::default(); slots.max(1)],
+            buttons: 0,
             touching: false,
-            have_last: 0,
-            last_x: 0,
-            last_y: 0,
-            tap_moved: 0,
+            tap_moved: 0.0,
             tap_clicked: false,
             fingers: 0,
             tools: 0,
@@ -257,6 +309,8 @@ pub struct Inputs {
     /// When to release a tap's click, if one is pending.
     pub tap_release_at: Option<f64>,
     tap_button: i32,
+    /// A touch that came straight after a tap: the tap's click is held until it lifts.
+    tap_dragging: bool,
     /// The UI scale: device pixels per mouse count, before acceleration.
     pub scale: f64,
     // what's left of the pointer's motion after rounding to whole pixels
@@ -318,6 +372,7 @@ impl Inputs {
             mouse_y: y + h as i32 / 2,
             tap_release_at: None,
             tap_button: 0,
+            tap_dragging: false,
             scale: 1.0,
             frac_x: 0.0,
             frac_y: 0.0,
@@ -405,65 +460,93 @@ impl Inputs {
         }
     }
 
-    /// Touchpad finger motion: move the pointer by the finger's movement. A full
-    /// swipe across the pad moves the pointer about one and a half screen widths (of
-    /// the display it is on).
-    fn touchpad_axis(&mut self, i: usize, code: u16, value: i32, area: &Area, moved: &mut bool) {
-        let w = area.width_at(self.mouse_x, self.mouse_y);
+    /// A touchpad position event: where a finger (the current slot's, or the emulated
+    /// one) is now. Nothing moves until the SYN_REPORT (touchpad_frame).
+    fn touchpad_abs(&mut self, i: usize, code: u16, value: i32) {
         let dev = &mut self.devices[i];
-        if !dev.touching {
-            return;
-        }
-        let is_x = code == ABS_X;
-        let bit = if is_x { 1 } else { 2 };
-        // two fingers or more down now: scrolling
-        let scrolling = dev.tools > 1;
-        if dev.have_last & bit == 0 {
-            // the finger just landed: only remember where
-            if is_x {
-                dev.last_x = value
-            } else {
-                dev.last_y = value
+        match (dev.mt, code) {
+            (true, ABS_MT_SLOT) => dev.slot = (value.max(0) as usize).min(dev.contacts.len() - 1),
+            (true, ABS_MT_TRACKING_ID) => {
+                let c = &mut dev.contacts[dev.slot];
+                c.id = value;
+                c.seen = false; // a new finger (or none): no motion from where the last one was
             }
-            dev.have_last |= bit;
+            (true, ABS_MT_POSITION_X) => dev.contacts[dev.slot].x = value,
+            (true, ABS_MT_POSITION_Y) => dev.contacts[dev.slot].y = value,
+            (false, ABS_X) => dev.contacts[0].x = value,
+            (false, ABS_Y) => dev.contacts[0].y = value,
+            _ => {}
+        }
+    }
+
+    /// A touchpad report is complete: move the pointer by how far a finger moved, or
+    /// with two fingers down, scroll. A full swipe across the pad moves the pointer
+    /// about one and a half screen widths (of the display it is on).
+    fn touchpad_frame(&mut self, i: usize, area: &Area, moved: &mut bool) {
+        let w = area.width_at(self.mouse_x, self.mouse_y);
+        let holding = self.tap_dragging;
+        let dev = &mut self.devices[i];
+        if !dev.mt {
+            // The emulated finger is down while anything touches.
+            dev.contacts[0].id = if dev.touching { 0 } else { -1 };
+        }
+        // Each finger's motion since the last report, in touchpad units. A finger that
+        // just landed has none yet.
+        let mut motions = Vec::new();
+        let mut down = 0;
+        for c in dev.contacts.iter_mut() {
+            if c.id < 0 {
+                c.seen = false;
+                continue;
+            }
+            down += 1;
+            if c.seen {
+                motions.push(((c.x - c.prev_x) as f64, (c.y - c.prev_y) as f64));
+            }
+            (c.prev_x, c.prev_y, c.seen) = (c.x, c.y, true);
+        }
+        if !dev.touching || motions.is_empty() {
             return;
         }
         // Pixels per touchpad unit along x. Along y, correct for touchpads whose units
         // aren't square (the resolutions are units per mm), so diagonals stay diagonal.
-        let mut scale = 1.5 * w as f64 / (dev.ax.maximum - dev.ax.minimum) as f64;
-        if !is_x && dev.ax.resolution > 0 && dev.ay.resolution > 0 {
-            scale *= dev.ax.resolution as f64 / dev.ay.resolution as f64;
+        let sx = 1.5 * w as f64 / (dev.ax.maximum - dev.ax.minimum) as f64;
+        let mut sy = sx;
+        if dev.ax.resolution > 0 && dev.ay.resolution > 0 {
+            sy *= dev.ax.resolution as f64 / dev.ay.resolution as f64;
         }
-        let (last, frac) = if is_x {
-            (&mut dev.last_x, &mut dev.frac_x)
-        } else {
-            (&mut dev.last_y, &mut dev.frac_y)
-        };
-        let delta = (value - *last) as f64 * scale + *frac;
-        *last = value;
-        if scrolling {
-            *frac = 0.0;
-            dev.tap_moved += delta.abs() as i32;
-            if is_x {
-                return; // nothing scrolls sideways yet
-            }
+        let fingers = if dev.mt { down } else { 8 - dev.tools.leading_zeros() as i32 };
+        // Two fingers or more down: scrolling, unless a click is held (pressing the pad
+        // with one finger and dragging with another).
+        if fingers >= 2 && dev.buttons == 0 && !holding {
+            dev.frac_x = 0.0;
+            dev.frac_y = 0.0;
+            let n = motions.len() as f64;
+            let dx = motions.iter().map(|m| m.0).sum::<f64>() / n * sx;
+            let dy = motions.iter().map(|m| m.1).sum::<f64>() / n * sy;
+            dev.tap_moved += dx.abs() + dy.abs();
             // Fingers moving down (y growing) pull the content down by as many pixels
             // as the pointer would have moved (sent at the SYN_REPORT), so the content
-            // stays under the fingers from the first pixel.
-            dev.scroll += delta;
+            // stays under the fingers from the first pixel. Nothing scrolls sideways yet.
+            dev.scroll += dy;
             return;
         }
-        let whole = delta as i32;
-        *frac = delta - whole as f64;
-        if whole == 0 {
+        // The pointer follows the finger that moved furthest: with one finger resting
+        // (the thumb pressing the pad) and another dragging, the dragging one.
+        let (mx, my) = motions.iter().copied().fold((0.0, 0.0), |best: (f64, f64), m| {
+            if m.0.hypot(m.1) > best.0.hypot(best.1) { m } else { best }
+        });
+        let x = mx * sx + dev.frac_x;
+        let y = my * sy + dev.frac_y;
+        let (whole_x, whole_y) = (x.trunc(), y.trunc());
+        dev.frac_x = x - whole_x;
+        dev.frac_y = y - whole_y;
+        if whole_x == 0.0 && whole_y == 0.0 {
             return;
         }
-        if is_x {
-            self.mouse_x += whole
-        } else {
-            self.mouse_y += whole
-        }
-        dev.tap_moved += whole.abs();
+        self.mouse_x += whole_x as i32;
+        self.mouse_y += whole_y as i32;
+        dev.tap_moved += whole_x.abs() + whole_y.abs();
         *moved = true;
     }
 
@@ -472,6 +555,9 @@ impl Inputs {
         let (touchpad, has_abs) = (self.devices[i].touchpad, self.devices[i].has_abs);
         match ev.type_ {
             EV_SYN if ev.code == SYN_REPORT => {
+                if touchpad {
+                    self.touchpad_frame(i, area, moved);
+                }
                 let dev = &mut self.devices[i];
                 if dev.scroll != 0.0 {
                     let dy = dev.scroll / self.scale;
@@ -518,11 +604,7 @@ impl Inputs {
                     elm::send(&ToElm::Wheel { dy: ev.value });
                 }
             }
-            EV_ABS if touchpad => {
-                if ev.code == ABS_X || ev.code == ABS_Y {
-                    self.touchpad_axis(i, ev.code, ev.value, area, moved);
-                }
-            }
+            EV_ABS if touchpad => self.touchpad_abs(i, ev.code, ev.value),
             EV_ABS if has_abs => {
                 // A tablet (QEMU's) spans every display.
                 let d = &self.devices[i];
@@ -554,14 +636,20 @@ impl Inputs {
                             elm::send(&ToElm::ScrollMomentum { velocity: 0.0 });
                         }
                         dev.touching = true;
-                        dev.have_last = 0;
-                        dev.tap_moved = 0;
+                        dev.contacts[0].seen = dev.mt && dev.contacts[0].seen;
+                        dev.tap_moved = 0.0;
                         dev.tap_clicked = false;
                         dev.fingers = 1;
                         dev.scroll = 0.0;
                         dev.frac_x = 0.0;
                         dev.frac_y = 0.0;
                         dev.touch_start = event_time;
+                        // Straight after a one-finger tap: hold its click while this
+                        // finger drags (tap and drag).
+                        if self.tap_button == 0 && self.tap_release_at.is_some_and(|t| sys::now() < t) {
+                            self.tap_release_at = None;
+                            self.tap_dragging = true;
+                        }
                     } else {
                         self.end_scroll(i, event_time);
                         let dev = &mut self.devices[i];
@@ -570,20 +658,31 @@ impl Inputs {
                         // tap, so click. Hold the button for a moment (released by
                         // release_tap), because a press and release in the same instant is
                         // invisible to a program that reacts to the button being held.
-                        if !dev.tap_clicked
-                            && self.tap_release_at.is_none()
-                            && dev.tap_moved < 20
-                            && event_time - dev.touch_start < 0.25
-                        {
-                            self.tap_button = if dev.fingers >= 2 { 1 } else { 0 }; // two-finger tap: right click
+                        let tap = !dev.tap_clicked && dev.tap_moved < 20.0 && event_time - dev.touch_start < 0.25;
+                        let fingers = dev.fingers;
+                        if self.tap_dragging {
+                            // The finger that dragged with a tap's click lifted: let go.
+                            // If it was a tap itself, that was a double tap: click again.
+                            self.tap_dragging = false;
+                            self.send_motion_first(*moved, area);
+                            send_button(0, false);
+                            if tap {
+                                send_button(0, true);
+                                self.tap_release_at = Some(sys::now() + TAP_DRAG_WINDOW);
+                            }
+                        } else if tap && self.tap_release_at.is_none() {
+                            self.tap_button = if fingers >= 2 { 1 } else { 0 }; // two-finger tap: right click
                             self.send_motion_first(*moved, area);
                             send_button(self.tap_button, true);
-                            self.tap_release_at = Some(sys::now() + 0.15);
+                            self.tap_release_at = Some(sys::now() + TAP_DRAG_WINDOW);
                         }
                     }
                 } else if touchpad && (BTN_TOOL_FINGER..=BTN_TOOL_QUADTAP).contains(&ev.code) {
-                    // The number of fingers changed, and the reported position may jump to another finger.
-                    dev.have_last = 0;
+                    // The number of fingers changed. Without slots, the emulated finger's
+                    // position may jump to another finger: start again from there.
+                    if !dev.mt {
+                        dev.contacts[0].seen = false;
+                    }
                     let f = match ev.code {
                         BTN_TOOL_FINGER => 1,
                         BTN_TOOL_DOUBLETAP => 2,
@@ -601,18 +700,27 @@ impl Inputs {
                         }
                     }
                 } else if ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE {
+                    let b = match ev.code {
+                        BTN_LEFT => 0,
+                        BTN_RIGHT => 1,
+                        _ => 2,
+                    };
                     if touchpad {
                         dev.tap_clicked = true;
+                        if down {
+                            dev.buttons |= 1 << b;
+                        } else {
+                            dev.buttons &= !(1 << b);
+                        }
+                        if self.tap_dragging && b == 0 && down {
+                            // Pressed down while tap-dragging: the button is already
+                            // down, and now the press holds it.
+                            self.tap_dragging = false;
+                            return;
+                        }
                     }
                     self.send_motion_first(*moved, area);
-                    send_button(
-                        match ev.code {
-                            BTN_LEFT => 0,
-                            BTN_RIGHT => 1,
-                            _ => 2,
-                        },
-                        down,
-                    );
+                    send_button(b, down);
                 } else if ev.code == KEY_POWER {
                     if down && sys::is_pid1() {
                         log!("host", "power button: powering off");
@@ -632,9 +740,26 @@ impl Inputs {
 mod tests {
     use super::*;
 
+    /// The queue of messages to Elm is shared by every test thread: tests that read it
+    /// take turns.
+    static QUEUE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn queue_lock() -> std::sync::MutexGuard<'static, ()> {
+        QUEUE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// A 100 x 60 mm touchpad, 10 units per mm, on a 1000 pixel wide screen: a unit
-    /// is 1.5 pixels of pointer motion.
+    /// is 1.5 pixels of pointer motion. Without slots (single-touch emulation only).
     fn touchpad() -> Inputs {
+        touchpad_with(1, false)
+    }
+
+    /// The same touchpad, reporting 5 fingers in slots.
+    fn multitouch() -> Inputs {
+        touchpad_with(5, true)
+    }
+
+    fn touchpad_with(slots: usize, mt: bool) -> Inputs {
         let axis = |maximum| AbsInfo {
             maximum,
             resolution: 10,
@@ -642,10 +767,154 @@ mod tests {
         };
         let mut inputs = Inputs::new(&Area::single(1000, 600));
         let null = File::open("/dev/null").unwrap();
+        let mut dev = Device::new(null, "test", true, true, axis(1000), axis(600), slots);
+        dev.mt = mt;
+        inputs.devices.push(dev);
         inputs
-            .devices
-            .push(Device::new(null, "test", true, true, axis(1000), axis(600)));
-        inputs
+    }
+
+    const SYN: (u16, u16, i32) = (EV_SYN, SYN_REPORT, 0);
+
+    /// Finger `slot` lands (id = slot + 10) at (x, y).
+    fn land(slot: i32, x: i32, y: i32) -> Vec<(u16, u16, i32)> {
+        vec![
+            (EV_ABS, ABS_MT_SLOT, slot),
+            (EV_ABS, ABS_MT_TRACKING_ID, slot + 10),
+            (EV_ABS, ABS_MT_POSITION_X, x),
+            (EV_ABS, ABS_MT_POSITION_Y, y),
+        ]
+    }
+
+    /// Finger `slot` moves to (x, y).
+    fn to(slot: i32, x: i32, y: i32) -> Vec<(u16, u16, i32)> {
+        vec![(EV_ABS, ABS_MT_SLOT, slot), (EV_ABS, ABS_MT_POSITION_X, x), (EV_ABS, ABS_MT_POSITION_Y, y)]
+    }
+
+    fn lift(slot: i32) -> Vec<(u16, u16, i32)> {
+        vec![(EV_ABS, ABS_MT_SLOT, slot), (EV_ABS, ABS_MT_TRACKING_ID, -1)]
+    }
+
+    fn report(parts: &[Vec<(u16, u16, i32)>]) -> Vec<(u16, u16, i32)> {
+        let mut events: Vec<_> = parts.concat();
+        events.push(SYN);
+        events
+    }
+
+    fn buttons(msgs: &[ToElm]) -> Vec<(i32, bool)> {
+        msgs.iter()
+            .filter_map(|m| if let ToElm::Button { b, down } = m { Some((*b, *down)) } else { None })
+            .collect()
+    }
+
+    #[test]
+    fn click_with_the_thumb_and_drag_with_another_finger() {
+        let _q = queue_lock();
+        let mut t = multitouch();
+        let (x0, y0) = (t.mouse_x, t.mouse_y);
+        // The thumb lands near the bottom and presses the pad down.
+        let msgs = send(
+            &mut t,
+            &report(&[
+                vec![(EV_KEY, BTN_TOUCH, 1), (EV_KEY, BTN_TOOL_FINGER, 1)],
+                land(0, 500, 580),
+                vec![(EV_KEY, BTN_LEFT, 1)],
+            ]),
+        );
+        assert_eq!(buttons(&msgs), vec![(0, true)]);
+        // The index finger lands far above it: the pointer doesn't jump there.
+        let msgs = send(
+            &mut t,
+            &report(&[vec![(EV_KEY, BTN_TOOL_FINGER, 0), (EV_KEY, BTN_TOOL_DOUBLETAP, 1)], land(1, 300, 200)]),
+        );
+        assert_eq!((t.mouse_x, t.mouse_y), (x0, y0));
+        assert!(msgs.is_empty(), "{}", msgs.len());
+        // It drags up and right while the thumb rests (wobbling a little): the pointer
+        // follows it all the way, and nothing scrolls.
+        let mut msgs = Vec::new();
+        for n in 1..=10 {
+            msgs.extend(send(&mut t, &report(&[to(0, 500 + n % 2, 580), to(1, 300 + 10 * n, 200 - 10 * n)])));
+        }
+        assert_eq!(scrolled(&msgs), 0.0);
+        assert!(buttons(&msgs).is_empty());
+        assert_eq!((t.mouse_x, t.mouse_y), (x0 + 150, y0 - 150));
+        // The thumb lets go of the click and lifts mid-drag: no jump, and the dragging
+        // finger keeps moving the pointer.
+        let msgs = send(
+            &mut t,
+            &report(&[
+                vec![(EV_KEY, BTN_LEFT, 0), (EV_KEY, BTN_TOOL_DOUBLETAP, 0), (EV_KEY, BTN_TOOL_FINGER, 1)],
+                lift(0),
+            ]),
+        );
+        assert_eq!(buttons(&msgs), vec![(0, false)]);
+        assert_eq!((t.mouse_x, t.mouse_y), (x0 + 150, y0 - 150));
+        send(&mut t, &report(&[to(1, 400, 98)]));
+        assert_eq!((t.mouse_x, t.mouse_y), (x0 + 150, y0 - 150 - 3));
+        // Two fingers without a click still scroll.
+        send(
+            &mut t,
+            &report(&[vec![(EV_KEY, BTN_TOOL_FINGER, 0), (EV_KEY, BTN_TOOL_DOUBLETAP, 1)], land(0, 600, 100)]),
+        );
+        let msgs = send(&mut t, &report(&[to(0, 600, 200), to(1, 400, 198)]));
+        assert_eq!(scrolled(&msgs), 150.0);
+        assert_eq!((t.mouse_x, t.mouse_y), (x0 + 150, y0 - 153));
+        // Lifting the fingers after scrolling isn't a tap.
+        let msgs = send(
+            &mut t,
+            &report(&[vec![(EV_KEY, BTN_TOOL_DOUBLETAP, 0), (EV_KEY, BTN_TOUCH, 0)], lift(0), lift(1)]),
+        );
+        assert!(buttons(&msgs).is_empty());
+    }
+
+    #[test]
+    fn tap_and_drag() {
+        let _q = queue_lock();
+        let mut t = multitouch();
+        let (x0, y0) = (t.mouse_x, t.mouse_y);
+        let touch = |slot| report(&[vec![(EV_KEY, BTN_TOUCH, 1), (EV_KEY, BTN_TOOL_FINGER, 1)], land(slot, 500, 300)]);
+        let release = |slot| report(&[vec![(EV_KEY, BTN_TOUCH, 0), (EV_KEY, BTN_TOOL_FINGER, 0)], lift(slot)]);
+        // A tap clicks, and holds the click a moment.
+        send(&mut t, &touch(0));
+        let msgs = send(&mut t, &release(0));
+        assert_eq!(buttons(&msgs), vec![(0, true)]);
+        assert!(t.tap_release_at.is_some());
+        // Touching again within that moment and moving drags: the click stays down.
+        let mut msgs = send(&mut t, &touch(1));
+        for n in 1..=10 {
+            msgs.extend(send(&mut t, &report(&[to(1, 500 + 10 * n, 300)])));
+        }
+        assert!(t.tap_release_at.is_none());
+        t.release_tap(f64::INFINITY);
+        assert!(buttons(&msgs).is_empty());
+        assert_eq!((t.mouse_x, t.mouse_y), (x0 + 150, y0));
+        // Lifting that finger lets go.
+        let msgs = send(&mut t, &release(1));
+        assert_eq!(buttons(&msgs), vec![(0, false)]);
+        // Once the tap's moment is over, a touch is only a touch.
+        send(&mut t, &touch(0));
+        assert_eq!(buttons(&send(&mut t, &release(0))), vec![(0, true)]);
+        t.release_tap(f64::INFINITY);
+        assert_eq!(buttons(&elm::take_queued()), vec![(0, false)]);
+        send(&mut t, &touch(0));
+        let msgs = send(&mut t, &report(&[to(0, 600, 300)]));
+        assert!(buttons(&msgs).is_empty());
+        assert!(buttons(&send(&mut t, &release(0))).is_empty());
+        // Two taps in a row: a double click.
+        send(&mut t, &touch(0));
+        let mut msgs = send(&mut t, &release(0));
+        send(&mut t, &touch(0));
+        msgs.extend(send(&mut t, &release(0)));
+        t.release_tap(f64::INFINITY);
+        msgs.extend(elm::take_queued());
+        assert_eq!(buttons(&msgs), vec![(0, true), (0, false), (0, true), (0, false)]);
+        // A press while tap-dragging takes the click over: it stays down until the pad
+        // is let go, and lifting the finger first doesn't release it.
+        send(&mut t, &touch(0));
+        send(&mut t, &release(0));
+        send(&mut t, &touch(1));
+        assert!(buttons(&send(&mut t, &[(EV_KEY, BTN_LEFT, 1), SYN])).is_empty());
+        assert!(buttons(&send(&mut t, &[(EV_KEY, BTN_LEFT, 0), SYN])).contains(&(0, false)));
+        assert!(buttons(&send(&mut t, &release(1))).is_empty());
     }
 
     fn send(inputs: &mut Inputs, events: &[(u16, u16, i32)]) -> Vec<ToElm> {
@@ -704,9 +973,9 @@ mod tests {
         assert_eq!(Inputs::new(&area).mouse_x, 1280);
     }
 
-    // One test, as the queue it reads is shared by every test thread.
     #[test]
     fn touchpad_moves_and_scrolls() {
+        let _q = queue_lock();
         let mut t = touchpad();
         let syn = (EV_SYN, SYN_REPORT, 0);
         // One finger: the pointer moves and nothing scrolls.
