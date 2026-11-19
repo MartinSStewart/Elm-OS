@@ -52,7 +52,7 @@ view lazyCache width height news =
         { padding = { top = 10, bottom = 0, left = 0, right = 0 }, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             4
-            [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [] } ]
+            [ Ui.customText Sprite.Small [ { text = "Wikipedia: Current events", color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing } ]
                 |> Ui.el { padding = Ui.paddingXY 12 0, borderAndFill = Ui.NoBorderOrFill }
             , case news of
                 NewsNotRequested ->
@@ -65,14 +65,14 @@ view lazyCache width height news =
                                 |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                         Nothing ->
-                            Ui.customText Sprite.Small [ { text = "Loading...", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] } ]
+                            Ui.customText Sprite.Small [ { text = "Loading...", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [], link = Nothing } ]
 
                 LoadedNews days ->
                     Ui.lazy2 lazyCache daysView width days
                         |> Ui.viewport { id = News News.Types.Viewport, viewportHeight = viewportHeight }
 
                 NewsFailed string ->
-                    Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] } ]
+                    Ui.customText Sprite.Small [ { text = Effect.httpErrorToString string, color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [], link = Nothing } ]
             ]
         )
 
@@ -92,7 +92,7 @@ daysView width days =
                         (\topic ->
                             Ui.column
                                 8
-                                [ Ui.customText Sprite.Small [ { text = topic.heading, color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [] } ]
+                                [ Ui.customText Sprite.Small [ { text = topic.heading, color = Color.textColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing } ]
                                 , Ui.column
                                     itemSpacing
                                     (List.map
@@ -232,11 +232,11 @@ inlineSegmentsHelp isBold isItalic remaining done =
 
         plain : String -> Sprite.Segment
         plain text =
-            { text = text, color = Color.textColor, font = font, decorations = [] }
+            { text = text, color = Color.textColor, font = font, decorations = [], link = Nothing }
 
         link : String -> Sprite.Segment
         link text =
-            { text = text, color = Color.linkColor, font = font, decorations = [ Sprite.Underline ] }
+            { text = text, color = Color.linkColor, font = font, decorations = [ Sprite.Underline ], link = Nothing }
     in
     case remaining of
         [] ->

@@ -18,11 +18,11 @@ type alias Post =
     }
 
 
-{-| A run of a comment's text in one style: `isLink` for text inside an `<a>`, `isItalic`
+{-| A run of a comment's text in one style: `link` is the address of the `<a>` it is inside, `isItalic`
 for text inside an `<i>`.
 -}
 type alias Span =
-    { text : String, isLink : Bool, isItalic : Bool }
+    { text : String, link : Maybe String, isItalic : Bool }
 
 
 {-| A comment and its replies. `index` is its place in the page (from 0), which tells
@@ -50,3 +50,5 @@ type UiId
     | CommentsViewport PostId
     | BackButton
     | CommentToggle Int
+      -- A link in a comment: which one is found from where the mouse is (Ui.linkAt).
+    | CommentLink

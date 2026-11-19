@@ -22,6 +22,8 @@ module Ui exposing
     , customButton
     , customText
     , customTextWrapped
+    , linkAt
+    , links
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , dragScrollbar
@@ -145,6 +147,7 @@ type ElementFull id lazy
         { fontSize : Sprite.FontSize
         , segments : List Sprite.Segment
         , cachedSize : Coord UiPixels
+        , linkId : Maybe id
         }
     | Button (ButtonData id lazy) (ElementFull id lazy)
     | Row RowColumn (List (ElementFull id lazy))
@@ -289,7 +292,7 @@ elementToScreenshotHelper model element acc =
             ( acc2, TextInputMultiline { id = id, style = data.style } )
 
         Text data ->
-            ( acc, Text data )
+            ( acc, Text { fontSize = data.fontSize, segments = data.segments, cachedSize = data.cachedSize, linkId = Nothing } )
 
         Button data child ->
             let
@@ -1172,7 +1175,7 @@ text =
 -}
 colorText : Color -> String -> Element id
 colorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [] } ]
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
 
 
 {-| Black text in the small monospace font. '\\n' starts a new line.
@@ -1186,7 +1189,7 @@ monoText =
 -}
 monoColorText : Color -> String -> Element id
 monoColorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [] } ]
+    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [], link = Nothing } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
@@ -1194,9 +1197,9 @@ font size, so every line is the same height whichever fonts it mixes. '\\n' in a
 them starts a new line. It's laid out the same at every UI scale (see Sprite).
 
     Ui.customText Sprite.Small
-        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [] }
-        , { text = "make check", color = Color.textColor, font = Sprite.Mono, decorations = [ Sprite.Underline ] }
-        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [] }
+        [ { text = "Run ", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
+        , { text = "make check", color = Color.textColor, font = Sprite.Mono, decorations = [ Sprite.Underline ], link = Nothing }
+        , { text = " first.", color = Color.textColor, font = Sprite.Sans Sprite.Italic, decorations = [], link = Nothing }
         ]
 
 Each segment's `decorations` underline it or strike it through (see Sprite.Decoration).
@@ -1208,6 +1211,7 @@ customText fontSize segments =
         { fontSize = fontSize
         , segments = segments
         , cachedSize = Sprite.customTextSize fontSize segments
+        , linkId = Nothing
         }
         |> Element
 
@@ -1221,7 +1225,50 @@ customTextWrapped fontSize maxWidth segments =
         ( wrapped, cachedSize ) =
             Sprite.wrapWithSize fontSize maxWidth segments
     in
-    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize } |> Element
+    Text { fontSize = fontSize, segments = wrapped, cachedSize = cachedSize, linkId = Nothing } |> Element
+
+
+{-| Makes the segments of a text that have a `link` hoverable: over one, `hover` finds the
+text with this id, and the mouse cursor is a hand. `linkAt` then says which link. Anything but a text is left as it is.
+-}
+links : id -> Element id -> Element id
+links id (Element element) =
+    linksHelper id element |> Element
+
+
+linksHelper : id -> ElementFull id lazy -> ElementFull id lazy
+linksHelper id element =
+    case element of
+        Text data ->
+            Text { fontSize = data.fontSize, segments = data.segments, cachedSize = data.cachedSize, linkId = Just id }
+
+        -- What the inspector's code generator wraps an element in.
+        Sourced source child ->
+            Sourced source (linksHelper id child)
+
+        _ ->
+            element
+
+
+{-| The address of the link under a point, if the element is a text with links and the
+point is on one.
+-}
+linkAt : Coord UiPixels -> Element id -> Maybe String
+linkAt point (Element element) =
+    linkAtHelper point element
+
+
+linkAtHelper : Coord UiPixels -> ElementFull id lazy -> Maybe String
+linkAtHelper point element =
+    case element of
+        Text data ->
+            Sprite.linkAt data.fontSize data.segments point
+
+        Sourced _ child ->
+            linkAtHelper point child
+
+        _ ->
+            Nothing
 
 
 
@@ -1983,7 +2030,8 @@ cursorAt uiState point element =
                         Cursor.Text
 
                 Element (Text _) ->
-                    Cursor.Arrow
+                    -- Only a text with links over the link has an id.
+                    Cursor.Pointer
 
                 Element (Row _ _) ->
                     Cursor.Arrow
@@ -2073,8 +2121,13 @@ hoverHelper model hovers point position element =
                     hovers
                     children
 
-            Text _ ->
-                ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers
+            Text data ->
+                ( data.linkId
+                    |> Maybe.andThen
+                        (\id -> Sprite.linkAt data.fontSize data.segments (Coord.minus position point) |> Maybe.map (\_ -> id))
+                , { relativePositionToUi = position, ui = element }
+                )
+                    :: hovers
 
             Quads _ ->
                 ( Nothing, { relativePositionToUi = position, ui = element } ) :: hovers

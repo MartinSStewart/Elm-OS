@@ -8,6 +8,7 @@ module HackerNews exposing
     , gotHttpRequest
     , httpRequestIdToString
     , init
+    , isExternalLink
     , maxWindowWidth
     , onClick
     , postIdToString
@@ -265,6 +266,10 @@ onClick uiId model =
         HackerNews.Types.BackButton ->
             ( { model | page = PostsPage }, [] )
 
+        HackerNews.Types.CommentLink ->
+            -- Main opens it, if it isn't a link to Hacker News itself.
+            ( model, [] )
+
         HackerNews.Types.CommentToggle index ->
             case model.page of
                 CommentsPage id _ ->
@@ -359,6 +364,16 @@ toggle index (Comment comment) =
 
     else
         Comment comment
+
+
+
+{-| Whether a link in a comment points away from Hacker News: it has a scheme and
+isn't on news.ycombinator.com.
+-}
+isExternalLink : String -> Bool
+isExternalLink url =
+    (String.startsWith "http://" url || String.startsWith "https://" url)
+        && not (String.startsWith "https://news.ycombinator.com/" url || String.startsWith "http://news.ycombinator.com/" url)
 
 
 
@@ -548,35 +563,44 @@ nodeChildren node =
 -}
 commentText : List Html.Parser.Node -> List Span
 commentText nodes =
-    commentSpans False False nodes |> mergeSpans
+    commentSpans Nothing False nodes |> mergeSpans
 
 
-commentSpans : Bool -> Bool -> List Html.Parser.Node -> List Span
-commentSpans isLink isItalic nodes =
+commentSpans : Maybe String -> Bool -> List Html.Parser.Node -> List Span
+commentSpans link isItalic nodes =
     List.concatMap
         (\node ->
             case node of
                 Html.Parser.Text text ->
-                    [ { text = String.replace "\n" " " text, isLink = isLink, isItalic = isItalic } ]
+                    [ { text = String.replace "\n" " " text, link = link, isItalic = isItalic } ]
 
                 Html.Parser.Comment _ ->
                     []
 
                 Html.Parser.Element "p" _ nodes2 ->
-                    { text = "\n\n", isLink = False, isItalic = False } :: commentSpans isLink isItalic nodes2
+                    { text = "\n\n", link = Nothing, isItalic = False } :: commentSpans link isItalic nodes2
 
-                Html.Parser.Element "a" _ nodes2 ->
-                    commentSpans True isItalic nodes2
+                Html.Parser.Element "a" attributes nodes2 ->
+                    commentSpans
+                        (case Html.Parser.getAttribute "href" attributes of
+                            Just href ->
+                                Just href
+
+                            Nothing ->
+                                link
+                        )
+                        isItalic
+                        nodes2
 
                 Html.Parser.Element "i" _ nodes2 ->
-                    commentSpans isLink True nodes2
+                    commentSpans link True nodes2
 
                 Html.Parser.Element _ attributes nodes2 ->
                     if Html.Parser.getAttribute "class" attributes == Just "reply" then
                         []
 
                     else
-                        commentSpans isLink isItalic nodes2
+                        commentSpans link isItalic nodes2
         )
         nodes
 
@@ -593,8 +617,8 @@ mergeSpans spans =
                 (\span result ->
                     case result of
                         next :: rest ->
-                            if span.isLink == next.isLink && span.isItalic == next.isItalic then
-                                { text = span.text ++ next.text, isLink = span.isLink, isItalic = span.isItalic } :: rest
+                            if span.link == next.link && span.isItalic == next.isItalic then
+                                { text = span.text ++ next.text, link = span.link, isItalic = span.isItalic } :: rest
 
                             else
                                 span :: result
@@ -611,7 +635,7 @@ mergeSpans spans =
             []
 
         first :: rest ->
-            { text = String.trimLeft first.text, isLink = first.isLink, isItalic = first.isItalic } :: trimLast rest
+            { text = String.trimLeft first.text, link = first.link, isItalic = first.isItalic } :: trimLast rest
 
 
 trimLast : List Span -> List Span
@@ -621,7 +645,7 @@ trimLast spans =
             []
 
         [ last ] ->
-            [ { text = String.trimRight last.text, isLink = last.isLink, isItalic = last.isItalic } ]
+            [ { text = String.trimRight last.text, link = last.link, isItalic = last.isItalic } ]
 
         first :: rest ->
             first :: trimLast rest
@@ -788,7 +812,7 @@ postsView lazyCache windowSize data =
 
         title : Element id
         title =
-            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [] } ]
+            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
     in
     Ui.column
         titleSpacing
@@ -879,6 +903,7 @@ commentsView lazyCache windowSize postId title comments =
                   , color = Color.textColor
                   , font = Sans Bold
                   , decorations = []
+                  , link = Nothing
                   }
                 ]
             ]
@@ -935,6 +960,7 @@ commentView lazyCache width (Comment comment) =
                     (commentHeader comment.author comment.date
                         ++ List.map (spanSegment (greyColor comment.grey)) comment.content
                     )
+                    |> Ui.links (HackerNews HackerNews.Types.CommentLink)
                 ]
     in
     if comment.isExpanded then
@@ -965,11 +991,12 @@ spanSegment : Color.Color -> Span -> Sprite.Segment
 spanSegment color span =
     { text = span.text
     , color =
-        if span.isLink then
-            Color.linkColor
+        case span.link of
+            Just _ ->
+                Color.linkColor
 
-        else
-            color
+            Nothing ->
+                color
     , font =
         if span.isItalic then
             Sans Italic
@@ -977,11 +1004,13 @@ spanSegment color span =
         else
             Sans Regular
     , decorations =
-        if span.isLink then
-            [ Sprite.Underline ]
+        case span.link of
+            Just _ ->
+                [ Sprite.Underline ]
 
-        else
-            []
+            Nothing ->
+                []
+    , link = span.link
     }
 
 
@@ -989,10 +1018,10 @@ spanSegment color span =
 -}
 commentHeader : String -> Maybe String -> List Sprite.Segment
 commentHeader author date =
-    { text = author ++ "  ", color = Color.textColor, font = Sans Bold, decorations = [] }
+    { text = author ++ "  ", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing }
         :: (case date of
                 Just text ->
-                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular, decorations = [] } ]
+                    [ { text = text ++ "  ", color = Color.dimTextColor, font = Sans Regular, decorations = [], link = Nothing } ]
 
                 Nothing ->
                     []

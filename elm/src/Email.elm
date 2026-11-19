@@ -646,7 +646,7 @@ view windowSize model =
 
 heading : String -> Element id
 heading title =
-    Ui.customText Small [ { text = title, color = Color.textColor, font = Sans Bold, decorations = [] } ]
+    Ui.customText Small [ { text = title, color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
 
 
 wrapped : Int -> Color.Color -> String -> Element id
@@ -654,7 +654,7 @@ wrapped width color text =
     Ui.customTextWrapped
         Small
         (Units.uiPixels width)
-        [ { text = text, color = color, font = Sans Regular, decorations = [] } ]
+        [ { text = text, color = color, font = Sans Regular, decorations = [], link = Nothing } ]
 
 
 formView : Int -> Model -> Element UiId
@@ -790,6 +790,7 @@ summaryView width summary2 =
                       , color = Color.textColor
                       , font = font
                       , decorations = []
+                      , link = Nothing
                       }
                     ]
                 )
@@ -798,6 +799,7 @@ summaryView width summary2 =
                   , color = Color.textColor
                   , font = font
                   , decorations = []
+                  , link = Nothing
                   }
                 ]
             ]

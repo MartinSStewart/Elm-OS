@@ -421,7 +421,7 @@ view windowSize model =
                 spacing
                 [ Ui.leftAndRight
                     (Units.uiPixels width)
-                    (Ui.customText Small [ { text = "Web viewer", color = Color.textColor, font = Sans Bold, decorations = [] } ])
+                    (Ui.customText Small [ { text = "Web viewer", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
                     (Ui.right { width = Coord.x (Ui.size close) } close)
                 , Ui.row
                     spacing
@@ -493,4 +493,4 @@ wrapped width color font text =
     Ui.customTextWrapped
         Small
         (Units.uiPixels width)
-        [ { text = text, color = color, font = font, decorations = [] } ]
+        [ { text = text, color = color, font = font, decorations = [], link = Nothing } ]

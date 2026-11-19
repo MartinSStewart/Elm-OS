@@ -20,6 +20,7 @@ module Sprite exposing
     , encoder
     , inAtlas
     , lineHeight
+    , linkAt
     , monoChar
     , move
     , rectangle
@@ -521,7 +522,7 @@ type FontSize
 {-| A run of text in one font and colour, for `customText`, with lines drawn across it.
 -}
 type alias Segment =
-    { text : String, color : Color, font : Font, decorations : List Decoration }
+    { text : String, color : Color, font : Font, decorations : List Decoration, link : Maybe String }
 
 
 {-| A line drawn across text, in the text's colour, where Noto Sans says it goes (for the
@@ -785,6 +786,44 @@ layoutSegments fontSize segments =
         |> Tuple.mapFirst List.reverse
 
 
+{-| The address of the link under a point, given from the top left of the text in UI
+pixels, if there is one: segments with a `link` are links. `segments` are laid out as
+`customText` does.
+-}
+linkAt : FontSize -> List Segment -> Coord UiPixels -> Maybe String
+linkAt fontSize segments point =
+    let
+        lineIndex : Int
+        lineIndex =
+            Coord.yRaw point // lineHeightRaw fontSize
+
+        x64 : Int
+        x64 =
+            Coord.xRaw point * 64
+    in
+    if Coord.yRaw point < 0 then
+        Nothing
+
+    else
+        segmentLines segments
+            |> List.drop lineIndex
+            |> List.head
+            |> Maybe.andThen
+                (\line ->
+                    let
+                        ( placed, end ) =
+                            layoutSegments fontSize line
+                    in
+                    List.map2
+                        (\( start, segment ) next -> { start = start, end = next, segment = segment })
+                        placed
+                        (List.map Tuple.first (List.drop 1 placed) ++ [ end ])
+                        |> List.filter (\span -> x64 >= span.start && x64 < span.end)
+                        |> List.head
+                        |> Maybe.andThen (\span -> span.segment.link)
+                )
+
+
 {-| Segments broken into lines at each '\\n'.
 -}
 segmentLines : List Segment -> List (List Segment)
@@ -844,7 +883,7 @@ caretPositions fontSize font string =
 -}
 text : UiScale -> Color -> FontSize -> Font -> Bounds UiPixels -> String -> Coord UiPixels -> List (Triangle DevicePixels)
 text uiScale color fontSize font clip string position =
-    customText uiScale fontSize clip [ { text = string, color = color, font = font, decorations = [] } ] position
+    customText uiScale fontSize clip [ { text = string, color = color, font = font, decorations = [], link = Nothing } ] position
 
 
 {-| Runs of text, each in its own colour and font but all the same size, one after
@@ -1078,7 +1117,7 @@ monoChar color position char =
 -}
 textSize : FontSize -> Font -> String -> Coord UiPixels
 textSize fontSize font string =
-    customTextSize fontSize [ { text = string, color = Color.textColor, font = font, decorations = [] } ]
+    customTextSize fontSize [ { text = string, color = Color.textColor, font = font, decorations = [], link = Nothing } ]
 
 
 {-| The size of `customText`'s segments: its widest line by its lines.
@@ -1215,7 +1254,7 @@ joinLines lines =
 
         style : Segment
         style =
-            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [] }
+            List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [], link = Nothing }
     in
     case lines of
         first :: rest ->
@@ -1415,7 +1454,7 @@ pushSegment : Segment -> List Segment -> List Segment
 pushSegment segment line =
     case line of
         last :: rest ->
-            if last.color == segment.color && last.font == segment.font then
+            if last.color == segment.color && last.font == segment.font && last.decorations == segment.decorations && last.link == segment.link then
                 { last | text = last.text ++ segment.text } :: rest
 
             else

@@ -794,6 +794,18 @@ step event model =
                                 , []
                                 )
 
+                            ( HackerNews HackerNews.Types.CommentLink, { relativePositionToUi, ui } ) :: _ ->
+                                case Ui.linkAt (Coord.minus relativePositionToUi cursor) ui of
+                                    Just url ->
+                                        if HackerNews.isExternalLink url then
+                                            openInWebViewer url model
+
+                                        else
+                                            ( model, [] )
+
+                                    Nothing ->
+                                        ( model, [] )
+
                             ( id, { relativePositionToUi, ui } ) :: _ ->
                                 let
                                     model2 : Model
@@ -1671,6 +1683,40 @@ asciiCollabClick uiId model uiState =
                 uiState
       }
     , effects
+    )
+
+
+{-| A link that is not to Hacker News opens in the website viewer, which opens if it
+isn't already.
+-}
+openInWebViewer : String -> Model -> ( Model, List Effect )
+openInWebViewer url model =
+    let
+        opened : Model
+        opened =
+            if appIsOpen WebViewerApp model then
+                model
+
+            else
+                click model (WebViewer WebViewer.Types.OpenButton) |> Tuple.first
+
+        ( webViewer, request ) =
+            WebViewer.go url opened.webViewer
+    in
+    ( { opened
+        | webViewer = webViewer
+        , uiState =
+            Ui.insertElement
+                (WebViewer WebViewer.Types.UrlInput)
+                (TextInputState { current = { cursorPosition = String.length url, cursorSize = 0, text = url }, undoHistory = [], redoHistory = [] })
+                opened.uiState
+      }
+    , case request of
+        Just ( count, url2 ) ->
+            [ httpGet (WebViewerRequest count) url2 ]
+
+        Nothing ->
+            []
     )
 
 
@@ -2810,7 +2856,7 @@ headingSize =
 -}
 heading : String -> Ui.Element id
 heading string =
-    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [] } ]
+    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]
 
 
 {-| Everything the UI framework draws on a display: the toolbar along the top, each
@@ -4221,10 +4267,10 @@ editorWindow model =
             , Ui.leftAndRight style.width
                 (t status)
                 (Ui.customText bodySize
-                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
-                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [] }
-                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [] }
-                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [] }
+                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
+                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [], link = Nothing }
+                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
+                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [], link = Nothing }
                     ]
                 )
             ]
