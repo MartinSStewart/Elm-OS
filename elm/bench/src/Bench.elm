@@ -154,8 +154,8 @@ frame screen model =
                 let
                     _ =
                         Debug.log (named "after collapsing, Ui.lazy draws the same triangles")
-                            (Ui.view Ui.init scale False Nothing screen (HackerNews.view (Ui.lazyCache [ ui ]) (Coord.toUi scale screen) collapsed)
-                                == Ui.view Ui.init scale False Nothing screen (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) collapsed)
+                            (Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (HackerNews.view (Ui.lazyCache [ ui ]) (Coord.toUi scale screen) collapsed)
+                                == Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) collapsed)
                             )
                 in
                 timed (named "view after collapsing the first comment (Ui.lazy)")
@@ -163,7 +163,7 @@ frame screen model =
                     |> Task.map (\_ -> ui)
             )
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init scale False Nothing screen ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
@@ -178,7 +178,7 @@ frame screen model =
                     _ =
                         Debug.log "render bytes" bytes
                 in
-                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init scale False Nothing screen (element ()) } ]) ] |> Bytes.width)
+                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (element ()) } ]) ] |> Bytes.width)
             )
         |> Task.andThen
             (\_ ->
@@ -188,7 +188,7 @@ frame screen model =
 
                     _ =
                         Debug.log (named "Ui.lazy draws the same triangles")
-                            (Ui.view Ui.init scale False Nothing screen (elementAgain first ()) == Ui.view Ui.init scale False Nothing screen first)
+                            (Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (elementAgain first ()) == Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen first)
                 in
                 timed (named "whole frame, nothing changed (Ui.lazy)")
                     (\() ->
@@ -198,7 +198,7 @@ frame screen model =
                         in
                         ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
                         , Ui.lazyCache [ ui ]
-                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init scale False Nothing screen ui } ]) ] |> Bytes.width
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui } ]) ] |> Bytes.width
                         )
                     )
             )
@@ -221,10 +221,7 @@ screenshotViewer count model =
             Coord.xy 1000 700
 
         shot =
-            { uiState = Ui.init
-            , uiScale = scale
-            , screenshot = Ui.elementToScreenshot (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) model)
-            }
+            Ui.elementToScreenshot (Time.millisToPosix 0) scale Ui.init (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) model)
 
         shots =
             List.repeat count shot
@@ -257,7 +254,7 @@ screenshotViewer count model =
             )
         |> Task.andThen (\_ -> timed (named "ScreenshotViewer.view (build the Element)") (\() -> element ()))
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init scale False Nothing screen ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
@@ -275,7 +272,7 @@ screenshotViewer count model =
                                 element ()
                         in
                         ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
-                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init scale False Nothing screen ui } ]) ] |> Bytes.width
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui } ]) ] |> Bytes.width
                         )
                     )
             )
