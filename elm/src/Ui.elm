@@ -24,8 +24,6 @@ module Ui exposing
     , customButton
     , customText
     , customTextWrapped
-    , linkAt
-    , links
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , dragScrollbar
@@ -50,6 +48,8 @@ module Ui exposing
     , lazyKeyed
     , left
     , leftAndRight
+    , linkAt
+    , links
     , monoColorText
     , monoText
     , noFind
@@ -2587,7 +2587,7 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                                             Duration.from buttonDownAt time
 
                                         opacity =
-                                            200 - round (Duration.inSeconds timeElapsed * 350)
+                                            50 - round (Duration.inSeconds timeElapsed * 100)
                                     in
                                     if opacity > 0 then
                                         Sprite.circle
