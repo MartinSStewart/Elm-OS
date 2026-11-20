@@ -61,7 +61,7 @@ UI pixels and `toDevice` scales them; text is drawn straight in device pixels, s
 Sans is laid out like a browser lays it out: with the font's own unhinted advances and
 kerning, so text at 2x is twice as wide as at 1x (to 1/64 of a device pixel) and wraps
 in the same places. Glyphs start at fractional pixels across; the atlas has each one
-drawn at four quarter-pixel offsets, and the nearest is drawn (`sansRun`). Down, each
+drawn at four quarter-pixel offsets, and the nearest is drawn (`sansRunWidth`). Down, each
 line's baseline is on a whole pixel, which the light hinting fits the glyphs to.
 
 -}
@@ -1018,31 +1018,51 @@ customText uiScale fontSize clip segments position =
             let
                 top =
                     y + lineIndex * height
-                ( placed, end ) =
-                    layoutSegments fontSize line
-
-                -- where each segment starts and ends, in 1/64 device pixels
-                spans =
-                    List.map2
-                        (\( start, segment ) next -> { left64 = (x * 64 + start) * s, right64 = (x * 64 + next) * s, segment = segment })
-                        placed
-                        (List.map Tuple.first (List.drop 1 placed) ++ [ end ])
-
-                baseline =
-                    (top + ascent) * s
             in
-            List.concatMap
-                (\{ left64, segment } ->
-                    case segment.font of
-                        Mono ->
-                            monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+            -- Lines well outside the clip (a line's height away, as a glyph can reach a
+            -- little past its line) draw nothing, so they aren't laid out.
+            if (top + 2 * height) * s <= deviceClip.top || (top - height) * s >= deviceClip.bottom then
+                []
 
-                        Sans style ->
-                            sansRun s fontSize (variant style) deviceClip segment.color ( left64, baseline ) segment.text
-                )
-                spans
-                ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
-                ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
+            else
+                let
+                    baseline =
+                        (top + ascent) * s
+
+                    -- Each segment laid out and drawn in one go, from where the last one ended
+                    -- (1/64 UI pixels from the text's left), and where each starts and ends
+                    -- (1/64 device pixels), for the lines across them.
+                    ( _, spansRev, glyphsRev ) =
+                        List.foldl
+                            (\segment ( pen64, spansAcc, glyphsAcc ) ->
+                                let
+                                    left64 =
+                                        (x * 64 + pen64) * s
+
+                                    ( glyphs, width ) =
+                                        case segment.font of
+                                            Mono ->
+                                                ( monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+                                                , String.length segment.text * Tuple.first charSize * monoScale fontSize * 64
+                                                )
+
+                                            Sans style ->
+                                                sansRunWidth s fontSize style deviceClip segment.color ( left64, baseline ) segment.text
+                                in
+                                ( pen64 + width
+                                , { left64 = left64, right64 = (x * 64 + pen64 + width) * s, segment = segment } :: spansAcc
+                                , glyphs :: glyphsAcc
+                                )
+                            )
+                            ( 0, [], [] )
+                            line
+
+                    spans =
+                        List.reverse spansRev
+                in
+                List.concat (List.reverse glyphsRev)
+                    ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
+                    ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
         )
         (segmentLines segments)
         |> List.concat
@@ -1347,40 +1367,166 @@ monoRun s fontSize deviceClip color ( left, top ) string =
         |> List.concat
 
 
-{-| One line of Noto Sans, from where it starts on the baseline (across in 1/64 device
-pixels, down in device pixels), laid out as `layoutLine` measures it and drawn with the
-face for the device size. Each glyph goes on the whole pixel left of where its pen is,
-in the atlas copy shifted right by the nearest number of 1/`NotoSans.subpixels` pixels
-to the rest, so its shape is never resampled.
+{-| One line of Noto Sans in a style, from where it starts on the baseline (across in
+1/64 device pixels, down in device pixels), drawn with the face for the device size, and
+how wide it is (1/64 UI pixels, as `layoutLine` measures it): it's laid out once, for both.
+Each glyph goes on the whole pixel left of where its pen is, in the atlas copy shifted
+right by the nearest number of 1/`NotoSans.subpixels` pixels to the rest, so its shape is
+never resampled. Advances and kerning are in font units and the same for every face.
 -}
-sansRun : Int -> FontSize -> NotoSans.Variant -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> List (Triangle DevicePixels)
-sansRun s fontSize v deviceClip color ( left64, baseline ) string =
-    layoutSans v.kerning (face v (sansSize fontSize * s)) string
-        |> Tuple.first
-        |> List.concatMap
-            (\( at, _, glyph ) ->
-                let
-                    -- where the pen is, in 1/subpixels device pixels
-                    steps =
-                        round (toFloat ((left64 + at) * NotoSans.subpixels) / 64)
+sansRunWidth : Int -> FontSize -> Style -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> ( List (Triangle DevicePixels), Int )
+sansRunWidth s fontSize style deviceClip color ( left64, baseline ) string =
+    let
+        m : Metrics
+        m =
+            metrics style
 
-                    copy =
-                        modBy NotoSans.subpixels steps
+        table : FaceTable
+        table =
+            faceTable style (sansSize fontSize * s)
 
-                    pen =
-                        (steps - copy) // NotoSans.subpixels
-                in
-                if glyph.w == 0 then
-                    []
+        ( end, _, drawn ) =
+            String.foldl
+                (\char ( pen, previous, acc ) ->
+                    let
+                        code : Int
+                        code =
+                            Char.toCode char
 
-                else
-                    clippedSprite color
-                        deviceClip
-                        ( pen + glyph.left, baseline + glyph.top )
-                        ( glyph.w, glyph.h )
-                        ( glyph.x + copy * (glyph.w + NotoSans.gap), glyph.y )
-                        ( glyph.w, glyph.h )
-            )
+                        at : Int
+                        at =
+                            case Array.get previous m.kerning of
+                                Just after ->
+                                    if Dict.isEmpty after then
+                                        pen
+
+                                    else
+                                        pen + (Dict.get code after |> Maybe.withDefault 0)
+
+                                Nothing ->
+                                    pen
+
+                        glyph : NotoSans.Glyph
+                        glyph =
+                            Array.get code table.glyphs |> Maybe.withDefault table.missing
+                    in
+                    ( at + glyph.advance
+                    , code
+                    , if glyph.w == 0 then
+                        acc
+
+                      else
+                        let
+                            -- where the pen is, in 1/subpixels device pixels
+                            steps : Int
+                            steps =
+                                round (toFloat ((left64 + unitsTo64 table.size at) * NotoSans.subpixels) / 64)
+
+                            copy : Int
+                            copy =
+                                modBy NotoSans.subpixels steps
+
+                            penX : Int
+                            penX =
+                                (steps - copy) // NotoSans.subpixels
+                        in
+                        clippedSprite color
+                            deviceClip
+                            ( penX + glyph.left, baseline + glyph.top )
+                            ( glyph.w, glyph.h )
+                            ( glyph.x + copy * (glyph.w + NotoSans.gap), glyph.y )
+                            ( glyph.w, glyph.h )
+                            :: acc
+                    )
+                )
+                ( 0, Char.toCode ' ', [] )
+                string
+    in
+    ( List.concat (List.reverse drawn), unitsTo64 (faceTable style (sansSize fontSize)).size end )
+
+
+{-| A face's glyphs in an Array by character code (quicker to look up than its Dict),
+with the one drawn for characters it doesn't have.
+-}
+type alias FaceTable =
+    { size : Int, glyphs : Array NotoSans.Glyph, missing : NotoSans.Glyph }
+
+
+makeFaceTable : NotoSans.Face -> FaceTable
+makeFaceTable f =
+    let
+        missing : NotoSans.Glyph
+        missing =
+            missingGlyph f
+    in
+    { size = f.size
+    , glyphs =
+        Dict.foldl
+            (\char glyph array -> Array.set (Char.toCode char) glyph array)
+            (Array.repeat (Dict.foldl (\char _ high -> max (Char.toCode char) high) 0 f.glyphs + 1) missing)
+            f.glyphs
+    , missing = missing
+    }
+
+
+{-| `face`, as a `FaceTable`.
+-}
+faceTable : Style -> Int -> FaceTable
+faceTable style size =
+    let
+        tables : List FaceTable
+        tables =
+            faceTables style
+    in
+    case List.filter (\t -> t.size <= size) tables |> List.reverse of
+        t :: _ ->
+            t
+
+        [] ->
+            case tables of
+                t :: _ ->
+                    t
+
+                [] ->
+                    { size = size, glyphs = Array.empty, missing = { x = 0, y = 0, w = 0, h = 0, left = 0, top = 0, advance = 0 } }
+
+
+{-| Every face of a style as a `FaceTable`, made once.
+-}
+faceTables : Style -> List FaceTable
+faceTables style =
+    case style of
+        Regular ->
+            regularFaceTables
+
+        Bold ->
+            boldFaceTables
+
+        Italic ->
+            italicFaceTables
+
+        BoldItalic ->
+            boldItalicFaceTables
+
+
+regularFaceTables : List FaceTable
+regularFaceTables =
+    List.map makeFaceTable NotoSans.regular.faces
+
+
+boldFaceTables : List FaceTable
+boldFaceTables =
+    List.map makeFaceTable NotoSans.bold.faces
+
+
+italicFaceTables : List FaceTable
+italicFaceTables =
+    List.map makeFaceTable NotoSans.italic.faces
+
+
+boldItalicFaceTables : List FaceTable
+boldItalicFaceTables =
+    List.map makeFaceTable NotoSans.boldItalic.faces
 
 
 clippedSprite :
