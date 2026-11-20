@@ -190,13 +190,24 @@ def near(c, want, tol=40):
     return all(abs(a - b) <= tol for a, b in zip(c, want))
 
 
+# Colours from elm/src/Color.elm (a dark theme): windows, toolbar buttons, text, and
+# the network app's "Connected".
+PANEL = (44, 41, 39)  # Color.fillColor
+BUTTON = (64, 59, 56)  # Color.fillColor2
+SUCCESS = (100, 205, 130)  # Color.successColor
+
+
+def is_text(c):  # Color.textColor (232, 226, 220), allowing for antialiasing
+    return min(c) > 180
+
+
 if usb:
     # On the stick, /init's messages go to the screen, not the serial port (a laptop
     # has none), so wait for Elm's scene instead: the toolbar's buttons at the top left.
     end = time.time() + 180
     while True:
         shot = screen()
-        if any(near(pixel(shot, x, y), (199, 185, 175), tol=25) for x in range(0, 120, 2) for y in (20, 40)):
+        if any(near(pixel(shot, x, y), BUTTON, tol=12) for x in range(0, 120, 2) for y in (20, 40)):
             break
         if time.time() > end:
             fail("Elm OS never drew its scene")
@@ -230,17 +241,17 @@ if any(near(c, fill) for c in there):
     fail("the cursor is not only under the mouse")
 
 # The debug app (elm/src/Main.elm) is the first window, so the layout (Layout.elm) puts
-# it in the top left corner, under the toolbar: a light panel with dark text, drawn
+# it in the top left corner, under the toolbar: a dark panel with light text, drawn
 # from the texture atlas's font. Windows start at FIRST_WINDOW (UI pixels): 8 to the
 # right of the screen's edge and 8 below the toolbar.
 FIRST_WINDOW = (12, 49)  # just inside the first window's top left border
 panel = pixel(shot, FIRST_WINDOW[0] * s, FIRST_WINDOW[1] * s)
 print(f"debug app's panel {panel}")
-if not near(panel, (220, 210, 199)):
+if not near(panel, PANEL, tol=10):
     fail(f"expected the debug app's panel in the top left corner, got {panel}")
-dark = sum(1 for x in range(14 * s, 200 * s) for y in range(56 * s, 80 * s) if max(pixel(shot, x, y)) < 60)
-if dark < 20:
-    fail(f"the debug app has no text ({dark} dark pixels)")
+text = sum(1 for x in range(14 * s, 200 * s) for y in range(56 * s, 80 * s) if is_text(pixel(shot, x, y)))
+if text < 20:
+    fail(f"the debug app has no text ({text} text pixels)")
 
 move(0.75, 0.25)
 if not all(near(c, fill) for c in cursor_at(screen(), 0.75, 0.25)):
@@ -295,7 +306,7 @@ for name in ["Debug", "Network", "Weather"]:
 time.sleep(1)
 corner = (FIRST_WINDOW[0] * s, FIRST_WINDOW[1] * s)
 before = pixel(screen(), *corner)
-if near(before, (220, 210, 199), tol=10):
+if near(before, PANEL, tol=10):
     fail("the Debug, Network and Weather buttons did not close their apps")
 
 # The About button opens the about page; a second click closes it.
@@ -306,7 +317,7 @@ press("About")
 time.sleep(1)
 closed = pixel(screen(), *corner)
 print(f"about page: {before}, open {opened}, closed {closed}")
-if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
+if not near(opened, PANEL, tol=10) or near(closed, PANEL, tol=10):
     fail("the About button did not open and close the about page")
 
 # The Calculator button opens the calculator in the top left corner, with the
@@ -320,15 +331,15 @@ for key in ["kp_6", "kp_multiply", "kp_7", "ret"]:
 time.sleep(1)
 shot = screen()
 save_png(shot, f"{ROOT}/build/calculator.png")
-digits = sum(1 for x in range(18 * s, 210 * s) for y in range(84 * s, 140 * s) if max(pixel(shot, x, y)) < 60)
-print(f"calculator: panel {pixel(shot, *calc_title)}, {digits} dark pixels in its display")
-if not near(pixel(shot, *calc_title), (220, 210, 199), tol=10):
+digits = sum(1 for x in range(18 * s, 210 * s) for y in range(84 * s, 140 * s) if is_text(pixel(shot, x, y)))
+print(f"calculator: panel {pixel(shot, *calc_title)}, {digits} text pixels in its display")
+if not near(pixel(shot, *calc_title), PANEL, tol=10):
     fail("the Calculator button did not open the calculator (build/calculator.png)")
 if digits < 20:
-    fail(f"the calculator's display is empty ({digits} dark pixels; build/calculator.png)")
+    fail(f"the calculator's display is empty ({digits} text pixels; build/calculator.png)")
 press("Calculator")
 time.sleep(1)
-if near(pixel(screen(), *calc_title), (220, 210, 199), tol=10):
+if near(pixel(screen(), *calc_title), PANEL, tol=10):
     fail("a second click on the Calculator button did not close the calculator")
 
 # The network app again, alone in the top left corner.
@@ -339,7 +350,7 @@ time.sleep(1)
 def connected_pixels(shot):
     """Green "Connected..." in the network app, below its title and the wifi header."""
     return sum(1 for x in range(14 * s, 460 * s) for y in range(115 * s, 150 * s)
-               if near(pixel(shot, x, y), (30, 120, 60), tol=30))
+               if near(pixel(shot, x, y), SUCCESS, tol=30))
 
 
 if usb:

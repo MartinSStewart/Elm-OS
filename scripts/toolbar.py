@@ -12,8 +12,8 @@ import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-OUTLINE = (157, 143, 134)  # Color.outlineColor
-FOCUSED = (70, 120, 255)  # Color.focusedUiColor
+OUTLINE = (108, 99, 93)  # Color.outlineColor
+FOCUSED = (90, 140, 255)  # Color.focusedUiColor
 TOP = 8  # the toolbar row's padding, in UI pixels
 SPACING = 4  # between buttons
 
@@ -21,7 +21,7 @@ SPACING = 4  # between buttons
 def labels():
     src = open(f"{ROOT}/elm/src/Main.elm").read()
     body = src.split("\ntoolbar model display =\n", 1)[1].split("\n    in\n", 1)[0]
-    names = re.findall(r'\(t "([^"]+)"\)', body.split("Nothing ->", 1)[1])
+    names = re.findall(r'\((?:Ui\.text|t) "([^"]+)"\)', body.split("Nothing ->", 1)[1])
     if not names:
         raise RuntimeError("found no buttons in Main.toolbar (elm/src/Main.elm)")
     return names
@@ -53,6 +53,8 @@ def buttons(shot, s):
             x += 1
     names = labels()
     runs = runs[:len(names)]  # the clock may be right after the last button
+    if runs and len(runs) < len(names) and runs[-1][1] >= w - 2 * s:
+        names = names[:len(runs)]  # the toolbar runs off the screen's right edge
     if len(runs) != len(names):
         raise RuntimeError(f"expected the toolbar's {len(names)} buttons {names}, found {len(runs)} "
                            f"at {runs} along y={y}")

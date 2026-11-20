@@ -140,7 +140,7 @@ def notice_shown():
     """Main.notice's panel (Color.fillColor) in the bottom right corner."""
     w, h, px = screen()
     i = ((h - 14) * w + (w - 14)) * 3
-    return all(abs(a - b) <= 10 for a, b in zip(px[i:i + 3], (220, 210, 199)))
+    return all(abs(a - b) <= 10 for a, b in zip(px[i:i + 3], (44, 41, 39)))
 
 # ---- 1. a build that changes the host
 

@@ -189,6 +189,11 @@ boot()
 SIZE = screen()
 w, h, _ = SIZE
 s = 2 if w >= 2000 else 1
+# Close the apps open from the start, so the text editor is the only window: the debug
+# app's numbers (frame times, CPU) change from one screenshot to the next.
+for name in ["Debug", "Network", "Weather"]:
+    press(name)
+    time.sleep(0.5)
 press("Text editor")
 for ch in "hello":
     cmd("send-key", keys=[{"type": "qcode", "data": ch}])

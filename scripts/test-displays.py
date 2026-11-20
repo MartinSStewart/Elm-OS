@@ -197,7 +197,7 @@ except RuntimeError as e:
     fail(f"{e} (build/displays-toolbar-*.png)")
 print("a toolbar on each display")
 
-PANEL = (220, 210, 199)
+PANEL = (44, 41, 39)  # Color.fillColor
 # The debug app opens on the first display, in the top left corner under the toolbar.
 if not near(pixel(shots[0], 12, 49), PANEL) or near(pixel(shots[1], 12, 49), PANEL):
     save("overlay")

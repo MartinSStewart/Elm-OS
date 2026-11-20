@@ -330,8 +330,9 @@ def editor_text(snap):
     (Ui.Model's `uiState`, a SeqDict): the key EditorInput (a byte, its place among
     Main.UiId's variants in alphabetical order), then TextInputMultilineState (likewise
     in Ui.ElementState), then a TextInputMultiline.Model, whose fields go alphabetically:
-    goalX (Maybe Int), then input (TextInput.Model), whose first is current (State:
-    cursorPosition, cursorSize, text). "" if the editor has no state yet (nothing typed)."""
+    glide (Glide: Easing Float, Fingers Float or Still), goalX (Maybe Int), grab (Maybe
+    Int), then input (TextInput.Model), whose first is current (State: cursorPosition,
+    cursorSize, text). "" if the editor has no state yet (nothing typed)."""
     model = snap[4]
     found = set()
     for i in range(len(model) - 2):
@@ -339,8 +340,11 @@ def editor_text(snap):
             continue
         r = Wire3(model, i + 2)
         try:
-            if r.u8() == 1:
-                r.int()
+            if r.u8() in (0, 1):  # Easing or Fingers, with a Float
+                r.at += 8
+            for _ in range(2):  # goalX, grab
+                if r.u8() == 1:
+                    r.int()
             cursor, size, text = r.int(), r.int(), r.string()
         except (IndexError, ValueError, UnicodeDecodeError):
             continue
@@ -364,7 +368,7 @@ def variant_number(path, type_name, variant):
     return names.index(variant)
 
 
-EDITOR_ID = variant_number(f"{ROOT}/elm/src/Main.elm", "UiId", "EditorInput")
+EDITOR_ID = variant_number(f"{ROOT}/elm/src/UiId.elm", "UiId", "EditorInput")
 EDITOR_STATE_TAG = variant_number(f"{ROOT}/elm/src/Ui.elm", "ElementState", "TextInputMultilineState")
 
 
@@ -372,10 +376,16 @@ boot()
 SIZE = screen()
 w, h, _ = SIZE
 s = 2 if w >= 2000 else 1
-before = screen()
 
 # ---- 1. type, then a power cut
 
+# Close the apps open from the start, so the text editor and the calculator are the only
+# windows: the debug app's numbers (frame times, CPU) change from one screenshot to the next.
+for name in ["Debug", "Network", "Weather"]:
+    press(name)
+    time.sleep(0.5)
+time.sleep(1)
+before = screen()
 press("Text editor")
 type_text("hello")
 press("Calculator")
@@ -386,8 +396,10 @@ move(w - 5, h // 2)
 time.sleep(2)
 typed = screen()
 save_png(typed, f"{ROOT}/build/persist-before.png")
-CALC = (18 * s, 84 * s, 210 * s, 140 * s)  # the calculator's display
-EDITOR = (w // 2 - 200 * s, h // 2 - 100 * s, w // 2 + 200 * s, h // 2 + 100 * s)
+# The layout (Layout.elm) puts the editor on the left and the calculator to its right,
+# both from the top. These leave out the middle and the right edge, where the pointer is.
+EDITOR = (8 * s, 45 * s, w // 2 - 20 * s, h // 2 - 20 * s)  # "hello" in its top left
+CALC = (w // 2, 45 * s, w - 20 * s, h // 2 - 20 * s)  # the calculator's display
 if region(typed, *CALC) == region(before, *CALC) or region(typed, *EDITOR) == region(before, *EDITOR):
     fail("typing changed nothing on screen (build/persist-before.png)")
 # The screen shows it, so Elm has handled the keys and asked for them to be logged.
@@ -436,7 +448,7 @@ press("Restart")
 end = time.time() + 15
 while True:
     shot = screen()
-    yes = [x for x in range(0, 400 * s) if shot[2][(22 * s * w + x) * 3:(22 * s * w + x) * 3 + 3] == bytes((230, 150, 140))]
+    yes = [x for x in range(0, 400 * s) if shot[2][(22 * s * w + x) * 3:(22 * s * w + x) * 3 + 3] == bytes((140, 50, 45))]
     if yes:
         break
     if time.time() > end:
