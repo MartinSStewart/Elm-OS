@@ -2,6 +2,7 @@ module TicTacToe exposing
     ( Mark(..)
     , Model
     , Status(..)
+    , appSize
     , init
     , press
     , status
@@ -19,6 +20,7 @@ import Color
 import Coord exposing (Coord)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TicTacToe.Types
+import Layout
 import Ui exposing (Element)
 import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
@@ -250,3 +252,10 @@ squareView model i =
     Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), padding = Ui.noPadding }
         isWinning
         (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]))
+
+
+{-| The window's size, worked out once.
+-}
+appSize : Layout.Limits
+appSize =
+    Layout.fixed (Ui.size (view init))

@@ -2326,6 +2326,9 @@ clickNetwork model id =
         Network.Types.ConnectButton ->
             connect model
 
+        Network.Types.NetworkListViewport ->
+            ( model, [] )
+
         Network.Types.DisconnectButton ->
             ( { model
                 | weather = weatherWithoutWifi model
@@ -2481,6 +2484,9 @@ dragSelect focus mouse position model =
             model
 
         Network Network.Types.DisconnectButton ->
+            model
+
+        Network Network.Types.NetworkListViewport ->
             model
 
         WeatherButton ->
@@ -3343,7 +3349,7 @@ appLimits : App -> Layout.Limits
 appLimits app =
     case app of
         AboutApp ->
-            Layout.fixed (Ui.size (aboutPage model))
+            aboutSize
 
         NewsApp ->
             { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
@@ -3364,10 +3370,10 @@ appLimits app =
             Calculator.appSize
 
         TicTacToeApp ->
-            Layout.fixed (Ui.size (TicTacToe.view model.ticTacToe))
+            TicTacToe.appSize
 
         PaintApp ->
-            Layout.fixed (Ui.size (Paint.view model.paint))
+            Paint.appSize
 
         EditorApp ->
             { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
@@ -3376,16 +3382,75 @@ appLimits app =
             }
 
         DebugApp ->
-            Layout.fixed (Ui.size (overlay model))
+            debugSize
 
         NetworkApp ->
-            Layout.fixed (Ui.size (networkPanel model.network))
+            networkSize
 
         WeatherApp ->
-            Layout.fixed (Ui.size (weatherPanel model))
+            weatherSize
 
         ScreenshotViewerApp ->
             { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
+
+
+aboutSize : Layout.Limits
+aboutSize =
+    Layout.fixed (Ui.size (aboutPage init))
+
+
+debugSize : Layout.Limits
+debugSize =
+    Layout.fixed (Ui.size (overlay debugSample))
+
+
+{-| What the debug app is sized from, once: the host has said everything it says.
+-}
+debugSample : Model
+debugSample =
+    { init
+        | displays = [ { id = 0, name = "eDP-1", position = Coord.xy 0 0, size = Coord.xy 1920 1080, sizeMm = ( 0, 0 ) } ]
+        , renderer = Just { gpu = True, name = "Renderer", hardwareCursor = True }
+        , stats =
+            Just
+                { cores = 8
+                , cpu = 0
+                , cpuElm = 0
+                , cpuHost = 0
+                , cpuGpu = 0
+                , memUsed = 0
+                , memTotal = 0
+                , gpuMs = Just 0
+                , elmMs = Just 0
+                , drawMs = Just 0
+                }
+        , frameIntervals = [ 16 ]
+        , bootInfo =
+            let
+                bootInfo =
+                    BootInfo.init
+            in
+            { bootInfo | boot = Just { initMs = 0, elmMs = 0, frameMs = 0 }, firmwareMs = Just 0 }
+    }
+
+
+networkSize : Layout.Limits
+networkSize =
+    Layout.fixed (Ui.size (networkPanel Network.sample))
+
+
+weatherSize : Layout.Limits
+weatherSize =
+    Layout.fixed (Ui.size (weatherPanel True weatherSample))
+
+
+{-| What the weather app is sized from, once: a forecast, which is the most it shows.
+-}
+weatherSample : WeatherState
+weatherSample =
+    GotWeather
+        { name = "Place", latitude = 0, longitude = 0 }
+        { temperature = 0, code = 0, wind = 0, humidity = 0, time = "2000-01-01T00:00", days = List.repeat 4 { date = "2000-01-01", code = 0, high = 0, low = 0 }, utcOffsetSeconds = Nothing }
 
 
 networkPanel : Network.Network -> Ui.Element UiId
@@ -3436,7 +3501,7 @@ appView app size model =
             networkPanel model.network
 
         WeatherApp ->
-            weatherPanel model
+            weatherPanel (Network.isOnline model.network) model.weather
 
         ScreenshotViewerApp ->
             ScreenshotViewer.view
@@ -4043,11 +4108,11 @@ clock room model =
             Ui.empty
 
 
-weatherPanel : Model -> Ui.Element UiId
-weatherPanel model =
+weatherPanel : Bool -> WeatherState -> Ui.Element UiId
+weatherPanel online weather =
     smallWindow
         { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
-        (Weather.weatherRows (Network.isOnline model.network) model.weather)
+        (Weather.weatherRows online weather)
 
 
 

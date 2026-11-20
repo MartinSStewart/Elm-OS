@@ -18,6 +18,7 @@ module Network exposing
     , passwordStyle
     , reconnect
     , refresh
+    , sample
     , select
     , selectedNeedsPassword
     , toggleShowPassword
@@ -275,6 +276,37 @@ connect passwordText network =
             ( network, [] )
 
 
+{-| What the app is sized from, once: a wifi card and a cable, both connected, and a
+network picked that needs a password.
+-}
+sample : Network
+sample =
+    { init
+        | wifiDevice = Card "wlan0"
+        , networks = [ sampleNetwork ]
+        , scanning = False
+        , wifiStatus = { state = Connected, ssid = sampleNetwork.ssid, ip = Nothing, error = "" }
+        , wired = [ { name = "eth0", state = WiredConnected, ip = Nothing } ]
+        , selected = Just sampleNetwork
+    }
+
+
+sampleNetwork : WifiNetwork
+sampleNetwork =
+    { ssid = Network.Types.stringToSsid "Network", signal = -50, security = Wpa }
+
+
+{-| The wifi list shows this many networks before it scrolls.
+-}
+listHeight : Quantity Int UiPixels
+listHeight =
+    let
+        rowHeight =
+            Coord.y (Ui.size (networkRow sample sampleNetwork))
+    in
+    Quantity.multiplyBy 8 rowHeight |> Quantity.plus (Units.uiPixels (4 * 7))
+
+
 {-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
 -}
 em : Int -> Quantity Int UiPixels
@@ -413,7 +445,10 @@ view model =
                         ]
 
                     else
-                        List.take 8 model.networks |> List.map (networkRow model)
+                        [ Ui.viewport
+                            { id = uiId Network.Types.NetworkListViewport, viewportHeight = listHeight }
+                            (Ui.column 4 (List.map (networkRow model) model.networks))
+                        ]
 
                 Unknown ->
                     []

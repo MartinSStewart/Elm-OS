@@ -1,5 +1,6 @@
 module Paint exposing
     ( Model
+    , appSize
     , endStroke
     , init
     , onClick
@@ -22,6 +23,7 @@ import Image exposing (Image)
 import Paint.Types
 import Set exposing (Set)
 import Sprite
+import Layout
 import Ui exposing (Element)
 import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
@@ -335,3 +337,10 @@ brushButton model radius =
             , triangles = Sprite.circle Color.textColor 1 ( s / 2, s / 2 ) (min (s / 2) (toFloat radius + 0.5))
             }
         )
+
+
+{-| The window's size, worked out once.
+-}
+appSize : Layout.Limits
+appSize =
+    Layout.fixed (Ui.size (view init))
