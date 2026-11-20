@@ -3310,7 +3310,7 @@ windows model display =
     in
     inOrder
         |> List.filter (\app -> appIsOpen app model && (displayOf app model).id == display.id)
-        |> List.map (\app -> ( app, appLimits app model ))
+        |> List.map (\app -> ( app, appLimits app ))
         |> Layout.layout windowGap area
         |> List.map
             (\( app, bounds ) ->
@@ -3333,14 +3333,14 @@ shownOn display app model =
 -}
 windowGap : Int
 windowGap =
-    8
+    4
 
 
 {-| How big each app's window can be. The ones that are always the same size say what
 size their view is.
 -}
-appLimits : App -> Model -> Layout.Limits
-appLimits app model =
+appLimits : App -> Layout.Limits
+appLimits app =
     case app of
         AboutApp ->
             Layout.fixed (Ui.size (aboutPage model))
@@ -3361,7 +3361,7 @@ appLimits app model =
             { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
 
         CalculatorApp ->
-            Layout.fixed (Ui.size (Calculator.view False model.calculator))
+            Calculator.appSize
 
         TicTacToeApp ->
             Layout.fixed (Ui.size (TicTacToe.view model.ticTacToe))
