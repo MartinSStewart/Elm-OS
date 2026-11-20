@@ -1,4 +1,4 @@
-module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, WeatherState, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar with a clock, and apps that open from the toolbar,
 drawn by the UI framework (Ui.elm, from town-collab). Each open app gets a window, laid
@@ -39,6 +39,7 @@ import Json.Decode as D
 import Json.Encode as E
 import Keyboard exposing (Key(..))
 import Layout
+import Network exposing (Network)
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
@@ -59,7 +60,7 @@ import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
-import Weather
+import Weather exposing (WeatherState(..))
 import WebViewer
 import WebViewer.Types
 import Wifi exposing (Ssid)
@@ -335,15 +336,7 @@ type alias Model =
     , ctrl : Bool
     , clipboard : String
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
-    , wifiDevice : Wifi.Device
-    , networks : List Wifi.Network
-    , scanning : Bool
-    , wifiStatus : Wifi.Status
-    , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
-    , selected : Maybe Wifi.Network
-    , -- save passwords here for networks that have been connected to before
-      savedWifiPasswords : SeqDict Ssid Wpa2Password
-    , showPassword : Bool
+    , network : Network
     , weather : WeatherState
     , time : Maybe Time.Posix -- the wall clock, from each Frame and the host's Tick each second
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
@@ -430,14 +423,6 @@ allApps =
     [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, ScreenshotViewerApp ]
 
 
-type WeatherState
-    = NoWeather
-    | FindingPlace
-    | LoadingForecast Weather.Place
-    | GotWeather Weather.Place Weather.Forecast
-    | WeatherFailed HttpError
-
-
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
 saved and sent elsewhere later.
 -}
@@ -464,14 +449,7 @@ init =
     , ctrl = False
     , clipboard = ""
     , selectingText = False
-    , wifiDevice = Wifi.Unknown
-    , networks = []
-    , scanning = True
-    , wifiStatus = { state = Wifi.Idle, ssid = Wifi.stringToSsid "", ip = Nothing, error = "" }
-    , wired = []
-    , selected = Nothing
-    , savedWifiPasswords = SeqDict.empty
-    , showPassword = False
+    , network = Network.init
     , weather = NoWeather
     , time = Nothing
     , utcOffsetMinutes = Nothing
@@ -999,7 +977,7 @@ step event model =
             ( { model | stats = Just stats }, [] )
 
         WifiDevice device ->
-            ( { model | wifiDevice = device, scanning = device /= Wifi.NoCard && model.scanning }, [] )
+            ( { model | wifiDevice = device, scanning = device /= Network.NoCard && model.scanning }, [] )
 
         WifiScan networks ->
             reconnect { model | networks = networks, scanning = False }
@@ -1100,37 +1078,6 @@ updateScreenshotPreview data model =
             )
 
 
-{-| Once a network the user picked is joined, its password is kept, so it can be
-joined again without asking (`reconnect`).
--}
-savePassword : Wifi.Status -> Model -> SeqDict Ssid Wpa2Password
-savePassword status model =
-    case model.selected of
-        Just network ->
-            if status.state == Wifi.Connected && network.ssid == status.ssid then
-                if needsPassword network then
-                    case SeqDict.get PasswordInput model.uiState.uiState of
-                        Just (TextInputState password) ->
-                            case Wpa2Password.fromString password.current.text of
-                                Ok ok ->
-                                    SeqDict.insert network.ssid ok model.savedWifiPasswords
-
-                                Err _ ->
-                                    SeqDict.remove network.ssid model.savedWifiPasswords
-
-                        _ ->
-                            SeqDict.remove network.ssid model.savedWifiPasswords
-
-                else
-                    SeqDict.remove network.ssid model.savedWifiPasswords
-
-            else
-                model.savedWifiPasswords
-
-        Nothing ->
-            model.savedWifiPasswords
-
-
 {-| After a scan, while wifi is idle (as after a restart), join the strongest network
 there is a saved password for. Not after a failure: a saved password that has stopped
 working would be tried again after every scan, every 30 seconds.
@@ -1183,11 +1130,6 @@ weatherWithoutWifi model =
 
     else
         NoWeather
-
-
-isOnline : Model -> Bool
-isOnline model =
-    model.wifiStatus.state == Wifi.Connected || Wired.isConnected model.wired
 
 
 nonEmpty : String -> String -> String
@@ -2441,11 +2383,6 @@ connect model =
             ( model, [] )
 
 
-needsPassword : Wifi.Network -> Bool
-needsPassword network =
-    network.security /= Wifi.Open
-
-
 typeKey : Key -> Model -> ( Model, List Effect )
 typeKey key model =
     case ( model.ctrl, key ) of
@@ -3472,13 +3409,17 @@ appLimits app model =
             Layout.fixed (Ui.size (overlay model))
 
         NetworkApp ->
-            Layout.fixed (Ui.size (networkPanel model))
+            Layout.fixed (Ui.size (networkPanel model.network))
 
         WeatherApp ->
             Layout.fixed (Ui.size (weatherPanel model))
 
         ScreenshotViewerApp ->
             { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
+
+
+networkPanel network =
+    smallWindow { title = heading "Network", close = CloseNetworkButton, width = width } (Network.networkPanel network)
 
 
 {-| An app's view, in a window this big. The apps that are always the same size ignore
@@ -3603,7 +3544,7 @@ overlay model =
         perFrame maybeMs =
             case maybeMs of
                 Just ms ->
-                    fixed 2 ms ++ " ms/frame" ++ percentOfFrame ms model
+                    Weather.fixed 2 ms ++ " ms/frame" ++ percentOfFrame ms model
 
                 Nothing ->
                     "n/a"
@@ -3629,18 +3570,18 @@ overlay model =
                             "n/a (drawing on the CPU)"
                         )
                     , line "CPU"
-                        (fixed 0 stats.cpu
+                        (Weather.fixed 0 stats.cpu
                             ++ "% of "
                             ++ String.fromInt stats.cores
                             ++ " cores"
                         )
                     , line "1 core"
                         ("Elm "
-                            ++ fixed 0 stats.cpuElm
+                            ++ Weather.fixed 0 stats.cpuElm
                             ++ "%, host "
-                            ++ fixed 0 stats.cpuHost
+                            ++ Weather.fixed 0 stats.cpuHost
                             ++ "%, elmos-gpu "
-                            ++ fixed 0 stats.cpuGpu
+                            ++ Weather.fixed 0 stats.cpuGpu
                             ++ "%"
                         )
                     , line "Memory" (String.fromInt stats.memUsed ++ " / " ++ String.fromInt stats.memTotal ++ " MB")
@@ -3650,7 +3591,7 @@ overlay model =
                     []
 
         seconds ms =
-            fixed 2 (ms / 1000) ++ " s"
+            Weather.fixed 2 (ms / 1000) ++ " s"
     in
     smallWindow { title = Ui.monoText "Elm OS debug", close = CloseDebugButton, width = debugWidth }
         [ Ui.column
@@ -3740,11 +3681,11 @@ frameText model =
                     List.maximum intervals |> Maybe.withDefault 0
             in
             "avg "
-                ++ fixed 1 average
+                ++ Weather.fixed 1 average
                 ++ " ms, max "
-                ++ fixed 1 maximum
+                ++ Weather.fixed 1 maximum
                 ++ " ms ("
-                ++ fixed 0 (1000 / max 0.001 average)
+                ++ Weather.fixed 0 (1000 / max 0.001 average)
                 ++ " fps)"
 
 
@@ -3755,35 +3696,7 @@ percentOfFrame ms model =
             ""
 
         intervals ->
-            " (" ++ fixed 0 (100 * ms * toFloat (List.length intervals) / max 0.001 (List.sum intervals)) ++ "%)"
-
-
-{-| A number with a fixed count of decimals.
--}
-fixed : Int -> Float -> String
-fixed decimals value =
-    let
-        factor =
-            10 ^ decimals
-
-        n =
-            round (abs value * toFloat factor)
-
-        sign =
-            if value < 0 && n > 0 then
-                "-"
-
-            else
-                ""
-
-        whole =
-            String.fromInt (n // factor)
-    in
-    if decimals <= 0 then
-        sign ++ whole
-
-    else
-        sign ++ whole ++ "." ++ String.padLeft decimals '0' (String.fromInt (modBy factor n))
+            " (" ++ Weather.fixed 0 (100 * ms * toFloat (List.length intervals) / max 0.001 (List.sum intervals)) ++ "%)"
 
 
 {-| The program. The Model is kept on the data disk and comes back after a restart
@@ -3961,23 +3874,23 @@ testFacts model uis =
             [ ( "state"
               , E.string
                     (case model.wifiStatus.state of
-                        Wifi.Idle ->
+                        Network.Idle ->
                             "idle"
 
-                        Wifi.Connecting ->
+                        Network.Connecting ->
                             "connecting"
 
-                        Wifi.Dhcp ->
+                        Network.Dhcp ->
                             "dhcp"
 
-                        Wifi.Connected ->
+                        Network.Connected ->
                             "connected"
 
-                        Wifi.Failed ->
+                        Network.Failed ->
                             "failed"
                     )
               )
-            , ( "ssid", E.string (Wifi.ssidToString model.wifiStatus.ssid) )
+            , ( "ssid", E.string (Network.ssidToString model.wifiStatus.ssid) )
             , ( "ip", E.string (Maybe.withDefault "" (Maybe.map Ipv4.toString model.wifiStatus.ip)) )
             ]
         )
@@ -4134,197 +4047,6 @@ panelWidth =
     em 28
 
 
-{-| The network app: a line for each wired card, then wifi (left out on a computer with
-a wired card and no wifi).
--}
-networkPanel : Model -> Ui.Element UiId
-networkPanel model =
-    let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        fit string =
-            Sprite.ellipsis bodySize font width string
-
-        small =
-            Ui.paddingXY 6 3
-
-        title =
-            case model.wifiDevice of
-                Wifi.Card name ->
-                    "Wifi (" ++ name ++ ")"
-
-                Wifi.Unknown ->
-                    "Wifi"
-
-                Wifi.NoCard ->
-                    "Wifi"
-
-        header =
-            case model.wifiDevice of
-                Wifi.Card _ ->
-                    Ui.leftAndRight width
-                        (t title)
-                        (Ui.button { id = RefreshButton, padding = small }
-                            (t
-                                (if model.scanning then
-                                    "Scanning"
-
-                                 else
-                                    "Refresh"
-                                )
-                            )
-                        )
-
-                Wifi.Unknown ->
-                    t title
-
-                Wifi.NoCard ->
-                    t title
-
-        status : Wifi.Status
-        status =
-            model.wifiStatus
-
-        ssid : String
-        ssid =
-            Wifi.ssidToString model.wifiStatus.ssid
-
-        statusLine : Ui.Element id
-        statusLine =
-            case model.wifiDevice of
-                Wifi.Unknown ->
-                    t "Looking for a wifi card…"
-
-                Wifi.NoCard ->
-                    t "No wifi card found"
-
-                Wifi.Card _ ->
-                    case status.state of
-                        Wifi.Idle ->
-                            t "Not connected. Pick a network:"
-
-                        Wifi.Connecting ->
-                            t (fit ("Joining " ++ ssid ++ "…"))
-
-                        Wifi.Dhcp ->
-                            t (fit ("Getting an address on " ++ ssid))
-
-                        Wifi.Connected ->
-                            Ui.colorText
-                                connectedColor
-                                (fit
-                                    ("Connected to "
-                                        ++ ssid
-                                        ++ ", "
-                                        ++ (case status.ip of
-                                                Just ip ->
-                                                    Ipv4.toString ip
-
-                                                Nothing ->
-                                                    ""
-                                           )
-                                    )
-                                )
-
-                        Wifi.Failed ->
-                            Ui.colorText Color.errorColor (Sprite.wrap bodySize font width status.error)
-
-        networkRows =
-            case model.wifiDevice of
-                Wifi.Card _ ->
-                    if List.isEmpty model.networks then
-                        [ t
-                            (if model.scanning then
-                                "Looking for networks…"
-
-                             else
-                                "No networks found"
-                            )
-                        ]
-
-                    else
-                        List.take 8 model.networks |> List.map (networkRow model)
-
-                Wifi.Unknown ->
-                    []
-
-                Wifi.NoCard ->
-                    []
-
-        joinRows =
-            case model.selected of
-                Just selected ->
-                    if selected.ssid == status.ssid && status.state /= Wifi.Idle && status.state /= Wifi.Failed then
-                        []
-
-                    else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText Color.errorColor "That kind of network isn't supported yet" ]
-
-                    else
-                        (if needsPassword selected then
-                            [ Ui.row
-                                6
-                                [ -- lined up with the text in the box, which is inset by its padding
-                                  Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (t "Password")
-                                , passwordInput model
-                                , Ui.button { id = ShowPasswordButton, padding = small }
-                                    (t
-                                        (if model.showPassword then
-                                            "Hide"
-
-                                         else
-                                            "Show"
-                                        )
-                                    )
-                                ]
-                            ]
-
-                         else
-                            []
-                        )
-                            ++ [ Ui.button
-                                    { id = ConnectButton, padding = small }
-                                    (t
-                                        (Sprite.ellipsis
-                                            bodySize
-                                            font
-                                            (width |> Quantity.minus (Units.uiPixels 12))
-                                            ("Connect to " ++ Wifi.ssidToString selected.ssid)
-                                        )
-                                    )
-                               ]
-
-                Nothing ->
-                    []
-
-        disconnectRow =
-            if status.state /= Wifi.Idle && status.state /= Wifi.Failed then
-                [ Ui.button { id = DisconnectButton, padding = small } (t "Disconnect") ]
-
-            else
-                []
-    in
-    smallWindow { title = heading "Network", close = CloseNetworkButton, width = width }
-        (wiredRows model
-            ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
-                    []
-
-                else
-                    [ header, statusLine ]
-                        ++ networkRows
-                        ++ joinRows
-                        ++ disconnectRow
-               )
-        )
-
-
 {-| The date and time, once the host has said (each second), at the right end of the
 toolbar: just the time when the date doesn't fit in `room`. In UTC until the weather says
 where this computer is.
@@ -4350,339 +4072,11 @@ clock room model =
             Ui.empty
 
 
-{-| Two lines for each wired card: its name, and whether it has a cable and an address.
--}
-wiredRows : Model -> List (Ui.Element UiId)
-wiredRows model =
-    let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        link : Wired.Link -> List (Ui.Element id)
-        link l =
-            [ t ("Wired (" ++ l.name ++ ")")
-            , case l.state of
-                Wired.NoCable ->
-                    t "No cable plugged in"
-
-                Wired.Dhcp ->
-                    t "Getting an address…"
-
-                Wired.Connected ->
-                    Ui.colorText
-                        connectedColor
-                        (Sprite.ellipsis
-                            bodySize
-                            font
-                            width
-                            (case l.ip of
-                                Just ip ->
-                                    "Connected, " ++ Ipv4.toString ip
-
-                                Nothing ->
-                                    "Connected"
-                            )
-                        )
-
-                Wired.Failed ->
-                    Ui.colorText
-                        Color.errorColor
-                        (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
-            ]
-
-        divider =
-            Ui.quads
-                { size = ( width, Units.uiPixels 6 )
-                , triangles =
-                    Sprite.rectangle
-                        Color.outlineColor
-                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                        (Coord.xy 0 2)
-                        ( width, Units.uiPixels 2 )
-                }
-    in
-    case model.wired of
-        [] ->
-            []
-
-        links ->
-            List.concatMap link links
-                ++ (if model.wifiDevice == Wifi.NoCard then
-                        []
-
-                    else
-                        [ divider ]
-                   )
-
-
-connectedColor : Color
-connectedColor =
-    Color.successColor
-
-
-networkRow : Model -> Wifi.Network -> Ui.Element UiId
-networkRow model network =
-    let
-        font =
-            sans
-
-        connectedHere =
-            model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
-
-        label =
-            if connectedHere then
-                "connected"
-
-            else
-                case network.security of
-                    Wifi.Open ->
-                        "open"
-
-                    Wifi.Wpa ->
-                        "locked"
-
-                    Wifi.Enterprise ->
-                        "802.1X"
-
-                    Wifi.Wep ->
-                        "WEP"
-
-                    Wifi.Wpa3 ->
-                        "WPA3"
-
-        -- The row fills the panel: its button's padding is 4 UI pixels each side.
-        width =
-            panelWidth |> Quantity.minus (Units.uiPixels 8)
-
-        labelWidth =
-            em 5
-
-        bars =
-            signalBars network.signal
-
-        nameWidth =
-            width |> Quantity.minus labelWidth |> Quantity.minus (Units.uiPixels (12 + 16))
-    in
-    Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY 4 2 }
-        (Maybe.map .ssid model.selected == Just network.ssid)
-        (Ui.leftAndRight width
-            (Ui.row 6 [ bars, Ui.text (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid)) ])
-            (Ui.text label)
-        )
-
-
-{-| Four bars, filled by signal strength in dBm.
--}
-signalBars : Int -> Ui.Element id
-signalBars dbm =
-    let
-        filled =
-            if dbm >= -55 then
-                4
-
-            else if dbm >= -65 then
-                3
-
-            else if dbm >= -75 then
-                2
-
-            else
-                1
-
-        bar i =
-            let
-                h =
-                    4 + 4 * i
-            in
-            Sprite.rectangle
-                (if i < filled then
-                    Color.textColor
-
-                 else
-                    Color.outlineColor
-                )
-                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                (Coord.xy (i * 4) (18 - h))
-                (Coord.xy 3 h)
-    in
-    Ui.quads { size = Coord.xy 16 18, triangles = List.concatMap bar (List.range 0 3) }
-
-
-{-| The password box: town-collab's text input, showing dots unless "Show" is on.
--}
-passwordStyle : Model -> TextInput.Style
-passwordStyle model =
-    { font = sans, fontSize = bodySize, width = em 14, masked = not model.showPassword }
-
-
-passwordInput : Model -> Ui.Element UiId
-passwordInput model =
-    Ui.textInput
-        { id = PasswordInput
-        , style = passwordStyle model
-        , isValid = True
-        }
-
-
 weatherPanel : Model -> Ui.Element UiId
 weatherPanel model =
-    smallWindow { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
-        (weatherRows model)
-
-
-weatherRows : Model -> List (Ui.Element UiId)
-weatherRows model =
-    let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        small =
-            Ui.paddingXY 6 3
-
-        degrees value =
-            String.fromInt (round value) ++ "°"
-    in
-    case model.weather of
-        NoWeather ->
-            if isOnline model then
-                [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
-
-            else
-                [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
-
-        FindingPlace ->
-            [ t "Finding where we are…" ]
-
-        LoadingForecast place ->
-            [ t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
-
-        WeatherFailed error ->
-            [ Ui.colorText Color.errorColor (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
-            , Ui.button { id = WeatherButton, padding = small } (t "Try again")
-            ]
-
-        GotWeather place forecast ->
-            [ Ui.leftAndRight width
-                (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
-                (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
-            , Ui.row
-                8
-                [ weatherIcon 3 forecast.code
-                , Ui.column
-                    3
-                    [ heading (fixed 1 forecast.temperature ++ "°C")
-                    , t (Weather.describe forecast.code)
-                    , t
-                        ("Wind "
-                            ++ String.fromInt (round forecast.wind)
-                            ++ " km/h, humidity "
-                            ++ String.fromInt (round forecast.humidity)
-                            ++ "%"
-                        )
-                    ]
-                ]
-            , Ui.column
-                3
-                (List.indexedMap
-                    (\i day ->
-                        Ui.row
-                            6
-                            [ weatherIcon 1 day.code
-                            , Ui.left (em 6)
-                                (t
-                                    (if i == 0 then
-                                        "Today"
-
-                                     else
-                                        Weather.weekday day.date
-                                    )
-                                )
-                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
-                            , t (Weather.describe day.code)
-                            ]
-                    )
-                    forecast.days
-                )
-            , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
-            ]
-
-
-{-| A small picture of the weather, 18 by 18 squares `unit` UI pixels wide.
--}
-weatherIcon : Int -> Int -> Ui.Element id
-weatherIcon unit code =
-    let
-        s =
-            toFloat unit
-
-        side =
-            18 * unit
-
-        sun =
-            Sprite.circle (Color.rgb255 250 190 40) s ( 9, 9 ) 6
-
-        smallSun =
-            Sprite.circle (Color.rgb255 250 190 40) s ( 6, 6 ) 4.5
-
-        cloudColor =
-            if code >= 61 || code == 3 then
-                Color.rgb255 120 125 135
-
-            else
-                Color.rgb255 170 175 185
-
-        cloud =
-            Sprite.circle cloudColor s ( 6, 11 ) 4
-                ++ Sprite.circle cloudColor s ( 11, 9 ) 5
-                ++ Sprite.circle cloudColor s ( 14, 12 ) 3.5
-                ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
-
-        drops color =
-            List.map
-                (\x -> Sprite.triangle color ( x * s, 15 * s ) ( (x + 1.2) * s, 15 * s ) ( (x - 1) * s, 18 * s ))
-                [ 6, 10, 14 ]
-
-        rain =
-            drops (Color.rgb255 60 110 220)
-
-        snow =
-            List.concatMap (\x -> Sprite.circle Color.white s ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
-
-        bolt =
-            [ Sprite.triangle (Color.rgb255 250 200 40) ( 10 * s, 13 * s ) ( 8 * s, 18 * s ) ( 12 * s, 15 * s ) ]
-
-        triangles =
-            if code <= 1 then
-                sun
-
-            else if code == 2 then
-                smallSun ++ cloud
-
-            else if code <= 48 then
-                cloud
-
-            else if code <= 67 || (code >= 80 && code <= 82) then
-                cloud ++ rain
-
-            else if code <= 86 then
-                cloud ++ snow
-
-            else
-                cloud ++ bolt
-    in
-    Ui.quads { size = Coord.xy side side, triangles = triangles }
+    smallWindow
+        { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
+        (Weather.weatherRows (isOnline model) model.weather)
 
 
 

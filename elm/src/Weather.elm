@@ -2,12 +2,15 @@ module Weather exposing
     ( Day
     , Forecast
     , Place
+    , WeatherState(..)
     , decodeForecast
     , decodePlace
     , defaultGeoUrl
     , defaultWeatherUrl
     , describe
+    , fixed
     , forecastUrl
+    , weatherRows
     , weekday
     )
 
@@ -17,7 +20,216 @@ Both go over HTTPS: Main asks the host for them with Effect.get, and the host fe
 them with rustls (host/init/src/http.rs).
 -}
 
+import Color
+import Coord
+import Effect exposing (HttpError)
 import Json.Decode as D
+import Quantity exposing (Quantity)
+import Sprite
+import Ui
+import UiId exposing (UiId(..))
+import Units exposing (UiPixels)
+import Weather
+
+
+type WeatherState
+    = NoWeather
+    | FindingPlace
+    | LoadingForecast Weather.Place
+    | GotWeather Weather.Place Weather.Forecast
+    | WeatherFailed HttpError
+
+
+{-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
+-}
+em : Int -> Quantity Int UiPixels
+em n =
+    Units.uiPixels (16 * n)
+
+
+weatherRows : Bool -> WeatherState -> List (Ui.Element UiId)
+weatherRows isOnline2 model =
+    let
+        font =
+            Sprite.Sans Sprite.Regular
+
+        width =
+            em 28
+
+        t =
+            Ui.text
+
+        small =
+            Ui.paddingXY 6 3
+
+        degrees value =
+            String.fromInt (round value) ++ "°"
+    in
+    case model of
+        NoWeather ->
+            if isOnline2 then
+                [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
+
+            else
+                [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
+
+        FindingPlace ->
+            [ t "Finding where we are…" ]
+
+        LoadingForecast place ->
+            [ t (Sprite.ellipsis Sprite.Small font width ("Weather in " ++ place.name ++ "…")) ]
+
+        WeatherFailed error ->
+            [ Ui.colorText Color.errorColor (Sprite.wrap Sprite.Small font width (Effect.httpErrorToString error))
+            , Ui.button { id = WeatherButton, padding = small } (t "Try again")
+            ]
+
+        GotWeather place forecast ->
+            [ Ui.leftAndRight width
+                (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
+                (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
+            , Ui.row
+                8
+                [ weatherIcon 3 forecast.code
+                , Ui.column
+                    3
+                    [ Ui.customText
+                        Sprite.Big
+                        [ { text = fixed 1 forecast.temperature ++ "°C"
+                          , color = Color.textColor
+                          , font = font
+                          , decorations = []
+                          , link = Nothing
+                          }
+                        ]
+                    , t (Weather.describe forecast.code)
+                    , t
+                        ("Wind "
+                            ++ String.fromInt (round forecast.wind)
+                            ++ " km/h, humidity "
+                            ++ String.fromInt (round forecast.humidity)
+                            ++ "%"
+                        )
+                    ]
+                ]
+            , Ui.column
+                3
+                (List.indexedMap
+                    (\i day ->
+                        Ui.row
+                            6
+                            [ weatherIcon 1 day.code
+                            , Ui.left (em 6)
+                                (t
+                                    (if i == 0 then
+                                        "Today"
+
+                                     else
+                                        Weather.weekday day.date
+                                    )
+                                )
+                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , t (Weather.describe day.code)
+                            ]
+                    )
+                    forecast.days
+                )
+            , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+            ]
+
+
+{-| A number with a fixed count of decimals.
+-}
+fixed : Int -> Float -> String
+fixed decimals value =
+    let
+        factor =
+            10 ^ decimals
+
+        n =
+            round (abs value * toFloat factor)
+
+        sign =
+            if value < 0 && n > 0 then
+                "-"
+
+            else
+                ""
+
+        whole =
+            String.fromInt (n // factor)
+    in
+    if decimals <= 0 then
+        sign ++ whole
+
+    else
+        sign ++ whole ++ "." ++ String.padLeft decimals '0' (String.fromInt (modBy factor n))
+
+
+{-| A small picture of the weather, 18 by 18 squares `unit` UI pixels wide.
+-}
+weatherIcon : Int -> Int -> Ui.Element id
+weatherIcon unit code =
+    let
+        s =
+            toFloat unit
+
+        side =
+            18 * unit
+
+        sun =
+            Sprite.circle (Color.rgb255 250 190 40) s ( 9, 9 ) 6
+
+        smallSun =
+            Sprite.circle (Color.rgb255 250 190 40) s ( 6, 6 ) 4.5
+
+        cloudColor =
+            if code >= 61 || code == 3 then
+                Color.rgb255 120 125 135
+
+            else
+                Color.rgb255 170 175 185
+
+        cloud =
+            Sprite.circle cloudColor s ( 6, 11 ) 4
+                ++ Sprite.circle cloudColor s ( 11, 9 ) 5
+                ++ Sprite.circle cloudColor s ( 14, 12 ) 3.5
+                ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
+
+        drops color =
+            List.map
+                (\x -> Sprite.triangle color ( x * s, 15 * s ) ( (x + 1.2) * s, 15 * s ) ( (x - 1) * s, 18 * s ))
+                [ 6, 10, 14 ]
+
+        rain =
+            drops (Color.rgb255 60 110 220)
+
+        snow =
+            List.concatMap (\x -> Sprite.circle Color.white s ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
+
+        bolt =
+            [ Sprite.triangle (Color.rgb255 250 200 40) ( 10 * s, 13 * s ) ( 8 * s, 18 * s ) ( 12 * s, 15 * s ) ]
+
+        triangles =
+            if code <= 1 then
+                sun
+
+            else if code == 2 then
+                smallSun ++ cloud
+
+            else if code <= 48 then
+                cloud
+
+            else if code <= 67 || (code >= 80 && code <= 82) then
+                cloud ++ rain
+
+            else if code <= 86 then
+                cloud ++ snow
+
+            else
+                cloud ++ bolt
+    in
+    Ui.quads { size = Coord.xy side side, triangles = triangles }
 
 
 defaultGeoUrl : String
