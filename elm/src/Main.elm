@@ -3198,6 +3198,7 @@ displayWindows model display =
             (\( app, bounds ) ->
                 ( bounds.topLeft
                 , appView app (Coord.minus bounds.topLeft bounds.bottomRight) model
+                    |> warnIfWrongSize (Coord.minus bounds.topLeft bounds.bottomRight)
                 )
             )
             (windows model display)
@@ -3212,6 +3213,45 @@ displayWindows model display =
             else
                 []
            )
+
+
+{-| An app's view, with a warning over its top left corner if it isn't the size of the
+window it was given: an app must fill its window exactly, and when it doesn't, this says
+by how much rather than leaving you to hunt for it.
+-}
+warnIfWrongSize : Coord UiPixels -> Ui.Element UiId -> Ui.Element UiId
+warnIfWrongSize windowSize appElement =
+    let
+        viewSize : Coord UiPixels
+        viewSize =
+            Ui.size appElement
+    in
+    if viewSize == windowSize then
+        appElement
+
+    else
+        Ui.inFront
+            [ ( Coord.origin, appElement )
+            , ( Coord.origin
+              , Ui.el
+                    { padding = Ui.paddingXY 6 3
+                    , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.errorColor, fillColor = Color.fillColor }
+                    }
+                    (Ui.colorText
+                        Color.errorColor
+                        ("Wrong size: the app is "
+                            ++ sizeToString viewSize
+                            ++ ", its window "
+                            ++ sizeToString windowSize
+                        )
+                    )
+              )
+            ]
+
+
+sizeToString : Coord UiPixels -> String
+sizeToString coord =
+    String.fromInt (Coord.xRaw coord) ++ " x " ++ String.fromInt (Coord.yRaw coord)
 
 
 {-| What the notice in the main display's bottom right corner says, if there is one.
@@ -3382,7 +3422,7 @@ appLimits app =
             { min = Coord.xy 400 300, preferred = Coord.xy 900 900, max = Coord.xy 1400 100000 }
 
         HackerNewsApp ->
-            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.windowWidth 1100, max = Coord.xy HackerNews.windowWidth 100000 }
+            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
 
         AsciiCollabApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
@@ -3550,7 +3590,11 @@ smallWindow { title, close, width } rows =
         { padding = Ui.paddingXY 6 6, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             4
-            (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+            (Ui.rowFromRight
+                { width = Quantity.unwrap widest, spacing = 0 }
+                [ \rest -> Ui.left (Units.uiPixels rest) title
+                , \_ -> Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close")
+                ]
                 :: rows
             )
         )
@@ -4243,18 +4287,16 @@ toolbar model display =
                     , Ui.button { id = RestartButton, padding = small } (Ui.text "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (Ui.text "Power off")
                     ]
-
-        row =
-            Ui.row 4 buttons
-
-        width =
-            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels 16)
-
-        room =
-            width |> Quantity.minus (Coord.x (Ui.size row)) |> Quantity.minus (Units.uiPixels 8)
     in
-    Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
-        (Ui.leftAndRight width row (clock room model))
+    Ui.elWithWidth
+        { width = Coord.xRaw (Display.uiSize display), padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+        (\width ->
+            Ui.rowFromLeft
+                { width = width, spacing = 8 }
+                [ \_ -> Ui.row 4 buttons
+                , \room -> Ui.right { width = Units.uiPixels room } (clock (Units.uiPixels room) model)
+                ]
+        )
 
 
 {-| The toolbar's buttons and the gap above them, in UI pixels.

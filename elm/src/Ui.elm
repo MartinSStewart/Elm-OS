@@ -6,12 +6,10 @@ module Ui exposing
     , ElementState(..)
     , Find
     , FindMatch
-    , Flexible
     , InputType(..)
     , LazyCache
     , Model
     , Padding
-    , Room
     , Screenshot
     , ScrollBy(..)
     , Source
@@ -32,15 +30,11 @@ module Ui exposing
     , dragScrollbar
     , el
     , elWithId
+    , elWithWidth
     , elementToScreenshot
     , empty
-    , fillColumn
-    , fillEl
-    , fillRow
     , findAll
     , findInput
-    , fixed
-    , flexible
     , getTextInput
     , getTextInputMultiline
     , hover
@@ -53,7 +47,6 @@ module Ui exposing
     , lazy3
     , lazyCache
     , lazyKeyed
-    , layout
     , left
     , leftAndRight
     , linkAt
@@ -68,14 +61,14 @@ module Ui exposing
     , onMouseUp
     , onWheel
     , paddingXY
-    , paragraph
     , quads
     , revealMatch
     , right
     , row
+    , rowFromLeft
+    , rowFromRight
     , screenshotSize
     , screenshotView
-    , scrollArea
     , scrolls
     , selectableButton
     , setFocus
@@ -90,7 +83,6 @@ module Ui exposing
     , view
     , viewport
     , windowBorderAndFill
-    , withWidth
     )
 
 {-| town-collab's UI framework (src/Ui.elm in github.com/MartinSStewart/town-collab),
@@ -1820,308 +1812,86 @@ childPositions isRow spacing position children =
 
 
 
--- ROOM: CONSTRAINTS GO DOWN, SIZES COME UP
+-- WIDTH HELPERS
 
 
-{-| How much room an element is given. Width is always known. Height is `Nothing` inside a
-scroll area, where content can be as tall as it likes.
+{-| An `el` exactly `width` wide. `child` is given the width inside the padding, and is
+padded out to it if it comes out narrower.
 -}
-type alias Room =
-    { width : Quantity Int UiPixels
-    , height : Maybe (Quantity Int UiPixels)
-    }
-
-
-{-| An element that is made once it knows how much room it has, so an app says only how
-big its window is and the widths inside it follow. Each container hands its children the
-room that's left after its padding, spacing and fixed-size children: subtraction, in one
-pass, with no measuring twice. What comes out is a plain `Element`, which still knows its
-size.
-
-`fillsWidth` and `fillsHeight` say whether it takes all the room it's given along that
-side (a paragraph does; a `fixed` button doesn't), so a row or column knows which children
-share what's left. An element that fills is padded out to exactly its share, so things
-after it line up.
-
--}
-type Flexible id
-    = Flexible { fillsWidth : Bool, fillsHeight : Bool, make : Room -> ElementFull id (SeqDict id (Element id)) }
-
-
-{-| An element whose size doesn't depend on the room around it. In a row or column it keeps
-its own size, and the `Flexible` children share what's left.
--}
-fixed : Element id -> Flexible id
-fixed (Element element) =
-    Flexible { fillsWidth = False, fillsHeight = False, make = \_ -> element }
-
-
-{-| Any element made from the room it's given; it takes the whole width. For text cut
-with an ellipsis, or a `lazy` part whose key holds the width:
-
-    Ui.flexible (\room -> Ui.lazy3 lazyCache commentsColumn lazyCache (Quantity.unwrap room.width) comments)
-
--}
-flexible : (Room -> Element id) -> Flexible id
-flexible make =
-    Flexible { fillsWidth = True, fillsHeight = False, make = \room -> make room |> (\(Element a) -> a) }
-
-
-{-| `customTextWrapped` as wide as the room it's given: lines break so none is wider.
--}
-paragraph : Sprite.FontSize -> List Sprite.Segment -> Flexible id
-paragraph fontSize segments =
-    flexible (\room -> customTextWrapped fontSize room.width segments)
-
-
-{-| `el` around a flexible child: the child gets the room less the padding.
--}
-fillEl : { padding : Padding, borderAndFill : BorderAndFill } -> Flexible id -> Flexible id
-fillEl data (Flexible child) =
-    Flexible
-        { child
-            | make =
-                \room ->
-                    let
-                        inner =
-                            { width = room.width |> Quantity.minus (Units.uiPixels (data.padding.left + data.padding.right)) |> Quantity.max Quantity.zero
-                            , height = Maybe.map (\h -> h |> Quantity.minus (Units.uiPixels (data.padding.top + data.padding.bottom)) |> Quantity.max Quantity.zero) room.height
-                            }
-
-                        (Element made) =
-                            el data (Element (fillTo child inner (child.make inner)))
-                    in
-                    made
-        }
-
-
-{-| A scroll area as tall as the room it's given; its content is as wide as the room and as
-tall as it likes. Outside a fixed height (in another scroll area) it's just its content.
--}
-scrollArea : id -> Flexible id -> Flexible id
-scrollArea id (Flexible child) =
-    Flexible
-        { fillsWidth = True
-        , fillsHeight = True
-        , make =
-            \room ->
-                let
-                    inner =
-                        { width = room.width, height = Nothing }
-
-                    content =
-                        fillTo { child | fillsHeight = False } inner (child.make inner)
-                in
-                case room.height of
-                    Just height ->
-                        Viewport { id = id, viewportHeight = height } content
-
-                    Nothing ->
-                        content
-        }
-
-
-{-| A column of flexible children. Each gets the whole width. The ones that fill the height
-(a `scrollArea`) share the height the others leave; the others are as tall as they are.
--}
-fillColumn : Int -> List (Flexible id) -> Flexible id
-fillColumn spacing children =
-    Flexible
-        { fillsWidth = List.any (\(Flexible c) -> c.fillsWidth) children
-        , fillsHeight = List.any (\(Flexible c) -> c.fillsHeight) children
-        , make =
-            \room ->
-                let
-                    natural =
-                        List.map
-                            (\(Flexible c) ->
-                                if c.fillsHeight then
-                                    Nothing
-
-                                else
-                                    Just (fillTo c room (c.make { room | height = Nothing }))
-                            )
-                            children
-
-                    shares =
-                        Maybe.map
-                            (\height ->
-                                share
-                                    (Quantity.unwrap height - spacing * (List.length children - 1) - List.sum (List.filterMap (Maybe.map (\m -> Coord.yRaw (sizeHelper m))) natural))
-                                    (List.length (List.filter (\(Flexible c) -> c.fillsHeight) children))
-                            )
-                            room.height
-
-                    made =
-                        List.map2 Tuple.pair children natural
-                            |> List.foldl
-                                (\( Flexible c, maybeMade ) ( left2, acc ) ->
-                                    case maybeMade of
-                                        Just m ->
-                                            ( left2, Element m :: acc )
-
-                                        Nothing ->
-                                            let
-                                                ( height, rest ) =
-                                                    case left2 of
-                                                        Just (h :: more) ->
-                                                            ( Just (Units.uiPixels h), Just more )
-
-                                                        _ ->
-                                                            ( Nothing, left2 )
-
-                                                childRoom =
-                                                    { room | height = height }
-                                            in
-                                            ( rest, Element (fillTo c childRoom (c.make childRoom)) :: acc )
-                                )
-                                ( shares, [] )
-                            |> Tuple.second
-                            |> List.reverse
-
-                    (Element result) =
-                        column spacing made
-                in
-                result
-        }
-
-
-{-| A row of flexible children. The `fixed` ones keep their own width, and the others share
-the width they leave, so a paragraph next to a button is exactly as wide as there's room for.
--}
-fillRow : Int -> List (Flexible id) -> Flexible id
-fillRow spacing children =
-    Flexible
-        { fillsWidth = List.any (\(Flexible c) -> c.fillsWidth) children
-        , fillsHeight = List.any (\(Flexible c) -> c.fillsHeight) children
-        , make =
-            \room ->
-                let
-                    natural =
-                        List.map
-                            (\(Flexible c) ->
-                                if c.fillsWidth then
-                                    Nothing
-
-                                else
-                                    Just (c.make room)
-                            )
-                            children
-
-                    shares =
-                        share
-                            (Quantity.unwrap room.width - spacing * (List.length children - 1) - List.sum (List.filterMap (Maybe.map (\m -> Coord.xRaw (sizeHelper m))) natural))
-                            (List.length (List.filter (\(Flexible c) -> c.fillsWidth) children))
-
-                    made =
-                        List.map2 Tuple.pair children natural
-                            |> List.foldl
-                                (\( Flexible c, maybeMade ) ( left2, acc ) ->
-                                    case maybeMade of
-                                        Just m ->
-                                            ( left2, Element m :: acc )
-
-                                        Nothing ->
-                                            case left2 of
-                                                w :: more ->
-                                                    let
-                                                        childRoom =
-                                                            { room | width = Units.uiPixels w }
-                                                    in
-                                                    ( more, Element (fillTo c childRoom (c.make childRoom)) :: acc )
-
-                                                [] ->
-                                                    ( [], acc )
-                                )
-                                ( shares, [] )
-                            |> Tuple.second
-                            |> List.reverse
-
-                    (Element result) =
-                        row spacing made
-                in
-                result
-        }
-
-
-{-| `total` split into `count` whole shares as even as can be (the first ones a pixel bigger),
-none below zero.
--}
-share : Int -> Int -> List Int
-share total count =
-    if count <= 0 then
-        []
-
-    else
-        let
-            total2 =
-                max 0 total
-        in
-        List.range 0 (count - 1)
-            |> List.map
-                (\i ->
-                    total2
-                        // count
-                        + (if i < modBy count total2 then
-                            1
-
-                           else
-                            0
-                          )
-                )
-
-
-{-| A made child padded out to the room along the sides it fills, so what comes after it lines up.
--}
-fillTo : { a | fillsWidth : Bool, fillsHeight : Bool } -> Room -> ElementFull id lazy -> ElementFull id lazy
-fillTo fills room child =
+elWithWidth : { width : Int, padding : Padding, borderAndFill : BorderAndFill } -> (Int -> Element id) -> Element id
+elWithWidth data child =
     let
+        inner : Int
+        inner =
+            data.width - data.padding.left - data.padding.right
+    in
+    el { padding = data.padding, borderAndFill = data.borderAndFill } (padToWidth 0 inner (child inner))
+
+
+{-| A row exactly `width` wide. Each child is given the width the children left of it
+leave (less the spacing), so the first is given all of it. A child that doesn't care
+ignores its Int:
+
+    Ui.rowFromLeft { width = 600, spacing = 8 } [ \_ -> backButton, \rest -> title rest ]
+
+If it comes out narrower than `width`, the row is padded on the right.
+
+-}
+rowFromLeft : { width : Int, spacing : Int } -> List (Int -> Element id) -> Element id
+rowFromLeft data children =
+    List.foldl
+        (\child ( rest, made ) ->
+            let
+                element : Element id
+                element =
+                    child rest
+            in
+            ( rest - Coord.xRaw (size element) - data.spacing, element :: made )
+        )
+        ( data.width, [] )
+        children
+        |> Tuple.second
+        |> List.reverse
+        |> row data.spacing
+        |> padToWidth 0 data.width
+
+
+{-| `rowFromLeft` starting from the right: the last child is given all of `width`, and
+each one before it what the ones right of it leave. If it comes out narrower than `width`,
+the row is padded on the left, so the right end stays put.
+-}
+rowFromRight : { width : Int, spacing : Int } -> List (Int -> Element id) -> Element id
+rowFromRight data children =
+    List.foldr
+        (\child ( rest, made ) ->
+            let
+                element : Element id
+                element =
+                    child rest
+            in
+            ( rest - Coord.xRaw (size element) - data.spacing, element :: made )
+        )
+        ( data.width, [] )
+        children
+        |> Tuple.second
+        |> row data.spacing
+        |> padToWidth 2 data.width
+
+
+{-| An element padded out to `width` if it's narrower; `fx` 0 puts it at the left, 2 at the right.
+-}
+padToWidth : Int -> Int -> Element id -> Element id
+padToWidth fx width (Element child) =
+    let
+        childSize : Coord UiPixels
         childSize =
             sizeHelper child
-
-        width =
-            if fills.fillsWidth then
-                Quantity.max room.width (Coord.x childSize)
-
-            else
-                Coord.x childSize
-
-        height =
-            case ( fills.fillsHeight, room.height ) of
-                ( True, Just h ) ->
-                    Quantity.max h (Coord.y childSize)
-
-                _ ->
-                    Coord.y childSize
     in
-    if ( width, height ) == childSize then
-        child
+    if Coord.xRaw childSize >= width then
+        Element child
 
     else
-        align 0 0 ( width, height ) child
-
-
-{-| A flexible element made for a room of this width, as tall as it likes. For an element
-inside a `lazy` part, whose key then holds the width.
--}
-withWidth : Quantity Int UiPixels -> Flexible id -> Element id
-withWidth width (Flexible data) =
-    let
-        room =
-            { width = width, height = Nothing }
-    in
-    fillTo data room (data.make room) |> Element
-
-
-{-| A flexible element filling an area of exactly this size, such as an app's window.
--}
-layout : Coord UiPixels -> Flexible id -> Element id
-layout areaSize (Flexible data) =
-    let
-        room =
-            { width = Coord.x areaSize, height = Just (Coord.y areaSize) }
-    in
-    fillTo { fillsWidth = True, fillsHeight = True } room (data.make room) |> Element
+        align fx 0 (Coord.xy width (Coord.yRaw childSize)) child |> Element
 
 
 
@@ -2438,6 +2208,7 @@ textsIn element found =
 
         Empty ->
             found
+
 
 
 -- HOVER AND FOCUS
