@@ -33,6 +33,7 @@ import Email.Types
 import HackerNews
 import HackerNews.Types
 import HostMessage
+import ImageCache exposing (ImageCache)
 import Ipv4
 import Json.Decode as D
 import Json.Encode as E
@@ -41,7 +42,8 @@ import Layout
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
-import ImageCache exposing (ImageCache)
+import Paint
+import Paint.Types
 import Persist
 import Quantity exposing (Quantity)
 import ScreenshotViewer
@@ -51,17 +53,15 @@ import SourceCode
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
-import Paint
-import Paint.Types
 import TicTacToe
 import TicTacToe.Types
 import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
+import Weather
 import WebViewer
 import WebViewer.Types
-import Weather
 import Wifi exposing (Ssid)
 import Wired
 import Wpa2Password exposing (Wpa2Password)
@@ -1078,10 +1078,6 @@ updateScreenshotPreview data model =
     in
     case Nonempty.fromList (Ui.hover model.uiState mouse displayUi2) |> Maybe.map (Nonempty.get data.depth) of
         Just ( _, { relativePositionToUi, ui } ) ->
-            let
-                _ =
-                    Debug.log "rel" relativePositionToUi
-            in
             ( { model
                 | takingScreenshot =
                     Just
@@ -3312,7 +3308,6 @@ findBarAt model display count =
         []
 
 
-
 {-| The display the find bar is on: the one it was opened on, or the main one if that
 isn't connected.
 -}
@@ -3375,6 +3370,7 @@ findInputStyle display =
 findBarHeight : Display -> Int
 findBarHeight display =
     Coord.yRaw (Ui.size (findBar display ""))
+
 
 
 -- WINDOW LAYOUT
@@ -3867,6 +3863,7 @@ draw msg model =
                 -- The image chunks on screen, found in the image texture (or put there).
                 ( imageCache, placed, imageWrites ) =
                     ImageCache.place model.imageCache (List.map .triangles scenes)
+
                 ( facts, factLogs ) =
                     case model.testFacts of
                         Just written ->
@@ -3904,7 +3901,7 @@ commandLineId =
 
 
 {-| What the QEMU tests (scripts/test-\*.py) check, by name, each as JSON. With
-ELMOS_TEST=1 on the kernel's command line, `draw` writes each one to the log when it
+ELMOS\_TEST=1 on the kernel's command line, `draw` writes each one to the log when it
 changes, as a line `[elm] test <name> <JSON>` (and all of them again whenever this
 program starts). The tests wait for those lines instead of reading the screen, so
 changing how something looks doesn't break them; they click buttons by their text, at
