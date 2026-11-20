@@ -108,7 +108,7 @@ pub fn solid() -> [f32; 2] {
 pub struct Tri {
     pub p: [[f32; 4]; 3],
     pub rgba: u32,
-    /// `LINEAR` and `IMAGE`, or'd together.
+    /// `LINEAR`, `IMAGE` and `CLAMP`, or'd together.
     pub flags: u32,
     /// Left, top, width, height of the texture rectangle that u, v wrap round into, so
     /// the triangle shows it repeated; width 0 for none (`RenderTriangle::tile`).
@@ -122,10 +122,13 @@ impl Tri {
     /// Sample the image texture (images.rs) rather than the atlas: u, v and the tile
     /// are in its pixels, and its colour multiplies the triangle's.
     pub const IMAGE: u32 = 2;
+    /// Clamp u, v into the tile rather than wrapping them round.
+    pub const CLAMP: u32 = 4;
 
     /// What Elm sent.
-    pub fn from_render(p: [[f32; 4]; 3], rgba: u32, linear: bool, image: bool, tile: [u16; 4]) -> Tri {
-        Tri { p, rgba, flags: (linear as u32) * Tri::LINEAR | (image as u32) * Tri::IMAGE, tile }
+    pub fn from_render(p: [[f32; 4]; 3], rgba: u32, linear: bool, image: bool, clamp: bool, tile: [u16; 4]) -> Tri {
+        let flags = (linear as u32) * Tri::LINEAR | (image as u32) * Tri::IMAGE | (clamp as u32) * Tri::CLAMP;
+        Tri { p, rgba, flags, tile }
     }
 
     pub fn as_bytes(tris: &[Tri]) -> &[u8] {

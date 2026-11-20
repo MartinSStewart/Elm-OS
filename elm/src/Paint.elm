@@ -6,26 +6,19 @@ module Paint exposing
     , startStroke
     , strokeBy
     , view
-    , writeAll
     )
 
 {-| A paint program: pick a colour and a brush, and draw on the canvas with the mouse.
 
-The canvas is 640 x 384 pixels (one per UI pixel), kept as 32 x 32 pixel chunks of
-`Bytes`, row by row: 4 bytes a pixel (red, green, blue, alpha), which is just what
-`Effect.WriteImage` takes. The canvas is shown from the image texture (Sprite.InImage),
-at its top left corner: every chunk a stroke changes is written there again, and all of
-them when the program starts (`writeAll`), since the texture is empty after a reboot.
+The canvas is a 640 x 384 pixel Image (one pixel per UI pixel): 32 x 32 pixel chunks.
+A stroke rebuilds the chunks it touches; Sprite.image draws it.
 
 -}
 
-import Array exposing (Array)
-import Bytes exposing (Bytes, Endianness(..))
-import Bytes.Decode as BD
-import Bytes.Encode as BE
+import Array
 import Color exposing (Color)
 import Coord exposing (Coord)
-import Effect exposing (Effect)
+import Image exposing (Image)
 import Paint.Types
 import Set exposing (Set)
 import Sprite
@@ -36,7 +29,7 @@ import Units exposing (UiPixels)
 
 type alias Model =
     { isOpen : Bool
-    , chunks : Array Bytes
+    , canvas : Image
     , color : Color
     , brush : Int -- the brush's radius, in canvas pixels
 
@@ -48,7 +41,7 @@ type alias Model =
 init : Model
 init =
     { isOpen = False
-    , chunks = Array.repeat (chunksAcross * chunksDown) blankChunk
+    , canvas = blank
     , color = Color.black
     , brush = 3
     , stroke = Nothing
@@ -57,7 +50,7 @@ init =
 
 chunkSize : Int
 chunkSize =
-    32
+    Image.chunkSize
 
 
 chunksAcross : Int
@@ -80,13 +73,6 @@ canvasHeight =
     chunkSize * chunksDown
 
 
-{-| Where the canvas's top left pixel is in the image texture.
--}
-imagePosition : ( Int, Int )
-imagePosition =
-    ( 0, 0 )
-
-
 {-| The radii of the brushes to pick from.
 -}
 brushes : List Int
@@ -94,9 +80,9 @@ brushes =
     [ 1, 3, 6, 12 ]
 
 
-blankChunk : Bytes
-blankChunk =
-    BE.encode (BE.sequence (List.repeat (chunkSize * chunkSize) (BE.unsignedInt32 BE (Color.toInt Color.white))))
+blank : Image
+blank =
+    Image.filled chunksAcross chunksDown (Color.toInt Color.white)
 
 
 
@@ -105,7 +91,7 @@ blankChunk =
 
 {-| The mouse went down on the canvas, at this pixel of it.
 -}
-startStroke : Coord UiPixels -> Model -> ( Model, List Effect )
+startStroke : Coord UiPixels -> Model -> Model
 startStroke point model =
     let
         at =
@@ -116,7 +102,7 @@ startStroke point model =
 
 {-| The mouse moved by this much while drawing: paints along the way.
 -}
-strokeBy : Coord UiPixels -> Model -> ( Model, List Effect )
+strokeBy : Coord UiPixels -> Model -> Model
 strokeBy ( dx, dy ) model =
     case model.stroke of
         Just ( x, y ) ->
@@ -125,13 +111,13 @@ strokeBy ( dx, dy ) model =
                     ( x + Units.inUiPixels dx, y + Units.inUiPixels dy )
             in
             if to == ( x, y ) then
-                ( model, [] )
+                model
 
             else
                 paint (line ( x, y ) to model.brush) { model | stroke = Just to }
 
         Nothing ->
-            ( model, [] )
+            model
 
 
 endStroke : Model -> Model
@@ -158,9 +144,9 @@ line ( fromX, fromY ) ( toX, toY ) radius =
 
 
 {-| A dab of the brush at each point, in the brush's colour. Each chunk they touch is
-rebuilt once, and written to the image texture.
+rebuilt once.
 -}
-paint : List ( Int, Int ) -> Model -> ( Model, List Effect )
+paint : List ( Int, Int ) -> Model -> Model
 paint dabs model =
     let
         r =
@@ -190,23 +176,31 @@ paint dabs model =
         color =
             Color.toInt model.color
 
-        changed : List ( Int, Bytes )
-        changed =
-            Set.toList touched
-                |> List.filterMap
-                    (\index ->
-                        Array.get index model.chunks
-                            |> Maybe.map (\chunk -> ( index, paintChunk index r color onCanvas chunk ))
-                    )
+        canvas =
+            model.canvas
     in
-    ( { model | chunks = List.foldl (\( index, chunk ) -> Array.set index chunk) model.chunks changed }
-    , List.map (\( index, chunk ) -> write index chunk) changed
-    )
+    { model
+        | canvas =
+            { canvas
+                | chunks =
+                    Set.foldl
+                        (\index chunks ->
+                            case Array.get index chunks of
+                                Just chunk ->
+                                    Array.set index (paintChunk index r color onCanvas chunk) chunks
+
+                                Nothing ->
+                                    chunks
+                        )
+                        canvas.chunks
+                        touched
+            }
+    }
 
 
 {-| The chunk with the dabs that reach it painted on.
 -}
-paintChunk : Int -> Int -> Int -> List ( Int, Int ) -> Bytes -> Bytes
+paintChunk : Int -> Int -> Int -> List ( Int, Int ) -> Image.Chunk -> Image.Chunk
 paintChunk index r color dabs chunk =
     let
         left =
@@ -232,87 +226,37 @@ paintChunk index r color dabs chunk =
                 pixels
                 (List.range (max top (y - r)) (min (top + chunkSize - 1) (y + r)))
     in
-    List.foldl dab (decodeChunk chunk) dabs |> encodeChunk
-
-
-decodeChunk : Bytes -> Array Int
-decodeChunk chunk =
-    BD.decode
-        (BD.loop ( chunkSize * chunkSize, [] )
-            (\( n, pixels ) ->
-                if n <= 0 then
-                    BD.succeed (BD.Done (List.reverse pixels))
-
-                else
-                    BD.map (\pixel -> BD.Loop ( n - 1, pixel :: pixels )) (BD.unsignedInt32 BE)
-            )
-        )
-        chunk
-        |> Maybe.withDefault []
-        |> Array.fromList
-
-
-encodeChunk : Array Int -> Bytes
-encodeChunk pixels =
-    BE.encode (BE.sequence (List.map (BE.unsignedInt32 BE) (Array.toList pixels)))
-
-
-{-| Writes chunk `index` into the image texture.
--}
-write : Int -> Bytes -> Effect
-write index chunk =
-    let
-        ( left, top ) =
-            imagePosition
-    in
-    Effect.WriteImage
-        { left = left + modBy chunksAcross index * chunkSize
-        , top = top + index // chunksAcross * chunkSize
-        , width = chunkSize
-        , pixels = chunk
-        }
-
-
-{-| Writes the whole canvas into the image texture.
--}
-writeAll : Model -> List Effect
-writeAll model =
-    List.indexedMap write (Array.toList model.chunks)
-
+    List.foldl dab (Image.chunkPixels chunk) dabs |> Image.chunkFromPixels
 
 
 -- CLICKS
 
 
-onClick : Paint.Types.UiId -> Model -> ( Model, List Effect )
+onClick : Paint.Types.UiId -> Model -> Model
 onClick id model =
     case id of
         Paint.Types.OpenButton ->
-            ( { model | isOpen = not model.isOpen, stroke = Nothing }, [] )
+            { model | isOpen = not model.isOpen, stroke = Nothing }
 
         Paint.Types.CloseButton ->
-            ( { model | isOpen = False, stroke = Nothing }, [] )
+            { model | isOpen = False, stroke = Nothing }
 
         Paint.Types.ClearButton ->
-            let
-                cleared =
-                    { model | chunks = Array.repeat (chunksAcross * chunksDown) blankChunk }
-            in
-            ( cleared, writeAll cleared )
+            { model | canvas = blank }
 
         Paint.Types.Canvas ->
-            ( model, [] )
+            model
 
         Paint.Types.ColorButton index ->
             case List.drop index Color.paintPalette of
                 color :: _ ->
-                    ( { model | color = color }, [] )
+                    { model | color = color }
 
                 [] ->
-                    ( model, [] )
+                    model
 
         Paint.Types.BrushButton radius ->
-            ( { model | brush = radius }, [] )
+            { model | brush = radius }
 
 
 
@@ -344,7 +288,7 @@ view model =
                 { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
                 (Ui.quads
                     { size = Coord.xy canvasWidth canvasHeight
-                    , triangles = Sprite.image ( 0, 0 ) ( canvasWidth, canvasHeight ) imagePosition
+                    , triangles = Sprite.image model.canvas
                     }
                 )
     in

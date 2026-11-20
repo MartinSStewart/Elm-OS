@@ -100,11 +100,6 @@ type alias Config model msg =
     -- Model thinks is open was closed by a restart or a power cut.
     , webSocketsOpen : List String -> msg
 
-    -- The program has started, its Model restored (or new). What it keeps only in the
-    -- host, such as pictures in the image texture (Effect.WriteImage), may be gone
-    -- (after a reboot), so it writes that again.
-    , started : msg
-
     -- Called after `update` with each message that isn't being replayed from the log:
     -- draws a frame if the message asks for one. Drawing here, rather than in `update`,
     -- keeps replaying the log quick, as it holds every frame's message. It may only
@@ -283,10 +278,7 @@ update config codecs msg model =
                         Nothing ->
                             runAll config
                                 codecs
-                                ({ seq = Nothing, bytes = 0, msg = config.webSocketsOpen webSocketsOpen }
-                                    :: { seq = Nothing, bytes = 0, msg = config.started }
-                                    :: List.reverse early
-                                )
+                                ({ seq = Nothing, bytes = 0, msg = config.webSocketsOpen webSocketsOpen } :: List.reverse early)
                                 ( Running config.init NotSaving [], [] )
 
                 ReadingSnapshot _ _ ->
@@ -421,7 +413,7 @@ resume config codecs disk restored upto arrivals =
         ( resumed, liveEffects ) =
             runAll config
                 codecs
-                (interrupted ++ sockets :: { seq = Nothing, bytes = 0, msg = config.started } :: new)
+                (interrupted ++ sockets :: new)
                 ( Running replayed.model (Saving { dir = disk.dir, seq = replayed.seq, logBytes = 0 }) replayed.pending, [] )
     in
     case resumed of

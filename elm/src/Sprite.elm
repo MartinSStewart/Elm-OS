@@ -17,6 +17,8 @@ module Sprite exposing
     , customTextSize
     , findMatches
     , foundText
+    , chunkOf
+    , fromImageTexture
     , image
     , dotGrid
     , ellipsis
@@ -71,6 +73,7 @@ import Bytes.Encode as BE
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
+import Image exposing (Image)
 import NotoSans
 import Quantity exposing (Quantity(..))
 import Sprites
@@ -100,6 +103,9 @@ type UvSpace
       -- that apps write into (Effect.WriteImage), such as a paint program's canvas. The
       -- triangle's colour multiplies the image's (white shows it as it is).
     | InImage
+      -- Pixels of an image chunk (Image.elm), 0 to 32 across and down, before it has a
+      -- place in the image texture: ImageCache.place gives it one (as `InImage`).
+    | InChunk Image.Chunk
 
 
 {-| The triangle sampling atlas pixels, from the sprite's picture for this UI scale if
@@ -112,6 +118,9 @@ inAtlas scale (Triangle t) =
             Triangle t
 
         InImage ->
+            Triangle t
+
+        InChunk _ ->
             Triangle t
 
         InSprite name ->
@@ -179,8 +188,9 @@ type Sampling
 {-| A triangle as Effect.renderBytes sends it (60 bytes, host/protocol/src/lib.rs
 read\_render): x, y, u, v of each corner as 32-bit floats, then as unsigned 32-bit
 integers the colour (0xRRGGBBAA), the tile's left + top \* 2^16, and its width +
-height \* 2^16 + 2^30 if it samples the image texture (`InImage`) + 2^31 if `Linear`;
-all little-endian. No tile is all 0s.
+height \* 2^16 + 2^30 + 2^29 if it samples the image texture (`InImage`, whose u, v clamp
+into the tile rather than wrap round) + 2^31 if `Linear`; all little-endian. No tile is
+all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
 encoder (Triangle t) =
@@ -221,7 +231,14 @@ encoder (Triangle t) =
                   )
                 + (case t.uvSpace of
                     InImage ->
-                        1073741824
+                        -- The image texture, clamped into the tile: each chunk's edge
+                        -- pixels repeat outwards, so Linear never blends in the chunk next
+                        -- to it in the texture.
+                        1073741824 + 536870912
+
+                    InChunk _ ->
+                        -- Never sent: ImageCache.place turns these into InImage.
+                        1073741824 + 536870912
 
                     AtlasPixels ->
                         0
@@ -442,14 +459,60 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     ]
 
 
-{-| A rectangle of the image texture (`InImage`) at the given place and size, as it is
-there: `image ( x, y ) ( w, h ) ( left, top )` shows the w x h pixels whose top left
-one is at left, top in the texture.
+{-| An image (Image.elm), its top left corner at 0, 0, a pixel per unit: two triangles
+for each chunk.
 -}
-image : ( Int, Int ) -> ( Int, Int ) -> ( Int, Int ) -> List (Triangle units)
-image position size texturePosition =
-    sprite Color.white position size texturePosition size
-        |> List.map (\(Triangle t) -> Triangle { t | uvSpace = InImage })
+image : Image -> List (Triangle units)
+image picture =
+    let
+        size =
+            Image.chunkSize
+    in
+    Array.toList picture.chunks
+        |> List.indexedMap
+            (\index chunk ->
+                sprite Color.white ( modBy picture.across index * size, index // picture.across * size ) ( size, size ) ( 0, 0 ) ( size, size )
+                    |> List.map (\(Triangle t) -> Triangle { t | uvSpace = InChunk chunk, tile = Just { left = 0, top = 0, width = size, height = size } })
+            )
+        |> List.concat
+
+
+{-| The image chunk the triangle shows, if it shows one that has no place in the image
+texture yet.
+-}
+chunkOf : Triangle a -> Maybe Image.Chunk
+chunkOf (Triangle t) =
+    case t.uvSpace of
+        InChunk chunk ->
+            Just chunk
+
+        AtlasPixels ->
+            Nothing
+
+        InSprite _ ->
+            Nothing
+
+        InImage ->
+            Nothing
+
+
+{-| A triangle showing an image chunk, showing it from the image texture, where the
+chunk's top left pixel is at the given place.
+-}
+fromImageTexture : ( Int, Int ) -> Triangle a -> Triangle a
+fromImageTexture ( left, top ) (Triangle t) =
+    let
+        f v =
+            { v | u = v.u + toFloat left, v = v.v + toFloat top }
+    in
+    Triangle
+        { t
+            | a = f t.a
+            , b = f t.b
+            , c = f t.c
+            , tile = Maybe.map (\tile -> { tile | left = tile.left + left, top = tile.top + top }) t.tile
+            , uvSpace = InImage
+        }
 
 
 rectangle : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)

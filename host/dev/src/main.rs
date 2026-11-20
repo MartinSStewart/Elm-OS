@@ -420,7 +420,7 @@ impl Runner {
                     }
                     match protocol::read_render(bytes) {
                         Some(tris) => {
-                            screen.scene = Some(tris.into_iter().map(|t| Tri::from_render(t.corners, t.rgba, t.linear != 0, t.image != 0, t.tile)).collect())
+                            screen.scene = Some(tris.into_iter().map(|t| Tri::from_render(t.corners, t.rgba, t.linear != 0, t.image != 0, t.clamp != 0, t.tile)).collect())
                         }
                         None => log!("dev", "couldn't read Elm's scene: {} bytes", bytes.len()),
                     }

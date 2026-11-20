@@ -112,9 +112,13 @@ const vec2 texel = vec2(1.0 / 2048.0, 1.0 / 4096.0); // ATLAS_W, ATLAS_H
 const vec2 image_texel = vec2(1.0 / 2048.0, 1.0 / 2048.0); // IMAGES_W, IMAGES_H
 // Texture pixel i (whole numbers), wrapped into the tile if there is one: the atlas's
 // coverage as white's alpha, or the image texture's colour.
-vec4 at(vec2 i, bool image) {
+vec4 at(vec2 i, bool image, bool clamped) {
     if (v_tile.z > 0.5) {
-        i = v_tile.xy + mod(i - v_tile.xy, v_tile.zw);
+        if (clamped) {
+            i = clamp(i, v_tile.xy, v_tile.xy + v_tile.zw - 1.0);
+        } else {
+            i = v_tile.xy + mod(i - v_tile.xy, v_tile.zw);
+        }
     }
     if (image) {
         return texture2D(images, (i + 0.5) * image_texel);
@@ -122,20 +126,23 @@ vec4 at(vec2 i, bool image) {
     return vec4(1.0, 1.0, 1.0, texture2D(atlas, (i + 0.5) * texel).a);
 }
 void main() {
-    // v_lin: 1 bilinear + 2 the image texture (Tri::flags).
-    bool image = v_lin > 1.5;
-    bool linear = v_lin - (image ? 2.0 : 0.0) > 0.5;
+    // v_lin: Tri::flags, 1 bilinear + 2 the image texture + 4 clamp into the tile.
+    float flags = floor(v_lin + 0.5);
+    bool clamped = flags > 3.5;
+    flags -= clamped ? 4.0 : 0.0;
+    bool image = flags > 1.5;
+    bool linear = flags - (image ? 2.0 : 0.0) > 0.5;
     vec4 sample;
     if (linear) {
         // Bilinear by hand, from four nearest pixels: pixel i is centred at i + 0.5.
         vec2 p = v_uv - 0.5;
         vec2 i = floor(p);
         vec2 f = p - i;
-        vec4 top = mix(at(i, image), at(i + vec2(1.0, 0.0), image), f.x);
-        vec4 bottom = mix(at(i + vec2(0.0, 1.0), image), at(i + vec2(1.0, 1.0), image), f.x);
+        vec4 top = mix(at(i, image, clamped), at(i + vec2(1.0, 0.0), image, clamped), f.x);
+        vec4 bottom = mix(at(i + vec2(0.0, 1.0), image, clamped), at(i + vec2(1.0, 1.0), image, clamped), f.x);
         sample = mix(top, bottom, f.y);
     } else {
-        sample = at(floor(v_uv), image);
+        sample = at(floor(v_uv), image, clamped);
     }
     gl_FragColor = v_col * sample;
 }
@@ -356,7 +363,8 @@ struct Vertex {
     u: f32,
     v: f32,
     rgba: [u8; 4],
-    /// `Tri::flags`: + 1.0 to sample bilinearly, + 2.0 to sample the image texture.
+    /// `Tri::flags`: + 1.0 to sample bilinearly, + 2.0 to sample the image texture, + 4.0
+    /// to clamp into the tile.
     linear: f32,
     /// `Tri::tile`: left, top, width, height in atlas pixels, width 0 for none.
     tile: [f32; 4],

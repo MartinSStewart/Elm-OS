@@ -40,6 +40,7 @@ import Layout
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
+import ImageCache exposing (ImageCache)
 import Persist
 import Quantity exposing (Quantity)
 import ScreenshotViewer
@@ -102,9 +103,6 @@ type Input
       -- restart (Persist.elm); one has opened, with the server's headers; a message
       -- on one; one has closed, and why.
     | WebSocketsOpen (List String)
-      -- The program has started (Persist.elm's `started`): what lived only in the host,
-      -- such as the paint program's canvas in the image texture, is written again.
-    | Started
     | WebSocketOpened String (List ( String, String ))
     | WebSocketMessage String Bytes
     | WebSocketClosed String String
@@ -322,6 +320,9 @@ type alias Model =
     , frames : Int
     , -- Last frame's `Ui.lazy` elements: never saved (tools/wire saves it as empty).
       lazyCache : Ui.LazyCache UiId
+    , -- Where the image chunks on screen are in the image texture: never saved (tools/wire
+      -- saves it as empty).
+      imageCache : ImageCache
     , shift : Bool
     , ctrl : Bool
     , clipboard : String
@@ -446,6 +447,7 @@ init =
     , frameIntervals = []
     , frames = 0
     , lazyCache = Ui.noLazyCache
+    , imageCache = ImageCache.empty
     , shift = False
     , ctrl = False
     , clipboard = ""
@@ -696,38 +698,35 @@ step event model =
                 modelOld =
                     model
 
-                ( model2, paintEffects ) =
+                model2 =
                     dragScreenshot model { model | mouse = Coord.xy x y }
                         |> paintStroke model
-
-                ( model3, effects ) =
-                    case model2.takingScreenshot of
-                        Just data ->
-                            updateScreenshotPreview data model2
-
-                        Nothing ->
-                            case ( model2.selectingText, model2.uiState.focus ) of
-                                ( True, Just focus ) ->
-                                    case findInput focus modelOld of
-                                        Just ( display, Ui.TextInputType { position } ) ->
-                                            -- The mouse in that display's UI pixels, even once it has left it.
-                                            ( dragSelect focus (uiMouseOn display model2.mouse) position model2, [] )
-
-                                        Just ( _, Ui.ButtonType _ ) ->
-                                            ( model2, [] )
-
-                                        Just ( display, Ui.ViewportType viewport ) ->
-                                            ( { model2 | uiState = Ui.dragScrollbar focus (uiMouseOn display model2.mouse) viewport model2.uiState }
-                                            , []
-                                            )
-
-                                        Nothing ->
-                                            ( model2, [] )
-
-                                _ ->
-                                    ( model2, [] )
             in
-            ( model3, paintEffects ++ effects )
+            case model2.takingScreenshot of
+                Just data ->
+                    updateScreenshotPreview data model2
+
+                Nothing ->
+                    case ( model2.selectingText, model2.uiState.focus ) of
+                        ( True, Just focus ) ->
+                            case findInput focus modelOld of
+                                Just ( display, Ui.TextInputType { position } ) ->
+                                    -- The mouse in that display's UI pixels, even once it has left it.
+                                    ( dragSelect focus (uiMouseOn display model2.mouse) position model2, [] )
+
+                                Just ( _, Ui.ButtonType _ ) ->
+                                    ( model2, [] )
+
+                                Just ( display, Ui.ViewportType viewport ) ->
+                                    ( { model2 | uiState = Ui.dragScrollbar focus (uiMouseOn display model2.mouse) viewport model2.uiState }
+                                    , []
+                                    )
+
+                                Nothing ->
+                                    ( model2, [] )
+
+                        _ ->
+                            ( model2, [] )
 
         Button 0 True ->
             let
@@ -805,11 +804,12 @@ step event model =
                                 )
 
                             ( Paint Paint.Types.Canvas, { relativePositionToUi } ) :: _ ->
-                                let
-                                    ( paint, effects ) =
-                                        Paint.startStroke (Coord.minus relativePositionToUi cursor) model.paint
-                                in
-                                ( { model | paint = paint, uiState = Ui.setFocus Nothing model.uiState }, effects )
+                                ( { model
+                                    | paint = Paint.startStroke (Coord.minus relativePositionToUi cursor) model.paint
+                                    , uiState = Ui.setFocus Nothing model.uiState
+                                  }
+                                , []
+                                )
 
                             ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
                                 ( { model
@@ -1000,9 +1000,6 @@ step event model =
 
         WebSocketsOpen ids ->
             webSocketInput (WebSocketsOpen ids) model
-
-        Started ->
-            ( model, Paint.writeAll model.paint )
 
         WebSocketOpened id headers ->
             webSocketInput (WebSocketOpened id headers) model
@@ -1737,11 +1734,7 @@ clickElement model id =
             webViewerClick uiId2 model
 
         Paint uiId2 ->
-            let
-                ( paint, effects ) =
-                    Paint.onClick uiId2 model.paint
-            in
-            ( { model | paint = paint }, effects )
+            ( { model | paint = Paint.onClick uiId2 model.paint }, [] )
 
         ScreenshotViewer uiId2 ->
             ( { model
@@ -3104,7 +3097,7 @@ dragScreenshot before after =
 {-| The mouse moved from where `before` has it to where `after` has it: paints along the
 way if a stroke is being drawn.
 -}
-paintStroke : Model -> Model -> ( Model, List Effect )
+paintStroke : Model -> Model -> Model
 paintStroke before after =
     case after.paint.stroke of
         Just _ ->
@@ -3112,16 +3105,16 @@ paintStroke before after =
                 display : Display
                 display =
                     displayOf PaintApp after
-
-                ( paint, effects ) =
+            in
+            { after
+                | paint =
                     Paint.strokeBy
                         (Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse))
                         after.paint
-            in
-            ( { after | paint = paint }, effects )
+            }
 
         Nothing ->
-            ( after, [] )
+            after
 
 
 {-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
@@ -3771,7 +3764,6 @@ persistConfig =
     , httpAnswered = httpAnswered
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     , webSocketsOpen = \ids -> GotInput (Ok (WebSocketsOpen ids))
-    , started = GotInput (Ok Started)
     , draw = draw
     }
 
@@ -3795,48 +3787,53 @@ draw msg model =
 
                 cursor =
                     cursorShape model uis
-            in
-            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
-            , [ Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
-              , Effect.Render
-                    (\() ->
-                        let
-                            found : { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
-                            found =
-                                findCount model (List.map (\part -> ( part.display, Ui.inFront part.windows )) parts)
-                        in
-                        List.map2
-                            (\part ( _, ui ) ->
-                                { display = part.display.id
-                                , triangles =
-                                    view
-                                        model
-                                        cursor
-                                        part.display
-                                        { ui = ui
-                                        , content = Ui.inFront part.windows
-                                        , bar = findBarAt model part.display found.count
-                                        , find =
-                                            { query = findText model
-                                            , selected =
-                                                case found.selected of
-                                                    Just ( displayId, match ) ->
-                                                        if displayId == part.display.id then
-                                                            Just ( match.at, match.index )
 
-                                                        else
-                                                            Nothing
+                scenes : List { display : Int, triangles : List (Triangle DevicePixels) }
+                scenes =
+                    let
+                        found : { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
+                        found =
+                            findCount model (List.map (\part -> ( part.display, Ui.inFront part.windows )) parts)
+                    in
+                    List.map2
+                        (\part ( _, ui ) ->
+                            { display = part.display.id
+                            , triangles =
+                                view
+                                    model
+                                    cursor
+                                    part.display
+                                    { ui = ui
+                                    , content = Ui.inFront part.windows
+                                    , bar = findBarAt model part.display found.count
+                                    , find =
+                                        { query = findText model
+                                        , selected =
+                                            case found.selected of
+                                                Just ( displayId, match ) ->
+                                                    if displayId == part.display.id then
+                                                        Just ( match.at, match.index )
 
-                                                    Nothing ->
+                                                    else
                                                         Nothing
-                                            }
+
+                                                Nothing ->
+                                                    Nothing
                                         }
-                                }
-                            )
-                            parts
-                            uis
-                    )
-              ]
+                                    }
+                            }
+                        )
+                        parts
+                        uis
+
+                -- The image chunks on screen, found in the image texture (or put there).
+                ( imageCache, placed, imageWrites ) =
+                    ImageCache.place model.imageCache (List.map .triangles scenes)
+            in
+            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis), imageCache = imageCache }
+            , Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
+                :: imageWrites
+                ++ [ Effect.Render (\() -> List.map2 (\scene triangles -> { scene | triangles = triangles }) scenes placed) ]
             )
 
         GotInput _ ->

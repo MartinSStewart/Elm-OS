@@ -671,8 +671,9 @@ isLazyKey m name =
 
 
 {-| Types that are never saved, and what they come back as: `Ui.lazy`'s keys (see
-`isLazyKey`), and Ui's `LazyCache`, last frame's lazy elements, which would be big and
-are only a cache. The rest of wire sees each as a type with one variant and nothing in
+`isLazyKey`), Ui's `LazyCache`, last frame's lazy elements, which would be big and
+are only a cache, and `ImageCache.ImageCache`, where image chunks are in the image
+texture, which is empty after a reboot. The rest of wire sees each as a type with one variant and nothing in
 it (`unsavedBody`), so it has a fixed shape.
 -}
 unsavedValue : Module -> String -> Maybe String
@@ -683,13 +684,16 @@ unsavedValue m name =
     else if unfreezeAny m.name == "Ui" && name == "LazyCache" then
         Just "noLazyCache"
 
+    else if unfreezeAny m.name == "ImageCache" && name == "ImageCache" then
+        Just "empty"
+
     else
         Nothing
 
 
 unsavedBody : String -> Body
 unsavedBody name =
-    if name == "LazyCache" then
+    if name == "LazyCache" || name == "ImageCache" then
         Custom [ ( "Empty", [] ) ]
 
     else

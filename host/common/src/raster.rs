@@ -16,10 +16,13 @@ fn edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (bx - ax) * (py - ay) - (by - ay) * (px - ax)
 }
 
-/// Atlas pixel `i` along one axis, wrapped into `start..start + len` if len isn't 0.
-fn wrap(i: i32, start: u16, len: u16) -> i32 {
+/// Texture pixel `i` along one axis, wrapped into `start..start + len` if len isn't 0
+/// (or clamped into it, with `Tri::CLAMP`).
+fn wrap(i: i32, start: u16, len: u16, clamp: bool) -> i32 {
     if len == 0 {
         i
+    } else if clamp {
+        i.clamp(start as i32, start as i32 + len as i32 - 1)
     } else {
         start as i32 + (i - start as i32).rem_euclid(len as i32)
     }
@@ -27,8 +30,8 @@ fn wrap(i: i32, start: u16, len: u16) -> i32 {
 
 /// The atlas pixel at u, v (wrapped into the triangle's tile, if it has one).
 fn sample(atlas: &[u8], tile: [u16; 4], u: f32, v: f32) -> u32 {
-    let x = wrap(u.floor() as i32, tile[0], tile[2]).clamp(0, ATLAS_W as i32 - 1) as usize;
-    let y = wrap(v.floor() as i32, tile[1], tile[3]).clamp(0, ATLAS_H as i32 - 1) as usize;
+    let x = wrap(u.floor() as i32, tile[0], tile[2], false).clamp(0, ATLAS_W as i32 - 1) as usize;
+    let y = wrap(v.floor() as i32, tile[1], tile[3], false).clamp(0, ATLAS_H as i32 - 1) as usize;
     atlas[y * ATLAS_W + x] as u32
 }
 
@@ -47,22 +50,22 @@ fn sample_linear(atlas: &[u8], tile: [u16; 4], u: f32, v: f32) -> u32 {
 
 /// The image texture's pixel at u, v (wrapped into the tile, if there is one), as
 /// red, green, blue, alpha.
-fn image_pixel(images: &[u8], tile: [u16; 4], u: f32, v: f32) -> [f32; 4] {
-    let x = wrap(u.floor() as i32, tile[0], tile[2]).clamp(0, IMAGES_W as i32 - 1) as usize;
-    let y = wrap(v.floor() as i32, tile[1], tile[3]).clamp(0, IMAGES_H as i32 - 1) as usize;
+fn image_pixel(images: &[u8], tile: [u16; 4], clamp: bool, u: f32, v: f32) -> [f32; 4] {
+    let x = wrap(u.floor() as i32, tile[0], tile[2], clamp).clamp(0, IMAGES_W as i32 - 1) as usize;
+    let y = wrap(v.floor() as i32, tile[1], tile[3], clamp).clamp(0, IMAGES_H as i32 - 1) as usize;
     let at = (y * IMAGES_W + x) * 4;
     [images[at] as f32, images[at + 1] as f32, images[at + 2] as f32, images[at + 3] as f32]
 }
 
 /// The image texture at u, v, by the nearest pixel or bilinear (as `sample_linear`).
-fn sample_image(images: &[u8], tile: [u16; 4], u: f32, v: f32, linear: bool) -> [f32; 4] {
+fn sample_image(images: &[u8], tile: [u16; 4], clamp: bool, u: f32, v: f32, linear: bool) -> [f32; 4] {
     if !linear {
-        return image_pixel(images, tile, u, v);
+        return image_pixel(images, tile, clamp, u, v);
     }
     let (u, v) = (u - 0.5, v - 0.5);
     let (x0, y0) = (u.floor(), v.floor());
     let (fx, fy) = (u - x0, v - y0);
-    let at = |dx: f32, dy: f32| image_pixel(images, tile, x0 + dx, y0 + dy);
+    let at = |dx: f32, dy: f32| image_pixel(images, tile, clamp, x0 + dx, y0 + dy);
     let (a, b, c, d) = (at(0.0, 0.0), at(1.0, 0.0), at(0.0, 1.0), at(1.0, 1.0));
     std::array::from_fn(|i| {
         let top = a[i] * (1.0 - fx) + b[i] * fx;
@@ -141,7 +144,7 @@ pub fn fill_triangle_rows(back: &mut [u32], stride: usize, w: u32, y0: u32, y1: 
             if image {
                 let u = (w0 * p0[2] + w1 * p1[2] + w2 * p2[2]) * inv;
                 let v = (w0 * p0[3] + w1 * p1[3] + w2 * p2[3]) * inv;
-                let [ir, ig, ib, ia] = sample_image(textures.images, tile, u, v, linear);
+                let [ir, ig, ib, ia] = sample_image(textures.images, tile, t.flags & Tri::CLAMP != 0, u, v, linear);
                 // The triangle's colour times the image's, blended in by their alpha.
                 let k = a as f32 * ia / 65025.0;
                 if k <= 0.0 {

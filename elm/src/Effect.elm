@@ -116,9 +116,8 @@ type Effect
     | TlsClose String
       -- RGBA pixels (4 bytes each, red first, not premultiplied) into the image
       -- texture (2048 x 2048, see Sprite.InImage), `width` to a row, as many rows as
-      -- `pixels` holds, with the top left one at left, top. It is empty at every boot,
-      -- so whatever an app keeps there is written again when the program starts (an
-      -- app's `started`).
+      -- `pixels` holds, with the top left one at left, top. It is empty at every boot.
+      -- ImageCache.elm decides what goes where (apps draw images with Sprite.image).
     | WriteImage { left : Int, top : Int, width : Int, pixels : Bytes }
 
 
