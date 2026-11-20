@@ -13,6 +13,7 @@ app keeps such types in `<App>/Types.elm`, not in `<App>.elm`.
 
 import AsciiCollab.Types
 import Calculator.Types
+import Code.Types
 import Email.Types
 import HackerNews.Types
 import Network.Types
@@ -38,10 +39,6 @@ type UiId
     | EditorInput
     | EditorWindow
     | CloseEditorButton
-    | EditorOpenButton
-    | EditorModulesViewport
-      -- A module in the editor's Open list, by its name.
-    | EditorModuleButton String
     | DebugButton
     | CloseDebugButton
     | NetworkAppButton
@@ -57,6 +54,7 @@ type UiId
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
     | Paint Paint.Types.UiId
+    | Code Code.Types.UiId
     | News News.Types.UiId
     | HackerNews HackerNews.Types.UiId
     | AsciiCollab AsciiCollab.Types.UiId

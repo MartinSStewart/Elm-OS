@@ -1,6 +1,12 @@
 module Color exposing
     ( Color
     , black
+    , codeCommentColor
+    , codeKeywordColor
+    , codeNumberColor
+    , codeOperatorColor
+    , codeStringColor
+    , codeTypeColor
     , dangerColor
     , dimTextColor
     , dotGridColor
@@ -232,3 +238,39 @@ paintPalette =
     , rgb255 240 130 180
     , rgb255 120 75 40
     ]
+
+
+-- Elm code in the Code app (ElmSyntax.elm), on fillColor3 or focusedInputColor. Names
+-- and everything else are textColor.
+
+
+codeKeywordColor : Color
+codeKeywordColor =
+    rgb255 230 140 200
+
+
+{-| Capitalised names: types, constructors and modules.
+-}
+codeTypeColor : Color
+codeTypeColor =
+    rgb255 120 200 230
+
+
+codeStringColor : Color
+codeStringColor =
+    rgb255 160 210 120
+
+
+codeNumberColor : Color
+codeNumberColor =
+    rgb255 240 180 100
+
+
+codeCommentColor : Color
+codeCommentColor =
+    rgb255 140 132 126
+
+
+codeOperatorColor : Color
+codeOperatorColor =
+    rgb255 220 200 150

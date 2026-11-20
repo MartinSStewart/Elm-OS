@@ -44,6 +44,8 @@ import Network.Types
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
+import Code
+import Code.Types
 import Paint
 import Paint.Types
 import Persist
@@ -51,7 +53,6 @@ import Quantity exposing (Quantity)
 import ScreenshotViewer
 import ScreenshotViewer.Types
 import SeqDict exposing (SeqDict)
-import SourceCode
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -356,9 +357,7 @@ type alias Model =
     , paint : Paint.Model
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
-
-    -- The editor's Open button was pressed: the list of modules shows instead of the text.
-    , editorPicking : Bool
+    , code : Code.Model
     , debugOpen : Bool
     , networkOpen : Bool
     , weatherOpen : Bool
@@ -408,6 +407,7 @@ type App
     | TicTacToeApp
     | PaintApp
     | EditorApp
+    | CodeApp
     | ScreenshotViewerApp
     | DebugApp
     | NetworkApp
@@ -418,7 +418,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, ScreenshotViewerApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp ]
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -469,7 +469,7 @@ init =
     , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
-    , editorPicking = False
+    , code = Code.init
     , debugOpen = True
     , networkOpen = True
     , weatherOpen = True
@@ -936,7 +936,14 @@ step event model =
                 typeKey key model
 
             else if model.uiState.focus == Just EditorInput then
-                ( editorKey key model, [] )
+                ( multilineKey EditorInput (editorStyle model) key model, [] )
+
+            else if model.uiState.focus == Just (Code Code.Types.Input) && model.code.isOpen then
+                if model.ctrl && key == Keyboard.Character "s" then
+                    ( { model | code = Code.save (codeText model) model.code }, [] )
+
+                else
+                    ( multilineKey (Code Code.Types.Input) (codeStyle model) key model, [] )
 
             else if model.uiState.focus == Just (WebViewer WebViewer.Types.UrlInput) && model.webViewer.isOpen then
                 webViewerKey key model
@@ -1198,6 +1205,35 @@ appButton id =
         EditorButton ->
             Just EditorApp
 
+        Code codeId ->
+            case codeId of
+                Code.Types.OpenButton ->
+                    Just CodeApp
+
+                Code.Types.Window ->
+                    Nothing
+
+                Code.Types.Input ->
+                    Nothing
+
+                Code.Types.CloseButton ->
+                    Nothing
+
+                Code.Types.ModulesButton ->
+                    Nothing
+
+                Code.Types.ModulesViewport ->
+                    Nothing
+
+                Code.Types.ModuleButton _ ->
+                    Nothing
+
+                Code.Types.SaveButton ->
+                    Nothing
+
+                Code.Types.RevertButton ->
+                    Nothing
+
         ScreenshotViewer id2 ->
             case id2 of
                 ScreenshotViewer.Types.OpenButton ->
@@ -1331,14 +1367,8 @@ appButton id =
         CloseEditorButton ->
             Nothing
 
-        EditorOpenButton ->
-            Nothing
 
-        EditorModulesViewport ->
-            Nothing
 
-        EditorModuleButton _ ->
-            Nothing
 
         News _ ->
             Nothing
@@ -1376,6 +1406,9 @@ appIsOpen app model =
 
         EditorApp ->
             model.editorOpen
+
+        CodeApp ->
+            model.code.isOpen
 
         ScreenshotViewerApp ->
             model.screenshotViewer.isOpen
@@ -1441,7 +1474,6 @@ clickElement model id =
         EditorButton ->
             ( { model
                 | editorOpen = not model.editorOpen
-                , editorPicking = False
                 , uiState =
                     Ui.setFocus
                         (if model.editorOpen then
@@ -1459,37 +1491,18 @@ clickElement model id =
             ( model, [] )
 
         EditorWindow ->
-            -- A click on the window around the text still types into it (unless the
-            -- list of modules is showing instead).
-            if model.editorPicking then
-                ( model, [] )
-
-            else
-                ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
+            -- A click on the window around the text still types into it.
+            ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
 
         CloseEditorButton ->
-            ( { model | editorOpen = False, editorPicking = False }, [] )
+            ( { model | editorOpen = False }, [] )
 
-        EditorOpenButton ->
-            ( { model | editorPicking = not model.editorPicking, uiState = Ui.setFocus Nothing model.uiState }, [] )
-
-        EditorModulesViewport ->
-            ( model, [] )
-
-        EditorModuleButton name ->
-            case SeqDict.get name SourceCode.sourceCode of
-                Just source ->
-                    ( { model
-                        | editorPicking = False
-                        , uiState =
-                            Ui.insertElement EditorInput (TextInputMultilineState (TextInputMultiline.withText source)) model.uiState
-                                |> Ui.setFocus (Just EditorInput)
-                      }
-                    , []
-                    )
-
-                Nothing ->
-                    ( model, [] )
+        Code codeId ->
+            let
+                ( code, uiState ) =
+                    Code.onClick codeId (codeText model) model.uiState model.code
+            in
+            ( { model | code = code, uiState = uiState }, [] )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
@@ -2417,6 +2430,33 @@ typeKey key model =
             )
 
 
+{-| Selects in the text box with many lines `id` while the mouse drags.
+-}
+dragSelectMultiline : UiId -> TextInputMultiline.Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectMultiline id style mouse position model =
+    { model
+        | uiState =
+            Ui.updateElement
+                id
+                (\maybe ->
+                    TextInputMultiline.mouseDownMove
+                        style
+                        mouse
+                        position
+                        (case maybe of
+                            Just (TextInputMultilineState editor) ->
+                                editor
+
+                            _ ->
+                                TextInputMultiline.init
+                        )
+                        |> TextInputMultilineState
+                        |> Just
+                )
+                model.uiState
+    }
+
+
 {-| The mouse moved with its button down after going down in the text box `focus`, at
 `position` on its display: select from there to the mouse (`mouse`, in that display's
 UI pixels).
@@ -2449,27 +2489,13 @@ dragSelect focus mouse position model =
             }
 
         EditorInput ->
-            { model
-                | uiState =
-                    Ui.updateElement
-                        EditorInput
-                        (\maybe ->
-                            TextInputMultiline.mouseDownMove
-                                (editorStyle model)
-                                mouse
-                                position
-                                (case maybe of
-                                    Just (TextInputMultilineState editor) ->
-                                        editor
+            dragSelectMultiline EditorInput (editorStyle model) mouse position model
 
-                                    _ ->
-                                        TextInputMultiline.init
-                                )
-                                |> TextInputMultilineState
-                                |> Just
-                        )
-                        model.uiState
-            }
+        Code Code.Types.Input ->
+            dragSelectMultiline (Code Code.Types.Input) (codeStyle model) mouse position model
+
+        Code _ ->
+            model
 
         Network Network.Types.RefreshButton ->
             model
@@ -2534,14 +2560,8 @@ dragSelect focus mouse position model =
         CloseEditorButton ->
             model
 
-        EditorOpenButton ->
-            model
 
-        EditorModulesViewport ->
-            model
 
-        EditorModuleButton _ ->
-            model
 
         DebugButton ->
             model
@@ -2604,10 +2624,11 @@ dragSelect focus mouse position model =
             model
 
 
-{-| A key for the text editor. Its copies go in the same clipboard as the password box's.
+{-| A key for a text box with many lines (the text editor's or the Code app's), `id`.
+Its copies go in the same clipboard as the password box's.
 -}
-editorKey : Key -> Model -> Model
-editorKey key model =
+multilineKey : UiId -> TextInputMultiline.Style -> Key -> Model -> Model
+multilineKey id style key model =
     case ( model.ctrl, key ) of
         ( False, Keyboard.Escape ) ->
             { model | uiState = Ui.setFocus Nothing model.uiState }
@@ -2616,10 +2637,10 @@ editorKey key model =
             { model
                 | uiState =
                     Ui.updateElement
-                        EditorInput
+                        id
                         (\maybe ->
                             TextInputMultiline.paste
-                                (editorStyle model)
+                                style
                                 model.clipboard
                                 (case maybe of
                                     Just (TextInputMultilineState editor) ->
@@ -2638,14 +2659,14 @@ editorKey key model =
             let
                 ( editor, outMsg ) =
                     TextInputMultiline.keyMsg
-                        (editorStyle model)
+                        style
                         model.ctrl
                         model.shift
                         key
-                        (Ui.getTextInputMultiline EditorInput model.uiState)
+                        (Ui.getTextInputMultiline id model.uiState)
             in
             { model
-                | uiState = Ui.insertElement EditorInput (TextInputMultilineState editor) model.uiState
+                | uiState = Ui.insertElement id (TextInputMultilineState editor) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -3381,6 +3402,9 @@ appLimits app =
             , max = Coord.xy (Quantity.unwrap (em 60) + 16) 100000
             }
 
+        CodeApp ->
+            Code.appSize
+
         DebugApp ->
             debugSize
 
@@ -3493,6 +3517,9 @@ appView app size model =
 
         EditorApp ->
             editorWindow model
+
+        CodeApp ->
+            Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) model.code
 
         DebugApp ->
             overlay model
@@ -3988,6 +4015,9 @@ appName app =
         EditorApp ->
             "Editor"
 
+        CodeApp ->
+            "Code"
+
         ScreenshotViewerApp ->
             "ScreenshotViewer"
 
@@ -4194,6 +4224,10 @@ toolbar model display =
                         (openHere EditorApp)
                         (Ui.text "Text editor")
                     , Ui.selectableButton
+                        { id = Code Code.Types.OpenButton, padding = small }
+                        (openHere CodeApp)
+                        (Ui.text "Code")
+                    , Ui.selectableButton
                         { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
                         (openHere ScreenshotViewerApp)
                         (Ui.text "Screenshots")
@@ -4332,7 +4366,25 @@ editorStyle model =
     , fontSize = bodySize
     , width = Units.uiPixels (windowWidth - 16)
     , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
+    , syntax = TextInputMultiline.PlainText
     }
+
+
+-- CODE
+
+
+{-| The Code app's text box, as big as its window.
+-}
+codeStyle : Model -> TextInputMultiline.Style
+codeStyle model =
+    Code.style (appUiSize CodeApp model)
+
+
+{-| The text in the Code app's text box.
+-}
+codeText : Model -> String
+codeText model =
+    (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState).input.current.text
 
 
 {-| The editor window's height besides its lines of text: the padding, the title, the
@@ -4389,30 +4441,11 @@ editorWindow model =
             6
             [ Ui.leftAndRight style.width
                 (heading "Text editor")
-                (Ui.row
-                    6
-                    [ Ui.button { id = EditorOpenButton, padding = Ui.paddingXY 6 3 } (t "Open")
-                    , Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close")
-                    ]
-                )
-            , if model.editorPicking then
-                Ui.viewport
-                    { id = EditorModulesViewport
-                    , viewportHeight = Units.uiPixels (Coord.yRaw (TextInputMultiline.size style))
-                    }
-                    (Ui.column
-                        4
-                        (List.map
-                            (\name -> Ui.button { id = EditorModuleButton name, padding = Ui.paddingXY 6 3 } (t name))
-                            (SeqDict.keys SourceCode.sourceCode)
-                        )
-                    )
-
-              else
-                Ui.textInputMultiline
-                    { id = EditorInput
-                    , style = style
-                    }
+                (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+            , Ui.textInputMultiline
+                { id = EditorInput
+                , style = style
+                }
             , Ui.leftAndRight style.width
                 (t status)
                 (Ui.customText bodySize
