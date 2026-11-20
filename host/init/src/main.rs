@@ -30,6 +30,7 @@ macro_rules! log {
     };
 }
 
+mod build;
 mod display;
 mod effects;
 mod elm;

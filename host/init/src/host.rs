@@ -432,6 +432,7 @@ impl Host {
                         }
                     }
                 }
+                Effect::Build { modules } => crate::build::request(modules),
             }
         }
         if cursor_dirty {

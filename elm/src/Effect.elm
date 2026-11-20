@@ -119,6 +119,11 @@ type Effect
       -- `pixels` holds, with the top left one at left, top. It is empty at every boot.
       -- ImageCache.elm decides what goes where (apps draw images with Sprite.image).
     | WriteImage { left : Int, top : Int, width : Int, pixels : Bytes }
+      -- Builds Elm OS again from these modules (each its path under elm/src and its
+      -- text) and switches to the new build (host/init/src/build.rs), which carries
+      -- the Model over. Refused unless the Model's types stay the same. Answered on
+      -- `fromHost` with build messages as it goes, then switching.
+    | Build (List ( String, String ))
 
 
 type PowerAction
@@ -350,3 +355,6 @@ encode effect =
 
         WriteImage { left, top, width, pixels } ->
             Postcard.variant 25 [ Postcard.unsigned left, Postcard.unsigned top, Postcard.unsigned width, Postcard.bytes pixels ]
+
+        Build modules ->
+            Postcard.variant 26 [ Postcard.list (\( path, text ) -> BE.sequence [ Postcard.string path, Postcard.string text ]) modules ]

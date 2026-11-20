@@ -118,11 +118,13 @@ Run `make review` (elm-review, needs Node.js) before committing Elm changes;
 
 ## Boot a real PC from a USB stick
 
-`make usb` builds `build/elmos-usb.img`, a UEFI image of about 70 MB: the boot partition, then
-a 32 MB ext4 partition named "Elm OS data" where Elm OS saves its state. The kernel is its own
+`make usb` builds `build/elmos-usb.img`, a UEFI image of about 1 GB: the boot partition, then
+a 256 MB ext4 partition named "Elm OS data" where Elm OS saves its state, then a read-only
+partition named "Elm OS tools" (about 600 MB) holding eco and its libraries, so the Code app
+can build Elm OS again on the computer itself (host/init/src/build.rs). The kernel is its own
 EFI program with the initramfs built in, so there is no bootloader, and Elm OS runs entirely
-from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat`, `mtools` and
-`mkfs.ext4`. Writing the image again erases what was saved on the stick.
+from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat`, `mtools`,
+`mkfs.ext4` and `patchelf`. Writing the image again erases what was saved on the stick.
 `make test-usb` boots the image in QEMU under UEFI (needs `ovmf`) as a check.
 
 1. **Write the stick (this erases it).** Run `make usb-write` to list USB disks, then

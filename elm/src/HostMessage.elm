@@ -12,6 +12,7 @@ program (Main.persistConfig.fromHost).
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
+import Code.Types
 import Display exposing (Display)
 import Network
 import Network.Ipv4 as Ipv4 exposing (Ipv4)
@@ -104,6 +105,8 @@ type ToElm
       -- The fingers lifted while scrolling: the content keeps going at this many UI
       -- pixels a second (positive is down), slowing down. 0 stops any glide.
     | ScrollMomentum Float
+      -- How a build asked for with Effect.Build is going.
+    | Build Code.Types.BuildStatus
 
 
 type HttpFailure
@@ -275,6 +278,29 @@ decoder =
 
                     35 ->
                         BD.map2 TlsClosed P.decodeString P.decodeString
+
+                    36 ->
+                        BD.map Build buildStatus
+
+                    _ ->
+                        BD.fail
+            )
+
+
+buildStatus : BD.Decoder Code.Types.BuildStatus
+buildStatus =
+    P.decodeUnsigned
+        |> BD.andThen
+            (\index ->
+                case index of
+                    0 ->
+                        BD.map Code.Types.BuildRunning P.decodeString
+
+                    1 ->
+                        BD.map2 Code.Types.BuildFailed P.decodeString P.decodeString
+
+                    2 ->
+                        BD.map Code.Types.Built P.decodeString
 
                     _ ->
                         BD.fail

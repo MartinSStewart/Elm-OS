@@ -124,7 +124,8 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::WebSocketClosed { .. }
         | ToElm::TlsOpened { .. }
         | ToElm::TlsData { .. }
-        | ToElm::TlsClosed { .. } => return None,
+        | ToElm::TlsClosed { .. }
+        | ToElm::Build { .. } => return None,
     })
 }
 

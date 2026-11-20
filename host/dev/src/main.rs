@@ -497,6 +497,14 @@ impl Runner {
                 }
             }
             Effect::ReplayLog { after } => elm::replay_log(after),
+            // Building happens on Elm OS itself (host/init/src/build.rs), with the
+            // tools partition; here `make dev` rebuilds when elm/src changes instead.
+            Effect::Build { .. } => elm::send(&ToElm::Build {
+                status: protocol::BuildStatus::Failed {
+                    step: "Starting".into(),
+                    output: "The desktop runner doesn't build from the Code app: edit elm/src instead, and it rebuilds by itself.".into(),
+                },
+            }),
         }
     }
 

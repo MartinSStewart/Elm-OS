@@ -72,6 +72,7 @@ effects =
     , Effect.TlsSend { id = "email", data = byteList [ 97, 49, 32, 76, 79, 71, 79, 85, 84, 13, 10 ] }
     , Effect.TlsClose "email"
     , Effect.WriteImage { left = 3, top = 300, width = 2, pixels = byteList [ 255, 0, 0, 255, 0, 0, 255, 128 ] }
+    , Effect.Build [ ( "Main.elm", "module Main exposing (main)\n" ), ( "Code/Types.elm", "" ) ]
     , Effect.Render
         (\() ->
             [ { display = 33, triangles = Sprite.atlasRectangle Color.white (Coord.xy 0 0) (Coord.xy 10 10) ( 4, 3588 ) }

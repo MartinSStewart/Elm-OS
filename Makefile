@@ -14,6 +14,7 @@
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make test-persist  boot twice with a power cut between: the Model must come back
 #   make test-switch   switch to another build of the Elm program without restarting
+#   make test-build    build the Elm program again on Elm OS (Code app) and switch to it
 #   make test-update   follow the deployed branch, against a stand-in for GitHub
 #   make measure-frames  how long Elm takes to answer a frame, in QEMU (MEASURE_GPU=1 for virgl)
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
@@ -131,7 +132,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -463,21 +464,44 @@ $(BUILD)/libelmos_link.a: $(HOST_SRC) | check-deps
 # -u keeps its constructor, which nothing else refers to). eco's runtime still refers
 # to libcurl for elm/http, which we don't use: host/link/src/no_curl.rs stands in for
 # it, so neither libcurl nor OpenSSL is linked.
-$(BUILD)/elm: $(BUILD)/libelmos_link.a $(BUILD)/elm.o
-	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
+#
+# ELM_LINK_ARGS(output, elm.o, libelmos_link.a): ld.lld's arguments, which the tools
+# partition carries too (link-args, for host/init/src/build.rs).
+ELM_LINK_ARGS = --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $(1) \
 	  -u elmos_link_init \
 	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
 	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
-	  $(BUILD)/elm.o \
+	  $(2) \
 	  --start-group \
 	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
 	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
 	    $(PROJECT_LIBS_REST) \
-	    $(BUILD)/libelmos_link.a \
+	    $(3) \
 	  --end-group \
 	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libzip.a $(RT)/libz.a \
 	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
 	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
+
+$(BUILD)/elm: $(BUILD)/libelmos_link.a $(BUILD)/elm.o
+	$(RT)/ld.lld $(call ELM_LINK_ARGS,$@,$(BUILD)/elm.o,$(BUILD)/libelmos_link.a)
+
+# ---- the tools partition: eco and what else building the Elm program again on the
+# computer takes (scripts/make-tools-fs.sh, host/init/src/build.rs). On the USB stick,
+# and for QEMU as a disk of its own, build/tools-qemu.img.
+TOOLS_ECO_ROOT := $(if $(filter 1,$(ECO_PATCHED)),$(ECO_PATCHED_DIR),$(ECO_DIR))
+
+$(BUILD)/link-args: $(BUILD)/eco-setting Makefile
+	@mkdir -p $(BUILD)
+	printf '%s\n' $(subst $(RT),/tools/eco/lib/eco-runtime,$(call ELM_LINK_ARGS,@OUT@,@ELM_O@,/tools/libelmos_link.a)) > $@
+
+# After elm.o, so that every package elm.json names is downloaded and compiled.
+$(BUILD)/tools.fs: $(BUILD)/elm.o $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args elm/elm.json \
+                   scripts/make-tools-fs.sh $(BUILD)/source-date
+	@echo "Making the tools partition (eco and its libraries, about 600 MB)" $(SAY)
+	scripts/make-tools-fs.sh $(TOOLS_ECO_ROOT) elm/elm.json $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args $@ > /dev/null
+
+$(BUILD)/tools-qemu.img: $(BUILD)/tools.fs scripts/make-tools-image.sh
+	scripts/make-tools-image.sh $< $@
 
 # ---- the GPU renderer: a small dynamically linked program, because Mesa's
 # drivers are shared libraries. Mesa and its libraries come from Alpine Linux
@@ -575,6 +599,7 @@ $(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-li
 	cp $(BUILD)/commit $(BUILD)/rootfs/etc/elmos/commit
 	cp $(BUILD)/host-version $(BUILD)/rootfs/etc/elmos/host-version
 	cp $(BUILD)/model-version $(BUILD)/rootfs/etc/elmos/model-version
+	cp $(BUILD)/wire/src/model-shape $(BUILD)/rootfs/etc/elmos/model-shape
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
@@ -654,8 +679,8 @@ usb: check-migration
 	+$(MAKE) $(BUILD)/elmos-usb.img
 	@echo "Built $(BUILD)/elmos-usb.img" $(SAY)
 
-$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
-	scripts/make-usb-image.sh $< $@
+$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI $(BUILD)/tools.fs scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
+	scripts/make-usb-image.sh $< $(BUILD)/tools.fs $@
 
 check-usb-deps:
 	@scripts/check-deps.sh usb
@@ -675,8 +700,9 @@ test-usb: usb | check-run-deps
 
 # The data disk for QEMU. Made once: it holds what Elm OS saved, so it isn't rebuilt
 # when the script changes. Delete it to start afresh.
+# 256 MiB, like the USB stick's: room for builds made with the Code app (build.rs).
 $(BUILD)/data-qemu.img: | check-usb-deps
-	scripts/make-data-image.sh $@
+	scripts/make-data-image.sh $@ 256
 
 # An empty one for the tests, which copy it.
 $(BUILD)/data-empty.img: scripts/make-data-image.sh scripts/make-data-fs.sh | check-usb-deps
@@ -710,6 +736,11 @@ test-persist: all $(BUILD)/data-empty.img | check-run-deps
 # from one that fails (see the script).
 test-switch: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-switch.py
+
+# Build Elm OS again on Elm OS from the Code app's edits, and switch to it (slow
+# without KVM: eco runs on QEMU's emulated CPU).
+test-build: all $(BUILD)/tools-qemu.img | check-run-deps check-usb-deps
+	python3 scripts/test-build.py
 
 # The error screen: a crash loop, a hang, and panics in /init (see the script).
 test-errors: all $(BUILD)/data-empty.img | check-run-deps
@@ -890,5 +921,5 @@ MAKEFLAGS += -s --no-print-directory
 SAY = >>"$$ELMOS_SAY"
 SHELL := $(CURDIR)/tools/quiet-sh
 eco migration refresh docker run run-cpu run-usb test test-gpu test-usb test-displays test-persist \
-test-switch test-errors test-update measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
+test-switch test-build test-errors test-update measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
 endif

@@ -202,6 +202,11 @@ pub enum Effect {
         #[serde(with = "serde_bytes")]
         pixels: Vec<u8>,
     },
+    /// Compiles these sources into a new build of the Elm program and switches to it
+    /// (host/init/src/build.rs): every module, each as its path under elm/src (such as
+    /// "Code/Types.elm") and its text. Refused unless the Model's types are the running
+    /// build's. Answered with `ToElm::Build`s as it goes.
+    Build { modules: Vec<(String, String)> },
 }
 
 /// A mouse cursor's picture, `width` x `height` device pixels of the texture atlas: the
@@ -365,6 +370,19 @@ pub enum ToElm {
     },
     /// The TLS connection has closed, or couldn't open, and why. Its id can be used again.
     TlsClosed { id: String, reason: String },
+    /// How the build that `Effect::Build` asked for is going.
+    Build { status: BuildStatus },
+}
+
+/// A build made on the computer (`Effect::Build`): the step it is on, why it stopped
+/// (the step and what the tools said), or that it worked and the host is switching to
+/// it, which `ToElm::Switching` follows.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum BuildStatus {
+    Running { step: String },
+    Failed { step: String, output: String },
+    Built { build: String },
 }
 
 /// Whether the host writes this message in the log (on the data disk) before sending
@@ -531,6 +549,7 @@ pub fn effect_name(effect: &Effect) -> &'static str {
         Effect::TlsSend { .. } => "TlsSend",
         Effect::TlsClose { .. } => "TlsClose",
         Effect::WriteImage { .. } => "WriteImage",
+        Effect::Build { .. } => "Build",
     }
 }
 
@@ -600,9 +619,10 @@ mod tests {
             Effect::TlsSend { .. } => "tlsSend",
             Effect::TlsClose { .. } => "tlsClose",
             Effect::WriteImage { .. } => "writeImage",
+            Effect::Build { .. } => "build",
         }
     }
-    const EFFECT_TAGS: usize = 26;
+    const EFFECT_TAGS: usize = 27;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -642,9 +662,10 @@ mod tests {
             ToElm::TlsOpened { .. } => "tlsOpened",
             ToElm::TlsData { .. } => "tlsData",
             ToElm::TlsClosed { .. } => "tlsClosed",
+            ToElm::Build { .. } => "build",
         }
     }
-    const TO_ELM_TAGS: usize = 36;
+    const TO_ELM_TAGS: usize = 37;
 
     #[test]
     fn reads_the_render_example() {

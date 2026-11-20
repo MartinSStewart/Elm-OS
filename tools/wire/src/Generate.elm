@@ -625,9 +625,24 @@ generateWith options modules modelKey msgKey configKey =
                             ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
                                  , source = entryModule options configKey modelKey msgKey shapes
                                  }
+                               , { path = "model-shape", source = modelShapeFile shapes }
                                ]
                     , warnings = warnings
                     }
+
+
+{-| The text of `model-shape`, next to the generated modules: the version of the Model
+this build saves (a draft's is the one after the newest frozen version) and the shape of
+its types, one per line. Elm OS keeps it with each build (/etc/elmos/model-shape), so
+a build made on the device (host/init/src/build.rs) can be refused when its Model isn't
+of the same types as the running one's.
+-}
+modelShapeFile : { a | model : String, versions : List ( Int, String ) } -> String
+modelShapeFile shapes =
+    String.fromInt (List.map Tuple.first shapes.versions |> List.maximum |> Maybe.withDefault 0)
+        ++ "\n"
+        ++ shapes.model
+        ++ "\n"
 
 
 allDefs : Dict String Module -> Dict Key Def

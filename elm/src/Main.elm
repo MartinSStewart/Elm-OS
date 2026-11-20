@@ -111,6 +111,8 @@ type Input
     | TlsOpened String
     | TlsData String Bytes
     | TlsClosed String String
+      -- How a build of Elm OS made here is going (the Code app's Build button).
+    | BuildUpdate Code.Types.BuildStatus
       -- Random bytes in hex, for AsciiCollab's client id.
     | RandomBytes (Maybe String)
       -- The kernel's command line (/proc/cmdline), read at start: ELMOS_TEST=1 turns on
@@ -296,6 +298,9 @@ toInput message =
 
         HostMessage.TlsClosed id reason ->
             Ok (TlsClosed id reason)
+
+        HostMessage.Build status ->
+            Ok (BuildUpdate status)
 
 
 {-| The host sends -1 for a time it doesn't know.
@@ -1028,6 +1033,9 @@ step event model =
         TlsClosed id reason ->
             ( { model | email = Email.tlsClosed id reason model.email }, [] )
 
+        BuildUpdate status ->
+            ( { model | code = Code.buildUpdate status model.code }, [] )
+
         RandomBytes hex ->
             AsciiCollab.gotRandomBytes hex model.asciiCollab |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
@@ -1232,6 +1240,15 @@ appButton id =
                     Nothing
 
                 Code.Types.RevertButton ->
+                    Nothing
+
+                Code.Types.BuildButton ->
+                    Nothing
+
+                Code.Types.ErrorsCloseButton ->
+                    Nothing
+
+                Code.Types.ErrorsViewport ->
                     Nothing
 
         ScreenshotViewer id2 ->
@@ -1499,10 +1516,10 @@ clickElement model id =
 
         Code codeId ->
             let
-                ( code, uiState ) =
+                ( code, uiState, effects ) =
                     Code.onClick codeId (codeText model) model.uiState model.code
             in
-            ( { model | code = code, uiState = uiState }, [] )
+            ( { model | code = code, uiState = uiState }, effects )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
@@ -3935,6 +3952,9 @@ the place `buttons` gives.
     that can be seen, in device pixels:
     [{"label": ..., "textBox": false, "focused": false, "x": ..., "y": ...}, ...] (Ui.buttons).
   - editor: the text editor's text. calculator: what its display shows.
+  - code: the Code app's module, the modules saved with changes, and how the last
+    build went: {"module": ..., "edited": [...], "build": "running Linking"}
+    ("failed <step>", "built <name>", "" before any).
   - wifi: {"state": ..., "ssid": ..., "ip": ...}. weather: the place the forecast is for,
     "" until there is one.
   - notice: what the notice in the bottom right corner says, "" when there is none.
@@ -3976,6 +3996,7 @@ testFacts model uis =
         )
     , json "editor" (E.string (Ui.getTextInputMultiline EditorInput model.uiState).input.current.text)
     , json "calculator" (E.string (Calculator.display model.calculator))
+    , json "code" (Code.testFact model.code)
     , json "wifi"
         (E.object
             [ ( "state"

@@ -320,9 +320,10 @@ applyEdits edits source =
 
 
 {-| The text of elm/src/SourceCode.elm with every module's source in it: each path
-(relative to the source directory) with its file's text. Written for the text
-editor's Open button. Left out: SourceCode itself (it would hold itself) and the
-frozen modules under Evergreen/ (old copies, not code anybody edits).
+(relative to the source directory) with its file's text, for the Code app, which
+shows them and sends them all to the host to build Elm OS again on the computer
+(host/init/src/build.rs). The frozen modules under Evergreen/ are in it for that build.
+Left out: SourceCode itself (it would hold itself; the build writes the stub).
 
 Each module is a single line, so the generated file's line numbers don't mean much.
 
@@ -331,7 +332,7 @@ sourceCodeModule : List ( String, String ) -> String
 sourceCodeModule files =
     let
         wanted ( path, _ ) =
-            path /= "SourceCode.elm" && not (String.startsWith "Evergreen/" path)
+            path /= "SourceCode.elm"
 
         entry prefix ( path, source ) =
             "        " ++ prefix ++ "( " ++ stringLiteral (moduleNameOf path) ++ ", " ++ stringLiteral source ++ " )"
