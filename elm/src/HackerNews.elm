@@ -9,11 +9,11 @@ module HackerNews exposing
     , httpRequestIdToString
     , init
     , isExternalLink
-    , maxWindowWidth
     , onClick
     , postIdToString
     , stringToHttpRequestId
     , view
+    , windowWidth
     )
 
 {-| The Hacker News app: the front page's posts, and a page of a post's comments.
@@ -31,7 +31,7 @@ import Effect
 import HackerNews.Types exposing (Comment(..), Post, PostId(..), Span)
 import Hex
 import Html.Parser
-import Quantity exposing (Quantity)
+import Quantity
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
@@ -729,23 +729,11 @@ titleSpacing =
     8
 
 
-{-| How wide the window's content is in a window this big (UI pixels).
+{-| How wide the window is (UI pixels). Everything inside it is as wide as the room it's given.
 -}
-pageWidth : Coord UiPixels -> Int
-pageWidth windowSize =
-    min maxPageWidth (Coord.xRaw windowSize - 2 * windowPadding - 16)
-
-
-maxPageWidth : Int
-maxPageWidth =
-    900
-
-
-{-| The window is no wider than this (UI pixels), however much room there is.
--}
-maxWindowWidth : Int
-maxWindowWidth =
-    maxPageWidth + 2 * windowPadding + 16
+windowWidth : Int
+windowWidth =
+    1000
 
 
 {-| How far a reply is indented from the comment it replies to.
@@ -771,99 +759,78 @@ toggleSpacing =
 -}
 view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
-    Ui.el
+    Ui.fillEl
         { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
         (case model.page of
             PostsPage ->
                 case model.data of
                     NotLoading ->
-                        Ui.empty
+                        Ui.fixed Ui.empty
 
                     Loading maybe ->
                         case maybe of
                             Just data ->
-                                postsView lazyCache windowSize data
+                                postsView lazyCache data
 
                             Nothing ->
-                                Ui.text "Loading..."
+                                Ui.fixed (Ui.text "Loading...")
 
                     Loaded data ->
-                        postsView lazyCache windowSize data
+                        postsView lazyCache data
 
                     LoadFailed httpError ->
-                        Ui.text (Effect.httpErrorToString httpError)
+                        Ui.fixed (Ui.text (Effect.httpErrorToString httpError))
 
             CommentsPage id title ->
                 commentsView
                     lazyCache
-                    windowSize
                     id
                     title
                     (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
+        |> Ui.layout windowSize
 
 
-postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
-postsView lazyCache windowSize data =
-    let
-        width : Int
-        width =
-            pageWidth windowSize
-
-        title : Element id
-        title =
-            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
-    in
-    Ui.column
+postsView : Ui.LazyCache UiId -> List Post -> Ui.Flexible UiId
+postsView lazyCache data =
+    Ui.fillColumn
         titleSpacing
-        [ title
-        , Ui.column
-            0
-            (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
+        [ Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
+            |> Ui.fixed
+        , Ui.flexible
+            (\room ->
+                Ui.column
+                    0
+                    (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView (Quantity.unwrap room.width) index post) data)
+            )
+            |> Ui.scrollArea (HackerNews HackerNews.Types.PostsViewport)
         ]
 
 
 postView : Int -> Int -> Post -> Element UiId
 postView width index { id, title, comments } =
-    let
-        countWidth : Quantity Int UiPixels
-        countWidth =
-            Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x
+    Ui.fillRow
+        8
+        [ Ui.colorText
+            Color.dimTextColor
+            (String.fromInt (index + 1) ++ ".")
+            |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
+            |> Ui.fixed
+        , Ui.flexible (\room -> Ui.text (Sprite.ellipsis Small (Sans Regular) room.width title))
+        , Ui.colorText
+            Color.dimTextColor
+            (String.fromInt comments
+                ++ (if comments == 1 then
+                        " comment"
 
-        numberWidth : Quantity Int UiPixels
-        numberWidth =
-            Sprite.textSize Small (Sans Regular) "00." |> Coord.x
-
-        spacing : Int
-        spacing =
-            8
-    in
-    Ui.leftAndRight
-        (Units.uiPixels width)
-        (Ui.row
-            spacing
-            [ Ui.colorText
-                Color.dimTextColor
-                (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
-            , Ui.text
-                (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
-            ]
-        )
-        (Ui.right
-            { width = countWidth }
-            (Ui.colorText
-                Color.dimTextColor
-                (String.fromInt comments
-                    ++ (if comments == 1 then
-                            " comment"
-
-                        else
-                            " comments"
-                       )
-                )
+                    else
+                        " comments"
+                   )
             )
-        )
+            |> Ui.right { width = Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x }
+            |> Ui.fixed
+        ]
+        |> Ui.withWidth (Units.uiPixels width)
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.PostButton id)
             , padding = Ui.paddingXY 0 postPadding
@@ -873,55 +840,45 @@ postView width index { id, title, comments } =
             }
 
 
-commentsView : Ui.LazyCache UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache windowSize postId title comments =
-    let
-        width : Int
-        width =
-            pageWidth windowSize
-
-        backButton : Element UiId
-        backButton =
-            Ui.button
+commentsView : Ui.LazyCache UiId -> PostId -> String -> CommentsState -> Ui.Flexible UiId
+commentsView lazyCache postId title comments =
+    Ui.fillColumn
+        titleSpacing
+        [ Ui.fillRow
+            8
+            [ Ui.button
                 { id = HackerNews HackerNews.Types.BackButton
                 , padding = Ui.paddingXY 6 0
                 }
                 (Ui.text "< Posts")
-
-        headerSpacing : Int
-        headerSpacing =
-            8
-    in
-    Ui.column
-        titleSpacing
-        [ Ui.row
-            headerSpacing
-            [ backButton
-            , Ui.customText
-                Small
-                [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title
-                  , color = Color.textColor
-                  , font = Sans Bold
-                  , decorations = []
-                  , link = Nothing
-                  }
-                ]
+                |> Ui.fixed
+            , Ui.flexible
+                (\room ->
+                    Ui.customText
+                        Small
+                        [ { text = Sprite.ellipsis Small (Sans Bold) room.width title
+                          , color = Color.textColor
+                          , font = Sans Bold
+                          , decorations = []
+                          , link = Nothing
+                          }
+                        ]
+                )
             ]
         , (case comments of
             CommentsLoading ->
-                Ui.text "Loading comments..."
+                Ui.fixed (Ui.text "Loading comments...")
 
             CommentsLoaded [] ->
-                Ui.text "No comments yet."
+                Ui.fixed (Ui.text "No comments yet.")
 
             CommentsLoaded loaded ->
-                Ui.lazy3 lazyCache commentsColumn lazyCache width loaded
+                Ui.flexible (\room -> Ui.lazy3 lazyCache commentsColumn lazyCache (Quantity.unwrap room.width) loaded)
 
             CommentsLoadFailed error ->
-                Ui.text (Effect.httpErrorToString error)
+                Ui.fixed (Ui.text (Effect.httpErrorToString error))
           )
-            |> Ui.left (Units.uiPixels width)
-            |> scrolling (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
+            |> Ui.scrollArea (HackerNews (HackerNews.Types.CommentsViewport postId))
         ]
 
 
@@ -937,52 +894,49 @@ commentsColumn lazyCache width comments =
 commentView : Ui.LazyCache UiId -> Int -> Comment -> Element UiId
 commentView lazyCache width (Comment comment) =
     let
-        textWidth : Int
-        textWidth =
-            width - toggleWidth - toggleSpacing
-
-        repliesButton : Element UiId
+        repliesButton : Ui.Flexible UiId
         repliesButton =
-            if comment.isExpanded then
+            (if comment.isExpanded then
                 toggleButton comment.index "[-]"
 
-            else
+             else
                 toggleButton comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
-
-        text : Element UiId
-        text =
-            Ui.row
-                toggleSpacing
-                [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-                , Ui.customTextWrapped
-                    Small
-                    (Units.uiPixels textWidth)
-                    (commentHeader comment.author comment.date
-                        ++ List.map (spanSegment (greyColor comment.grey)) comment.content
-                    )
-                    |> Ui.links (HackerNews HackerNews.Types.CommentLink)
-                ]
+            )
+                |> Ui.right { width = Units.uiPixels toggleWidth }
+                |> Ui.fixed
     in
-    if comment.isExpanded then
-        Ui.column
+    (if comment.isExpanded then
+        Ui.fillColumn
             commentSpacing
-            [ text
-            , Ui.row
+            [ Ui.fillRow
+                toggleSpacing
+                [ repliesButton
+                , Ui.flexible
+                    (\room ->
+                        Ui.customTextWrapped
+                            Small
+                            room.width
+                            (commentHeader comment.author comment.date
+                                ++ List.map (spanSegment (greyColor comment.grey)) comment.content
+                            )
+                            |> Ui.links (HackerNews HackerNews.Types.CommentLink)
+                    )
+                ]
+            , Ui.fillRow
                 0
-                [ Ui.left (Units.uiPixels replyIndent) Ui.empty
-                , commentsColumn lazyCache (width - replyIndent) comment.children
+                [ Ui.fixed (Ui.left (Units.uiPixels replyIndent) Ui.empty)
+                , Ui.flexible (\room -> commentsColumn lazyCache (Quantity.unwrap room.width) comment.children)
                 ]
             ]
 
-    else
-        Ui.row
+     else
+        Ui.fillRow
             toggleSpacing
-            [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-            , Ui.customTextWrapped
-                Small
-                (Units.uiPixels textWidth)
-                (commentHeader comment.author comment.date)
+            [ repliesButton
+            , Ui.paragraph Small (commentHeader comment.author comment.date)
             ]
+    )
+        |> Ui.withWidth (Units.uiPixels width)
 
 
 {-| A link is in the link color and underlined, italics in italic.
@@ -1067,15 +1021,3 @@ toggleButton index label =
             , borderAndFill = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.NoBorderOrFill
             }
-
-
-{-| Content in a viewport that reaches from below the header (`headerHeight` high) to
-the bottom of the window, scrolled to where `uiState` says.
--}
-scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
-scrolling viewportId windowSize headerHeight content =
-    Ui.viewport
-        { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
-        }
-        content

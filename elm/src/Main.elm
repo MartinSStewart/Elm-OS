@@ -3361,7 +3361,7 @@ appLimits app =
             { min = Coord.xy 400 300, preferred = Coord.xy 900 900, max = Coord.xy 1400 100000 }
 
         HackerNewsApp ->
-            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
+            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.windowWidth 1100, max = Coord.xy HackerNews.windowWidth 100000 }
 
         AsciiCollabApp ->
             { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
