@@ -19,6 +19,10 @@ first on the left. Passes when:
     python3 scripts/test-displays.py --gpu   drawn by the GPU renderer (virgl; see
                                              test-qemu.py for what --gpu needs)
 
+Apart from the cursor (looked for on the screen), it reads the facts Elm writes to the
+serial log with ELMOS_TEST=1 (scripts/testfacts.py, Main.testFacts): which apps are open
+on each display, and where each toolbar button is.
+
 With --gpu it only checks that the GPU renderer starts again on both displays once the
 second is plugged in, and keeps getting frames on screen (each frame waits for every
 display's page flip): QEMU can't screendump a head drawn with OpenGL, and its SDL
@@ -27,7 +31,7 @@ front end (DISPLAY, e.g. xvfb-run); without --gpu nothing does.
 """
 import json, os, shutil, socket, struct, subprocess, sys, tempfile, time, zlib
 
-import toolbar
+from testfacts import Facts
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 W, H = 1280, 800
@@ -49,7 +53,7 @@ qemu = subprocess.Popen(
      "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
      "-drive", f"if=virtio,format=raw,file={data_disk}",
      # Elm draws the cursor, so the screenshots show it.
-     "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software" + VIDEO,
+     "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_TEST=1" + VIDEO,
      "-vga", "none",
      "-device", f"{'virtio-gpu-gl-pci' if gpu else 'virtio-gpu-pci'},id=video0,max_outputs=2,xres={W},yres={H}",
      "-display", os.environ.get("QEMU_DISPLAY", "sdl,gl=on" if gpu else "none"),
@@ -144,14 +148,7 @@ def screen(head):
     return w, h, parts[3]
 
 
-def pixel(shot, x, y):
-    w, _, px = shot
-    i = (y * w + x) * 3
-    return tuple(px[i:i + 3])
-
-
-def near(c, want, tol=40):
-    return all(abs(a - b) <= tol for a, b in zip(c, want))
+facts = Facts(log, fail, lambda: qemu.poll() is None)
 
 
 def save_png(shot, path):
@@ -169,20 +166,41 @@ def save(name):
 
 def move(head, x, y):
     """To (x, y) on a display. The tablet spans both displays, side by side, tops lined
-    up: (W + W2) x H."""
+    up: (W + W2) x H. Waits for Elm to say the pointer is there."""
     gx = head * W + x
     cmd("input-send-event", events=[
         {"type": "abs", "data": {"axis": "x", "value": gx * 0x8000 // (W + W2) + 1}},
         {"type": "abs", "data": {"axis": "y", "value": y * 0x8000 // H + 1}}])
-    time.sleep(1)
+    facts.wait("pointer", lambda p: abs(p[0] - gx) <= 1 and abs(p[1] - y) <= 1, f"the pointer at {gx},{y}")
+    time.sleep(0.5)  # for the frame drawn then to reach the screen
 
 
-def click(head, x, y):
-    move(head, x, y)
+def click(x, y):
+    """At (x, y) of both displays together, as the facts give places."""
+    head = 1 if x >= W else 0
+    move(head, x - head * W, y)
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
-    time.sleep(0.4)
+    time.sleep(0.3)
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
-    time.sleep(1)
+    time.sleep(0.3)
+
+
+def press(head, label):
+    """Clicks the button that says `label` on a display."""
+    buttons = facts.wait("buttons", lambda bs: any(b["label"] == label and (b["x"] >= W) == (head == 1) for b in bs),
+                         f"a button {label!r} on display {head}")
+    b = next(b for b in buttons if b["label"] == label and (b["x"] >= W) == (head == 1))
+    click(b["x"], b["y"])
+
+
+def windows(want, what):
+    return facts.wait("windows", lambda open_: open_ == want, what)
+
+
+def region(shot, x, y):
+    """Under the pointer at (x, y): where the cursor is drawn."""
+    w, _, px = shot
+    return b"".join(px[(row * w + x) * 3:(row * w + x + 10) * 3] for row in range(y, y + 16))
 
 
 time.sleep(2)
@@ -190,86 +208,57 @@ shots = [screen(0), screen(1)]
 for head, shot in enumerate(shots):
     if shot[:2] != [(W, H), (W2, H2)][head]:
         fail(f"display {head} is {shot[0]}x{shot[1]}, expected {[(W, H), (W2, H2)][head]}")
-try:
-    buttons = [toolbar.buttons(shot, 1) for shot in shots]
-except RuntimeError as e:
-    save("toolbar")
-    fail(f"{e} (build/displays-toolbar-*.png)")
+for head in (0, 1):
+    for name in ["About", "Calculator"]:
+        facts.wait("buttons", lambda bs: any(b["label"] == name and (b["x"] >= W) == (head == 1) for b in bs),
+                              f"a {name} button on display {head}")
 print("a toolbar on each display")
 
-PANEL = (44, 41, 39)  # Color.fillColor
-# The debug app opens on the first display, in the top left corner under the toolbar.
-if not near(pixel(shots[0], 12, 49), PANEL) or near(pixel(shots[1], 12, 49), PANEL):
-    save("overlay")
-    fail("expected the debug app on the first display only (build/displays-overlay-*.png)")
+# The apps open from the start are on the first display.
+windows([["Debug", "Network", "Weather"], []], "the debug, network and weather apps on the first display only")
 print("debug app on the first display only")
 
-# The cursor: a white arrow, its tip at the pointer.
-WHITE = (255, 255, 255)
-
-
-def cursor_on(shot, x, y):
-    return all(near(pixel(shot, x + dx, y + 8), WHITE) for dx in (2, 3, 4))
-
-
+# The cursor is drawn where the pointer is, and only there: the screen under it changes
+# when the pointer moves to the other display.
 move(1, 500, 500)
 a, b = screen(0), screen(1)
-if not cursor_on(b, 500, 500) or cursor_on(a, 500, 500):
-    save("cursor")
-    fail("expected the cursor on the second display only (build/displays-cursor-*.png)")
 move(0, 640, 500)
-if not cursor_on(screen(0), 640, 500) or cursor_on(screen(1), 640, 500):
+c, d = screen(0), screen(1)
+if region(b, 500, 500) == region(d, 500, 500) or region(a, 640, 500) == region(c, 640, 500):
     save("cursor")
-    fail("expected the cursor back on the first display only (build/displays-cursor-*.png)")
+    fail("expected the cursor to move from the second display to the first (build/displays-cursor-*.png)")
 print("the cursor moves from one display to the other")
 
-# Close the apps open from the start (on the first display), so the about page is the
-# only window wherever it is: in the top left corner, under the toolbar.
+# Close the apps open from the start, so the about page is the only window.
 for name in ["Debug", "Network", "Weather"]:
-    click(0, *buttons[0][name])
-middles = [(12, 49), (12, 49)]
+    press(0, name)
+windows([[], []], "the apps open at start to close")
 
-
-def about_on():
-    return [near(pixel(screen(head), *middles[head]), PANEL, tol=10) for head in (0, 1)]
-
-
-click(1, *buttons[1]["About"])
-if about_on() != [False, True]:
-    save("about")
-    fail(f"the second display's About button should open the about page there, got {about_on()} "
-         "(build/displays-about-*.png)")
+press(1, "About")
+windows([[], ["About"]], "the second display's About button to open the about page there")
 print("About on the second display opens it there")
-click(0, *buttons[0]["About"])
-if about_on() != [True, False]:
-    save("about")
-    fail(f"the first display's About button should move the about page there, got {about_on()} "
-         "(build/displays-about-*.png)")
+press(0, "About")
+windows([["About"], []], "the first display's About button to move the about page there")
 print("About on the first display moves it there")
-click(0, *buttons[0]["About"])
-if about_on() != [False, False]:
-    fail("a second click should close the about page")
+press(0, "About")
+windows([[], []], "a second click to close the about page")
 save("two")
 
 # Open it on the second display again, then unplug that display: it comes to the first.
-click(1, *buttons[1]["About"])
-if about_on() != [False, True]:
-    fail("the about page didn't open on the second display again")
+press(1, "About")
+windows([[], ["About"]], "the about page to open on the second display again")
 wait_for("ELMOS_TEST_HOTPLUG: Virtual-2 off", timeout=120)
 end = time.time() + 30
 while log().count("[host] the displays changed") < 2:
     if time.time() > end:
         fail("the host didn't notice the second display going")
     time.sleep(0.5)
-time.sleep(4)
 one = displays_now()
 print("unplugged:\n" + "\n".join(one))
+windows([["About"]], "the about page to show on the first display once the second has gone")
 if len(one) != 1:
     fail(f"expected one display after unplugging the second, found {one}")
-shot = screen(0)
-save_png(shot, f"{ROOT}/build/displays-one.png")
-if not near(pixel(shot, *middles[0]), PANEL, tol=10):
-    fail("the about page should show on the first display once the second has gone (build/displays-one.png)")
+save_png(screen(0), f"{ROOT}/build/displays-one.png")
 print("unplugging the second display brings its about page to the first")
 qemu.kill()
 print("PASS (screenshots in build/displays-two-*.png and build/displays-one.png)")

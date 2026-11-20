@@ -8,9 +8,14 @@ build/data-empty.img, with wired networking (QEMU's) and no simulated wifi:
      this build's host and Model versions): the host must download it, check it, and
      switch to it, and programs/current must name it afterwards.
 
+Whether Elm shows a notice comes from the facts it writes to the serial log with
+ELMOS_TEST=1 (scripts/testfacts.py, Main.testFacts), not from the screen.
+
     python3 scripts/test-update.py      (make test-update)
 """
-import hashlib, http.server, json, os, shutil, socket, subprocess, sys, tempfile, threading, time
+import hashlib, http.server, json, os, shutil, subprocess, sys, tempfile, threading, time
+
+from testfacts import Facts
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "MartinSStewart/Elm-OS"
@@ -19,8 +24,6 @@ disk = os.path.join(tmp, "data.img")
 shutil.copy(f"{ROOT}/build/data-empty.img", disk)
 accel = ["-enable-kvm", "-cpu", "host"] if os.access("/dev/kvm", os.W_OK) else ["-cpu", "max"]
 serial_path = os.path.join(tmp, "serial.log")
-qmp_path = os.path.join(tmp, "qmp.sock")
-shot_path = os.path.join(tmp, "shot.ppm")
 qemu = None
 
 program = open(f"{ROOT}/build/elm", "rb").read()
@@ -106,41 +109,15 @@ qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
      "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
      "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "user,model=virtio-net-pci",
-     "-append", "console=ttyS0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_CURSOR=software"
+     "-append", "console=ttyS0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_CURSOR=software ELMOS_TEST=1"
      f" ELMOS_UPDATES=1 ELMOS_UPDATE_API={url} ELMOS_UPDATE_DOWNLOAD={url}"
      " ELMOS_UPDATE_FIRST=2 ELMOS_UPDATE_EVERY=3",
      "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
-     "-no-reboot", "-serial", f"file:{serial_path}",
-     "-qmp", f"unix:{qmp_path},server=on,wait=off"])
+     "-no-reboot", "-serial", f"file:{serial_path}"])
 
 
-def screen():
-    """A screendump over QMP: (width, height, RGB bytes)."""
-    s = socket.socket(socket.AF_UNIX)
-    for _ in range(100):
-        try:
-            s.connect(qmp_path)
-            break
-        except OSError:
-            time.sleep(0.1)
-    f = s.makefile("rw")
-    f.readline()
-    for c in [{"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": shot_path}}]:
-        f.write(json.dumps(c) + "\n")
-        f.flush()
-        while "return" not in (r := json.loads(f.readline())) and "error" not in r:
-            pass
-    s.close()
-    parts = open(shot_path, "rb").read().split(b"\n", 3)
-    w, h = map(int, parts[1].split())
-    return w, h, parts[3]
+facts = Facts(serial, fail, lambda: qemu.poll() is None)
 
-
-def notice_shown():
-    """Main.notice's panel (Color.fillColor) in the bottom right corner."""
-    w, h, px = screen()
-    i = ((h - 14) * w + (w - 14)) * 3
-    return all(abs(a - b) <= 10 for a, b in zip(px[i:i + 3], (44, 41, 39)))
 
 # ---- 1. a build that changes the host
 
@@ -148,20 +125,21 @@ wait_for("first frame")
 wait_for(f"build {BAD[:12]} is deployed, but it changes the host: flash the USB stick again to run it")
 if downloads or "switching from" in serial():
     fail("the host downloaded or switched to a build for another host")
-time.sleep(2)
-if not notice_shown():
-    fail("no notice on screen that the USB stick needs flashing")
+facts.wait("notice", lambda text: "flashing" in text, "a notice that the USB stick needs flashing")
 print("a build for another host: not downloaded, the host says (and shows) the USB stick needs flashing")
 
 # ---- 2. a build it can run
 
 deployed[0] = GOOD
 wait_for(f"[host] switched to build {GOOD[:12]}")
+switched = serial().index("[host] switching from")
 if downloads != [GOOD[:12]]:
     fail(f"expected one download of build {GOOD[:12]}, got {downloads}")
+# The new build writes all the facts when it starts.
+facts.wait("notice", lambda text: text == "", "no notice after switching to the deployed build", since=switched)
 time.sleep(5)  # the updater's next checks must find it up to date
-if notice_shown():
-    fail("a notice is still in the bottom right corner after switching to the deployed build")
+if facts.get("notice", since=switched) != "":
+    fail(f"a notice came back after switching to the deployed build: {facts.get('notice')!r}")
 if downloads != [GOOD[:12]] or serial().count("switching from") != 1:
     fail("the host downloaded or switched again after it was up to date")
 qemu.kill()

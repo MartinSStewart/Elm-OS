@@ -1,5 +1,6 @@
 module Ui exposing
     ( BorderAndFill(..)
+    , Clickable
     , Element
     , ElementFull
     , ElementState(..)
@@ -16,6 +17,7 @@ module Ui exposing
     , ViewportModel
     , bottomRight
     , button
+    , buttons
     , center
     , colorText
     , column
@@ -1977,6 +1979,149 @@ inspectHelper model point clip position element found =
     else
         Nothing
 
+
+
+-- BUTTONS
+
+
+{-| Every button and text box that can be seen (or the part of it that can), in the
+order they come in the tree, with its text: for a button the text inside it, joined
+with spaces ("" for a button with none), and for a text box what is typed in it; and
+whether it has the keyboard focus. Only
+the QEMU tests use it, to click things by what they say (Main.testFacts).
+-}
+buttons : Model id -> Element id -> List Clickable
+buttons model (Element element) =
+    buttonsHelper
+        model
+        { topLeft = Coord.xy -100000 -100000, bottomRight = Coord.xy 100000 100000 }
+        Coord.origin
+        element
+        []
+        |> List.reverse
+
+
+type alias Clickable =
+    { label : String, textBox : Bool, focused : Bool, bounds : Bounds UiPixels }
+
+
+buttonsHelper : Model id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List Clickable -> List Clickable
+buttonsHelper model clip position element found =
+    let
+        add : id -> Bool -> String -> List Clickable
+        add id textBox label =
+            case Bounds.intersection clip (Bounds.fromTopLeftAndSize position (sizeHelper element)) of
+                Just visible ->
+                    { label = label, textBox = textBox, focused = model.focus == Just id, bounds = visible } :: found
+
+                Nothing ->
+                    found
+    in
+    case element of
+        Button data child ->
+            let
+                withThis =
+                    add data.id False (String.join " " (textsIn child []))
+            in
+            List.foldl
+                (\child2 found2 -> buttonsHelper model clip position child2 found2)
+                (buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child withThis)
+                data.inFront
+
+        Row data children ->
+            List.foldl
+                (\( at, child ) found2 -> buttonsHelper model clip at child found2)
+                found
+                (childPositions True data.spacing position children)
+
+        Column data children ->
+            List.foldl
+                (\( at, child ) found2 -> buttonsHelper model clip at child found2)
+                found
+                (childPositions False data.spacing position children)
+
+        Single data child ->
+            buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child found
+
+        InFront _ children ->
+            List.foldl
+                (\( coord, child ) found2 -> buttonsHelper model clip (Coord.plus coord position) child found2)
+                found
+                children
+
+        Viewport data child ->
+            case Bounds.intersection clip (viewportInside position data child) of
+                Just inside ->
+                    buttonsHelper model inside (Coord.plus (contentPosition (getViewport data.id model)) position) child found
+
+                Nothing ->
+                    found
+
+        Lazy _ _ child ->
+            buttonsHelper model clip position child found
+
+        Sourced _ child ->
+            buttonsHelper model clip position child found
+
+        TextInput data ->
+            add data.id True (getTextInput data.id model).current.text
+
+        TextInputMultiline data ->
+            add data.id True (getTextInputMultiline data.id model).input.current.text
+
+        Text _ ->
+            found
+
+        Quads _ ->
+            found
+
+        Empty ->
+            found
+
+
+{-| The texts in an element, in order, before `found`.
+-}
+textsIn : ElementFull id lazy -> List String -> List String
+textsIn element found =
+    case element of
+        Text data ->
+            String.concat (List.map .text data.segments) :: found
+
+        Button data child ->
+            textsIn child (List.foldr textsIn found data.inFront)
+
+        Row _ children ->
+            List.foldr textsIn found children
+
+        Column _ children ->
+            List.foldr textsIn found children
+
+        Single _ child ->
+            textsIn child found
+
+        InFront _ children ->
+            List.foldr (\( _, child ) found2 -> textsIn child found2) found children
+
+        Viewport _ child ->
+            textsIn child found
+
+        Lazy _ _ child ->
+            textsIn child found
+
+        Sourced _ child ->
+            textsIn child found
+
+        TextInput _ ->
+            found
+
+        TextInputMultiline _ ->
+            found
+
+        Quads _ ->
+            found
+
+        Empty ->
+            found
 
 
 -- HOVER AND FOCUS

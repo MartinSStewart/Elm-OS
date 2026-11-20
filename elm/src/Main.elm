@@ -35,6 +35,7 @@ import HackerNews.Types
 import HostMessage
 import Ipv4
 import Json.Decode as D
+import Json.Encode as E
 import Keyboard exposing (Key(..))
 import Layout
 import News
@@ -112,6 +113,9 @@ type Input
     | TlsClosed String String
       -- Random bytes in hex, for AsciiCollab's client id.
     | RandomBytes (Maybe String)
+      -- The kernel's command line (/proc/cmdline), read at start: ELMOS_TEST=1 turns on
+      -- the test facts (`testFacts`).
+    | CommandLine (Maybe String)
 
 
 type alias SystemInfo =
@@ -244,7 +248,11 @@ toInput message =
             Ok (BootInfo (BootInfo.Dir path entries))
 
         HostMessage.Files id files ->
-            Ok (BootInfo (BootInfo.Files id files))
+            if id == commandLineId then
+                Ok (CommandLine (List.head files |> Maybe.andThen Tuple.second))
+
+            else
+                Ok (BootInfo (BootInfo.Files id files))
 
         HostMessage.Bytes path offset hex ->
             if path == AsciiCollab.randomBytesPath then
@@ -379,6 +387,10 @@ type alias Model =
     , findBar : Maybe { display : String, selected : Int }
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
+
+    -- With ELMOS_TEST=1 on the kernel's command line, the facts the QEMU tests check, as
+    -- last written to the log (see `testFacts`); Nothing otherwise.
+    , testFacts : Maybe (List ( String, String ))
     }
 
 
@@ -494,6 +506,7 @@ init =
     , findBar = Nothing
     , takingScreenshot = Nothing
     , screenshots = []
+    , testFacts = Nothing
     }
 
 
@@ -560,8 +573,21 @@ step event model =
                 | mouse = Coord.plus main_.position (Coord.xy (Coord.xRaw main_.size // 2) (Coord.yRaw main_.size // 2))
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
+                , testFacts = Nothing
               }
-            , BootInfo.start
+            , Effect.ReadFiles { id = commandLineId, paths = [ "/proc/cmdline" ] } :: BootInfo.start
+            )
+
+        CommandLine text ->
+            ( { model
+                | testFacts =
+                    if List.member "ELMOS_TEST=1" (String.words (Maybe.withDefault "" text)) then
+                        Just []
+
+                    else
+                        Nothing
+              }
+            , []
             )
 
         DisplaysChanged displays ->
@@ -3246,21 +3272,33 @@ displayWindows model display =
             )
             (windows model display)
         ++ (if display.id == (mainDisplay model).id then
-                case model.upgradingTo of
-                    Just build ->
-                        [ notice model ("Upgrade to " ++ build ++ " in progress") ]
+                case noticeText model of
+                    Just text ->
+                        [ notice model text ]
 
                     Nothing ->
-                        case model.reflashNeeded of
-                            Just build ->
-                                [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
-
-                            Nothing ->
-                                []
+                        []
 
             else
                 []
            )
+
+
+{-| What the notice in the main display's bottom right corner says, if there is one.
+-}
+noticeText : Model -> Maybe String
+noticeText model =
+    case model.upgradingTo of
+        Just build ->
+            Just ("Upgrade to " ++ build ++ " in progress")
+
+        Nothing ->
+            case model.reflashNeeded of
+                Just build ->
+                    Just ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it")
+
+                Nothing ->
+                    Nothing
 
 
 {-| The find bar, if it is open on this display, along its bottom, showing `count`.
@@ -3829,11 +3867,26 @@ draw msg model =
                 -- The image chunks on screen, found in the image texture (or put there).
                 ( imageCache, placed, imageWrites ) =
                     ImageCache.place model.imageCache (List.map .triangles scenes)
+                ( facts, factLogs ) =
+                    case model.testFacts of
+                        Just written ->
+                            let
+                                now =
+                                    testFacts model uis
+                            in
+                            ( Just now
+                            , List.filter (\fact -> not (List.member fact written)) now
+                                |> List.map (\( name, value ) -> Effect.Log ("test " ++ name ++ " " ++ value))
+                            )
+
+                        Nothing ->
+                            ( Nothing, [] )
             in
-            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis), imageCache = imageCache }
+            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis), imageCache = imageCache, testFacts = facts }
             , Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
                 :: imageWrites
-                ++ [ Effect.Render (\() -> List.map2 (\scene triangles -> { scene | triangles = triangles }) scenes placed) ]
+                ++ Effect.Render (\() -> List.map2 (\scene triangles -> { scene | triangles = triangles }) scenes placed)
+                :: factLogs
             )
 
         GotInput _ ->
@@ -3841,6 +3894,165 @@ draw msg model =
 
         Tick _ ->
             ( model, [] )
+
+
+{-| The id of the request for the kernel's command line (`CommandLine`).
+-}
+commandLineId : String
+commandLineId =
+    "cmdline"
+
+
+{-| What the QEMU tests (scripts/test-\*.py) check, by name, each as JSON. With
+ELMOS_TEST=1 on the kernel's command line, `draw` writes each one to the log when it
+changes, as a line `[elm] test <name> <JSON>` (and all of them again whenever this
+program starts). The tests wait for those lines instead of reading the screen, so
+changing how something looks doesn't break them; they click buttons by their text, at
+the place `buttons` gives.
+
+  - pointer: where the mouse is, in device pixels, [x, y].
+  - windows: the open apps (`appName`) on each display, in layout order:
+    [["Debug", "Network", "Weather"]] with one display.
+  - buttons: every button and text box that can be seen, with its text (what is typed,
+    for a text box), whether it has the keyboard focus, and the middle of the part of it
+    that can be seen, in device pixels:
+    [{"label": ..., "textBox": false, "focused": false, "x": ..., "y": ...}, ...] (Ui.buttons).
+  - editor: the text editor's text. calculator: what its display shows.
+  - wifi: {"state": ..., "ssid": ..., "ip": ...}. weather: the place the forecast is for,
+    "" until there is one.
+  - notice: what the notice in the bottom right corner says, "" when there is none.
+
+-}
+testFacts : Model -> List ( Display, Ui.Element UiId ) -> List ( String, String )
+testFacts model uis =
+    let
+        json name value =
+            ( name, E.encode 0 value )
+
+        button : Display -> Ui.Clickable -> E.Value
+        button display found =
+            let
+                middle =
+                    Coord.plus display.position
+                        (Coord.toDevice
+                            (Display.uiScale display)
+                            (Coord.xy
+                                ((Coord.xRaw found.bounds.topLeft + Coord.xRaw found.bounds.bottomRight) // 2)
+                                ((Coord.yRaw found.bounds.topLeft + Coord.yRaw found.bounds.bottomRight) // 2)
+                            )
+                        )
+            in
+            E.object
+                [ ( "label", E.string found.label )
+                , ( "textBox", E.bool found.textBox )
+                , ( "focused", E.bool found.focused )
+                , ( "x", E.int (Coord.xRaw middle) )
+                , ( "y", E.int (Coord.yRaw middle) )
+                ]
+    in
+    [ json "pointer" (E.list E.int [ Coord.xRaw model.mouse, Coord.yRaw model.mouse ])
+    , json "windows"
+        (E.list (\display -> E.list (\( app, _ ) -> E.string (appName app)) (windows model display)) model.displays)
+    , json "buttons"
+        (E.list identity
+            (List.concatMap (\( display, ui ) -> List.map (button display) (Ui.buttons model.uiState ui)) uis)
+        )
+    , json "editor" (E.string (Ui.getTextInputMultiline EditorInput model.uiState).input.current.text)
+    , json "calculator" (E.string (Calculator.display model.calculator))
+    , json "wifi"
+        (E.object
+            [ ( "state"
+              , E.string
+                    (case model.wifiStatus.state of
+                        Wifi.Idle ->
+                            "idle"
+
+                        Wifi.Connecting ->
+                            "connecting"
+
+                        Wifi.Dhcp ->
+                            "dhcp"
+
+                        Wifi.Connected ->
+                            "connected"
+
+                        Wifi.Failed ->
+                            "failed"
+                    )
+              )
+            , ( "ssid", E.string (Wifi.ssidToString model.wifiStatus.ssid) )
+            , ( "ip", E.string (Maybe.withDefault "" (Maybe.map Ipv4.toString model.wifiStatus.ip)) )
+            ]
+        )
+    , json "weather"
+        (E.string
+            (case model.weather of
+                GotWeather place _ ->
+                    place.name
+
+                NoWeather ->
+                    ""
+
+                FindingPlace ->
+                    ""
+
+                LoadingForecast _ ->
+                    ""
+
+                WeatherFailed _ ->
+                    ""
+            )
+        )
+    , json "notice" (E.string (Maybe.withDefault "" (noticeText model)))
+    ]
+
+
+{-| An app's name in the test facts (`testFacts`).
+-}
+appName : App -> String
+appName app =
+    case app of
+        AboutApp ->
+            "About"
+
+        NewsApp ->
+            "News"
+
+        HackerNewsApp ->
+            "HackerNews"
+
+        EmailApp ->
+            "Email"
+
+        WebViewerApp ->
+            "WebViewer"
+
+        AsciiCollabApp ->
+            "AsciiCollab"
+
+        CalculatorApp ->
+            "Calculator"
+
+        TicTacToeApp ->
+            "TicTacToe"
+
+        PaintApp ->
+            "Paint"
+
+        EditorApp ->
+            "Editor"
+
+        ScreenshotViewerApp ->
+            "ScreenshotViewer"
+
+        DebugApp ->
+            "Debug"
+
+        NetworkApp ->
+            "Network"
+
+        WeatherApp ->
+            "Weather"
 
 
 {-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
