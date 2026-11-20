@@ -17,6 +17,7 @@ import Expect
 import HostMessage
 import Main
 import Persist
+import Network.Types
 import Postcard
 import ProtocolExamples
 import Quantity
@@ -25,7 +26,6 @@ import Test exposing (Test, describe, test)
 import Time
 import Units
 import Unsafe
-import Wifi
 
 
 byteList : List Int -> Bytes
@@ -39,7 +39,7 @@ effects : List Effect
 effects =
     [ Effect.SetCursor { image = { width = 24, height = 38, hotSpot = ( 1, 2 ), fill = ( 1, 3585 ), outline = Just ( 27, 3585 ) }, color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
     , Effect.WifiScan
-    , Effect.WifiConnect { ssid = Wifi.stringToSsid "Home", password = Unsafe.wpa2Password "password" |> Just }
+    , Effect.WifiConnect { ssid = Network.Types.stringToSsid "Home", password = Unsafe.wpa2Password "password" |> Just }
     , Effect.WifiDisconnect
     , Effect.Power Effect.PowerOff
     , Effect.Power Effect.Restart

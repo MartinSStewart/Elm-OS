@@ -1,4 +1,4 @@
-module Ipv4 exposing (Ipv4, fromString, toString)
+module Network.Ipv4 exposing (Ipv4, fromString, toString)
 
 import Bitwise
 

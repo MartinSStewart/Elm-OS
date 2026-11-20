@@ -38,11 +38,11 @@ import Bytes.Encode as BE
 import Color exposing (Color)
 import Cursor
 import Duration exposing (Duration)
+import Network.Types exposing (Ssid)
+import Network.Wpa2Password exposing (Wpa2Password)
 import Postcard
 import Sprite exposing (Triangle)
 import Units exposing (DevicePixels, UiScale)
-import Wifi exposing (Ssid)
-import Wpa2Password exposing (Wpa2Password)
 
 
 port toHost : Bytes -> Cmd msg
@@ -256,11 +256,11 @@ encode effect =
         WifiConnect { ssid, password } ->
             Postcard.variant
                 3
-                [ Postcard.string (Wifi.ssidToString ssid)
+                [ Postcard.string (Network.Types.ssidToString ssid)
                 , Postcard.string
                     (case password of
                         Just password2 ->
-                            Wpa2Password.toString password2
+                            Network.Wpa2Password.toString password2
 
                         Nothing ->
                             ""

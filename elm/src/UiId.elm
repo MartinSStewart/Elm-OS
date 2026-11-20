@@ -15,22 +15,16 @@ import AsciiCollab.Types
 import Calculator.Types
 import Email.Types
 import HackerNews.Types
+import Network.Types
 import News.Types
 import Paint.Types
 import ScreenshotViewer.Types
 import TicTacToe.Types
 import WebViewer.Types
-import Wifi exposing (Ssid)
 
 
 type UiId
-    = RefreshButton
-    | NetworkButton Ssid
-    | PasswordInput
-    | ShowPasswordButton
-    | ConnectButton
-    | DisconnectButton
-    | WeatherButton
+    = WeatherButton
     | AboutButton
     | NewsButton
     | CloseAboutButton
@@ -59,6 +53,7 @@ type UiId
     | FindPreviousButton
     | FindNextButton
     | CloseFindButton
+    | Network Network.Types.UiId
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
     | Paint Paint.Types.UiId

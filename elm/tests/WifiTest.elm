@@ -1,18 +1,19 @@
 module WifiTest exposing (suite)
 
 {-| Joining a wifi network again by itself, with the password saved when the user
-joined it (Main.reconnect, Main.savePassword).
+joined it (Network.reconnect, Network.gotStatus).
 -}
 
 import Effect exposing (Effect)
 import Expect
 import HostMessage
 import Main
+import Network
+import Network.Types
+import Network.Wpa2Password as Wpa2Password
 import SeqDict
 import Test exposing (Test, describe, test)
 import Unsafe
-import Wifi
-import Wpa2Password
 
 
 run : List HostMessage.ToElm -> Main.Model -> ( Main.Model, List Effect )
@@ -32,7 +33,7 @@ connects effects =
             case effect of
                 Effect.WifiConnect { ssid, password } ->
                     Just
-                        (Wifi.ssidToString ssid
+                        (Network.Types.ssidToString ssid
                             ++ " "
                             ++ (case password of
                                     Just password2 ->
@@ -55,22 +56,26 @@ saved =
         init : Main.Model
         init =
             Main.persistConfig.init
+
+        network : Network.Network
+        network =
+            init.network
     in
-    { init | savedWifiPasswords = SeqDict.fromList [ ( Wifi.stringToSsid "Home", Unsafe.wpa2Password "password" ) ] }
+    { init | network = { network | savedWifiPasswords = SeqDict.fromList [ ( Network.Types.stringToSsid "Home", Unsafe.wpa2Password "password" ) ] } }
 
 
 scan : HostMessage.ToElm
 scan =
     HostMessage.WifiScan
-        [ { ssid = Wifi.stringToSsid "Other", signal = -30, security = Wifi.Wpa }
-        , { ssid = Wifi.stringToSsid "Cafe", signal = -70, security = Wifi.Open }
-        , { ssid = Wifi.stringToSsid "Home", signal = -40, security = Wifi.Wpa }
+        [ { ssid = Network.Types.stringToSsid "Other", signal = -30, security = Network.Wpa }
+        , { ssid = Network.Types.stringToSsid "Cafe", signal = -70, security = Network.Open }
+        , { ssid = Network.Types.stringToSsid "Home", signal = -40, security = Network.Wpa }
         ]
 
 
-status : Wifi.State -> String -> HostMessage.ToElm
+status : Network.WifiState -> String -> HostMessage.ToElm
 status state ssid =
-    HostMessage.WifiStatus { state = state, ssid = Wifi.stringToSsid ssid, ip = Nothing, error = "" }
+    HostMessage.WifiStatus { state = state, ssid = Network.Types.stringToSsid ssid, ip = Nothing, error = "" }
 
 
 suite : Test
@@ -78,28 +83,28 @@ suite =
     describe "Wifi"
         [ test "while idle, a scan with saved networks joins the strongest of them"
             (\_ ->
-                run [ status Wifi.Idle "", scan ] saved
+                run [ status Network.Idle "", scan ] saved
                     |> Tuple.second
                     |> connects
                     |> Expect.equal [ "Home password" ]
             )
         , test "after a failure, scans don't try again"
             (\_ ->
-                run [ status Wifi.Failed "Home", scan ] saved
+                run [ status Network.Failed "Home", scan ] saved
                     |> Tuple.second
                     |> connects
                     |> Expect.equal []
             )
         , test "while connected, scans don't join anything"
             (\_ ->
-                run [ status Wifi.Connected "Cafe", scan ] saved
+                run [ status Network.Connected "Cafe", scan ] saved
                     |> Tuple.second
                     |> connects
                     |> Expect.equal []
             )
         , test "without saved networks, nothing is joined"
             (\_ ->
-                run [ status Wifi.Idle "", scan ] Main.persistConfig.init
+                run [ status Network.Idle "", scan ] Main.persistConfig.init
                     |> Tuple.second
                     |> connects
                     |> Expect.equal []

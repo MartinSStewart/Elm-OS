@@ -34,12 +34,13 @@ import HackerNews
 import HackerNews.Types
 import HostMessage
 import ImageCache exposing (ImageCache)
-import Ipv4
 import Json.Decode as D
 import Json.Encode as E
 import Keyboard exposing (Key(..))
 import Layout
-import Network exposing (Network)
+import Network
+import Network.Ipv4 as Ipv4
+import Network.Types
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
@@ -63,9 +64,6 @@ import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather exposing (WeatherState(..))
 import WebViewer
 import WebViewer.Types
-import Wifi exposing (Ssid)
-import Wired
-import Wpa2Password exposing (Wpa2Password)
 
 
 
@@ -89,10 +87,10 @@ type Input
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
-    | WifiDevice Wifi.Device
-    | WifiScan (List Wifi.Network)
-    | WifiStatus Wifi.Status
-    | WiredLinks (List Wired.Link)
+    | WifiDevice Network.WifiDevice
+    | WifiScan (List Network.WifiNetwork)
+    | WifiStatus Network.WifiStatus
+    | WiredLinks (List Network.WiredLink)
     | NetConfig { geoUrl : String, weatherUrl : String }
     | System SystemInfo
     | BootInfo BootInfo.Input
@@ -203,10 +201,10 @@ toInput message =
                 (WifiDevice
                     (case name of
                         Just n ->
-                            Wifi.Card n
+                            Network.Card n
 
                         Nothing ->
-                            Wifi.NoCard
+                            Network.NoCard
                     )
                 )
 
@@ -336,7 +334,7 @@ type alias Model =
     , ctrl : Bool
     , clipboard : String
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
-    , network : Network
+    , network : Network.Network
     , weather : WeatherState
     , time : Maybe Time.Posix -- the wall clock, from each Frame and the host's Tick each second
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
@@ -934,7 +932,7 @@ step event model =
             else if model.uiState.focus == Nothing && model.findBar /= Nothing && key == Keyboard.Escape then
                 ( closeFindBar model, [] )
 
-            else if model.uiState.focus == Just PasswordInput then
+            else if model.uiState.focus == Just (Network Network.Types.PasswordInput) then
                 typeKey key model
 
             else if model.uiState.focus == Just EditorInput then
@@ -977,16 +975,16 @@ step event model =
             ( { model | stats = Just stats }, [] )
 
         WifiDevice device ->
-            ( { model | wifiDevice = device, scanning = device /= Network.NoCard && model.scanning }, [] )
+            ( { model | network = Network.gotDevice device model.network }, [] )
 
         WifiScan networks ->
-            reconnect { model | networks = networks, scanning = False }
+            reconnect { model | network = Network.gotScan networks model.network }
 
         WifiStatus status ->
-            whenOnline model { model | wifiStatus = status, savedWifiPasswords = savePassword status model }
+            whenOnline model { model | network = Network.gotStatus (passwordText model) status model.network }
 
         WiredLinks links ->
-            whenOnline model { model | wired = links }
+            whenOnline model { model | network = Network.gotWired links model.network }
 
         System info ->
             ( { model | system = Just info }, [] )
@@ -1084,28 +1082,11 @@ working would be tried again after every scan, every 30 seconds.
 -}
 reconnect : Model -> ( Model, List Effect )
 reconnect model =
-    let
-        known : List ( Wifi.Network, Wpa2Password )
-        known =
-            List.filterMap
-                (\network -> SeqDict.get network.ssid model.savedWifiPasswords |> Maybe.map (Tuple.pair network))
-                model.networks
-                |> List.sortBy (\( network, _ ) -> negate network.signal)
-    in
-    case known of
-        ( network, password ) :: _ ->
-            if model.wifiStatus.state == Wifi.Idle then
-                ( { model
-                    | weather = weatherWithoutWifi model
-                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
-                  }
-                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password } ]
-                )
+    case Network.reconnect model.network of
+        Just ( network, effect ) ->
+            ( { model | network = network, weather = weatherWithoutWifi model }, [ effect ] )
 
-            else
-                ( model, [] )
-
-        [] ->
+        Nothing ->
             ( model, [] )
 
 
@@ -1113,7 +1094,7 @@ reconnect model =
 -}
 whenOnline : Model -> Model -> ( Model, List Effect )
 whenOnline before after =
-    if isOnline after && not (isOnline before) then
+    if Network.isOnline after.network && not (Network.isOnline before.network) then
         fetchWeather after
 
     else
@@ -1125,7 +1106,7 @@ cable keeps the computer online.
 -}
 weatherWithoutWifi : Model -> WeatherState
 weatherWithoutWifi model =
-    if Wired.isConnected model.wired then
+    if Network.isWiredConnected model.network then
         model.weather
 
     else
@@ -1314,22 +1295,7 @@ appButton id =
         Lazy _ ->
             Nothing
 
-        RefreshButton ->
-            Nothing
-
-        NetworkButton _ ->
-            Nothing
-
-        PasswordInput ->
-            Nothing
-
-        ShowPasswordButton ->
-            Nothing
-
-        ConnectButton ->
-            Nothing
-
-        DisconnectButton ->
+        Network _ ->
             Nothing
 
         WeatherButton ->
@@ -1437,45 +1403,8 @@ emailFieldFocused model =
 clickElement : Model -> UiId -> ( Model, List Effect )
 clickElement model id =
     case id of
-        RefreshButton ->
-            ( { model | scanning = True }, [ Effect.WifiScan ] )
-
-        NetworkButton ssid ->
-            case List.filter (\n -> n.ssid == ssid) model.networks |> List.head of
-                Just network ->
-                    ( { model
-                        | selected = Just network
-                        , uiState =
-                            Ui.setFocus
-                                (if needsPassword network then
-                                    Just PasswordInput
-
-                                 else
-                                    Nothing
-                                )
-                                model.uiState
-                      }
-                    , []
-                    )
-
-                Nothing ->
-                    ( model, [] )
-
-        PasswordInput ->
-            ( { model | uiState = Ui.setFocus (Just PasswordInput) model.uiState }, [] )
-
-        ShowPasswordButton ->
-            ( { model | showPassword = not model.showPassword }, [] )
-
-        ConnectButton ->
-            connect model
-
-        DisconnectButton ->
-            ( { model
-                | weather = weatherWithoutWifi model
-              }
-            , [ Effect.WifiDisconnect ]
-            )
+        Network networkId ->
+            clickNetwork model networkId
 
         WeatherButton ->
             fetchWeather model
@@ -2344,43 +2273,84 @@ closeCalculator model =
     }
 
 
+{-| What is typed in the password box, if anything has been.
+-}
+passwordText : Model -> Maybe String
+passwordText model =
+    case SeqDict.get passwordId model.uiState.uiState of
+        Just (TextInputState password) ->
+            Just password.current.text
+
+        _ ->
+            Nothing
+
+
+passwordId : UiId
+passwordId =
+    Network Network.Types.PasswordInput
+
+
+clickNetwork : Model -> Network.Types.UiId -> ( Model, List Effect )
+clickNetwork model id =
+    case id of
+        Network.Types.RefreshButton ->
+            ( { model | network = Network.refresh model.network }, [ Effect.WifiScan ] )
+
+        Network.Types.NetworkButton ssid ->
+            case Network.select ssid model.network of
+                Just network ->
+                    ( { model
+                        | network = network
+                        , uiState =
+                            Ui.setFocus
+                                (if Network.selectedNeedsPassword network then
+                                    Just passwordId
+
+                                 else
+                                    Nothing
+                                )
+                                model.uiState
+                      }
+                    , []
+                    )
+
+                Nothing ->
+                    ( model, [] )
+
+        Network.Types.PasswordInput ->
+            ( { model | uiState = Ui.setFocus (Just passwordId) model.uiState }, [] )
+
+        Network.Types.ShowPasswordButton ->
+            ( { model | network = Network.toggleShowPassword model.network }, [] )
+
+        Network.Types.ConnectButton ->
+            connect model
+
+        Network.Types.DisconnectButton ->
+            ( { model
+                | weather = weatherWithoutWifi model
+              }
+            , [ Effect.WifiDisconnect ]
+            )
+
+
 connect : Model -> ( Model, List Effect )
 connect model =
-    case model.selected of
-        Just network ->
-            if needsPassword network then
-                case SeqDict.get PasswordInput model.uiState.uiState of
-                    Just (TextInputState password) ->
-                        case Wpa2Password.fromString password.current.text of
-                            Ok password2 ->
-                                ( { model
-                                    | weather = weatherWithoutWifi model
-                                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
-                                  }
-                                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password2 } ]
-                                )
-
-                            Err error ->
-                                ( { model
-                                    | wifiStatus =
-                                        { state = Wifi.Failed, ssid = network.ssid, ip = Nothing, error = error }
-                                  }
-                                , []
-                                )
-
-                    _ ->
-                        ( model, [] )
+    let
+        ( network, effects ) =
+            Network.connect (passwordText model) model.network
+    in
+    ( { model
+        | network = network
+        , weather =
+            if List.isEmpty effects then
+                model.weather
 
             else
-                ( { model
-                    | weather = weatherWithoutWifi model
-                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
-                  }
-                , [ Effect.WifiConnect { ssid = network.ssid, password = Nothing } ]
-                )
-
-        Nothing ->
-            ( model, [] )
+                weatherWithoutWifi model
+      }
+    , effects
+    )
 
 
 typeKey : Key -> Model -> ( Model, List Effect )
@@ -2396,7 +2366,7 @@ typeKey key model =
             ( { model
                 | uiState =
                     Ui.updateElement
-                        PasswordInput
+                        passwordId
                         (\maybe ->
                             TextInput.paste
                                 model.clipboard
@@ -2423,15 +2393,15 @@ typeKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (Ui.getTextInput PasswordInput model.uiState)
+                        (Ui.getTextInput passwordId model.uiState)
             in
             ( { model
                 | uiState =
-                    Ui.insertElement PasswordInput (TextInputState (limitPassword password)) model.uiState
+                    Ui.insertElement passwordId (TextInputState (limitPassword password)) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
-                            if model.showPassword then
+                            if model.network.showPassword then
                                 text
 
                             else
@@ -2451,14 +2421,14 @@ UI pixels).
 dragSelect : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 dragSelect focus mouse position model =
     case focus of
-        PasswordInput ->
+        Network Network.Types.PasswordInput ->
             { model
                 | uiState =
                     Ui.updateElement
-                        PasswordInput
+                        passwordId
                         (\maybe ->
                             TextInput.mouseDownMove
-                                (passwordStyle model)
+                                (Network.passwordStyle model.network)
                                 mouse
                                 position
                                 (case maybe of
@@ -2498,19 +2468,19 @@ dragSelect focus mouse position model =
                         model.uiState
             }
 
-        RefreshButton ->
+        Network Network.Types.RefreshButton ->
             model
 
-        NetworkButton _ ->
+        Network (Network.Types.NetworkButton _) ->
             model
 
-        ShowPasswordButton ->
+        Network Network.Types.ShowPasswordButton ->
             model
 
-        ConnectButton ->
+        Network Network.Types.ConnectButton ->
             model
 
-        DisconnectButton ->
+        Network Network.Types.DisconnectButton ->
             model
 
         WeatherButton ->
@@ -3418,8 +3388,9 @@ appLimits app model =
             { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
 
 
+networkPanel : Network.Network -> Ui.Element UiId
 networkPanel network =
-    smallWindow { title = heading "Network", close = CloseNetworkButton, width = width } (Network.networkPanel network)
+    smallWindow { title = heading "Network", close = CloseNetworkButton, width = panelWidth } (Network.view network)
 
 
 {-| An app's view, in a window this big. The apps that are always the same size ignore
@@ -3462,7 +3433,7 @@ appView app size model =
             overlay model
 
         NetworkApp ->
-            networkPanel model
+            networkPanel model.network
 
         WeatherApp ->
             weatherPanel model
@@ -3873,7 +3844,7 @@ testFacts model uis =
         (E.object
             [ ( "state"
               , E.string
-                    (case model.wifiStatus.state of
+                    (case model.network.wifiStatus.state of
                         Network.Idle ->
                             "idle"
 
@@ -3890,8 +3861,8 @@ testFacts model uis =
                             "failed"
                     )
               )
-            , ( "ssid", E.string (Network.ssidToString model.wifiStatus.ssid) )
-            , ( "ip", E.string (Maybe.withDefault "" (Maybe.map Ipv4.toString model.wifiStatus.ip)) )
+            , ( "ssid", E.string (Network.Types.ssidToString model.network.wifiStatus.ssid) )
+            , ( "ip", E.string (Maybe.withDefault "" (Maybe.map Ipv4.toString model.network.wifiStatus.ip)) )
             ]
         )
     , json "weather"
@@ -4076,7 +4047,7 @@ weatherPanel : Model -> Ui.Element UiId
 weatherPanel model =
     smallWindow
         { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
-        (Weather.weatherRows (isOnline model) model.weather)
+        (Weather.weatherRows (Network.isOnline model.network) model.weather)
 
 
 

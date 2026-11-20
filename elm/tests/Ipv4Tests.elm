@@ -2,7 +2,7 @@ module Ipv4Tests exposing (suite)
 
 import Expect
 import Fuzz exposing (Fuzzer)
-import Ipv4
+import Network.Ipv4 as Ipv4
 import Test exposing (Test, describe)
 
 

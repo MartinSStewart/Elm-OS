@@ -3,8 +3,8 @@ module Unsafe exposing
     , wpa2Password
     )
 
-import Ipv4 exposing (Ipv4)
-import Wpa2Password exposing (Wpa2Password)
+import Network.Ipv4 as Ipv4 exposing (Ipv4)
+import Network.Wpa2Password as Wpa2Password exposing (Wpa2Password)
 
 
 wpa2Password : String -> Wpa2Password

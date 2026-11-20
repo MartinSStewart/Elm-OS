@@ -1,4 +1,4 @@
-module Wpa2Password exposing (Wpa2Password, fromString, toString)
+module Network.Wpa2Password exposing (Wpa2Password, fromString, toString)
 
 
 type Wpa2Password

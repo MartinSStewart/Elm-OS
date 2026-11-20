@@ -10,11 +10,12 @@ import ElmOs
 import Expect
 import HostMessage
 import Main
+import Network
+import Network.Types
 import Persist
 import Test exposing (Test, describe, test)
 import Time
 import Unsafe
-import Wifi
 import Wire
 
 
@@ -33,8 +34,8 @@ session =
     , Ok (HostMessage.Mouse 300 20)
     , Ok
         (HostMessage.WifiStatus
-            { state = Wifi.Connected
-            , ssid = Wifi.stringToSsid "Home"
+            { state = Network.Connected
+            , ssid = Network.Types.stringToSsid "Home"
             , ip = Just (Unsafe.ipv4 "10.0.0.2")
             , error = ""
             }
@@ -318,7 +319,7 @@ suite =
 
                     -- Nothing is reset on a restart: the last boot's wifi is there until
                     -- the host says otherwise.
-                    , \_ -> Maybe.map (\m -> m.wifiStatus.ssid) second |> Expect.equal (Just (Wifi.stringToSsid "Home"))
+                    , \_ -> Maybe.map (\m -> m.network.wifiStatus.ssid) second |> Expect.equal (Just (Network.Types.stringToSsid "Home"))
                     ]
                     ()
             )

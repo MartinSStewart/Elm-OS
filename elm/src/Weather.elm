@@ -7,11 +7,9 @@ module Weather exposing
     , decodePlace
     , defaultGeoUrl
     , defaultWeatherUrl
-    , describe
     , fixed
     , forecastUrl
     , weatherRows
-    , weekday
     )
 
 {-| The weather where this computer is: its rough location from its public IP address
@@ -29,14 +27,13 @@ import Sprite
 import Ui
 import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
-import Weather
 
 
 type WeatherState
     = NoWeather
     | FindingPlace
-    | LoadingForecast Weather.Place
-    | GotWeather Weather.Place Weather.Forecast
+    | LoadingForecast Place
+    | GotWeather Place Forecast
     | WeatherFailed HttpError
 
 
@@ -48,7 +45,7 @@ em n =
 
 
 weatherRows : Bool -> WeatherState -> List (Ui.Element UiId)
-weatherRows isOnline2 model =
+weatherRows online model =
     let
         font =
             Sprite.Sans Sprite.Regular
@@ -67,7 +64,7 @@ weatherRows isOnline2 model =
     in
     case model of
         NoWeather ->
-            if isOnline2 then
+            if online then
                 [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
 
             else
@@ -102,7 +99,7 @@ weatherRows isOnline2 model =
                           , link = Nothing
                           }
                         ]
-                    , t (Weather.describe forecast.code)
+                    , t (describe forecast.code)
                     , t
                         ("Wind "
                             ++ String.fromInt (round forecast.wind)
@@ -125,11 +122,11 @@ weatherRows isOnline2 model =
                                         "Today"
 
                                      else
-                                        Weather.weekday day.date
+                                        weekday day.date
                                     )
                                 )
                             , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
-                            , t (Weather.describe day.code)
+                            , t (describe day.code)
                             ]
                     )
                     forecast.days
