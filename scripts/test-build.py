@@ -109,12 +109,19 @@ def type_text(text):
             keys(ch)
 
 
+def settled():
+    """Waits for the buttons an unsaved change brings (Save, Commit): they move the others."""
+    facts.wait("buttons", lambda bs: any(b["label"] == "Commit" for b in bs), "the Commit button")
+    time.sleep(1)
+
+
 def code_fact(check, what, timeout=60, since=0):
     return facts.wait("code", check, what, timeout=timeout, since=since)
 
 
 def open_code_types():
-    """Opens Code.Types from the Code app's list of modules, with the cursor at its end."""
+    """Opens Code.Types from the Code app's list of modules, with the cursor at its end.
+    (The display is 1920 x 1080 so that the list reaches it without scrolling.)"""
     press("Code.Types")
     code_fact(lambda c: c["module"] == "Code.Types", "Code.Types to be open")
     facts.wait("buttons", lambda bs: any(b["textBox"] and b["focused"] for b in bs), "the code to have the focus")
@@ -128,7 +135,7 @@ qemu = subprocess.Popen(
      "-drive", f"if=virtio,format=raw,readonly=on,file={ROOT}/build/tools-qemu.img",
      "-nic", "none",
      "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_TEST=1",
-     "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
+     "-vga", "none", "-device", "virtio-gpu-pci,xres=1920,yres=1080", "-display", "none",
      "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
      "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
 wait_for("first frame", timeout=600)
@@ -152,6 +159,7 @@ w, h = int(m.group(1)), int(m.group(2))
 press("Code")
 open_code_types()
 type_text("    | Extra\n")
+settled()
 press("Build and run")
 code_fact(lambda c: c["build"] == "failed Checking the Model's types", "the build to be refused for changing the Model",
           timeout=1200)
@@ -166,6 +174,7 @@ press("Back to built-in")
 code_fact(lambda c: c["edited"] == [], "Code.Types to be back as built")
 keys("ctrl", "end")
 type_text("-- built on Elm OS\n")
+settled()
 mark = len(serial())
 press("Build and run")
 wait_for("[host] switched to build local-", timeout=COMPILE_MINUTES * 60, since=mark)
@@ -173,6 +182,9 @@ name = re.search(r"\[host\] switched to build (local-[0-9a-f]+)", serial()[mark:
 after = serial().rindex("[host] switching from")
 code_fact(lambda c: c["edited"] == ["Code.Types"], "the new build to still have Code.Types saved", since=after)
 print(f"built {name} on Elm OS and switched to it; the Model came along")
+for line in serial()[mark:].splitlines():
+    if line.startswith("[build]") and " s since the build started" in line:
+        print("  " + line)
 qemu.kill()
 qemu.wait()
 

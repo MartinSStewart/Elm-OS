@@ -376,7 +376,32 @@ else as \\u{...}.
 -}
 stringLiteral : String -> String
 stringLiteral text =
-    "\"" ++ String.foldr (\c acc -> escapeChar c ++ acc) "" text ++ "\""
+    if String.all plain text then
+        -- The usual case, and much faster than a character at a time: Elm OS's modules
+        -- are megabytes of text (this took most of wire's 27 s).
+        "\""
+            ++ (text
+                    |> String.replace "\\" "\\\\"
+                    |> String.replace "\"" "\\\""
+                    |> String.replace "\n" "\\n"
+                    |> String.replace "\u{000D}" "\\r"
+                    |> String.replace "\t" "\\t"
+               )
+            ++ "\""
+
+    else
+        "\"" ++ String.concat (List.map escapeChar (String.toList text)) ++ "\""
+
+
+{-| Characters that are written as they are, or with one of the short escapes.
+-}
+plain : Char -> Bool
+plain c =
+    let
+        code =
+            Char.toCode c
+    in
+    (code >= 32 && code < 127) || c == '\n' || c == '\u{000D}' || c == '\t'
 
 
 escapeChar : Char -> String

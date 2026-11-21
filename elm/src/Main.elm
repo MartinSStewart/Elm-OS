@@ -17,6 +17,7 @@ import AsciiCollab
 import AsciiCollab.Types
 import BootInfo
 import Bounds exposing (Bounds)
+import BuildInfo
 import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
@@ -1032,7 +1033,8 @@ step event model =
             whenOnline model { model | network = Network.gotWired links model.network }
 
         System info ->
-            ( { model | system = Just info }, [] )
+            -- The host says this as a program starts.
+            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code }, [] )
 
         BootInfo bootInput ->
             BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })

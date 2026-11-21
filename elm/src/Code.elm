@@ -2,6 +2,7 @@ module Code exposing
     ( Model
     , appSize
     , buildUpdate
+    , forgetPushed
     , httpResponse
     , init
     , onClick
@@ -270,6 +271,31 @@ push uiState model =
 noCommitToStartFrom : String
 noCommitToStartFrom =
     "This build of Elm OS was made from code with changes that weren't committed, so there's no commit on GitHub to put these on top of."
+
+
+{-| For when Elm OS starts a program built from the commit `commit` (BuildInfo.commit).
+If it isn't the commit the last push was made on top of, it's a build made since, such
+as CI's of that push: the saved modules it has as they are aren't changes any more, so
+they go, with the last push's news.
+
+Builds made here of the Code app's edits say the commit they were made on top of, so
+they never drop any.
+
+-}
+forgetPushed : String -> Model -> Model
+forgetPushed commit model =
+    let
+        git =
+            model.git
+
+        saved =
+            SeqDict.filter (\name text -> SeqDict.get name SourceCode.sourceCode /= Just text) model.saved
+    in
+    if commit == "" || git.from == "" || commit == git.from || saved == model.saved then
+        model
+
+    else
+        { model | saved = saved, git = { git | pushed = SeqDict.empty, status = GitIdle } }
 
 
 {-| GitHub's answer to the request with this number (Code.GitHub.requestId).

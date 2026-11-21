@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use protocol::{BuildStatus, ToElm};
 
@@ -50,6 +51,23 @@ static BUILDING: AtomicBool = AtomicBool::new(false);
 /// The step the build going now is on, said again when another is asked for meanwhile.
 static STEP: Mutex<String> = Mutex::new(String::new());
 
+/// When the build going now started, and its step: each step's time goes in the log, to
+/// see where a build's time goes.
+static STARTED: Mutex<Option<(Instant, Instant)>> = Mutex::new(None);
+
+/// Logs how long the step that just ended took, and since the build started.
+fn log_step_time() {
+    let now = Instant::now();
+    let mut started = STARTED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((build, step)) = *started {
+        let name = STEP.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        log!("build", "{name}: {:.1} s ({:.1} s since the build started)", (now - step).as_secs_f64(), (now - build).as_secs_f64());
+        *started = Some((build, now));
+    } else {
+        *started = Some((now, now));
+    }
+}
+
 /// Starts a build on a thread of its own, unless one is going already (then says
 /// which step that one is on).
 pub fn request(modules: Vec<(String, String)>) {
@@ -58,13 +76,18 @@ pub fn request(modules: Vec<(String, String)>) {
         status(BuildStatus::Running { step });
         return;
     }
+    *STARTED.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let spawned = std::thread::Builder::new().name("build".into()).spawn(move || {
         let result = build(modules);
+        log_step_time();
         BUILDING.store(false, Ordering::SeqCst);
         match result {
             Ok(name) => {
                 status(BuildStatus::Built { build: name.clone() });
-                if !elm::switch_to(name.clone()) {
+                *STEP.lock().unwrap_or_else(|e| e.into_inner()) = "Switching to the new build".into();
+                let switched = elm::switch_to(name.clone());
+                log_step_time();
+                if !switched {
                     log!("build", "couldn't switch to build {name}");
                     status(BuildStatus::Failed {
                         step: "Switching to the new build".into(),
@@ -88,6 +111,7 @@ fn status(status: BuildStatus) {
 }
 
 fn running(step: &str) {
+    log_step_time();
     log!("build", "{step}");
     *STEP.lock().unwrap_or_else(|e| e.into_inner()) = step.to_owned();
     status(BuildStatus::Running { step: step.into() });

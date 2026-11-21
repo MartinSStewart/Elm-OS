@@ -682,7 +682,9 @@ changing a `Ui.lazy` call never changes the Model's shape or needs a migration.
 -}
 isLazyKey : Module -> String -> Bool
 isLazyKey m name =
-    name == "LazyKey" && String.contains "type LazyKey = Restored" (String.join " " (String.words m.source))
+    -- The first contains is a quick check on the source as it is: the second, on its
+    -- words joined back up, is very slow in eco on a long module.
+    name == "LazyKey" && String.contains "Restored" m.source && String.contains "type LazyKey = Restored" (String.join " " (String.words m.source))
 
 
 {-| Types that are never saved, and what they come back as: `Ui.lazy`'s keys (see
