@@ -223,11 +223,6 @@ cursorX style state =
 -- WORDS
 
 
-isSpace : Char -> Bool
-isSpace char =
-    char == ' ' || char == '\n' || char == '\t'
-
-
 countWhile : (a -> Bool) -> List a -> Int
 countWhile isGood list =
     case list of
@@ -242,7 +237,8 @@ countWhile isGood list =
             0
 
 
-{-| The start of the word before `index` (skipping spaces first).
+{-| The start of the word before `index`: skips anything that isn't a letter, digit or
+underscore, then those.
 -}
 wordStart : String -> Int -> Int
 wordStart text index =
@@ -250,13 +246,13 @@ wordStart text index =
         before =
             String.left index text |> String.toList |> List.reverse
 
-        spaces =
-            countWhile isSpace before
+        symbols =
+            countWhile (\char -> not (TextInput.isWordChar char)) before
     in
-    index - spaces - countWhile (\char -> not (isSpace char)) (List.drop spaces before)
+    index - symbols - countWhile TextInput.isWordChar (List.drop symbols before)
 
 
-{-| The end of the word after `index` (skipping spaces first).
+{-| The end of the word after `index`, the same way.
 -}
 wordEnd : String -> Int -> Int
 wordEnd text index =
@@ -264,10 +260,19 @@ wordEnd text index =
         after =
             String.dropLeft index text |> String.toList
 
-        spaces =
-            countWhile isSpace after
+        symbols =
+            countWhile (\char -> not (TextInput.isWordChar char)) after
     in
-    index + spaces + countWhile (\char -> not (isSpace char)) (List.drop spaces after)
+    index + symbols + countWhile TextInput.isWordChar (List.drop symbols after)
+
+
+{-| The start and end of the line holding caret `index`, without its newline.
+-}
+lineRange : String -> Int -> ( Int, Int )
+lineRange text index =
+    ( String.left index text |> String.indexes "\n" |> List.reverse |> List.head |> Maybe.map ((+) 1) |> Maybe.withDefault 0
+    , String.dropLeft index text |> String.indexes "\n" |> List.head |> Maybe.map ((+) index) |> Maybe.withDefault (String.length text)
+    )
 
 
 
@@ -628,7 +633,7 @@ indexAt style mousePosition position model =
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
 it grabs it, else it moves the cursor there (two clicks in a row select the word there,
-three select everything: see TextInput.mouseDown).
+three select the line: see TextInput.mouseDown).
 -}
 mouseDown : Time.Posix -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDown time style mousePosition position model =
@@ -659,7 +664,20 @@ mouseDown time style mousePosition position model =
                 TextInput.registerClick time index model.input
         in
         { model
-            | input = TextInput.replaceState (TextInput.selectClicks clicks index) input
+            | input =
+                TextInput.replaceState
+                    (\state ->
+                        if clicks >= 3 then
+                            let
+                                ( start, end ) =
+                                    lineRange state.text index
+                            in
+                            { state | cursorPosition = end, cursorSize = start - end }
+
+                        else
+                            TextInput.selectClicks clicks index state
+                    )
+                    input
             , goalX = Nothing
         }
 

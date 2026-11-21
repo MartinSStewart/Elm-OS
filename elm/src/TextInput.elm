@@ -7,6 +7,7 @@ module TextInput exposing
     , deleteSelection
     , init
     , insertText
+    , isWordChar
     , keyMsg
     , mouseDown
     , mouseDownMove

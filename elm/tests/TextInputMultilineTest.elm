@@ -166,6 +166,40 @@ suite =
                     |> cursor
                     |> Expect.equal ( 0, 3 )
             )
+        , test "Ctrl+Right stops at the end of each word and at symbols"
+            (\_ ->
+                let
+                    press model =
+                        TextInputMultiline.keyMsg style True False Keyboard.ArrowRight model |> Tuple.first
+
+                    at model =
+                        model.input.current.cursorPosition
+
+                    start =
+                        TextInputMultiline.keyMsg style True False Keyboard.Home (after "foo.bar  baz" []) |> Tuple.first
+
+                    one =
+                        press start
+
+                    two =
+                        press one
+
+                    three =
+                        press two
+                in
+                List.map at [ start, one, two, three ]
+                    |> Expect.equal [ 0, 3, 7, 12 ]
+            )
+        , test "a triple click in a multiline box selects the line"
+            (\_ ->
+                let
+                    click =
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) style (Coord.xy 4 (4 + textLineHeight + 1)) Coord.origin
+                in
+                (after "ab\ncd ef\ngh" [] |> click |> click |> click).input.current
+                    |> (\state -> ( TextInput.selectionMin state, TextInput.selectionMax state ))
+                    |> Expect.equal ( 3, 8 )
+            )
         , test "Enter starts a new line"
             (\_ ->
                 (after "ab\ncd" []).input.current.text
