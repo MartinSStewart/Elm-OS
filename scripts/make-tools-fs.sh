@@ -72,7 +72,7 @@ json.dump(project, open(sys.argv[2], "w"), indent=4)
 # only whole seconds, so on the read-only partition the fingerprint would change and eco
 # would fail to delete the copy. So: whole seconds everywhere, then the copies made again
 # from the files as they are here, by an eco that finds them here (an unpatched copy of
-# eco/bin/eco, which looks for them beside itself), checking a module that does nothing.
+# eco/bin/eco, which looks for them beside itself), compiling a program that does nothing.
 python3 -I -c '
 import os, sys
 for d, dirs, files in os.walk(sys.argv[1]):
@@ -89,8 +89,11 @@ for dir in $(python3 -I -c 'import json, sys; print(" ".join(json.load(open(sys.
     mkdir -p "$seed/$dir"
 done
 first=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["source-directories"][0])' "$seed/elm.json")
-printf 'module ToolsSeed exposing (x)\n\n\nx : Int\nx =\n    1\n' > "$seed/$first/ToolsSeed.elm"
-if ! (cd "$seed" && HOME=$root/home "$root/eco/bin/eco-seed" make "$first/ToolsSeed.elm" --output=/dev/null >&2); then
+printf 'module ToolsSeed exposing (main)\n\n\nmain : Program () () ()\nmain =\n    Platform.worker { init = \\_ -> ( (), Cmd.none ), update = \\_ m -> ( m, Cmd.none ), subscriptions = \\_ -> Sub.none }\n' > "$seed/$first/ToolsSeed.elm"
+# Both of eco's paths, so that the packages have both kinds of compiled files: the plain
+# one (--output=/dev/null) and the typed one that MLIR and native output take.
+if ! (cd "$seed" && HOME=$root/home "$root/eco/bin/eco-seed" make "$first/ToolsSeed.elm" --output=/dev/null >&2 \
+        && HOME=$root/home "$root/eco/bin/eco-seed" make "$first/ToolsSeed.elm" --output=seed.mlir >&2); then
     echo "make-tools-fs: eco couldn't check a module with the tools' packages" >&2
     exit 1
 fi

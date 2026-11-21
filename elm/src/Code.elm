@@ -456,16 +456,22 @@ view windowSize input model =
                                     (List.filter (\name -> not (String.startsWith "Evergreen." name)) (SeqDict.keys SourceCode.sourceCode))
                                 )
                             )
+
+        content =
+            Ui.column
+                6
+                [ Ui.leftAndRight boxStyle.width
+                    (Ui.customText Sprite.Big [ segment Color.textColor title ])
+                    (Ui.row 6 buttons)
+                , body
+                , Ui.customText Sprite.Small (fileStatus ++ buildStatus)
+                ]
     in
     Ui.elWithId
         (UiId.Code Window)
-        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
-        (Ui.column
-            6
-            [ Ui.leftAndRight boxStyle.width
-                (Ui.customText Sprite.Big [ segment Color.textColor title ])
-                (Ui.row 6 buttons)
-            , body
-            , Ui.customText Sprite.Small (fileStatus ++ buildStatus)
-            ]
-        )
+        -- The code shows in whole lines, so what's left of the window's height under them
+        -- goes below the status line.
+        { padding = { top = 8, bottom = 8 + max 0 (Coord.yRaw windowSize - 16 - Coord.yRaw (Ui.size content)), left = 8, right = 8 }
+        , borderAndFill = Ui.windowBorderAndFill
+        }
+        content
