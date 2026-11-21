@@ -1,5 +1,8 @@
 module Sub.Things exposing (Box, Labelled, Opaque, Tree(..), box, labelled, opaque)
+
 import Quantity exposing (Quantity)
+
+
 type Tree a
     = Node a (List (Tree a))
     | Leaf
@@ -13,7 +16,8 @@ type alias Box a =
     { value : a, extra : Maybe a }
 
 
-{-| Recursive through a record. -}
+{-| Recursive through a record.
+-}
 type Chain a
     = Chain { value : a, next : Maybe (Chain a) }
 

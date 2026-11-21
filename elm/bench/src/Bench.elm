@@ -15,15 +15,15 @@ import Fixture
 import HackerNews
 import HackerNews.Types
 import Html.Parser
-import Wire
+import ScreenshotViewer
+import ScreenshotViewer.Types
 import Sprite
 import Task exposing (Task)
 import Time
-import ScreenshotViewer
-import ScreenshotViewer.Types
 import Ui
 import UiId
 import Units
+import Wire
 
 
 runs : Int
@@ -210,18 +210,20 @@ frame screen model =
                                 )
                     )
                     |> Task.andThen (\_ -> Task.succeed ())
-                    |> Task.andThen (\_ -> timed (named "whole frame, nothing changed (Ui.lazy)")
-                    (\() ->
-                        let
-                            ui =
-                                elementAgain first ()
-                        in
-                        ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
-                        , Ui.lazyCache [ ui ]
-                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen ui } ]) ] |> Bytes.width
+                    |> Task.andThen
+                        (\_ ->
+                            timed (named "whole frame, nothing changed (Ui.lazy)")
+                                (\() ->
+                                    let
+                                        ui =
+                                            elementAgain first ()
+                                    in
+                                    ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
+                                    , Ui.lazyCache [ ui ]
+                                    , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen ui } ]) ] |> Bytes.width
+                                    )
+                                )
                         )
-                    )
-                    )
             )
         |> Task.map (\_ -> ())
 

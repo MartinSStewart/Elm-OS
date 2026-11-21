@@ -264,7 +264,23 @@ suite =
             )
         , test "a damaged entry and everything after it are dropped"
             (\_ ->
-                Persist.unframe (join [ Persist.frame (text "[1,2]"), Persist.frame (text "[3,4]") |> list |> List.map (\b -> if b == 51 then 53 else b) |> bytes, Persist.frame (text "[5,6]") ])
+                Persist.unframe
+                    (join
+                        [ Persist.frame (text "[1,2]")
+                        , Persist.frame (text "[3,4]")
+                            |> list
+                            |> List.map
+                                (\b ->
+                                    if b == 51 then
+                                        53
+
+                                    else
+                                        b
+                                )
+                            |> bytes
+                        , Persist.frame (text "[5,6]")
+                        ]
+                    )
                     |> Expect.equal [ text "[1,2]" ]
             )
         , test "the generated codec reads back the Model it wrote"

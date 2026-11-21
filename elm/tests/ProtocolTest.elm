@@ -16,8 +16,8 @@ import Effect exposing (Effect)
 import Expect
 import HostMessage
 import Main
-import Persist
 import Network.Types
+import Persist
 import Postcard
 import ProtocolExamples
 import Quantity

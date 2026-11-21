@@ -62,7 +62,7 @@ suite =
                 List.length (draw "world" (Ui.text "Hello world"))
                     |> Expect.equal (List.length (draw "" (Ui.text "Hello world")) + 2)
             )
-                , test "findAll lists matches in tree order, including ones scrolled out of a viewport"
+        , test "findAll lists matches in tree order, including ones scrolled out of a viewport"
             (\() ->
                 Ui.findAll Ui.init "cat" longList
                     |> List.map .index

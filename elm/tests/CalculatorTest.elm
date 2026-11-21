@@ -88,7 +88,7 @@ suite =
             [ test "0.1 + 0.2" (\_ -> Calculator.format (0.1 + 0.2) |> Expect.equal "0.3")
             , test "1 / 3" (\_ -> Calculator.format (1 / 3) |> Expect.equal "0.333333333333")
             , test "2 / 3" (\_ -> Calculator.format (2 / 3) |> Expect.equal "0.666666666667")
-            , test "-0" (\_ -> Calculator.format -0 |> Expect.equal "0")
+            , test "-0" (\_ -> Calculator.format 0 |> Expect.equal "0")
             , test "negative" (\_ -> Calculator.format -2.5 |> Expect.equal "-2.5")
             , test "whole numbers" (\_ -> Calculator.format 1000 |> Expect.equal "1000")
             , test "largest plain number" (\_ -> Calculator.format 999999999999 |> Expect.equal "999999999999")

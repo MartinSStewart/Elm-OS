@@ -1965,7 +1965,6 @@ decFn ctx m self depth ty =
             "Wire.fail"
 
 
-
 {-| Drops the parentheses around a whole expression, which every expression that
 starts with one here has.
 -}
@@ -1986,7 +1985,7 @@ unwrap expr =
 builds whose shapes are the same read each other's data. Type variables are
 numbered, and labels such as a Quantity's units are left out, since neither changes
 the data. `rename` maps module names, so that a frozen version's shape (whose
-modules are Evergreen.V<n>.*) can be compared with the current one's.
+modules are Evergreen.V<n>.\*) can be compared with the current one's.
 -}
 rootShape : Dict Key Def -> Dict Key (List Bool) -> (String -> String) -> Key -> String
 rootShape defs used rename key =
@@ -2198,7 +2197,7 @@ stringLiteral s =
 
 
 {-| The frozen versions of the Model's types: version n is the modules
-Evergreen.V<n>.*, a copy of the program as it was when it was frozen (of what the
+Evergreen.V<n>.\*, a copy of the program as it was when it was frozen (of what the
 Model's types and the migration need, see Freeze.elm), and Evergreen.Migrate.V<n>
 turns a Model of version n - 1 into one of version n. The newest version must have
 the same shape as the current types, so a Model saved by this build is of that

@@ -71,7 +71,8 @@ suite =
             (\_ ->
                 let
                     placed =
-                        run 1280 760
+                        run 1280
+                            760
                             [ ( "debug", fixed 520 420 ), ( "net", fixed 460 300 ), ( "weather", fixed 460 280 ), ( "hn", stretchy ), ( "calc", fixed 250 300 ) ]
 
                     overlaps ( a, ( ax, ay ), ( aw, ah ) ) ( b, ( bx, by ), ( bw, bh ) ) =

@@ -6,13 +6,13 @@ is read by the current build through the migration to version 2.
 
 import App
 import Array
+import Bytes exposing (Bytes)
+import Bytes.Encode as BE
 import Dict
 import ElmOs
 import Evergreen.V1.App
 import Evergreen.V1.Sub.Things
 import Expect
-import Bytes exposing (Bytes)
-import Bytes.Encode as BE
 import Json.Encode as E
 import Persist
 import Quantity
