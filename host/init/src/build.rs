@@ -129,6 +129,8 @@ fn build(modules: Vec<(String, String)>) -> Result<String, Failure> {
     check_shape(&shape)?;
 
     running("Compiling (about 2 minutes)");
+    let tmp = work.join("tmp");
+    std::fs::create_dir_all(&tmp).map_err(|e| fail("Compiling", e.to_string()))?;
     let object = work.join("elm.o");
     let _ = std::fs::remove_file(&object);
     run(
@@ -139,6 +141,8 @@ fn build(modules: Vec<(String, String)>) -> Result<String, Failure> {
             // Four pieces compiled at once, whatever the number of cores: the bytes depend
             // on it, and the Makefile uses four too (ECO_SPLIT_CODEGEN there).
             .env("ECO_SPLIT_CODEGEN", "4")
+            // eco writes the pieces to temporary files first, and Elm OS has no /tmp.
+            .env("TMPDIR", &tmp)
             .args(["make", "src/ElmOs.elm", &format!("--output={}", path_str(&object))]),
     )?;
 
