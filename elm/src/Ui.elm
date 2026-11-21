@@ -615,7 +615,7 @@ onAnimationFrame timeElapsed mouse hovered model =
                             value
 
                         TextInputMultilineState multiline ->
-                            TextInputMultiline.animate (Duration.inSeconds timeElapsed) multiline
+                            TextInputMultiline.animate timeElapsed multiline
                                 |> Scrollbar.fade timeElapsed (scrollbarHovered id)
                                 |> TextInputMultilineState
 

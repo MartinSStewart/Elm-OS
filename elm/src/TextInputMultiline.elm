@@ -37,6 +37,7 @@ TextInput's. Lines don't wrap: the box scrolls sideways to keep the cursor in vi
 import Bounds exposing (Bounds)
 import Color
 import Coord exposing (Coord)
+import Duration exposing (Duration)
 import ElmSyntax
 import Keyboard
 import Quantity exposing (Quantity)
@@ -476,11 +477,11 @@ wheel style clicks model =
 
 
 {-| How much of the distance left a glide from the wheel (or to the nearest line once
-fingers rest) keeps after a second: a three line step takes about a third of a second.
+fingers rest) keeps after a second
 -}
 wheelKept : Float
 wheelKept =
-    0.0001
+    0.00000001
 
 
 {-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down): the text
@@ -536,8 +537,12 @@ stopGlide model =
 
 {-| A frame, `seconds` after the last: move on towards `scroll`.
 -}
-animate : Float -> Model -> Model
-animate seconds model =
+animate : Duration -> Model -> Model
+animate timeElapsed model =
+    let
+        seconds =
+            Duration.inSeconds timeElapsed
+    in
     case model.glide of
         Still ->
             model

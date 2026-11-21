@@ -948,6 +948,9 @@ step event model =
             else if model.uiState.focus == Just FindInput && model.findBar /= Nothing then
                 findBarKey key model
 
+            else if model.takingScreenshot /= Nothing && key == Keyboard.Escape then
+                ( { model | takingScreenshot = Nothing }, [] )
+
             else if model.uiState.focus == Nothing && model.findBar /= Nothing && key == Keyboard.Escape then
                 ( closeFindBar model, [] )
 
