@@ -3504,7 +3504,7 @@ shownOn display app model =
 -}
 windowGap : Int
 windowGap =
-    4
+    8
 
 
 {-| How big each app's window can be. The ones that are always the same size say what
