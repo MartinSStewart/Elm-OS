@@ -18,7 +18,7 @@
 # layout). Prints the filesystem's size in MiB on stdout.
 set -eu
 eco=$1 elm_json=$2 wire=$3 link_lib=$4 link_args=$5 out=$6
-root=$out.root
+root=$(cd "$(dirname "$out")" && pwd)/$(basename "$out").root
 rm -rf "$root" "$out"
 mkdir -p "$root/eco/bin" "$root/eco/lib" "$root/sysroot" "$root/home/.eco/0.2.0/packages"
 
@@ -65,6 +65,38 @@ project = json.load(open(sys.argv[1]))
 project["test-dependencies"] = {"direct": {}, "indirect": {}}
 json.dump(project, open(sys.argv[2], "w"), indent=4)
 ' "$elm_json" "$root/elm.json"
+
+# eco keeps a copy of each package it bundles (eco/containers...) in its package cache, and
+# copies it afresh, deleting the old one, when the bundled one's fingerprint changes: a hash
+# of its files' sizes and modification times, to the millisecond. ext4's `mkfs -d` keeps
+# only whole seconds, so on the read-only partition the fingerprint would change and eco
+# would fail to delete the copy. So: whole seconds everywhere, then the copies made again
+# from the files as they are here, by an eco that finds them here (an unpatched copy of
+# eco/bin/eco, which looks for them beside itself), checking a module that does nothing.
+python3 -I -c '
+import os, sys
+for d, dirs, files in os.walk(sys.argv[1]):
+    for n in dirs + files:
+        p = os.path.join(d, n)
+        if not os.path.islink(p):
+            t = int(os.stat(p).st_mtime)
+            os.utime(p, (t, t))
+' "$root"
+seed=$(mktemp -d)
+cp "$eco/bin/eco" "$root/eco/bin/eco-seed"
+cp "$root/elm.json" "$seed/elm.json"
+for dir in $(python3 -I -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1]))["source-directories"]))' "$seed/elm.json"); do
+    mkdir -p "$seed/$dir"
+done
+first=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["source-directories"][0])' "$seed/elm.json")
+printf 'module ToolsSeed exposing (x)\n\n\nx : Int\nx =\n    1\n' > "$seed/$first/ToolsSeed.elm"
+if ! (cd "$seed" && HOME=$root/home "$root/eco/bin/eco-seed" make "$first/ToolsSeed.elm" --output=/dev/null >&2); then
+    echo "make-tools-fs: eco couldn't check a module with the tools' packages" >&2
+    exit 1
+fi
+rm -f "$root/eco/bin/eco-seed"
+rm -r "${seed:?}"
+
 cp "$wire" "$root/wire-tool"
 cp "$link_lib" "$root/libelmos_link.a"
 cp "$link_args" "$root/link-args"
