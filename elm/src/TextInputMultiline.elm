@@ -44,6 +44,7 @@ import Quantity exposing (Quantity)
 import Scrollbar
 import Sprite exposing (Triangle)
 import TextInput
+import Time
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
@@ -109,7 +110,7 @@ init =
 -}
 withText : String -> Model
 withText text =
-    { init | input = { current = { cursorPosition = 0, cursorSize = 0, text = text }, undoHistory = [], redoHistory = [] } }
+    { init | input = { current = { cursorPosition = 0, cursorSize = 0, text = text }, undoHistory = [], redoHistory = [], lastClick = Nothing } }
 
 
 {-| How many undo steps are kept. Every key that changes the text is one, and each holds
@@ -626,10 +627,11 @@ indexAt style mousePosition position model =
 
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
-it grabs it, else it moves the cursor there.
+it grabs it, else it moves the cursor there (two clicks in a row select the word there,
+three select everything: see TextInput.mouseDown).
 -}
-mouseDown : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
-mouseDown style mousePosition position model =
+mouseDown : Time.Posix -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+mouseDown time style mousePosition position model =
     let
         onTrack : Coord UiPixels
         onTrack =
@@ -648,8 +650,16 @@ mouseDown style mousePosition position model =
                 model
 
     else
+        let
+            index : Int
+            index =
+                indexAt style mousePosition position model
+
+            ( clicks, input ) =
+                TextInput.registerClick time index model.input
+        in
         { model
-            | input = TextInput.replaceState (moveTo False (indexAt style mousePosition position model)) model.input
+            | input = TextInput.replaceState (TextInput.selectClicks clicks index) input
             , goalX = Nothing
         }
 

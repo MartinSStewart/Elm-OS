@@ -705,6 +705,10 @@ step event model =
                                     Ok response ->
                                         Ok { status = response.status, body = Effect.bodyToString response.body |> Maybe.withDefault "" }
 
+                                    Err (Effect.NetworkError why) ->
+                                        -- What the host said, which tells a missing network from a refused one.
+                                        Err ("Couldn't reach GitHub (" ++ why ++ "). Is Elm OS online? The Network app connects it.")
+
                                     Err error ->
                                         Err (Effect.httpErrorToString error)
                                 )
@@ -1760,7 +1764,7 @@ openInWebViewer url model =
         , uiState =
             Ui.insertElement
                 (WebViewer WebViewer.Types.UrlInput)
-                (TextInputState { current = { cursorPosition = String.length url, cursorSize = 0, text = url }, undoHistory = [], redoHistory = [] })
+                (TextInputState { current = { cursorPosition = String.length url, cursorSize = 0, text = url }, undoHistory = [], redoHistory = [], lastClick = Nothing })
                 opened.uiState
       }
     , case request of

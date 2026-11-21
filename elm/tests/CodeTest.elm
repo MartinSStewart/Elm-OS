@@ -5,8 +5,8 @@ import Code.Types exposing (BuildStatus(..))
 import Coord
 import Expect
 import SeqDict
-import TextInputMultiline
 import Test exposing (Test, describe, test)
+import TextInputMultiline
 import Ui
 
 
