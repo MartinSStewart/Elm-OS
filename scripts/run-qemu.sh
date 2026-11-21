@@ -39,6 +39,8 @@ cd "$(dirname "$0")/.."
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
 ACCEL="-cpu max"
 [ -w /dev/kvm ] && ACCEL="-enable-kvm -cpu host"
+# QEMU's control socket, which `make paste` (scripts/qemu-paste.py) types through.
+QMP="-qmp unix:build/qemu-qmp.sock,server=on,wait=off"
 
 if [ "$1" = --usb ]; then
   shift
@@ -51,7 +53,7 @@ if [ "$1" = --usb ]; then
     -drive if=none,id=stick,format=raw,file=build/elmos-usb.img,snapshot=on \
     -device qemu-xhci -device usb-storage,drive=stick,bootindex=0 \
     -device usb-kbd -device usb-tablet -vga std -nic user,model=e1000e \
-    -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot "$@"
+    -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot $QMP "$@"
 fi
 RES="${QEMU_RES:-1920x1080}"
 XRES="xres=${RES%x*},yres=${RES#*x},max_outputs=${QEMU_HEADS:-1}"
@@ -71,4 +73,4 @@ exec qemu-system-x86_64 $ACCEL -m 4G -smp 4 \
   -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" $TOOLS \
   -append "console=ttyS0 quiet retain_initrd" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
-  -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"
+  -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot $QMP "$@"

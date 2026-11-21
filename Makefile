@@ -136,7 +136,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: format format-check FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+.PHONY: format format-check FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -707,6 +707,12 @@ usb-write: usb
 # Boots the USB image in QEMU on UEFI firmware (OVMF), with USB keyboard and mouse.
 run-usb: usb | check-run-deps
 	scripts/run-qemu.sh --usb
+
+# Types the clipboard (or what's piped in: `echo hi | make paste`) into the QEMU that
+# `make run` started, where the keyboard focus is (scripts/qemu-paste.py).
+paste:
+	python3 -I scripts/qemu-paste.py
+
 
 test-usb: usb | check-run-deps
 	python3 scripts/test-qemu.py --usb
