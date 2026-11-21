@@ -9,6 +9,7 @@ import Sprite
 import Test exposing (Test, describe, test)
 import TextInput
 import TextInputMultiline
+import Time
 import Units
 
 
@@ -174,7 +175,7 @@ suite =
             (\_ ->
                 let
                     pressed =
-                        TextInputMultiline.mouseDown style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
                 in
                 ( pressed.scroll, cursor pressed, pressed.grab /= Nothing )
                     |> Expect.equal ( 91, ( 0, 0 ), True )
@@ -183,7 +184,7 @@ suite =
             (\_ ->
                 let
                     dragged =
-                        TextInputMultiline.mouseDown style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
                             |> TextInputMultiline.mouseDownMove style (Coord.xy 390 -500) Coord.origin
 
                     released =

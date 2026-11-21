@@ -1,5 +1,6 @@
 module TextInput exposing
-    ( Model
+    ( Click
+    , Model
     , OutMsg(..)
     , State
     , Style
@@ -11,7 +12,9 @@ module TextInput exposing
     , mouseDownMove
     , paste
     , pushState
+    , registerClick
     , replaceState
+    , selectClicks
     , selectionMax
     , selectionMin
     , size
@@ -32,6 +35,7 @@ import Coord exposing (Coord)
 import Keyboard
 import Quantity exposing (Quantity)
 import Sprite exposing (Triangle)
+import Time
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
@@ -39,7 +43,14 @@ type alias Model =
     { current : State
     , undoHistory : List State
     , redoHistory : List State
+
+    -- The last mouse click, to tell double and triple clicks.
+    , lastClick : Maybe Click
     }
+
+
+type alias Click =
+    { time : Time.Posix, clicks : Int, index : Int }
 
 
 type alias State =
@@ -51,12 +62,12 @@ type alias State =
 
 init : Model
 init =
-    { current = { cursorPosition = 0, cursorSize = 0, text = "" }, undoHistory = [], redoHistory = [] }
+    { current = { cursorPosition = 0, cursorSize = 0, text = "" }, undoHistory = [], redoHistory = [], lastClick = Nothing }
 
 
 pushState : (State -> State) -> Model -> Model
 pushState changeFunc model =
-    { redoHistory = [], undoHistory = model.current :: model.undoHistory, current = changeFunc model.current }
+    { model | redoHistory = [], undoHistory = model.current :: model.undoHistory, current = changeFunc model.current }
 
 
 replaceState : (State -> State) -> Model -> Model
@@ -68,9 +79,10 @@ undo : Model -> Model
 undo model =
     case model.undoHistory of
         head :: rest ->
-            { undoHistory = rest
-            , current = head
-            , redoHistory = model.current :: model.redoHistory
+            { model
+                | undoHistory = rest
+                , current = head
+                , redoHistory = model.current :: model.redoHistory
             }
 
         [] ->
@@ -81,9 +93,10 @@ redo : Model -> Model
 redo model =
     case model.redoHistory of
         head :: rest ->
-            { redoHistory = rest
-            , current = head
-            , undoHistory = model.current :: model.undoHistory
+            { model
+                | redoHistory = rest
+                , current = head
+                , undoHistory = model.current :: model.undoHistory
             }
 
         [] ->
@@ -433,18 +446,169 @@ width style =
     Quantity.unwrap style.width
 
 
-{-| The mouse went down at `mousePosition`, with the box at `position`.
+{-| The mouse went down at `mousePosition`, with the box at `position`, at `time`: one
+click puts the cursor there, two in a row select the word there (or the nearest one if
+it is on a space), three select everything.
 -}
-mouseDown : Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
-mouseDown style mousePosition position model =
-    replaceState
-        (\state ->
-            { state
-                | cursorPosition = cursorPosition style mousePosition position state
-                , cursorSize = 0
-            }
-        )
-        model
+mouseDown : Time.Posix -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+mouseDown time style mousePosition position model =
+    let
+        index : Int
+        index =
+            cursorPosition style mousePosition position model.current
+
+        ( clicks, model2 ) =
+            registerClick time index model
+    in
+    replaceState (selectClicks clicks index) model2
+
+
+{-| How long after a click another still counts as part of a double or triple click.
+-}
+multiClickMilliseconds : Int
+multiClickMilliseconds =
+    500
+
+
+{-| Note a click on the caret `index` at `time`, and say how many clicks in a row it is
+(1, 2 or 3; a fourth starts again). Clicks must be close in time and place.
+-}
+registerClick : Time.Posix -> Int -> Model -> ( Int, Model )
+registerClick time index model =
+    let
+        clicks : Int
+        clicks =
+            case model.lastClick of
+                Just last ->
+                    if
+                        (Time.posixToMillis time - Time.posixToMillis last.time <= multiClickMilliseconds)
+                            && (Time.posixToMillis time >= Time.posixToMillis last.time)
+                            && (abs (last.index - index) <= 1)
+                            && (last.clicks < 3)
+                    then
+                        last.clicks + 1
+
+                    else
+                        1
+
+                Nothing ->
+                    1
+    in
+    ( clicks, { model | lastClick = Just { time = time, clicks = clicks, index = index } } )
+
+
+{-| What a click that is the `clicks`th in a row at caret `index` selects.
+-}
+selectClicks : Int -> Int -> State -> State
+selectClicks clicks index state =
+    if clicks <= 1 then
+        { state | cursorPosition = index, cursorSize = 0 }
+
+    else if clicks == 2 then
+        let
+            ( start, end ) =
+                wordAt state.text index
+        in
+        { state | cursorPosition = end, cursorSize = start - end }
+
+    else
+        { state | cursorPosition = String.length state.text, cursorSize = negate (String.length state.text) }
+
+
+isWordChar : Char -> Bool
+isWordChar char =
+    Char.isAlphaNum char || char == '_'
+
+
+{-| The start and end of the word at caret `index`: the one it touches, or if it is among
+spaces or symbols the nearest on the same line (the one after on a tie), or `index`
+twice if the line has none.
+-}
+wordAt : String -> Int -> ( Int, Int )
+wordAt text index =
+    let
+        charAt : Int -> Maybe Char
+        charAt i =
+            if i < 0 then
+                Nothing
+
+            else
+                String.slice i (i + 1) text |> String.uncons |> Maybe.map Tuple.first
+
+        isWordAt : Int -> Bool
+        isWordAt i =
+            charAt i |> Maybe.map isWordChar |> Maybe.withDefault False
+
+        wordStartFrom : Int -> Int
+        wordStartFrom i =
+            if isWordAt (i - 1) then
+                wordStartFrom (i - 1)
+
+            else
+                i
+
+        wordEndFrom : Int -> Int
+        wordEndFrom i =
+            if isWordAt i then
+                wordEndFrom (i + 1)
+
+            else
+                i
+
+        -- The end of the nearest word before `i` on its line.
+        wordBefore : Int -> Maybe Int
+        wordBefore i =
+            case charAt (i - 1) of
+                Nothing ->
+                    Nothing
+
+                Just '\n' ->
+                    Nothing
+
+                Just char ->
+                    if isWordChar char then
+                        Just i
+
+                    else
+                        wordBefore (i - 1)
+
+        -- The start of the nearest word after `i` on its line.
+        wordAfter : Int -> Maybe Int
+        wordAfter i =
+            case charAt i of
+                Nothing ->
+                    Nothing
+
+                Just '\n' ->
+                    Nothing
+
+                Just char ->
+                    if isWordChar char then
+                        Just i
+
+                    else
+                        wordAfter (i + 1)
+    in
+    if isWordAt index || isWordAt (index - 1) then
+        ( wordStartFrom index, wordEndFrom index )
+
+    else
+        case ( wordBefore index, wordAfter index ) of
+            ( Just before, Just after ) ->
+                if index - before < after - index then
+                    ( wordStartFrom before, before )
+
+                else
+                    ( after, wordEndFrom after )
+
+            ( Just before, Nothing ) ->
+                ( wordStartFrom before, before )
+
+            ( Nothing, Just after ) ->
+                ( after, wordEndFrom after )
+
+            ( Nothing, Nothing ) ->
+                ( index, index )
 
 
 {-| The caret nearest the mouse.

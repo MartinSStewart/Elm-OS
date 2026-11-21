@@ -680,6 +680,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
             let
                 state3 =
                     TextInput.mouseDown
+                        time
                         textInput2.style
                         cursor
                         relativePositionToUi
@@ -694,6 +695,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
             let
                 state3 =
                     TextInputMultiline.mouseDown
+                        time
                         textInput2.style
                         cursor
                         relativePositionToUi

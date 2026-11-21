@@ -1764,7 +1764,7 @@ openInWebViewer url model =
         , uiState =
             Ui.insertElement
                 (WebViewer WebViewer.Types.UrlInput)
-                (TextInputState { current = { cursorPosition = String.length url, cursorSize = 0, text = url }, undoHistory = [], redoHistory = [] })
+                (TextInputState { current = { cursorPosition = String.length url, cursorSize = 0, text = url }, undoHistory = [], redoHistory = [], lastClick = Nothing })
                 opened.uiState
       }
     , case request of
