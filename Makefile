@@ -21,6 +21,7 @@
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
 #   make atlas      build/atlas.png, the texture atlas (pixel font, cursor, Noto Sans) to look at
+#   make format     run elm-format on every Elm source; make format-check fails if one isn't formatted
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
@@ -33,7 +34,7 @@
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
 #   make host-tests  /init's unit tests (host/init: touchpad scrolling, error screen text)
-#   make check      the tests that don't boot anything: check-migration, review, review-tests,
+#   make check      the tests that don't boot anything: check-migration, format-check, review, review-tests,
 #                   elm-tests, test-wire, protocol-tests, host-tests, dev-check, test-containers (CI runs these, then test
 #                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
@@ -135,7 +136,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+.PHONY: format format-check FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -342,6 +343,7 @@ migration: $(BUILD)/wire-tool
 	else \
 	  $(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes; \
 	fi
+	npx --yes $(ELM_FORMAT) --yes elm/src/Evergreen >/dev/null
 
 # Starts the versions again: deletes elm/src/Evergreen (every frozen version and migration)
 # and freezes the program as the version after the newest there was, with no migration to
@@ -354,6 +356,7 @@ migration-reset: $(BUILD)/wire-tool
 	echo "Deleting elm/src/Evergreen and freezing the program as version $$next, with no migration to it."; \
 	rm -r elm/src/Evergreen; \
 	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes --version "$$next"
+	npx --yes $(ELM_FORMAT) --yes elm/src/Evergreen >/dev/null
 
 # Until then, `make` (and so `make run` and `make test`) still builds, with a warning: a
 # draft build, whose Model is called version n + 1 and is read from version n's as it
@@ -844,6 +847,18 @@ test-containers: | check-deps
 	  { console.log(e.length ? 'eco/containers in JS FAIL: ' + e.join('; ') : 'eco/containers in JS: PASS'); process.exitCode = e.length ? 1 : 0 })"
 	@echo "passed: test-containers" $(SAY)
 
+# ---- elm-format (every Elm source is formatted; `make migration` formats what it writes)
+
+ELM_FORMAT := elm-format@0.8.8
+ELM_DIRS := elm/src elm/tests elm/bench elm/review/src elm/review/tests tools/wire/src tools/wire/test
+
+format:
+	npx --yes $(ELM_FORMAT) --yes $(ELM_DIRS) >/dev/null
+
+format-check:
+	npx --yes $(ELM_FORMAT) --validate $(ELM_DIRS)
+	@echo "passed: format-check" $(SAY)
+
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
 review: elm/src/Sprites.elm
@@ -886,7 +901,7 @@ dev-check:
 	@echo "passed: dev-check" $(SAY)
 
 check:
-	+$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
+	+$(MAKE) -j1 check-migration format-check review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
 	@echo "make check: all passed" $(SAY)
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
