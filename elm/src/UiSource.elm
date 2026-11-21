@@ -8,7 +8,7 @@ inspector (Ctrl+Shift+Q, Ui.inspect). On line 12 of Main,
 
 becomes
 
-    (UiSource.at1 "Main" 12 "text" Ui.text) "Hello"
+    UiSource.at1 "Main" 12 "text" Ui.text "Hello"
 
 on the same line, so line numbers stay as they are. `at2` and `at3` are the same for
 functions of two and three arguments. Nothing in elm/src calls them.

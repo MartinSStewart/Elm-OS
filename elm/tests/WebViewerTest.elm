@@ -27,7 +27,7 @@ suite =
             , test "table cells are separated"
                 (\_ -> WebViewer.pageText "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>" |> Expect.equal "a b\nc")
             , test "list items get bullets"
-                (\_ -> WebViewer.pageText "<ul><li>one</li><li>two</li></ul>" |> Expect.equal "\u{2022} one\n\u{2022} two")
+                (\_ -> WebViewer.pageText "<ul><li>one</li><li>two</li></ul>" |> Expect.equal "• one\n• two")
             , test "the title in the head is shown, scripts there aren't"
                 (\_ ->
                     WebViewer.pageText "<html><head><title>T</title><meta charset=utf-8><script>x()</script></head><body>B</body></html>"

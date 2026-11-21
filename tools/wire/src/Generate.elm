@@ -625,9 +625,24 @@ generateWith options modules modelKey msgKey configKey =
                             ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
                                  , source = entryModule options configKey modelKey msgKey shapes
                                  }
+                               , { path = "model-shape", source = modelShapeFile shapes }
                                ]
                     , warnings = warnings
                     }
+
+
+{-| The text of `model-shape`, next to the generated modules: the version of the Model
+this build saves (a draft's is the one after the newest frozen version) and the shape of
+its types, one per line. Elm OS keeps it with each build (/etc/elmos/model-shape), so
+a build made on the device (host/init/src/build.rs) can be refused when its Model isn't
+of the same types as the running one's.
+-}
+modelShapeFile : { a | model : String, versions : List ( Int, String ) } -> String
+modelShapeFile shapes =
+    String.fromInt (List.map Tuple.first shapes.versions |> List.maximum |> Maybe.withDefault 0)
+        ++ "\n"
+        ++ shapes.model
+        ++ "\n"
 
 
 allDefs : Dict String Module -> Dict Key Def
@@ -671,8 +686,9 @@ isLazyKey m name =
 
 
 {-| Types that are never saved, and what they come back as: `Ui.lazy`'s keys (see
-`isLazyKey`), and Ui's `LazyCache`, last frame's lazy elements, which would be big and
-are only a cache. The rest of wire sees each as a type with one variant and nothing in
+`isLazyKey`), Ui's `LazyCache`, last frame's lazy elements, which would be big and
+are only a cache, and `ImageCache.ImageCache`, where image chunks are in the image
+texture, which is empty after a reboot. The rest of wire sees each as a type with one variant and nothing in
 it (`unsavedBody`), so it has a fixed shape.
 -}
 unsavedValue : Module -> String -> Maybe String
@@ -683,13 +699,16 @@ unsavedValue m name =
     else if unfreezeAny m.name == "Ui" && name == "LazyCache" then
         Just "noLazyCache"
 
+    else if unfreezeAny m.name == "ImageCache" && name == "ImageCache" then
+        Just "empty"
+
     else
         Nothing
 
 
 unsavedBody : String -> Body
 unsavedBody name =
-    if name == "LazyCache" then
+    if name == "LazyCache" || name == "ImageCache" then
         Custom [ ( "Empty", [] ) ]
 
     else
@@ -1946,7 +1965,6 @@ decFn ctx m self depth ty =
             "Wire.fail"
 
 
-
 {-| Drops the parentheses around a whole expression, which every expression that
 starts with one here has.
 -}
@@ -1967,7 +1985,7 @@ unwrap expr =
 builds whose shapes are the same read each other's data. Type variables are
 numbered, and labels such as a Quantity's units are left out, since neither changes
 the data. `rename` maps module names, so that a frozen version's shape (whose
-modules are Evergreen.V<n>.*) can be compared with the current one's.
+modules are Evergreen.V<n>.\*) can be compared with the current one's.
 -}
 rootShape : Dict Key Def -> Dict Key (List Bool) -> (String -> String) -> Key -> String
 rootShape defs used rename key =
@@ -2179,7 +2197,7 @@ stringLiteral s =
 
 
 {-| The frozen versions of the Model's types: version n is the modules
-Evergreen.V<n>.*, a copy of the program as it was when it was frozen (of what the
+Evergreen.V<n>.\*, a copy of the program as it was when it was frozen (of what the
 Model's types and the migration need, see Freeze.elm), and Evergreen.Migrate.V<n>
 turns a Model of version n - 1 into one of version n. The newest version must have
 the same shape as the current types, so a Model saved by this build is of that

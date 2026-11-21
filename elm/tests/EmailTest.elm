@@ -79,8 +79,8 @@ header2 =
 suite : Test
 suite =
     describe "Email"
-        [ test "lists the inbox over a session that arrives in pieces" (
-            \_ ->
+        [ test "lists the inbox over a session that arrives in pieces"
+            (\_ ->
                 let
                     ( model, effects ) =
                         Email.link account Email.init
@@ -118,9 +118,8 @@ suite =
                     , Nothing
                     )
             )
-
-        , test "a wrong password shows the server's reason" (
-            \_ ->
+        , test "a wrong password shows the server's reason"
+            (\_ ->
                 let
                     ( model, _ ) =
                         Email.link account Email.init
@@ -130,9 +129,8 @@ suite =
                 in
                 Expect.equal ( model.error, model.session ) ( Just "Couldn't log in: [AUTHENTICATIONFAILED] Invalid credentials", Nothing )
             )
-
-        , test "a session that hangs ends" (
-            \_ ->
+        , test "a session that hangs ends"
+            (\_ ->
                 let
                     ( model, _ ) =
                         Email.link account Email.init
@@ -142,17 +140,15 @@ suite =
                 in
                 Expect.equal ( model2.session, model2.error ) ( Nothing, Just "The server took too long to answer." )
             )
-
-        , test "the server for an address" (
-            \_ ->
+        , test "the server for an address"
+            (\_ ->
                 Expect.equal
                     (List.map Email.serverFor [ "a@gmail.com", "a@Fastmail.com", "a@mycompany.org" ])
                     [ "imap.gmail.com", "imap.fastmail.com", "imap.mycompany.org" ]
             )
-
         , describe "Imap"
-            [ test "a literal waits for all its bytes" (
-                \_ ->
+            [ test "a literal waits for all its bytes"
+                (\_ ->
                     Expect.equal
                         ( Imap.nextResponse "* 1 FETCH (BODY[TEXT] {5}\u{000D}\nhel"
                         , Imap.nextResponse "* 1 FETCH (BODY[TEXT] {5}\u{000D}\nhello)\u{000D}\nrest"
@@ -161,42 +157,36 @@ suite =
                         , Just ( Imap.Untagged [ Imap.Text "* 1 FETCH (BODY[TEXT] ", Imap.Literal "hello", Imap.Text ")" ], "rest" )
                         )
                 )
-
-            , test "a tagged response" (
-                \_ ->
+            , test "a tagged response"
+                (\_ ->
                     Imap.nextResponse "a2 NO nope\u{000D}\n"
                         |> Expect.equal (Just ( Imap.Tagged "a2" Imap.StatusNo "nope", "" ))
                 )
-
-            , test "plain text body" (
-                \_ ->
+            , test "plain text body"
+                (\_ ->
                     Imap.decodeBody [] "Hello\u{000D}\nthere\u{000D}\n"
                         |> Expect.equal "Hello\nthere"
                 )
-
-            , test "quoted-printable UTF-8 body" (
-                \_ ->
+            , test "quoted-printable UTF-8 body"
+                (\_ ->
                     Imap.decodeBody
                         [ ( "content-type", "text/plain; charset=utf-8" ), ( "content-transfer-encoding", "quoted-printable" ) ]
                         "Gr=C3=BC=C3=9Fe, a long =\nline"
                         |> Expect.equal "Grüße, a long line"
                 )
-
-            , test "the plain part of a multipart message, base64" (
-                \_ ->
+            , test "the plain part of a multipart message, base64"
+                (\_ ->
                     Imap.decodeBody
                         [ ( "content-type", "multipart/alternative; boundary=\"XX\"" ) ]
                         (crlf "preamble\n--XX\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: base64\n\nSGVsbG8gd29ybGQh\n--XX\nContent-Type: text/html\n\n<p>Other</p>\n--XX--\n")
                         |> Expect.equal "Hello world!"
                 )
-
-            , test "HTML only" (
-                \_ ->
+            , test "HTML only"
+                (\_ ->
                     Imap.decodeBody
                         [ ( "content-type", "text/html" ) ]
                         "<html><style>p{color:red}</style><body><p>Hi &amp; bye</p><p>Two</p></body></html>"
                         |> Expect.equal "Hi & bye\nTwo"
                 )
-
             ]
         ]

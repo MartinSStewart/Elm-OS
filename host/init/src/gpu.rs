@@ -2,7 +2,9 @@
 //! binary, and Mesa's drivers are shared libraries that can't be loaded into it, so
 //! the renderer is its own dynamically linked program that owns the display.
 //!
-//!   its stdin  <- frames: u32 number of scenes, then for each the display's connector
+//!   its stdin  <- frames: u32 number of writes into the image texture, each u32 left,
+//!                 top, width, height and its RGBA pixels (common/src/images.rs);
+//!                 then u32 number of scenes, and for each the display's connector
 //!                 id, a u32 count and that many Tri (common/src/atlas.rs)
 //!   its stdout -> "out CONNECTOR X Y W H MM_W MM_H NAME" for each display, then
 //!                 "ok CURSOR RENDERER" once they are up; then "f GPU_NS" for each
@@ -13,6 +15,7 @@
 
 use common::atlas::Tri;
 use common::cursor::Picture;
+use common::images;
 use protocol::Display;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -194,9 +197,20 @@ impl Gpu {
         self.acks.as_ref().map_or(-1, |f| f.as_raw_fd())
     }
 
-    /// Hands a frame over: each display's triangles. False if the renderer is gone.
-    pub fn send_frame(&mut self, scenes: &[(u32, Vec<Tri>)]) -> bool {
-        let mut head = (scenes.len() as u32).to_ne_bytes().to_vec();
+    /// Hands a frame over: the writes into the image texture since the last one (each
+    /// `clipped`), then each display's triangles. False if the renderer is gone.
+    pub fn send_frame(&mut self, writes: &[images::Write], scenes: &[(u32, Vec<Tri>)]) -> bool {
+        let mut head = (writes.len() as u32).to_ne_bytes().to_vec();
+        for w in writes {
+            for n in [w.left, w.top, w.width, w.height()] {
+                head.extend_from_slice(&n.to_ne_bytes());
+            }
+            if self.frames.write_all(&head).is_err() || self.frames.write_all(&w.pixels).is_err() {
+                return false;
+            }
+            head.clear();
+        }
+        head.extend_from_slice(&(scenes.len() as u32).to_ne_bytes());
         for (display, tris) in scenes {
             head.extend_from_slice(&display.to_ne_bytes());
             head.extend_from_slice(&(tris.len() as u32).to_ne_bytes());

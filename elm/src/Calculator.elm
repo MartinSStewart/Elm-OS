@@ -1,6 +1,7 @@
 module Calculator exposing
     ( Entry(..)
     , Model
+    , appSize
     , display
     , expression
     , format
@@ -26,6 +27,7 @@ import Calculator.Types exposing (Key(..), Operator(..))
 import Color
 import Coord exposing (Coord)
 import Keyboard
+import Layout
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
@@ -608,6 +610,11 @@ sans =
 width : Int
 width =
     4 * Coord.xRaw buttonSize + 3 * spacing
+
+
+appSize : Layout.Limits
+appSize =
+    Layout.fixed (Ui.size (view False init))
 
 
 {-| The calculator's window. `focused` when keys go to it: then its display has the

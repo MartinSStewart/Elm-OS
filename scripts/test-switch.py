@@ -15,11 +15,15 @@ on a copy of build/data-empty.img:
 Both builds here have the same Model types, so this checks the switching rather
 than a migration (make test-wire checks those).
 
+What the editor has, and where the buttons are, come from the facts Elm writes to the
+serial log with ELMOS_TEST=1 (scripts/testfacts.py, Main.testFacts), not from the
+screen, so a change to how Elm OS looks doesn't break this test.
+
     python3 scripts/test-switch.py      (make test-switch)
 """
-import json, os, shutil, socket, stat, subprocess, sys, tempfile, time
+import json, os, re, shutil, socket, stat, subprocess, sys, tempfile, time
 
-import toolbar
+from testfacts import Facts
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -68,7 +72,7 @@ def boot():
         ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
          "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
          "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "none",
-         "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1",
+         "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1 ELMOS_TEST=1",
          "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
          "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
          "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
@@ -103,21 +107,22 @@ def power_cut():
     qemu.wait()
 
 
-def screen():
-    path = os.path.join(tmp, "shot.ppm")
-    cmd("screendump", filename=path)
-    time.sleep(0.3)
-    parts = open(path, "rb").read().split(b"\n", 3)
-    w, h = map(int, parts[1].split())
-    return w, h, parts[3]
+facts = Facts(serial, fail, lambda: qemu.poll() is None)
+
+
+def screen_size():
+    """The display's size, from the host's "[host] display <name> <w>x<h> ..." line."""
+    m = re.search(r"\[host\] display \S+ (\d+)x(\d+)", serial())
+    if not m:
+        fail("the host didn't say how big the display is")
+    return int(m.group(1)), int(m.group(2))
 
 
 def move(x, y):
-    w, h, _ = SIZE
     cmd("input-send-event", events=[
         {"type": "abs", "data": {"axis": "x", "value": int(x / w * 0x7fff)}},
         {"type": "abs", "data": {"axis": "y", "value": int(y / h * 0x7fff)}}])
-    time.sleep(0.5)
+    facts.wait("pointer", lambda p: abs(p[0] - x) <= 1 and abs(p[1] - y) <= 1, f"the pointer at {x},{y}")
 
 
 def click(x, y):
@@ -125,22 +130,16 @@ def click(x, y):
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
     time.sleep(0.3)
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
-    time.sleep(1)
+    time.sleep(0.3)
 
 
-def press(name):
-    """Clicks a toolbar button by its label (scripts/toolbar.py finds it on screen)."""
-    shot = screen()
-    try:
-        x, y = toolbar.buttons(shot, s)[name]
-    except RuntimeError as e:
-        fail(str(e))
-    click(x, y)
+def press(label):
+    """Clicks the button that says `label` (see Facts.button)."""
+    click(*facts.button(label))
 
 
-def region(shot, x0, y0, x1, y1):
-    w, _, px = shot
-    return b"".join(px[(y * w + x0) * 3:(y * w + x1) * 3] for y in range(y0, y1))
+def editor_has(want, since, what):
+    facts.wait("editor", lambda text: text == want, what, since=since)
 
 
 def partition_copy():
@@ -186,17 +185,15 @@ def wait_for_after(start, text, timeout=180):
 # ---- 1. type "hello" in the built-in build
 
 boot()
-SIZE = screen()
-w, h, _ = SIZE
-s = 2 if w >= 2000 else 1
+w, h = screen_size()
 press("Text editor")
+# The keyboard and the mouse are separate devices: keys sent after a click can reach Elm
+# before it, so wait for the click to have given the editor the focus.
+facts.wait("buttons", lambda bs: any(b["textBox"] and b["focused"] for b in bs), "the editor to have the focus")
 for ch in "hello":
     cmd("send-key", keys=[{"type": "qcode", "data": ch}])
     time.sleep(0.15)
-move(w - 5, h // 2)
-time.sleep(2)
-EDITOR = (w // 2 - 200 * s, h // 2 - 100 * s, w // 2 + 200 * s, h // 2 + 100 * s)
-typed = screen()
+editor_has("hello", 0, "the editor to have 'hello'")
 start = len(serial())
 wait_for_after(start, "[persist] synced /data/log")
 wait_for_after(len(serial()), "[persist] synced /data/log")
@@ -208,10 +205,9 @@ print("typed 'hello' in the built-in build")
 put_build("b", f"{ROOT}/build/elm")
 boot()
 wait_for("[host] switched to build b")
-move(w - 5, h // 2)
-time.sleep(3)
-if region(screen(), *EDITOR) != region(typed, *EDITOR):
-    fail("the text editor isn't as it was after switching to build b")
+# Build b writes all the facts when it starts (the built-in build writes only the ones
+# that change, and its editor doesn't).
+editor_has("hello", serial().index("[host] switching from"), "the editor to have 'hello' after switching to build b")
 power_cut()
 current = disk_file("programs/current")
 if current != b"b\n":
@@ -236,11 +232,8 @@ while serial().count("[host] running build b") < 2:
     if time.time() > end:
         fail("build b wasn't started again")
     time.sleep(0.2)
-time.sleep(5)
-move(w - 5, h // 2)
-time.sleep(3)
-if region(screen(), *EDITOR) != region(typed, *EDITOR):
-    fail("the text editor isn't as it was after going back to build b")
+again = serial().rindex("[host] running build b")
+editor_has("hello", again, "the editor to have 'hello' after going back to build b")
 power_cut()
 current = disk_file("programs/current")
 if current != b"b\n":

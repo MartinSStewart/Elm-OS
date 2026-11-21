@@ -73,6 +73,7 @@ pub const GL_TEXTURE0: GLenum = 0x84C0;
 pub const GL_TEXTURE_2D: GLenum = 0x0DE1;
 pub const GL_UNPACK_ALIGNMENT: GLenum = 0x0CF5;
 pub const GL_ALPHA: GLenum = 0x1906;
+pub const GL_RGBA: GLenum = 0x1908;
 pub const GL_TEXTURE_MIN_FILTER: GLenum = 0x2801;
 pub const GL_TEXTURE_MAG_FILTER: GLenum = 0x2800;
 pub const GL_NEAREST: GLint = 0x2600;
@@ -128,6 +129,17 @@ extern "C" {
         w: GLsizei,
         h: GLsizei,
         border: GLint,
+        format: GLenum,
+        kind: GLenum,
+        data: *const c_void,
+    );
+    pub fn glTexSubImage2D(
+        target: GLenum,
+        level: GLint,
+        x: GLint,
+        y: GLint,
+        w: GLsizei,
+        h: GLsizei,
         format: GLenum,
         kind: GLenum,
         data: *const c_void,

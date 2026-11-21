@@ -139,6 +139,19 @@ pub fn model_version(build: &Build) -> Option<u64> {
     }
 }
 
+/// The version and shape of the Model's types a build saves (tools/wire's model-shape):
+/// for the built-in one from the initramfs, for one on the disk from its manifest. A
+/// build made on this computer (build.rs) must have the running build's.
+pub fn model_shape(build: &Build) -> Option<String> {
+    match build {
+        None => std::fs::read_to_string("/etc/elmos/model-shape").ok(),
+        Some(name) => {
+            let text = std::fs::read_to_string(persist::Disk::path(&format!("programs/{name}/manifest.json"))).ok()?;
+            Some(serde_json::from_str::<serde_json::Value>(&text).ok()?.get("modelShape")?.as_str()?.to_owned())
+        }
+    }
+}
+
 /// The commit a build was made from, as far as known: a disk build's name is the
 /// first 12 digits of its commit; the built-in one says in /etc/elmos/commit (with
 /// "-dirty" if it had uncommitted changes).

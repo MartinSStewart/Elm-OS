@@ -2,6 +2,7 @@ module TicTacToe exposing
     ( Mark(..)
     , Model
     , Status(..)
+    , appSize
     , init
     , press
     , status
@@ -17,6 +18,7 @@ The board is a list of nine squares, top row first, each empty or holding a mark
 
 import Color
 import Coord exposing (Coord)
+import Layout
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TicTacToe.Types
 import Ui exposing (Element)
@@ -250,3 +252,10 @@ squareView model i =
     Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), padding = Ui.noPadding }
         isWinning
         (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]))
+
+
+{-| The window's size, worked out once.
+-}
+appSize : Layout.Limits
+appSize =
+    Layout.fixed (Ui.size (view init))

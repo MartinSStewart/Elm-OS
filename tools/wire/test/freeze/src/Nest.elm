@@ -7,6 +7,7 @@ Nest.Leaf's type, and the two imported each other.
 
 `duration` is a package's alias (Duration = Quantity Float Duration.Seconds), which
 tools/wire writes out in full, so the frozen Nest must import Quantity and Duration.
+
 -}
 
 import Duration exposing (Duration)

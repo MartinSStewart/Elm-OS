@@ -366,7 +366,6 @@ toggle index (Comment comment) =
         Comment comment
 
 
-
 {-| Whether a link in a comment points away from Hacker News: it has a scheme and
 isn't on news.ycombinator.com.
 -}
@@ -729,23 +728,11 @@ titleSpacing =
     8
 
 
-{-| How wide the window's content is in a window this big (UI pixels).
--}
-pageWidth : Coord UiPixels -> Int
-pageWidth windowSize =
-    min maxPageWidth (Coord.xRaw windowSize - 2 * windowPadding - 16)
-
-
-maxPageWidth : Int
-maxPageWidth =
-    900
-
-
 {-| The window is no wider than this (UI pixels), however much room there is.
 -}
 maxWindowWidth : Int
 maxWindowWidth =
-    maxPageWidth + 2 * windowPadding + 16
+    1000
 
 
 {-| How far a reply is indented from the comment it replies to.
@@ -771,45 +758,43 @@ toggleSpacing =
 -}
 view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
-    Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
-        (case model.page of
-            PostsPage ->
-                case model.data of
-                    NotLoading ->
-                        Ui.empty
+    Ui.elWithWidth
+        { width = Coord.xRaw windowSize, padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        (\width ->
+            case model.page of
+                PostsPage ->
+                    case model.data of
+                        NotLoading ->
+                            Ui.empty
 
-                    Loading maybe ->
-                        case maybe of
-                            Just data ->
-                                postsView lazyCache windowSize data
+                        Loading maybe ->
+                            case maybe of
+                                Just data ->
+                                    postsView lazyCache windowSize width data
 
-                            Nothing ->
-                                Ui.text "Loading..."
+                                Nothing ->
+                                    Ui.text "Loading..."
 
-                    Loaded data ->
-                        postsView lazyCache windowSize data
+                        Loaded data ->
+                            postsView lazyCache windowSize width data
 
-                    LoadFailed httpError ->
-                        Ui.text (Effect.httpErrorToString httpError)
+                        LoadFailed httpError ->
+                            Ui.text (Effect.httpErrorToString httpError)
 
-            CommentsPage id title ->
-                commentsView
-                    lazyCache
-                    windowSize
-                    id
-                    title
-                    (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
+                CommentsPage id title ->
+                    commentsView
+                        lazyCache
+                        windowSize
+                        width
+                        id
+                        title
+                        (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
 
 
-postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
-postsView lazyCache windowSize data =
+postsView : Ui.LazyCache UiId -> Coord UiPixels -> Int -> List Post -> Element UiId
+postsView lazyCache windowSize width data =
     let
-        width : Int
-        width =
-            pageWidth windowSize
-
         title : Element id
         title =
             Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
@@ -873,13 +858,9 @@ postView width index { id, title, comments } =
             }
 
 
-commentsView : Ui.LazyCache UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache windowSize postId title comments =
+commentsView : Ui.LazyCache UiId -> Coord UiPixels -> Int -> PostId -> String -> CommentsState -> Element UiId
+commentsView lazyCache windowSize width postId title comments =
     let
-        width : Int
-        width =
-            pageWidth windowSize
-
         backButton : Element UiId
         backButton =
             Ui.button
@@ -894,18 +875,19 @@ commentsView lazyCache windowSize postId title comments =
     in
     Ui.column
         titleSpacing
-        [ Ui.row
-            headerSpacing
-            [ backButton
-            , Ui.customText
-                Small
-                [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels (width - Coord.xRaw (Ui.size backButton) - headerSpacing)) title
-                  , color = Color.textColor
-                  , font = Sans Bold
-                  , decorations = []
-                  , link = Nothing
-                  }
-                ]
+        [ Ui.rowFromLeft
+            { width = width, spacing = headerSpacing }
+            [ \_ -> backButton
+            , \rest ->
+                Ui.customText
+                    Small
+                    [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels rest) title
+                      , color = Color.textColor
+                      , font = Sans Bold
+                      , decorations = []
+                      , link = Nothing
+                      }
+                    ]
             ]
         , (case comments of
             CommentsLoading ->
@@ -937,10 +919,6 @@ commentsColumn lazyCache width comments =
 commentView : Ui.LazyCache UiId -> Int -> Comment -> Element UiId
 commentView lazyCache width (Comment comment) =
     let
-        textWidth : Int
-        textWidth =
-            width - toggleWidth - toggleSpacing
-
         repliesButton : Element UiId
         repliesButton =
             if comment.isExpanded then
@@ -951,37 +929,35 @@ commentView lazyCache width (Comment comment) =
 
         text : Element UiId
         text =
-            Ui.row
-                toggleSpacing
-                [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-                , Ui.customTextWrapped
-                    Small
-                    (Units.uiPixels textWidth)
-                    (commentHeader comment.author comment.date
-                        ++ List.map (spanSegment (greyColor comment.grey)) comment.content
-                    )
-                    |> Ui.links (HackerNews HackerNews.Types.CommentLink)
+            Ui.rowFromLeft
+                { width = width, spacing = toggleSpacing }
+                [ \_ -> Ui.right { width = Units.uiPixels toggleWidth } repliesButton
+                , \rest ->
+                    Ui.customTextWrapped
+                        Small
+                        (Units.uiPixels rest)
+                        (commentHeader comment.author comment.date
+                            ++ List.map (spanSegment (greyColor comment.grey)) comment.content
+                        )
+                        |> Ui.links (HackerNews HackerNews.Types.CommentLink)
                 ]
     in
     if comment.isExpanded then
         Ui.column
             commentSpacing
             [ text
-            , Ui.row
-                0
-                [ Ui.left (Units.uiPixels replyIndent) Ui.empty
-                , commentsColumn lazyCache (width - replyIndent) comment.children
+            , Ui.rowFromLeft
+                { width = width, spacing = 0 }
+                [ \_ -> Ui.left (Units.uiPixels replyIndent) Ui.empty
+                , \rest -> commentsColumn lazyCache rest comment.children
                 ]
             ]
 
     else
-        Ui.row
-            toggleSpacing
-            [ Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-            , Ui.customTextWrapped
-                Small
-                (Units.uiPixels textWidth)
-                (commentHeader comment.author comment.date)
+        Ui.rowFromLeft
+            { width = width, spacing = toggleSpacing }
+            [ \_ -> Ui.right { width = Units.uiPixels toggleWidth } repliesButton
+            , \rest -> Ui.customTextWrapped Small (Units.uiPixels rest) (commentHeader comment.author comment.date)
             ]
 
 

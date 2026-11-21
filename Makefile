@@ -14,12 +14,14 @@
 #   make GPU=0      leave Mesa out: CPU rendering only, and an 18 MB initramfs
 #   make test-persist  boot twice with a power cut between: the Model must come back
 #   make test-switch   switch to another build of the Elm program without restarting
+#   make test-build    build the Elm program again on Elm OS (Code app) and switch to it
 #   make test-update   follow the deployed branch, against a stand-in for GitHub
 #   make measure-frames  how long Elm takes to answer a frame, in QEMU (MEASURE_GPU=1 for virgl)
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
 #   make atlas      build/atlas.png, the texture atlas (pixel font, cursor, Noto Sans) to look at
+#   make format     run elm-format on every Elm source; make format-check fails if one isn't formatted
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
@@ -32,7 +34,7 @@
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
 #   make host-tests  /init's unit tests (host/init: touchpad scrolling, error screen text)
-#   make check      the tests that don't boot anything: check-migration, review, review-tests,
+#   make check      the tests that don't boot anything: check-migration, format-check, review, review-tests,
 #                   elm-tests, test-wire, protocol-tests, host-tests, dev-check, test-containers (CI runs these, then test
 #                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
@@ -73,6 +75,10 @@ ECO_PATCHED_DIR ?= $(ECO_DIR)-patched
 ifeq ($(origin ECO),undefined)
 # elmos-bin/eco runs bin/eco with a package cache of its own (ECO_DIR/home/.eco), not
 # ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
+# The patched eco compiles an object in this many pieces at once (tools/eco-patched/0005). Its
+# default is one per core, but the bytes depend on the count, so it's fixed: builds on computers
+# with other numbers of cores stay the same. host/init/src/build.rs uses the same number.
+export ECO_SPLIT_CODEGEN := 4
 ifeq ($(ECO_PATCHED),1)
 ECO        := $(ECO_PATCHED_DIR)/elmos-bin/eco
 export PATH := $(ECO_PATCHED_DIR)/elmos-bin:$(PATH)
@@ -130,8 +136,8 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu test test-gpu test-displays clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-errors test-update release measure-frames \
+.PHONY: format format-check FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -291,11 +297,18 @@ elm/src/Sprites.elm: $(SPRITES) host/common/src/sprites.rs host/common/src/atlas
 	$(CARGO) run -q --manifest-path host/Cargo.toml -p common --example sprites-elm \
 	  --target-dir $(abspath $(BUILD)/cargo-tools) -- $(abspath $@)
 
-$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm") elm/src/Sprites.elm
+$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm") elm/src/Sprites.elm \
+                     $(BUILD)/BuildInfo.elm
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
 	$(call WIRE,$(BUILD)/wire,--src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes)
+	cmp -s $(BUILD)/BuildInfo.elm $(BUILD)/wire/src/BuildInfo.elm || cp $(BUILD)/BuildInfo.elm $(BUILD)/wire/src/BuildInfo.elm
 	touch $@
+
+# The commit and branch elm/src came from, for the Code app's commits (elm/src/BuildInfo.elm
+# is its stub). Rewritten only when they change.
+$(BUILD)/BuildInfo.elm: FORCE
+	@mkdir -p $(BUILD); tools/build-info.sh > $@.new; cmp -s $@.new $@ && rm $@.new || mv $@.new $@
 
 # Runs tools/wire with the flags $(2), writing into the directory $(1). When it fails,
 # it still writes the program with placeholder codecs, so this compiles that: often
@@ -337,6 +350,7 @@ migration: $(BUILD)/wire-tool
 	else \
 	  $(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes; \
 	fi
+	npx --yes $(ELM_FORMAT) --yes elm/src/Evergreen >/dev/null
 
 # Starts the versions again: deletes elm/src/Evergreen (every frozen version and migration)
 # and freezes the program as the version after the newest there was, with no migration to
@@ -349,6 +363,7 @@ migration-reset: $(BUILD)/wire-tool
 	echo "Deleting elm/src/Evergreen and freezing the program as version $$next, with no migration to it."; \
 	rm -r elm/src/Evergreen; \
 	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes --version "$$next"
+	npx --yes $(ELM_FORMAT) --yes elm/src/Evergreen >/dev/null
 
 # Until then, `make` (and so `make run` and `make test`) still builds, with a warning: a
 # draft build, whose Model is called version n + 1 and is read from version n's as it
@@ -463,21 +478,45 @@ $(BUILD)/libelmos_link.a: $(HOST_SRC) | check-deps
 # -u keeps its constructor, which nothing else refers to). eco's runtime still refers
 # to libcurl for elm/http, which we don't use: host/link/src/no_curl.rs stands in for
 # it, so neither libcurl nor OpenSSL is linked.
-$(BUILD)/elm: $(BUILD)/libelmos_link.a $(BUILD)/elm.o
-	$(RT)/ld.lld --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $@ \
+#
+# ELM_LINK_ARGS(output, elm.o, libelmos_link.a): ld.lld's arguments, which the tools
+# partition carries too (link-args, for host/init/src/build.rs).
+ELM_LINK_ARGS = --eh-frame-hdr --no-dependent-libraries -static --strip-debug -o $(1) \
 	  -u elmos_link_init \
 	  $(RT)/crt/crt1.o $(RT)/crt/crti.o $(RT)/crt/clang_rt.crtbegin-x86_64.o \
 	  $(RT)/mimalloc.o $(RT)/memfuncs.o \
-	  $(BUILD)/elm.o \
+	  $(2) \
 	  --start-group \
 	    $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST)) \
 	    --whole-archive $(RT)/project/libElmKernel_Utils.a --no-whole-archive \
 	    $(PROJECT_LIBS_REST) \
-	    $(BUILD)/libelmos_link.a \
+	    $(3) \
 	  --end-group \
 	  $(RT)/libc.a $(RT)/libc++.a $(RT)/libc++abi.a $(RT)/libzip.a $(RT)/libz.a \
 	  $(RT)/libclang_rt.builtins-x86_64.a $(RT)/libunwind.a \
 	  $(RT)/crt/clang_rt.crtend-x86_64.o $(RT)/crt/crtn.o
+
+$(BUILD)/elm: $(BUILD)/libelmos_link.a $(BUILD)/elm.o
+	$(RT)/ld.lld $(call ELM_LINK_ARGS,$@,$(BUILD)/elm.o,$(BUILD)/libelmos_link.a)
+
+# ---- the tools partition: eco and what else building the Elm program again on the
+# computer takes (scripts/make-tools-fs.sh, host/init/src/build.rs). On the USB stick,
+# and for QEMU as a disk of its own, build/tools-qemu.img.
+TOOLS_ECO_ROOT := $(if $(filter 1,$(ECO_PATCHED)),$(ECO_PATCHED_DIR),$(ECO_DIR))
+
+$(BUILD)/link-args: $(BUILD)/eco-setting Makefile
+	@mkdir -p $(BUILD)
+	printf '%s\n' $(subst $(RT),/tools/eco/lib/eco-runtime,$(call ELM_LINK_ARGS,@OUT@,@ELM_O@,/tools/libelmos_link.a)) > $@
+
+# After elm.o, so that every package elm.json names is downloaded and compiled, but not
+# remade when only the Elm code changes: `make run` would spend 10 s on it each time.
+$(BUILD)/tools.fs: $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args elm/elm.json \
+                   scripts/make-tools-fs.sh $(BUILD)/source-date $(TOOLS_ECO_ROOT)/bin/eco | $(BUILD)/elm.o
+	@echo "Making the tools partition (eco and its libraries, about 600 MB)" $(SAY)
+	scripts/make-tools-fs.sh $(TOOLS_ECO_ROOT) elm/elm.json $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args $@ > /dev/null
+
+$(BUILD)/tools-qemu.img: $(BUILD)/tools.fs scripts/make-tools-image.sh
+	scripts/make-tools-image.sh $< $@
 
 # ---- the GPU renderer: a small dynamically linked program, because Mesa's
 # drivers are shared libraries. Mesa and its libraries come from Alpine Linux
@@ -575,6 +614,7 @@ $(BUILD)/initramfs.cpio: $(INITRAMFS_DEPS) $(BUILD)/licenses/.done tools/copy-li
 	cp $(BUILD)/commit $(BUILD)/rootfs/etc/elmos/commit
 	cp $(BUILD)/host-version $(BUILD)/rootfs/etc/elmos/host-version
 	cp $(BUILD)/model-version $(BUILD)/rootfs/etc/elmos/model-version
+	cp $(BUILD)/wire/src/model-shape $(BUILD)/rootfs/etc/elmos/model-shape
 ifeq ($(GPU),1)
 	mkdir -p $(BUILD)/rootfs/usr/bin
 	cp $(BUILD)/elmos-gpu $(BUILD)/rootfs/usr/bin/
@@ -654,8 +694,8 @@ usb: check-migration
 	+$(MAKE) $(BUILD)/elmos-usb.img
 	@echo "Built $(BUILD)/elmos-usb.img" $(SAY)
 
-$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
-	scripts/make-usb-image.sh $< $@
+$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI $(BUILD)/tools.fs scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
+	scripts/make-usb-image.sh $< $(BUILD)/tools.fs $@
 
 check-usb-deps:
 	@scripts/check-deps.sh usb
@@ -668,6 +708,12 @@ usb-write: usb
 run-usb: usb | check-run-deps
 	scripts/run-qemu.sh --usb
 
+# Types the clipboard (or what's piped in: `echo hi | make paste`) into the QEMU that
+# `make run` started, where the keyboard focus is (scripts/qemu-paste.py).
+paste:
+	python3 -I scripts/qemu-paste.py
+
+
 test-usb: usb | check-run-deps
 	python3 scripts/test-qemu.py --usb
 
@@ -675,8 +721,9 @@ test-usb: usb | check-run-deps
 
 # The data disk for QEMU. Made once: it holds what Elm OS saved, so it isn't rebuilt
 # when the script changes. Delete it to start afresh.
+# 256 MiB, like the USB stick's: room for builds made with the Code app (build.rs).
 $(BUILD)/data-qemu.img: | check-usb-deps
-	scripts/make-data-image.sh $@
+	scripts/make-data-image.sh $@ 256
 
 # An empty one for the tests, which copy it.
 $(BUILD)/data-empty.img: scripts/make-data-image.sh scripts/make-data-fs.sh | check-usb-deps
@@ -688,10 +735,10 @@ RUN_DATA = if grep -q elmos-draft-build $(BUILD)/wire/src/ElmOs.elm; then \
              cp --sparse=always $(BUILD)/data-qemu.img $(BUILD)/data-draft.img; \
              export QEMU_DATA=$(BUILD)/data-draft.img; fi
 
-run: all $(BUILD)/data-qemu.img | check-run-deps
+run: all $(BUILD)/data-qemu.img $(BUILD)/tools-qemu.img | check-run-deps check-usb-deps
 	$(RUN_DATA); scripts/run-qemu.sh
 
-run-cpu: all $(BUILD)/data-qemu.img | check-run-deps
+run-cpu: all $(BUILD)/data-qemu.img $(BUILD)/tools-qemu.img | check-run-deps check-usb-deps
 	$(RUN_DATA); QEMU_GPU=0 scripts/run-qemu.sh
 
 test: all $(BUILD)/data-empty.img | check-run-deps
@@ -710,6 +757,11 @@ test-persist: all $(BUILD)/data-empty.img | check-run-deps
 # from one that fails (see the script).
 test-switch: all $(BUILD)/data-empty.img | check-run-deps
 	python3 scripts/test-switch.py
+
+# Build Elm OS again on Elm OS from the Code app's edits, and switch to it (slow
+# without KVM: eco runs on QEMU's emulated CPU).
+test-build: all $(BUILD)/tools-qemu.img | check-run-deps check-usb-deps
+	python3 scripts/test-build.py
 
 # The error screen: a crash loop, a hang, and panics in /init (see the script).
 test-errors: all $(BUILD)/data-empty.img | check-run-deps
@@ -809,6 +861,18 @@ test-containers: | check-deps
 	  { console.log(e.length ? 'eco/containers in JS FAIL: ' + e.join('; ') : 'eco/containers in JS: PASS'); process.exitCode = e.length ? 1 : 0 })"
 	@echo "passed: test-containers" $(SAY)
 
+# ---- elm-format (every Elm source is formatted; `make migration` formats what it writes)
+
+ELM_FORMAT := elm-format@0.8.8
+ELM_DIRS := elm/src elm/tests elm/bench elm/review/src elm/review/tests tools/wire/src tools/wire/test
+
+format:
+	npx --yes $(ELM_FORMAT) --yes $(ELM_DIRS) >/dev/null
+
+format-check:
+	npx --yes $(ELM_FORMAT) --validate $(ELM_DIRS)
+	@echo "passed: format-check" $(SAY)
+
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
 review: elm/src/Sprites.elm
@@ -851,7 +915,7 @@ dev-check:
 	@echo "passed: dev-check" $(SAY)
 
 check:
-	+$(MAKE) -j1 check-migration review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
+	+$(MAKE) -j1 check-migration format-check review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
 	@echo "make check: all passed" $(SAY)
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
@@ -890,5 +954,5 @@ MAKEFLAGS += -s --no-print-directory
 SAY = >>"$$ELMOS_SAY"
 SHELL := $(CURDIR)/tools/quiet-sh
 eco migration refresh docker run run-cpu run-usb test test-gpu test-usb test-displays test-persist \
-test-switch test-errors test-update measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
+test-switch test-build test-errors test-update measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
 endif

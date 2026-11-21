@@ -12,12 +12,13 @@ program (Main.persistConfig.fromHost).
 
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
+import Code.Types
 import Display exposing (Display)
-import Ipv4 exposing (Ipv4)
+import Network
+import Network.Ipv4 as Ipv4 exposing (Ipv4)
+import Network.Types
 import Postcard as P
 import Time
-import Wifi
-import Wired
 
 
 type ToElm
@@ -51,9 +52,9 @@ type ToElm
         }
       -- The wifi card's name, if there is one.
     | WifiDevice (Maybe String)
-    | WifiScan (List Wifi.Network)
-    | WifiStatus Wifi.Status
-    | Wired (List Wired.Link)
+    | WifiScan (List Network.WifiNetwork)
+    | WifiStatus Network.WifiStatus
+    | Wired (List Network.WiredLink)
     | NetConfig { geoUrl : String, weatherUrl : String }
       -- Where the data disk is mounted, if there is one, the HTTP requests an
       -- earlier program made that the host is still working on (Persist.elm), and the
@@ -104,6 +105,8 @@ type ToElm
       -- The fingers lifted while scrolling: the content keeps going at this many UI
       -- pixels a second (positive is down), slowing down. 0 stops any glide.
     | ScrollMomentum Float
+      -- How a build asked for with Effect.Build is going.
+    | Build Code.Types.BuildStatus
 
 
 type HttpFailure
@@ -185,7 +188,7 @@ decoder =
                                     (\ip2 ->
                                         WifiStatus
                                             { state = state
-                                            , ssid = Wifi.stringToSsid ssid
+                                            , ssid = Network.Types.stringToSsid ssid
                                             , ip = ip2
                                             , error = error
                                             }
@@ -276,6 +279,29 @@ decoder =
                     35 ->
                         BD.map2 TlsClosed P.decodeString P.decodeString
 
+                    36 ->
+                        BD.map Build buildStatus
+
+                    _ ->
+                        BD.fail
+            )
+
+
+buildStatus : BD.Decoder Code.Types.BuildStatus
+buildStatus =
+    P.decodeUnsigned
+        |> BD.andThen
+            (\index ->
+                case index of
+                    0 ->
+                        BD.map Code.Types.BuildRunning P.decodeString
+
+                    1 ->
+                        BD.map2 Code.Types.BuildFailed P.decodeString P.decodeString
+
+                    2 ->
+                        BD.map Code.Types.Built P.decodeString
+
                     _ ->
                         BD.fail
             )
@@ -314,29 +340,29 @@ stats =
         |> BD.andThen identity
 
 
-network : BD.Decoder Wifi.Network
+network : BD.Decoder Network.WifiNetwork
 network =
-    BD.map3 Wifi.Network (BD.map Wifi.stringToSsid P.decodeString) P.decodeInt security
+    BD.map3 Network.WifiNetwork (BD.map Network.Types.stringToSsid P.decodeString) P.decodeInt security
 
 
 {-| protocol::Security's variants, in order.
 -}
-security : BD.Decoder Wifi.Security
+security : BD.Decoder Network.WifiSecurity
 security =
-    variants [ Wifi.Open, Wifi.Wpa, Wifi.Wpa3, Wifi.Enterprise, Wifi.Wep ]
+    variants [ Network.Open, Network.Wpa, Network.Wpa3, Network.Enterprise, Network.Wep ]
 
 
-wifiState : BD.Decoder Wifi.State
+wifiState : BD.Decoder Network.WifiState
 wifiState =
-    variants [ Wifi.Idle, Wifi.Connecting, Wifi.Dhcp, Wifi.Connected, Wifi.Failed ]
+    variants [ Network.Idle, Network.Connecting, Network.Dhcp, Network.Connected, Network.Failed ]
 
 
-wiredLink : BD.Decoder Wired.Link
+wiredLink : BD.Decoder Network.WiredLink
 wiredLink =
     BD.map3
         (\name state ip -> BD.map (\ip2 -> { name = name, state = state, ip = ip2 }) (maybeIpv4 ip))
         P.decodeString
-        (variants [ Wired.NoCable, Wired.Dhcp, Wired.Connected, Wired.Failed ])
+        (variants [ Network.WiredNoCable, Network.WiredDhcp, Network.WiredConnected, Network.WiredFailed ])
         P.decodeString
         |> BD.andThen identity
 

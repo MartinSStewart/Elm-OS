@@ -97,7 +97,7 @@ onClick uiId model =
             model
 
 
-{-| What was typed as a URL: trimmed, with https:// in front when it has no scheme.
+{-| What was typed as a URL: trimmed, with <https://> in front when it has no scheme.
 Nothing if nothing was typed.
 -}
 normaliseUrl : String -> Maybe String
@@ -233,7 +233,7 @@ textOf node acc =
                 "\n" :: acc
 
             else if name == "li" then
-                lineBreak :: "\u{2022} " :: List.foldr textOf (lineBreak :: acc) children
+                lineBreak :: "• " :: List.foldr textOf (lineBreak :: acc) children
 
             else if name == "td" || name == "th" then
                 List.foldr textOf (" " :: acc) children
@@ -306,7 +306,7 @@ collapseSpaces text =
 
         isSpace : Char -> Bool
         isSpace char =
-            char == ' ' || char == '\n' || char == '\t' || char == '\r'
+            char == ' ' || char == '\n' || char == '\t' || char == '\u{000D}'
     in
     case words of
         [] ->

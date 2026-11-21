@@ -1,6 +1,7 @@
 module TextInputMultilineTest exposing (suite)
 
 import Coord
+import Duration
 import Expect
 import Keyboard
 import Quantity
@@ -13,7 +14,7 @@ import Units
 
 style : TextInputMultiline.Style
 style =
-    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.uiPixels 400, lines = 10 }
+    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.uiPixels 400, lines = 10, syntax = TextInputMultiline.PlainText }
 
 
 {-| Types `text` (one key per character, '\\n' as Enter), then presses `keys`.
@@ -59,7 +60,7 @@ lineHeight =
 -}
 frames : Float -> TextInputMultiline.Model -> TextInputMultiline.Model
 frames seconds model =
-    List.foldl (\_ m -> TextInputMultiline.animate (1 / 60) m) model (List.range 1 (round (seconds * 60)))
+    List.foldl (\_ m -> TextInputMultiline.animate (Duration.seconds (1 / 60)) m) model (List.range 1 (round (seconds * 60)))
 
 
 cursor : TextInputMultiline.Model -> ( Int, Int )

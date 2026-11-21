@@ -4,8 +4,8 @@ import Coord
 import Cursor exposing (Cursor)
 import Expect
 import Quantity
-import Test exposing (Test, describe, test)
 import Sprite
+import Test exposing (Test, describe, test)
 import Ui
 import Units
 
@@ -57,12 +57,19 @@ suite =
                                     big.hotSpot
                             in
                             not
-                                (small.outline /= Nothing
-                                    && big.width == 2 * small.width
-                                    && big.height == 2 * small.height
+                                (small.outline
+                                    /= Nothing
+                                    && big.width
+                                    == 2
+                                    * small.width
+                                    && big.height
+                                    == 2
+                                    * small.height
                                     && (hx >= 0 && hy >= 0 && hx < big.width && hy < big.height)
-                                    && big.width <= 64
-                                    && big.height <= 64
+                                    && big.width
+                                    <= 64
+                                    && big.height
+                                    <= 64
                                 )
                         )
                     |> Expect.equal []

@@ -80,6 +80,11 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
         .ok_or("GitHub's answer for the deployed branch has no commit")?;
     let name = &commit[..12];
     let running = elm::running_build();
+    if running.as_deref().is_some_and(|n| n.starts_with("local-")) {
+        // Made on this computer from edited code (build.rs): switching to the deployed
+        // build would drop the edits from what runs. Not until there's a way to choose.
+        return Ok(());
+    }
     let mine = programs::commit(&running).unwrap_or_default();
     let clean = !mine.is_empty() && !mine.ends_with("-dirty") && mine.chars().all(|c| c.is_ascii_hexdigit());
     if clean && (commit.starts_with(&mine) || mine.starts_with(name)) {

@@ -2,19 +2,26 @@
 host/init/src/persist.rs), in QEMU, on a copy of build/data-empty.img.
 
   1. Boot, open the text editor and type "hello", open the calculator and work out
-     6 * 7. Once the screen shows it, wait for the host to say it has fsynced the log,
-     then kill QEMU: a power cut. Check every entry on the disk has the right length and CRC-32, and
-     that the host's message log (host/common/src/msglog.rs) carries on from the snapshot's number.
+     6 * 7. Once Elm says so, wait for the host to say it has fsynced the log, then
+     kill QEMU: a power cut. Check every entry on the disk has the right length and
+     CRC-32, and that the host's message log (host/common/src/msglog.rs) carries on
+     from the snapshot's number.
   2. Add half an entry to the end of the log, as a write cut short by the power would
-     leave it. Boot: the screen must show the editor and calculator as they were (Elm
-     reads the snapshot (its CRC-32, compiled by eco, must match zlib's) and the host
-     sends the logged messages again), and the snapshot Elm writes at start must have
-     the text in it and the log no torn entry.
-  3. Type " world" and restart with the toolbar's Restart button: Elm takes a snapshot
-     before the restart, so the log has only the messages after it.
+     leave it. Boot: the editor and calculator must be as they were (Elm reads the
+     snapshot (its CRC-32, compiled by eco, must match zlib's) and the host sends the
+     logged messages again), and once Elm has written the snapshot it takes at start,
+     the log must have no torn entry.
+  3. Empty the log, so that the next boot has only that snapshot: the editor must still
+     have "hello". Type " world" and restart with the toolbar's Restart button: Elm
+     takes a snapshot before the restart, so the log has only the messages after it,
+     and the next boot has "hello world".
   4. Power cuts at random moments while typing, a few times over: every boot must
      come back, with the editor's text one of the texts it had, never something else,
      and the log on the disk must have everything the host said it had fsynced.
+
+What the editor and the calculator have, and where the buttons are, come from the facts
+Elm writes to the serial log with ELMOS_TEST=1 (scripts/testfacts.py, Main.testFacts),
+not from the screen, so a change to how Elm OS looks doesn't break this test.
 
 The kernel's console messages are turned down (loglevel=4): the host's log lines and
 the kernel's share the serial port, and a kernel line could land in the middle of one
@@ -28,7 +35,7 @@ KVM can take seconds to get round to a key press.
 """
 import json, os, random, re, shutil, socket, struct, subprocess, sys, tempfile, time, zlib
 
-import toolbar
+from testfacts import Facts
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -74,7 +81,7 @@ def boot():
         ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
          "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
          "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "none",
-         "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1",
+         "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1 ELMOS_TEST=1",
          "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
          "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
          "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
@@ -128,29 +135,22 @@ def power_cut():
     qemu.wait()
 
 
-def screen():
-    path = os.path.join(tmp, "shot.ppm")
-    cmd("screendump", filename=path)
-    time.sleep(0.3)
-    parts = open(path, "rb").read().split(b"\n", 3)
-    w, h = map(int, parts[1].split())
-    return w, h, parts[3]
+def screen_size():
+    """The display's size, from the host's "[host] display <name> <w>x<h> ..." line."""
+    m = re.search(r"\[host\] display \S+ (\d+)x(\d+)", serial())
+    if not m:
+        fail("the host didn't say how big the display is")
+    return int(m.group(1)), int(m.group(2))
 
 
-def save_png(shot, path):
-    w, h, px = shot
-    rows = b"".join(b"\0" + px[y * w * 3:(y + 1) * w * 3] for y in range(h))
-    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
-    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
-                          + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+facts = Facts(serial, fail, lambda: qemu.poll() is None)
 
 
 def move(x, y):
-    w, h, _ = SIZE
     cmd("input-send-event", events=[
         {"type": "abs", "data": {"axis": "x", "value": int(x / w * 0x7fff)}},
         {"type": "abs", "data": {"axis": "y", "value": int(y / h * 0x7fff)}}])
-    time.sleep(0.5)
+    facts.wait("pointer", lambda p: abs(p[0] - x) <= 1 and abs(p[1] - y) <= 1, f"the pointer at {x},{y}")
 
 
 def click(x, y):
@@ -158,18 +158,31 @@ def click(x, y):
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
     time.sleep(0.3)
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
-    time.sleep(1)
+    time.sleep(0.3)
 
 
-def press(name):
-    """Clicks a toolbar button by its label (scripts/toolbar.py finds it on screen)."""
-    shot = screen()
-    try:
-        x, y = toolbar.buttons(shot, s)[name]
-    except RuntimeError as e:
-        save_png(shot, f"{ROOT}/build/screenshot.png")
-        fail(f"{e} (build/screenshot.png)")
-    click(x, y)
+def press(label):
+    """Clicks the button that says `label` (see Facts.button)."""
+    click(*facts.button(label))
+
+
+def click_editor():
+    """Clicks in the text editor (the only text box on screen here), and waits for it to
+    have the keyboard focus: the keyboard and the mouse are separate devices, so keys
+    sent after a click can reach Elm before it."""
+    click(*facts.button("...", text_box=True))
+    facts.wait("buttons", lambda bs: any(b["textBox"] and b["focused"] for b in bs), "the editor to have the focus")
+    cmd("send-key", keys=[{"type": "qcode", "data": "end"}])
+
+
+def wait_text(name, want, since=0):
+    facts.wait(name, lambda value: value == want, f"the {name} to have {want!r}", since=since)
+
+
+def restored_text():
+    """The editor's text once this boot has restored the Model: the first the editor
+    fact says, since Elm draws (and so writes facts) only once the log is replayed."""
+    return facts.wait("editor", lambda _: True, "the editor's text after the restore", timeout=120)
 
 
 QCODES = {" ": "spc", "-": "minus", ".": "dot"}
@@ -179,11 +192,6 @@ def type_text(text, pause=0.15):
     for ch in text:
         cmd("send-key", keys=[{"type": "qcode", "data": QCODES.get(ch, ch)}])
         time.sleep(pause)
-
-
-def region(shot, x0, y0, x1, y1):
-    w, _, px = shot
-    return b"".join(px[(y * w + x0) * 3:(y * w + x1) * 3] for y in range(y0, y1))
 
 
 # ---- reading the data disk, as Persist.elm does
@@ -324,73 +332,26 @@ def snapshot_text():
         fail(f"the snapshot isn't as Persist.elm writes it ({e!r}): {payload[:80]!r}")
 
 
-def editor_text(snap):
-    """The text editor's text in a snapshot. The Model is Wire3, which says nothing of
-    its own shape, so this looks for the editor's entry in the UI elements' states
-    (Ui.Model's `uiState`, a SeqDict): the key EditorInput (a byte, its place among
-    Main.UiId's variants in alphabetical order), then TextInputMultilineState (likewise
-    in Ui.ElementState), then a TextInputMultiline.Model, whose fields go alphabetically:
-    goalX (Maybe Int), then input (TextInput.Model), whose first is current (State:
-    cursorPosition, cursorSize, text). "" if the editor has no state yet (nothing typed)."""
-    model = snap[4]
-    found = set()
-    for i in range(len(model) - 2):
-        if model[i] != EDITOR_ID or model[i + 1] != EDITOR_STATE_TAG:
-            continue
-        r = Wire3(model, i + 2)
-        try:
-            if r.u8() == 1:
-                r.int()
-            cursor, size, text = r.int(), r.int(), r.string()
-        except (IndexError, ValueError, UnicodeDecodeError):
-            continue
-        if 0 <= cursor <= len(text) and abs(size) <= len(text) and text.isprintable():
-            found.add(text)
-    if len(found) > 1:
-        fail(f"the editor's state in the snapshot could be any of {sorted(found)!r}: update editor_text in this test")
-    return found.pop() if found else ""
-
-
-def variant_number(path, type_name, variant):
-    """The tag Wire3 gives `variant` of the custom type `type_name`: its place among the
-    type's variants in alphabetical order."""
-    source = re.sub(r"--[^\n]*", "", open(path).read())
-    m = re.search(rf"^type {type_name}\b[^=]*=(.*?)(?=^\S)", source, re.S | re.M)
-    if not m:
-        fail(f"no `type {type_name}` in {path}")
-    names = sorted(v.split()[0] for v in m.group(1).split("|"))
-    if variant not in names:
-        fail(f"{type_name} in {path} has no variant {variant}: update editor_text in this test")
-    return names.index(variant)
-
-
-EDITOR_ID = variant_number(f"{ROOT}/elm/src/Main.elm", "UiId", "EditorInput")
-EDITOR_STATE_TAG = variant_number(f"{ROOT}/elm/src/Ui.elm", "ElementState", "TextInputMultilineState")
-
-
 boot()
-SIZE = screen()
-w, h, _ = SIZE
-s = 2 if w >= 2000 else 1
-before = screen()
+w, h = screen_size()
 
 # ---- 1. type, then a power cut
 
+# Close the apps open from the start, so the text editor is the only text box on screen.
+for name in ["Debug", "Network", "Weather"]:
+    press(name)
+facts.wait("windows", lambda open_: sum(open_, []) == [], "the apps open at start to close")
 press("Text editor")
+facts.wait("buttons", lambda bs: any(b["textBox"] and b["focused"] for b in bs), "the editor to have the focus")
 type_text("hello")
+wait_text("editor", "hello")
 press("Calculator")
+facts.wait("windows", lambda open_: "Calculator" in sum(open_, []), "the calculator to open")
 for key in ["kp_6", "kp_multiply", "kp_7", "kp_enter"]:
     cmd("send-key", keys=[{"type": "qcode", "data": key}])
     time.sleep(0.3)
-move(w - 5, h // 2)
-time.sleep(2)
-typed = screen()
-save_png(typed, f"{ROOT}/build/persist-before.png")
-CALC = (18 * s, 84 * s, 210 * s, 140 * s)  # the calculator's display
-EDITOR = (w // 2 - 200 * s, h // 2 - 100 * s, w // 2 + 200 * s, h // 2 + 100 * s)
-if region(typed, *CALC) == region(before, *CALC) or region(typed, *EDITOR) == region(before, *EDITOR):
-    fail("typing changed nothing on screen (build/persist-before.png)")
-# The screen shows it, so Elm has handled the keys and asked for them to be logged.
+wait_text("calculator", "42")
+# Elm has handled the keys, so it has asked for them to be logged.
 wait_for_syncs()
 power_cut()
 print("power cut after typing")
@@ -409,43 +370,33 @@ if base != first_snap[3]:
 
 replace_file("log", log + struct.pack("<IIQ", 57, 0x1234ABCD, logged[-1][0] + 1) + b"\x05\x01")
 boot()
-move(w - 5, h // 2)
-time.sleep(2)
-restored = screen()
-save_png(restored, f"{ROOT}/build/persist-after.png")
-if region(restored, *CALC) != region(typed, *CALC):
-    fail("the calculator's display didn't come back (build/persist-before.png, persist-after.png)")
-if region(restored, *EDITOR) != region(typed, *EDITOR):
-    fail("the text editor didn't come back (build/persist-before.png, persist-after.png)")
+if restored_text() != "hello":
+    fail(f"after the power cut the editor has {facts.get('editor')!r}, not 'hello'")
+wait_text("calculator", "42")
 print("after the power cut, the editor and calculator are back as they were")
 wait_for("[persist] wrote /data/snapshot")
 power_cut()
-snap = snapshot_text()
-if editor_text(snap) != "hello":
-    fail(f"the snapshot taken at start has {editor_text(snap)!r} in the editor, not 'hello'")
 log_entries(disk_file("log"))  # no torn entry any more
-print("the snapshot written at start has 'hello'; the torn entry is gone")
+print("Elm took a snapshot at start; the torn entry is gone")
 
-# ---- 3. a clean restart
+# ---- 3. only the snapshot, then a clean restart
 
+snap = snapshot_text()
+replace_file("log", b"ELMOSLG1" + struct.pack("<Q", snap[3]))
 boot()
-click(w // 2, h // 2)  # focus the editor again (the power cut left the calculator focused)
-cmd("send-key", keys=[{"type": "qcode", "data": "end"}])
+if restored_text() != "hello":
+    fail(f"from the snapshot taken at start alone, the editor has {facts.get('editor')!r}, not 'hello'")
+print("the snapshot taken at start has 'hello'")
+click_editor()
 type_text(" world")
+wait_text("editor", "hello world")
 press("Restart")
-end = time.time() + 15
-while True:
-    shot = screen()
-    yes = [x for x in range(0, 400 * s) if shot[2][(22 * s * w + x) * 3:(22 * s * w + x) * 3 + 3] == bytes((230, 150, 140))]
-    if yes:
-        break
-    if time.time() > end:
-        save_png(shot, f"{ROOT}/build/screenshot.png")
-        fail("no Yes button after Restart (build/screenshot.png)")
-    time.sleep(1)
+move(*facts.button("Yes"))
 try:
-    click(yes[len(yes) // 2], 22 * s)
-except OSError:
+    cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
+    time.sleep(0.3)
+    cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
+except (OSError, ValueError):
     pass  # with KVM, Elm can restart (and QEMU exit) before the button comes back up
 try:
     qemu.wait(timeout=30)
@@ -457,18 +408,19 @@ snap = snapshot_text()
 # The host goes on logging what it sends (frames, say) until it restarts: those are
 # after the snapshot's number.
 base, after_restart = log_entries(disk_file("log"))
-if editor_text(snap) != "hello world" or base != snap[3]:
-    fail(f"after Restart: editor {editor_text(snap)!r}, the log carries on from {base}, the snapshot has up to {snap[3]}")
+if base != snap[3]:
+    fail(f"after Restart the log carries on from {base}, but the snapshot has up to {snap[3]}")
+boot()
+if restored_text() != "hello world":
+    fail(f"after Restart the editor has {facts.get('editor')!r}, not 'hello world'")
 print(f"Restart takes a snapshot first: 'hello world', and the log has only the {len(after_restart)} messages after it")
 
 # ---- 4. power cuts at random moments
 
 random.seed(int(os.environ.get("SEED", time.time())))
-texts = [editor_text(snap)]
+texts = ["hello world"]
 for round in range(int(os.environ.get("ROUNDS", 3))):
-    boot()
-    click(w // 2, h // 2)
-    cmd("send-key", keys=[{"type": "qcode", "data": "end"}])
+    click_editor()
     durable = texts[-1]
     text = texts[-1]
     for ch in "".join(random.choice("abcdefgh ") for _ in range(random.randint(3, 12))):
@@ -483,12 +435,11 @@ for round in range(int(os.environ.get("ROUNDS", 3))):
         fail(f"the host said it had fsynced {synced} bytes of the log, but the disk has {len(on_disk)}")
     log_entries(on_disk[:synced])  # and what it fsynced is whole
     boot()
-    wait_for("[persist] wrote /data/snapshot")  # the one taken at start, once the log is replayed
-    power_cut()
-    got = editor_text(snapshot_text())
+    got = restored_text()
     print(f"round {round + 1}: typed {text!r}, after the power cut {got!r} ({synced} bytes of the log were fsynced)")
     if got not in texts or len(got) < len(durable):
         fail(f"expected one of the texts it had, at least {durable!r}")
     texts = texts[:texts.index(got) + 1]
+power_cut()
 
-print("PASS (screenshots in build/persist-before.png and build/persist-after.png)")
+print("PASS")

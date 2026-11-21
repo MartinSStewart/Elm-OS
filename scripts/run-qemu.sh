@@ -23,6 +23,10 @@
 # see check-migration in the Makefile). The USB image has its own data partition, but --usb opens the image
 # read-only, so there nothing is kept from one run to the next.
 #
+# build/tools-qemu.img (make run makes it) is the "Elm OS tools" disk, read-only, so the
+# Code app's "Build and run" can compile Elm OS inside QEMU (host/init/src/build.rs). That
+# needs the 4 GB of memory the guest gets; without KVM the compile takes many minutes.
+#
 # retain_initrd keeps the initramfs readable (/sys/firmware/initrd), so the debug
 # overlay can show its SHA-256, to compare with `sha256sum build/initramfs-qemu.cpio`.
 #
@@ -35,6 +39,8 @@ cd "$(dirname "$0")/.."
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
 ACCEL="-cpu max"
 [ -w /dev/kvm ] && ACCEL="-enable-kvm -cpu host"
+# QEMU's control socket, which `make paste` (scripts/qemu-paste.py) types through.
+QMP="-qmp unix:build/qemu-qmp.sock,server=on,wait=off"
 
 if [ "$1" = --usb ]; then
   shift
@@ -47,7 +53,7 @@ if [ "$1" = --usb ]; then
     -drive if=none,id=stick,format=raw,file=build/elmos-usb.img,snapshot=on \
     -device qemu-xhci -device usb-storage,drive=stick,bootindex=0 \
     -device usb-kbd -device usb-tablet -vga std -nic user,model=e1000e \
-    -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot "$@"
+    -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot $QMP "$@"
 fi
 RES="${QEMU_RES:-1920x1080}"
 XRES="xres=${RES%x*},yres=${RES#*x},max_outputs=${QEMU_HEADS:-1}"
@@ -59,10 +65,12 @@ else
   GPU="-device virtio-gpu-pci,$XRES"
   DISPLAY_OPT="${QEMU_DISPLAY:-gtk}"
 fi
-exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
+TOOLS=
+[ -f build/tools-qemu.img ] && TOOLS="-drive if=virtio,format=raw,readonly=on,file=build/tools-qemu.img"
+exec qemu-system-x86_64 $ACCEL -m 4G -smp 4 \
   -kernel build/bzImage -initrd build/initramfs-qemu.cpio \
   -nic user,model=virtio-net-pci \
-  -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" \
+  -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" $TOOLS \
   -append "console=ttyS0 quiet retain_initrd" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
-  -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"
+  -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot $QMP "$@"

@@ -8,18 +8,21 @@ module Sprite exposing
     , Tile
     , Triangle
     , asciiChar
-    , atlasRectangle
     , asciiIndex
+    , atlasRectangle
     , caretPositions
+    , chunkOf
     , circle
     , clipTo
     , customText
     , customTextSize
-    , findMatches
-    , foundText
     , dotGrid
     , ellipsis
     , encoder
+    , findMatches
+    , foundText
+    , fromImageTexture
+    , image
     , inAtlas
     , lineHeight
     , linkAt
@@ -58,7 +61,7 @@ UI pixels and `toDevice` scales them; text is drawn straight in device pixels, s
 Sans is laid out like a browser lays it out: with the font's own unhinted advances and
 kerning, so text at 2x is twice as wide as at 1x (to 1/64 of a device pixel) and wraps
 in the same places. Glyphs start at fractional pixels across; the atlas has each one
-drawn at four quarter-pixel offsets, and the nearest is drawn (`sansRun`). Down, each
+drawn at four quarter-pixel offsets, and the nearest is drawn (`sansRunWidth`). Down, each
 line's baseline is on a whole pixel, which the light hinting fits the glyphs to.
 
 -}
@@ -70,6 +73,7 @@ import Bytes.Encode as BE
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Dict exposing (Dict)
+import Image exposing (Image)
 import NotoSans
 import Quantity exposing (Quantity(..))
 import Sprites
@@ -95,6 +99,13 @@ picture.
 type UvSpace
     = AtlasPixels
     | InSprite Sprites.Name
+      -- Pixels of the image texture rather than the atlas: 2048 x 2048 colour pixels
+      -- that apps write into (Effect.WriteImage), such as a paint program's canvas. The
+      -- triangle's colour multiplies the image's (white shows it as it is).
+    | InImage
+      -- Pixels of an image chunk (Image.elm), 0 to 32 across and down, before it has a
+      -- place in the image texture: ImageCache.place gives it one (as `InImage`).
+    | InChunk Image.Chunk
 
 
 {-| The triangle sampling atlas pixels, from the sprite's picture for this UI scale if
@@ -104,6 +115,12 @@ inAtlas : Int -> Triangle a -> Triangle a
 inAtlas scale (Triangle t) =
     case t.uvSpace of
         AtlasPixels ->
+            Triangle t
+
+        InImage ->
+            Triangle t
+
+        InChunk _ ->
             Triangle t
 
         InSprite name ->
@@ -171,7 +188,9 @@ type Sampling
 {-| A triangle as Effect.renderBytes sends it (60 bytes, host/protocol/src/lib.rs
 read\_render): x, y, u, v of each corner as 32-bit floats, then as unsigned 32-bit
 integers the colour (0xRRGGBBAA), the tile's left + top \* 2^16, and its width +
-height \* 2^16 + 2^31 if `Linear`; all little-endian. No tile is all 0s.
+height \* 2^16 + 2^30 + 2^29 if it samples the image texture (`InImage`, whose u, v clamp
+into the tile rather than wrap round) + 2^31 if `Linear`; all little-endian. No tile is
+all 0s.
 -}
 encoder : Triangle DevicePixels -> BE.Encoder
 encoder (Triangle t) =
@@ -209,6 +228,23 @@ encoder (Triangle t) =
 
                     Linear ->
                         2147483648
+                  )
+                + (case t.uvSpace of
+                    InImage ->
+                        -- The image texture, clamped into the tile: each chunk's edge
+                        -- pixels repeat outwards, so Linear never blends in the chunk next
+                        -- to it in the texture.
+                        1073741824 + 536870912
+
+                    InChunk _ ->
+                        -- Never sent: ImageCache.place turns these into InImage.
+                        1073741824 + 536870912
+
+                    AtlasPixels ->
+                        0
+
+                    InSprite _ ->
+                        0
                   )
             )
         ]
@@ -423,6 +459,62 @@ sprite color ( x, y ) ( w, h ) ( tx, ty ) ( tw, th ) =
     ]
 
 
+{-| An image (Image.elm), its top left corner at 0, 0, a pixel per unit: two triangles
+for each chunk.
+-}
+image : Image -> List (Triangle units)
+image picture =
+    let
+        size =
+            Image.chunkSize
+    in
+    Array.toList picture.chunks
+        |> List.indexedMap
+            (\index chunk ->
+                sprite Color.white ( modBy picture.across index * size, index // picture.across * size ) ( size, size ) ( 0, 0 ) ( size, size )
+                    |> List.map (\(Triangle t) -> Triangle { t | uvSpace = InChunk chunk, tile = Just { left = 0, top = 0, width = size, height = size } })
+            )
+        |> List.concat
+
+
+{-| The image chunk the triangle shows, if it shows one that has no place in the image
+texture yet.
+-}
+chunkOf : Triangle a -> Maybe Image.Chunk
+chunkOf (Triangle t) =
+    case t.uvSpace of
+        InChunk chunk ->
+            Just chunk
+
+        AtlasPixels ->
+            Nothing
+
+        InSprite _ ->
+            Nothing
+
+        InImage ->
+            Nothing
+
+
+{-| A triangle showing an image chunk, showing it from the image texture, where the
+chunk's top left pixel is at the given place.
+-}
+fromImageTexture : ( Int, Int ) -> Triangle a -> Triangle a
+fromImageTexture ( left, top ) (Triangle t) =
+    let
+        f v =
+            { v | u = v.u + toFloat left, v = v.v + toFloat top }
+    in
+    Triangle
+        { t
+            | a = f t.a
+            , b = f t.b
+            , c = f t.c
+            , tile = Maybe.map (\tile -> { tile | left = tile.left + left, top = tile.top + top }) t.tile
+            , uvSpace = InImage
+        }
+
+
 rectangle : Color -> Bounds units -> Coord units -> Coord units -> List (Triangle units)
 rectangle color clip position size =
     clippedSprite
@@ -450,7 +542,7 @@ dotGridTile =
     { left = 0, top = 0, width = width, height = height }
 
 
-{-| A rectangle (position, size) covered in the dot grid tile (sprites/dot-grid.*.webp),
+{-| A rectangle (position, size) covered in the dot grid tile (sprites/dot-grid.\*.webp),
 repeated from its top left corner, cut to `clip`: two triangles, however big the
 rectangle. Made in UI pixels, so on a 2x screen it shows the 2x picture.
 -}
@@ -926,31 +1018,51 @@ customText uiScale fontSize clip segments position =
             let
                 top =
                     y + lineIndex * height
-                ( placed, end ) =
-                    layoutSegments fontSize line
-
-                -- where each segment starts and ends, in 1/64 device pixels
-                spans =
-                    List.map2
-                        (\( start, segment ) next -> { left64 = (x * 64 + start) * s, right64 = (x * 64 + next) * s, segment = segment })
-                        placed
-                        (List.map Tuple.first (List.drop 1 placed) ++ [ end ])
-
-                baseline =
-                    (top + ascent) * s
             in
-            List.concatMap
-                (\{ left64, segment } ->
-                    case segment.font of
-                        Mono ->
-                            monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+            -- Lines well outside the clip (a line's height away, as a glyph can reach a
+            -- little past its line) draw nothing, so they aren't laid out.
+            if (top + 2 * height) * s <= deviceClip.top || (top - height) * s >= deviceClip.bottom then
+                []
 
-                        Sans style ->
-                            sansRun s fontSize (variant style) deviceClip segment.color ( left64, baseline ) segment.text
-                )
-                spans
-                ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
-                ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
+            else
+                let
+                    baseline =
+                        (top + ascent) * s
+
+                    -- Each segment laid out and drawn in one go, from where the last one ended
+                    -- (1/64 UI pixels from the text's left), and where each starts and ends
+                    -- (1/64 device pixels), for the lines across them.
+                    ( _, spansRev, glyphsRev ) =
+                        List.foldl
+                            (\segment ( pen64, spansAcc, glyphsAcc ) ->
+                                let
+                                    left64 =
+                                        (x * 64 + pen64) * s
+
+                                    ( glyphs, width ) =
+                                        case segment.font of
+                                            Mono ->
+                                                ( monoRun s fontSize deviceClip segment.color ( (left64 + 32) // 64, (top + ascent - pixelBaseline * monoScale fontSize) * s ) segment.text
+                                                , String.length segment.text * Tuple.first charSize * monoScale fontSize * 64
+                                                )
+
+                                            Sans style ->
+                                                sansRunWidth s fontSize style deviceClip segment.color ( left64, baseline ) segment.text
+                                in
+                                ( pen64 + width
+                                , { left64 = left64, right64 = (x * 64 + pen64 + width) * s, segment = segment } :: spansAcc
+                                , glyphs :: glyphsAcc
+                                )
+                            )
+                            ( 0, [], [] )
+                            line
+
+                    spans =
+                        List.reverse spansRev
+                in
+                List.concat (List.reverse glyphsRev)
+                    ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
+                    ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
         )
         (segmentLines segments)
         |> List.concat
@@ -1030,7 +1142,11 @@ between them and the characters next to them.
 foundText :
     UiScale
     -> { query : String, selected : Maybe Int, background : Color, color : Color, otherBackground : Color }
-    -> FontSize -> Bounds UiPixels -> List Segment -> Coord UiPixels -> List (Triangle DevicePixels)
+    -> FontSize
+    -> Bounds UiPixels
+    -> List Segment
+    -> Coord UiPixels
+    -> List (Triangle DevicePixels)
 foundText uiScale found fontSize clip segments position =
     case findMatches found.query segments of
         [] ->
@@ -1087,7 +1203,11 @@ foundText uiScale found fontSize clip segments position =
                                              else
                                                 found.otherBackground
                                             )
-                                            deviceClip ( left, (y + lineIndex * height) * s ) ( right - left, height * s ) ( 2, 2 ) ( 4, 4 )
+                                            deviceClip
+                                            ( left, (y + lineIndex * height) * s )
+                                            ( right - left, height * s )
+                                            ( 2, 2 )
+                                            ( 4, 4 )
                                             |> fromSprite Sprites.Solid
 
                                     else
@@ -1255,40 +1375,166 @@ monoRun s fontSize deviceClip color ( left, top ) string =
         |> List.concat
 
 
-{-| One line of Noto Sans, from where it starts on the baseline (across in 1/64 device
-pixels, down in device pixels), laid out as `layoutLine` measures it and drawn with the
-face for the device size. Each glyph goes on the whole pixel left of where its pen is,
-in the atlas copy shifted right by the nearest number of 1/`NotoSans.subpixels` pixels
-to the rest, so its shape is never resampled.
+{-| One line of Noto Sans in a style, from where it starts on the baseline (across in
+1/64 device pixels, down in device pixels), drawn with the face for the device size, and
+how wide it is (1/64 UI pixels, as `layoutLine` measures it): it's laid out once, for both.
+Each glyph goes on the whole pixel left of where its pen is, in the atlas copy shifted
+right by the nearest number of 1/`NotoSans.subpixels` pixels to the rest, so its shape is
+never resampled. Advances and kerning are in font units and the same for every face.
 -}
-sansRun : Int -> FontSize -> NotoSans.Variant -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> List (Triangle DevicePixels)
-sansRun s fontSize v deviceClip color ( left64, baseline ) string =
-    layoutSans v.kerning (face v (sansSize fontSize * s)) string
-        |> Tuple.first
-        |> List.concatMap
-            (\( at, _, glyph ) ->
-                let
-                    -- where the pen is, in 1/subpixels device pixels
-                    steps =
-                        round (toFloat ((left64 + at) * NotoSans.subpixels) / 64)
+sansRunWidth : Int -> FontSize -> Style -> { left : Int, right : Int, top : Int, bottom : Int } -> Color -> ( Int, Int ) -> String -> ( List (Triangle DevicePixels), Int )
+sansRunWidth s fontSize style deviceClip color ( left64, baseline ) string =
+    let
+        m : Metrics
+        m =
+            metrics style
 
-                    copy =
-                        modBy NotoSans.subpixels steps
+        table : FaceTable
+        table =
+            faceTable style (sansSize fontSize * s)
 
-                    pen =
-                        (steps - copy) // NotoSans.subpixels
-                in
-                if glyph.w == 0 then
-                    []
+        ( end, _, drawn ) =
+            String.foldl
+                (\char ( pen, previous, acc ) ->
+                    let
+                        code : Int
+                        code =
+                            Char.toCode char
 
-                else
-                    clippedSprite color
-                        deviceClip
-                        ( pen + glyph.left, baseline + glyph.top )
-                        ( glyph.w, glyph.h )
-                        ( glyph.x + copy * (glyph.w + NotoSans.gap), glyph.y )
-                        ( glyph.w, glyph.h )
-            )
+                        at : Int
+                        at =
+                            case Array.get previous m.kerning of
+                                Just after ->
+                                    if Dict.isEmpty after then
+                                        pen
+
+                                    else
+                                        pen + (Dict.get code after |> Maybe.withDefault 0)
+
+                                Nothing ->
+                                    pen
+
+                        glyph : NotoSans.Glyph
+                        glyph =
+                            Array.get code table.glyphs |> Maybe.withDefault table.missing
+                    in
+                    ( at + glyph.advance
+                    , code
+                    , if glyph.w == 0 then
+                        acc
+
+                      else
+                        let
+                            -- where the pen is, in 1/subpixels device pixels
+                            steps : Int
+                            steps =
+                                round (toFloat ((left64 + unitsTo64 table.size at) * NotoSans.subpixels) / 64)
+
+                            copy : Int
+                            copy =
+                                modBy NotoSans.subpixels steps
+
+                            penX : Int
+                            penX =
+                                (steps - copy) // NotoSans.subpixels
+                        in
+                        clippedSprite color
+                            deviceClip
+                            ( penX + glyph.left, baseline + glyph.top )
+                            ( glyph.w, glyph.h )
+                            ( glyph.x + copy * (glyph.w + NotoSans.gap), glyph.y )
+                            ( glyph.w, glyph.h )
+                            :: acc
+                    )
+                )
+                ( 0, Char.toCode ' ', [] )
+                string
+    in
+    ( List.concat (List.reverse drawn), unitsTo64 (faceTable style (sansSize fontSize)).size end )
+
+
+{-| A face's glyphs in an Array by character code (quicker to look up than its Dict),
+with the one drawn for characters it doesn't have.
+-}
+type alias FaceTable =
+    { size : Int, glyphs : Array NotoSans.Glyph, missing : NotoSans.Glyph }
+
+
+makeFaceTable : NotoSans.Face -> FaceTable
+makeFaceTable f =
+    let
+        missing : NotoSans.Glyph
+        missing =
+            missingGlyph f
+    in
+    { size = f.size
+    , glyphs =
+        Dict.foldl
+            (\char glyph array -> Array.set (Char.toCode char) glyph array)
+            (Array.repeat (Dict.foldl (\char _ high -> max (Char.toCode char) high) 0 f.glyphs + 1) missing)
+            f.glyphs
+    , missing = missing
+    }
+
+
+{-| `face`, as a `FaceTable`.
+-}
+faceTable : Style -> Int -> FaceTable
+faceTable style size =
+    let
+        tables : List FaceTable
+        tables =
+            faceTables style
+    in
+    case List.filter (\t -> t.size <= size) tables |> List.reverse of
+        t :: _ ->
+            t
+
+        [] ->
+            case tables of
+                t :: _ ->
+                    t
+
+                [] ->
+                    { size = size, glyphs = Array.empty, missing = { x = 0, y = 0, w = 0, h = 0, left = 0, top = 0, advance = 0 } }
+
+
+{-| Every face of a style as a `FaceTable`, made once.
+-}
+faceTables : Style -> List FaceTable
+faceTables style =
+    case style of
+        Regular ->
+            regularFaceTables
+
+        Bold ->
+            boldFaceTables
+
+        Italic ->
+            italicFaceTables
+
+        BoldItalic ->
+            boldItalicFaceTables
+
+
+regularFaceTables : List FaceTable
+regularFaceTables =
+    List.map makeFaceTable NotoSans.regular.faces
+
+
+boldFaceTables : List FaceTable
+boldFaceTables =
+    List.map makeFaceTable NotoSans.bold.faces
+
+
+italicFaceTables : List FaceTable
+italicFaceTables =
+    List.map makeFaceTable NotoSans.italic.faces
+
+
+boldItalicFaceTables : List FaceTable
+boldItalicFaceTables =
+    List.map makeFaceTable NotoSans.boldItalic.faces
 
 
 clippedSprite :
@@ -1354,7 +1600,7 @@ customTextSize fontSize segments =
     in
     Coord.xy
         (lines
-            |> List.map (\line -> toUiCeiling (Tuple.second (layoutSegments fontSize line)))
+            |> List.map (\line -> toUiCeiling (List.foldl (\segment sum -> sum + width64 fontSize segment.font segment.text) 0 line))
             |> List.maximum
             |> Maybe.withDefault 0
         )
@@ -1527,60 +1773,13 @@ wrapLinesHelper fontSize maxWidth segments =
             let
                 state : WrapState
                 state =
-                    List.foldl (placeWord fontSize (Quantity.unwrap maxWidth * 64)) { lines = [], current = [], x = 0, widest = 0 } (toWords line)
+                    wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
             in
             ( List.reverse state.current :: state.lines ++ lines, max widest (max state.widest state.x) )
         )
         ( [], 0 )
         (segmentLines segments)
         |> Tuple.mapFirst List.reverse
-
-
-{-| A word and the space before it (Nothing for the first word of a line). A word can
-be made of pieces in different fonts or colours.
--}
-type alias Word =
-    { space : Maybe Segment, pieces : List Segment }
-
-
-{-| One line (no '\\n' in it) broken into words at its spaces.
--}
-toWords : List Segment -> List Word
-toWords line =
-    let
-        addPiece : Segment -> Word -> Word
-        addPiece piece word =
-            if String.isEmpty piece.text then
-                word
-
-            else
-                { word | pieces = piece :: word.pieces }
-
-        finish : Word -> Word
-        finish word =
-            { word | pieces = List.reverse word.pieces }
-
-        ( last, done ) =
-            List.foldl
-                (\segment state ->
-                    case String.split " " segment.text of
-                        first :: rest ->
-                            List.foldl
-                                (\part ( word, words ) ->
-                                    ( addPiece { segment | text = part } { space = Just { segment | text = " " }, pieces = [] }
-                                    , finish word :: words
-                                    )
-                                )
-                                (Tuple.mapFirst (addPiece { segment | text = first }) state)
-                                rest
-
-                        [] ->
-                            state
-                )
-                ( { space = Nothing, pieces = [] }, [] )
-                line
-    in
-    List.reverse (finish last :: done)
 
 
 {-| Where the greedy line breaking has got to: the lines done (last first), the
@@ -1591,49 +1790,194 @@ type alias WrapState =
     { lines : List (List Segment), current : List Segment, x : Int, widest : Int }
 
 
-placeWord : FontSize -> Int -> Word -> WrapState -> WrapState
-placeWord fontSize limit64 word state =
-    let
-        wordWidth : Int
-        wordWidth =
-            List.foldl (\piece sum -> sum + width64 fontSize piece.font piece.text) 0 word.pieces
+{-| Part of a line's `index`th segment: its text from `start` to `end` (as String.slice
+counts), and how wide that is (1/64 UI pixels). A word is one or more of these, and so
+is the space before it.
+-}
+type alias Piece =
+    { index : Int, segment : Segment, start : Int, end : Int, width : Int }
 
+
+{-| `WrapState` while a line is being broken, with the word being read: the space before
+it, its pieces (last first) and their width. The end of the current line is kept as
+`open`, a piece of one segment that grows while the words placed come one after another
+in it, so that its text is cut out (String.slice) once rather than added up word by word.
+-}
+type alias Scan =
+    { lines : List (List Segment)
+    , current : List Segment
+    , open : Maybe Piece
+    , x : Int
+    , widest : Int
+    , space : Maybe Piece
+    , pieces : List Piece
+    , wordWidth : Int
+    }
+
+
+{-| One line (no '\\n' in it) broken at the spaces before words that would go past
+`limit64`. Words are found with String.indexes and each is measured once.
+-}
+wrapLine : FontSize -> Int -> List Segment -> WrapState
+wrapLine fontSize limit64 line =
+    let
+        scanSegment : Segment -> ( Int, Scan ) -> ( Int, Scan )
+        scanSegment segment ( index, scan ) =
+            let
+                addPiece : Int -> Int -> Scan -> Scan
+                addPiece start end scan2 =
+                    if start == end then
+                        scan2
+
+                    else
+                        let
+                            width : Int
+                            width =
+                                width64 fontSize segment.font (String.slice start end segment.text)
+                        in
+                        { scan2
+                            | pieces = { index = index, segment = segment, start = start, end = end, width = width } :: scan2.pieces
+                            , wordWidth = scan2.wordWidth + width
+                        }
+
+                spaceWidth : Int
+                spaceWidth =
+                    width64 fontSize segment.font " "
+
+                ( lastStart, scanned ) =
+                    List.foldl
+                        (\at ( start, scan2 ) ->
+                            let
+                                placed : Scan
+                                placed =
+                                    placeWord fontSize limit64 (addPiece start at scan2)
+                            in
+                            ( at + 1
+                            , { placed | space = Just { index = index, segment = segment, start = at, end = at + 1, width = spaceWidth } }
+                            )
+                        )
+                        ( 0, scan )
+                        (String.indexes " " segment.text)
+            in
+            ( index + 1, addPiece lastStart (String.length segment.text) scanned )
+
+        ( _, lastWord ) =
+            List.foldl
+                scanSegment
+                ( 0, { lines = [], current = [], open = Nothing, x = 0, widest = 0, space = Nothing, pieces = [], wordWidth = 0 } )
+                line
+
+        done : Scan
+        done =
+            placeWord fontSize limit64 lastWord
+    in
+    { lines = done.lines, current = flushOpen done, x = done.x, widest = done.widest }
+
+
+{-| The segment a piece is.
+-}
+pieceSegment : Piece -> Segment
+pieceSegment piece =
+    let
+        segment : Segment
+        segment =
+            piece.segment
+    in
+    { segment | text = String.slice piece.start piece.end segment.text }
+
+
+{-| The current line's segments (last first), with its `open` piece made a segment.
+-}
+flushOpen : Scan -> List Segment
+flushOpen scan =
+    case scan.open of
+        Just open ->
+            pushSegment (pieceSegment open) scan.current
+
+        Nothing ->
+            scan.current
+
+
+{-| Adds a piece to the end of the current line.
+-}
+pushPiece : Piece -> Scan -> Scan
+pushPiece piece scan =
+    case scan.open of
+        Just open ->
+            if open.index == piece.index && open.end == piece.start then
+                { scan | open = Just { open | end = piece.end } }
+
+            else
+                { scan | current = pushSegment (pieceSegment open) scan.current, open = Just piece }
+
+        Nothing ->
+            { scan | open = Just piece }
+
+
+{-| Puts the word read so far (and the space before it) on the current line if it fits,
+otherwise on a new line without the space, otherwise breaks it (`breakWord`).
+-}
+placeWord : FontSize -> Int -> Scan -> Scan
+placeWord fontSize limit64 scan =
+    let
         spaceWidth : Int
         spaceWidth =
-            case word.space of
+            case scan.space of
                 Just space ->
-                    width64 fontSize space.font " "
+                    space.width
 
                 Nothing ->
                     0
 
-        withSpace : List Segment
-        withSpace =
-            case word.space of
+        pieces : List Piece
+        pieces =
+            List.reverse scan.pieces
+
+        cleared : Scan
+        cleared =
+            { scan | space = Nothing, pieces = [], wordWidth = 0 }
+
+        breakPieces : Scan -> Scan
+        breakPieces from =
+            let
+                broken : WrapState
+                broken =
+                    breakWord
+                        fontSize
+                        limit64
+                        (List.map pieceSegment pieces)
+                        { lines = from.lines, current = flushOpen from, x = from.x, widest = from.widest }
+            in
+            { from | lines = broken.lines, current = broken.current, open = Nothing, x = broken.x, widest = broken.widest }
+    in
+    if scan.x + spaceWidth + scan.wordWidth <= limit64 then
+        List.foldl
+            pushPiece
+            (case scan.space of
                 Just space ->
-                    pushSegment space state.current
+                    pushPiece space cleared
 
                 Nothing ->
-                    state.current
-    in
-    if state.x + spaceWidth + wordWidth <= limit64 then
-        { state | current = List.foldl pushSegment withSpace word.pieces, x = state.x + spaceWidth + wordWidth }
+                    cleared
+            )
+            pieces
+            |> (\placed -> { placed | x = scan.x + spaceWidth + scan.wordWidth })
 
-    else if state.x == 0 then
+    else if scan.x == 0 then
         -- Nothing on the line yet, and the word is too wide for it on its own.
-        breakWord fontSize limit64 word.pieces state
+        breakPieces cleared
 
     else
         let
-            newLine : WrapState
+            newLine : Scan
             newLine =
-                { lines = List.reverse state.current :: state.lines, current = [], x = 0, widest = max state.widest state.x }
+                { cleared | lines = List.reverse (flushOpen cleared) :: cleared.lines, current = [], open = Nothing, x = 0, widest = max scan.widest scan.x }
         in
-        if wordWidth <= limit64 then
-            { newLine | current = List.foldl pushSegment [] word.pieces, x = wordWidth }
+        if scan.wordWidth <= limit64 then
+            List.foldl pushPiece { newLine | x = scan.wordWidth } pieces
 
         else
-            breakWord fontSize limit64 word.pieces newLine
+            breakPieces newLine
 
 
 {-| A word too wide for a line, put on the current line (which is empty) one character
@@ -1710,21 +2054,26 @@ width64 fontSize font string =
                         code : Int
                         code =
                             Char.toCode char
-
-                        kern : Int
-                        kern =
-                            case Array.get previous m.kerning of
-                                Just after ->
-                                    if Dict.isEmpty after then
-                                        0
-
-                                    else
-                                        Dict.get code after |> Maybe.withDefault 0
-
-                                Nothing ->
-                                    0
                     in
-                    ( pen + kern + (Array.get code m.advances |> Maybe.withDefault m.missingAdvance), code )
+                    if code < 128 && previous < 128 then
+                        ( pen + (Array.get (previous * 128 + code) m.asciiPairs |> Maybe.withDefault 0), code )
+
+                    else
+                        let
+                            kern : Int
+                            kern =
+                                case Array.get previous m.kerning of
+                                    Just after ->
+                                        if Dict.isEmpty after then
+                                            0
+
+                                        else
+                                            Dict.get code after |> Maybe.withDefault 0
+
+                                    Nothing ->
+                                        0
+                        in
+                        ( pen + kern + (Array.get code m.advances |> Maybe.withDefault m.missingAdvance), code )
                 )
                 ( 0, Char.toCode ' ' )
                 string
@@ -1735,10 +2084,12 @@ width64 fontSize font string =
 {-| A Noto Sans style's advances and kerning (font units, the same at every size), in
 Arrays indexed by character code: an Array.get is a good deal quicker than a Dict.get
 with a Char, let alone a pair of them. `kerning` has, for each character, how much
-closer or further the characters after it go.
+closer or further the characters after it go. `asciiPairs` has, for two ASCII characters
+(at first \* 128 + second), the kerning between them plus the second's advance: one
+look-up for most characters.
 -}
 type alias Metrics =
-    { advances : Array Int, missingAdvance : Int, kerning : Array (Dict Int Int) }
+    { advances : Array Int, missingAdvance : Int, kerning : Array (Dict Int Int), asciiPairs : Array Int }
 
 
 makeMetrics : Style -> Metrics
@@ -1771,18 +2122,32 @@ makeMetrics style =
                 )
                 Dict.empty
                 v.kerning
+
+        advances : Array Int
+        advances =
+            List.foldl
+                (\( code, advance ) array -> Array.set code advance array)
+                (Array.repeat (List.foldl (\( code, _ ) high -> max code high) 0 glyphs + 1) missing)
+                glyphs
     in
-    { advances =
-        List.foldl
-            (\( code, advance ) array -> Array.set code advance array)
-            (Array.repeat (List.foldl (\( code, _ ) high -> max code high) 0 glyphs + 1) missing)
-            glyphs
+    { advances = advances
     , missingAdvance = missing
     , kerning =
         Dict.foldl
             (\code after array -> Array.set code after array)
             (Array.repeat (Dict.foldl (\code _ high -> max code high) 0 kerning + 1) Dict.empty)
             kerning
+    , asciiPairs =
+        Array.initialize (128 * 128)
+            (\i ->
+                let
+                    code : Int
+                    code =
+                        modBy 128 i
+                in
+                (Dict.get (i // 128) kerning |> Maybe.andThen (Dict.get code) |> Maybe.withDefault 0)
+                    + (Array.get code advances |> Maybe.withDefault missing)
+            )
     }
 
 

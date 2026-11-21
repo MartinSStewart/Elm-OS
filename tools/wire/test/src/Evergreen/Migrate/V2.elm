@@ -49,10 +49,10 @@ migrate_App_Model old =
     , order = GT
     , kind = migrate_App_Kind old.kind
     , kinds = List.map migrate_App_Kind old.kinds
-    , kindDict = Dict.map (\_ -> (Maybe.map migrate_App_Kind)) old.kindDict
+    , kindDict = Dict.map (\_ -> Maybe.map migrate_App_Kind) old.kindDict
     , seqSet = old.seqSet
     , seqDict = old.seqDict
-    , kindSeqDict = SeqDict.map (\_ -> (Maybe.map migrate_App_Kind)) old.kindSeqDict
+    , kindSeqDict = SeqDict.map (\_ -> Maybe.map migrate_App_Kind) old.kindSeqDict
     }
 
 
@@ -69,14 +69,14 @@ migrate_App_Kind old =
             Evergreen.V2.App.Beta (String.length text)
 
 
-migrate_Sub_Things_Box : (old_a -> new_a) -> (Evergreen.V1.Sub.Things.Box old_a) -> (Evergreen.V2.Sub.Things.Box new_a)
+migrate_Sub_Things_Box : (old_a -> new_a) -> Evergreen.V1.Sub.Things.Box old_a -> Evergreen.V2.Sub.Things.Box new_a
 migrate_Sub_Things_Box migrate_a old =
     { value = migrate_a old.value
     , extra = Maybe.map migrate_a old.extra
     }
 
 
-migrate_Sub_Things_Labelled : (Evergreen.V1.Sub.Things.Labelled old_units) -> (Evergreen.V2.Sub.Things.Labelled new_units)
+migrate_Sub_Things_Labelled : Evergreen.V1.Sub.Things.Labelled old_units -> Evergreen.V2.Sub.Things.Labelled new_units
 migrate_Sub_Things_Labelled old =
     (\( w3_t1_0, w3_t1_1 ) -> ( Quantity.unsafe (Quantity.unwrap w3_t1_0), Quantity.unsafe (Quantity.unwrap w3_t1_1) )) old
 
@@ -88,7 +88,7 @@ migrate_Sub_Things_Opaque old =
             Evergreen.V2.Sub.Things.Opaque w3_x0 (migrate_Sub_Things_Box identity w3_x1) (migrate_Sub_Things_Chain identity w3_x2)
 
 
-migrate_Sub_Things_Tree : (old_a -> new_a) -> (Evergreen.V1.Sub.Things.Tree old_a) -> (Evergreen.V2.Sub.Things.Tree new_a)
+migrate_Sub_Things_Tree : (old_a -> new_a) -> Evergreen.V1.Sub.Things.Tree old_a -> Evergreen.V2.Sub.Things.Tree new_a
 migrate_Sub_Things_Tree migrate_a old =
     case old of
         Evergreen.V1.Sub.Things.Node w3_x0 w3_x1 ->
@@ -98,7 +98,7 @@ migrate_Sub_Things_Tree migrate_a old =
             Evergreen.V2.Sub.Things.Leaf
 
 
-migrate_Sub_Things_Chain : (old_a -> new_a) -> (Evergreen.V1.Sub.Things.Chain old_a) -> (Evergreen.V2.Sub.Things.Chain new_a)
+migrate_Sub_Things_Chain : (old_a -> new_a) -> Evergreen.V1.Sub.Things.Chain old_a -> Evergreen.V2.Sub.Things.Chain new_a
 migrate_Sub_Things_Chain migrate_a old =
     case old of
         Evergreen.V1.Sub.Things.Chain w3_x0 ->

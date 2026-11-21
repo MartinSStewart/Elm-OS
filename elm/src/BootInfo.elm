@@ -7,8 +7,8 @@ module BootInfo exposing
     , Model
     , batteryText
     , bootRows
-    , clockText
     , buildText
+    , clockText
     , init
     , start
     , tick
@@ -28,7 +28,7 @@ and says when the first frame was on screen; working out what they mean is here.
     from. That leaves out the data partition after it, which changes as Elm OS saves
     things (Persist.elm). `make usb` writes that hash to build/elmos-usb.img.sha256
     (and `make docker` prints it).
-  - Battery: every battery in /sys/class/power_supply that powers the computer (not
+  - Battery: every battery in /sys/class/power\_supply that powers the computer (not
     a mouse's), added up.
   - Clock: the CPU cores' clock speeds (cpufreq), and how the kernel picks them: the
     policy (powersave or performance) and, on Intel CPUs that choose their own clocks
@@ -307,6 +307,7 @@ update input model =
             ( { model | boot = Just times }, [] )
 
 
+
 -- GPT (scripts/make-usb-image.sh: 512-byte sectors, partition 1 an EFI system
 -- partition named "Elm OS", then the "Elm OS data" partition, which changes as
 -- Elm OS saves things, so the hash is of the image up to the end of partition 1)
@@ -384,6 +385,7 @@ littleEndian : Array Int -> Int -> Int -> Int
 littleEndian bytes from count =
     List.range 0 (count - 1)
         |> List.foldr (\i acc -> acc * 256 + byteAt bytes (from + i)) 0
+
 
 
 -- BATTERY
@@ -510,6 +512,7 @@ battery files =
     }
 
 
+
 -- WHAT THE OVERLAY SHOWS
 
 
@@ -601,7 +604,7 @@ clock files =
             Nothing
 
 
-{-| For example "0.80 - 4.20 GHz of 4.50, powersave, balance_performance".
+{-| For example "0.80 - 4.20 GHz of 4.50, powersave, balance\_performance".
 -}
 clockText : Model -> String
 clockText model =
@@ -616,10 +619,9 @@ clockText model =
                     in
                     String.fromInt (hundredths // 100) ++ "." ++ String.padLeft 2 '0' (String.fromInt (modBy 100 hundredths))
             in
-            ([ ghz c.minMhz ++ " - " ++ ghz c.maxMhz ++ " GHz of " ++ ghz c.limitMhz, c.governor, c.hint ]
+            [ ghz c.minMhz ++ " - " ++ ghz c.maxMhz ++ " GHz of " ++ ghz c.limitMhz, c.governor, c.hint ]
                 |> List.filter ((/=) "")
                 |> String.join ", "
-            )
 
         Nothing ->
             if List.isEmpty model.cpufreqPolicies then

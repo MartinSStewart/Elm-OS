@@ -3,7 +3,6 @@ module Evergreen.V2.App exposing (..)
 {-| The types from App that the Model was made of in version 2, frozen by
 tools/wire (`make migration`) so that a Model saved by version 2 can still be read
 and migrated. Don't change them.
-
 -}
 
 import Array

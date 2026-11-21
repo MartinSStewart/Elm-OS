@@ -30,6 +30,8 @@ done
 # Sprite.elm), so a build for another atlas draws the wrong glyphs. atlas.rs places
 # the pixel font and cursor, make-noto-sans.py (noto_sans.rle) the rest.
 sed -e 's://.*$::' -e 's/[[:space:]]*$//' -e '/^$/d' host/common/src/atlas.rs
+# And the image texture's size, which Elm places its pictures in.
+sed -e '/^#\[cfg(test)\]/,$d' -e 's://.*$::' -e 's/[[:space:]]*$//' -e '/^$/d' host/common/src/images.rs
 sha256sum < host/common/src/noto_sans.rle
 # The sprites, which Elm draws from where the host packs them (elm/src/Sprites.elm,
 # made by host/common/src/sprites.rs).

@@ -1,6 +1,12 @@
 module Color exposing
     ( Color
     , black
+    , codeCommentColor
+    , codeKeywordColor
+    , codeNumberColor
+    , codeOperatorColor
+    , codeStringColor
+    , codeTypeColor
     , dangerColor
     , dimTextColor
     , dotGridColor
@@ -8,14 +14,15 @@ module Color exposing
     , fillColor
     , fillColor2
     , fillColor3
-    , focusedInputColor
     , findMatchColor
     , findMatchTextColor
     , findOtherMatchColor
+    , focusedInputColor
     , focusedUiColor
     , highlightColor
     , linkColor
     , outlineColor
+    , paintPalette
     , pressColor
     , rgb
     , rgb255
@@ -211,3 +218,60 @@ scrollbarColor alpha =
 pressColor : Int -> Color
 pressColor alpha =
     rgba255 232 226 220 alpha
+
+
+{-| The paint program's colours, in the order its palette shows them. The canvas starts
+white (the second).
+-}
+paintPalette : List Color
+paintPalette =
+    [ black
+    , white
+    , rgb255 128 128 128
+    , rgb255 200 30 40
+    , rgb255 245 130 30
+    , rgb255 250 215 40
+    , rgb255 60 170 70
+    , rgb255 40 170 200
+    , rgb255 40 80 200
+    , rgb255 130 60 170
+    , rgb255 240 130 180
+    , rgb255 120 75 40
+    ]
+
+
+
+-- Elm code in the Code app (ElmSyntax.elm), on fillColor3 or focusedInputColor. Names
+-- and everything else are textColor.
+
+
+codeKeywordColor : Color
+codeKeywordColor =
+    rgb255 230 140 200
+
+
+{-| Capitalised names: types, constructors and modules.
+-}
+codeTypeColor : Color
+codeTypeColor =
+    rgb255 120 200 230
+
+
+codeStringColor : Color
+codeStringColor =
+    rgb255 160 210 120
+
+
+codeNumberColor : Color
+codeNumberColor =
+    rgb255 240 180 100
+
+
+codeCommentColor : Color
+codeCommentColor =
+    rgb255 140 132 126
+
+
+codeOperatorColor : Color
+codeOperatorColor =
+    rgb255 220 200 150

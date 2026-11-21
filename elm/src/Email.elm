@@ -1,17 +1,17 @@
 module Email exposing
     ( Account
-    , Model
     , Job(..)
     , MessageState(..)
+    , Model
     , Page(..)
     , Session
     , Stage(..)
     , Summary
     , init
     , inputStyle
-    , passwordStyle
     , link
     , onClick
+    , passwordStyle
     , serverFor
     , tick
     , tlsClosed
@@ -24,7 +24,7 @@ module Email exposing
 nothing is sent, deleted or marked as read (it uses EXAMINE and BODY.PEEK).
 
 It speaks IMAP over TLS (port 993) with a user name and an app password. The host only
-moves bytes (Effect.TlsOpen, host/init/src/tls_socket.rs); the protocol is here, parsed
+moves bytes (Effect.TlsOpen, host/init/src/tls\_socket.rs); the protocol is here, parsed
 by Email.Imap. There is no connection kept open: each refresh or message opened is a
 short session that logs in, reads what it needs and leaves.
 
@@ -592,6 +592,7 @@ summary fetched =
     , date = Imap.displayDate (value "date")
     , seen = fetched.seen
     }
+
 
 
 -- VIEW

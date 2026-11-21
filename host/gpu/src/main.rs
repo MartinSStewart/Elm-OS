@@ -10,15 +10,19 @@
 //!             Then "f GPU_NS\n" each time a frame is on the screen, with how long
 //!             the GPU took to draw it in nanoseconds (-1 if unknown), or "d\n" for
 //!             a frame skipped because a newer one was already waiting.
-//!   stdin  <- frames: u32 n, then n Tri (common/src/atlas.rs): per triangle x, y, u, v
-//!             for each corner, an 0xRRGGBBAA colour as Elm sends them, whether
-//!             to sample the atlas bilinearly, and the atlas rectangle it repeats.
+//!   stdin  <- frames: first the writes into the image texture since the last frame
+//!             (u32 count, then for each u32 left, top, width, height and that many
+//!             RGBA pixels: common/src/images.rs), then the scenes (init/src/gpu.rs):
+//!             each triangle a Tri (common/src/atlas.rs), with x, y, u, v for each
+//!             corner, an 0xRRGGBBAA colour as Elm sends them, its flags (bilinear,
+//!             image texture) and the rectangle it repeats.
 //!   fd 3   <- cursor commands, one per line, handled on their own thread so the
 //!             cursor moves while a frame is drawing: "m CONNECTOR X Y" moves it,
 //!             "c RGBA W H HX HY PIXELS" redraws it with that fill colour (W H HX HY PIXELS is
 //!             the picture, common::cursor::Picture::line).
 //!
-//! Every triangle samples the texture atlas, which we upload once.
+//! Every triangle samples the texture atlas, which we upload once, or the image
+//! texture, which /init's frames write into.
 //!
 //! The display path is the standard one (as in kmscube): GBM gives the GPU buffers
 //! that KMS can show, EGL renders into them, and each finished frame is shown with a
@@ -32,6 +36,7 @@
 mod ffi;
 
 use common::atlas::{self, Tri, ATLAS_H, ATLAS_W};
+use common::images::{self, IMAGES_H, IMAGES_W};
 use common::cursor::{Picture, PLANE as CURSOR_PLANE};
 use common::drm;
 use ffi::*;
@@ -84,7 +89,8 @@ void main() {
 }
 ";
 
-/// The atlas holds coverage only (GL_ALPHA): it scales the colour's alpha.
+/// The atlas holds coverage only (GL_ALPHA): it scales the colour's alpha. The image
+/// texture (`lin` >= 2, common/src/images.rs) holds colours, which multiply it.
 ///
 /// The shader works in atlas pixels and fetches whole pixels (`at`), so that a triangle
 /// with a tile (`Tri::tile`) can wrap each pixel it reads round into the tile: its
@@ -97,32 +103,48 @@ precision highp float;
 precision mediump float;
 #endif
 uniform sampler2D atlas;
+uniform sampler2D images;
 varying vec2 v_uv;
 varying vec4 v_col;
 varying float v_lin;
 varying vec4 v_tile;
 const vec2 texel = vec2(1.0 / 2048.0, 1.0 / 4096.0); // ATLAS_W, ATLAS_H
-// Atlas pixel i (whole numbers), wrapped into the tile if there is one.
-float at(vec2 i) {
+const vec2 image_texel = vec2(1.0 / 2048.0, 1.0 / 2048.0); // IMAGES_W, IMAGES_H
+// Texture pixel i (whole numbers), wrapped into the tile if there is one: the atlas's
+// coverage as white's alpha, or the image texture's colour.
+vec4 at(vec2 i, bool image, bool clamped) {
     if (v_tile.z > 0.5) {
-        i = v_tile.xy + mod(i - v_tile.xy, v_tile.zw);
+        if (clamped) {
+            i = clamp(i, v_tile.xy, v_tile.xy + v_tile.zw - 1.0);
+        } else {
+            i = v_tile.xy + mod(i - v_tile.xy, v_tile.zw);
+        }
     }
-    return texture2D(atlas, (i + 0.5) * texel).a;
+    if (image) {
+        return texture2D(images, (i + 0.5) * image_texel);
+    }
+    return vec4(1.0, 1.0, 1.0, texture2D(atlas, (i + 0.5) * texel).a);
 }
 void main() {
-    float cover;
-    if (v_lin > 0.5) {
-        // Bilinear by hand, from four nearest pixels: atlas pixel i is centred at i + 0.5.
+    // v_lin: Tri::flags, 1 bilinear + 2 the image texture + 4 clamp into the tile.
+    float flags = floor(v_lin + 0.5);
+    bool clamped = flags > 3.5;
+    flags -= clamped ? 4.0 : 0.0;
+    bool image = flags > 1.5;
+    bool linear = flags - (image ? 2.0 : 0.0) > 0.5;
+    vec4 sample;
+    if (linear) {
+        // Bilinear by hand, from four nearest pixels: pixel i is centred at i + 0.5.
         vec2 p = v_uv - 0.5;
         vec2 i = floor(p);
         vec2 f = p - i;
-        float top = mix(at(i), at(i + vec2(1.0, 0.0)), f.x);
-        float bottom = mix(at(i + vec2(0.0, 1.0)), at(i + vec2(1.0, 1.0)), f.x);
-        cover = mix(top, bottom, f.y);
+        vec4 top = mix(at(i, image, clamped), at(i + vec2(1.0, 0.0), image, clamped), f.x);
+        vec4 bottom = mix(at(i + vec2(0.0, 1.0), image, clamped), at(i + vec2(1.0, 1.0), image, clamped), f.x);
+        sample = mix(top, bottom, f.y);
     } else {
-        cover = at(floor(v_uv));
+        sample = at(floor(v_uv), image, clamped);
     }
-    gl_FragColor = vec4(v_col.rgb, v_col.a * cover);
+    gl_FragColor = v_col * sample;
 }
 ";
 
@@ -341,7 +363,8 @@ struct Vertex {
     u: f32,
     v: f32,
     rgba: [u8; 4],
-    /// 1.0 to sample the atlas bilinearly (`Tri::linear`), 0.0 for the nearest pixel.
+    /// `Tri::flags`: + 1.0 to sample bilinearly, + 2.0 to sample the image texture, + 4.0
+    /// to clamp into the tile.
     linear: f32,
     /// `Tri::tile`: left, top, width, height in atlas pixels, width 0 for none.
     tile: [f32; 4],
@@ -353,9 +376,37 @@ fn read_u32(input: &mut File) -> Option<u32> {
     Some(u32::from_ne_bytes(n))
 }
 
-/// Reads one frame from /init: the number of scenes, then for each the display's
-/// connector id, a count, and that many triangles. None when /init is gone.
-fn read_frame(input: &mut File, scenes: &mut Vec<(u32, Vec<Tri>)>) -> Option<()> {
+/// Reads one frame from /init: the writes into the image texture, which it makes right
+/// away (`images` is the texture, bound to unit 1), then the number of scenes, and for
+/// each the display's connector id, a count, and that many triangles. None when /init
+/// is gone.
+fn read_frame(input: &mut File, scenes: &mut Vec<(u32, Vec<Tri>)>, pixels: &mut Vec<u8>) -> Option<()> {
+    let writes = read_u32(input)?;
+    for _ in 0..writes {
+        let (left, top, width, height) = (read_u32(input)?, read_u32(input)?, read_u32(input)?, read_u32(input)?);
+        if left as usize + width as usize > IMAGES_W || top as usize + height as usize > IMAGES_H {
+            die("image write outside the texture");
+        }
+        pixels.resize(width as usize * height as usize * 4, 0);
+        input.read_exact(pixels).ok()?;
+        // SAFETY: the image texture is bound to unit 1 and the context is current;
+        // `pixels` holds width x height RGBA pixels.
+        unsafe {
+            glActiveTexture(GL_TEXTURE0 + 1);
+            glTexSubImage2D(
+                GL_TEXTURE_2D,
+                0,
+                left as i32,
+                top as i32,
+                width as i32,
+                height as i32,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                pixels.as_ptr() as *const c_void,
+            );
+            glActiveTexture(GL_TEXTURE0);
+        }
+    }
     let count = read_u32(input)? as usize;
     if count > 64 {
         die("absurd display count");
@@ -535,6 +586,7 @@ fn main() {
         glUseProgram(prog);
         let screen_uniform = glGetUniformLocation(prog, c"screen".as_ptr());
         glUniform1i(glGetUniformLocation(prog, c"atlas".as_ptr()), 0);
+        glUniform1i(glGetUniformLocation(prog, c"images".as_ptr()), 1);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         for i in 0..5 {
@@ -607,6 +659,30 @@ fn main() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // The image texture, on unit 1: transparent until /init writes into it.
+        let mut image_tex = 0;
+        glGenTextures(1, &mut image_tex);
+        glActiveTexture(GL_TEXTURE0 + 1);
+        glBindTexture(GL_TEXTURE_2D, image_tex);
+        let empty = images::empty();
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA as i32,
+            IMAGES_W as i32,
+            IMAGES_H as i32,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            empty.as_ptr() as *const c_void,
+        );
+        drop(empty);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glActiveTexture(GL_TEXTURE0);
 
         let mut timer = Timer::new();
 
@@ -695,9 +771,10 @@ fn main() {
         let mut input = File::from_raw_fd(0);
         let mut scenes: Vec<(u32, Vec<Tri>)> = Vec::new();
         let mut verts: Vec<Vertex> = Vec::new();
+        let mut pixels: Vec<u8> = Vec::new();
         let mut stdout = std::io::stdout();
         'frames: loop {
-            if read_frame(&mut input, &mut scenes).is_none() {
+            if read_frame(&mut input, &mut scenes, &mut pixels).is_none() {
                 break; // /init went away
             }
             // Frames can arrive faster than the screen refreshes (a touchpad reports
@@ -705,7 +782,7 @@ fn main() {
             // Draw only the newest, or the backlog in the pipe makes the screen lag.
             // Each frame skipped is reported as "d", so /init knows it is done with it.
             while has_more(&input) {
-                if read_frame(&mut input, &mut scenes).is_none() {
+                if read_frame(&mut input, &mut scenes, &mut pixels).is_none() {
                     break 'frames;
                 }
                 let _ = writeln!(stdout, "d");
@@ -728,7 +805,7 @@ fn main() {
                                 u: p[2],
                                 v: p[3],
                                 rgba,
-                                linear: t.linear as f32,
+                                linear: t.flags as f32,
                                 tile: t.tile.map(|n| n as f32),
                             });
                         }

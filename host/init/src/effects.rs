@@ -112,7 +112,7 @@ pub fn take() -> Vec<FromElm> {
                                 .iter()
                                 .map(|s| {
                                     let tris = protocol::read_render(&s.triangles)?;
-                                    Some((s.display, tris.into_iter().map(|t| Tri { p: t.corners, rgba: t.rgba, linear: t.linear, tile: t.tile }).collect()))
+                                    Some((s.display, tris.into_iter().map(|t| Tri::from_render(t.corners, t.rgba, t.linear != 0, t.image != 0, t.clamp != 0, t.tile)).collect()))
                                 })
                                 .collect();
                             match read {

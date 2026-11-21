@@ -2,22 +2,23 @@ module TextInputMultiline exposing
     ( Glide(..)
     , Model
     , Style
+    , Syntax(..)
+    , animate
     , init
     , keyMsg
     , lineAndColumn
+    , momentum
     , mouseDown
     , mouseDownMove
     , mouseUp
-    , animate
-    , momentum
     , overScrollbar
     , paste
-    , size
-    , withText
-    , view
     , scrollPixels
+    , size
     , stopGlide
+    , view
     , wheel
+    , withText
     )
 
 {-| A text box with many lines, for the text editor: TextInput's model (text, cursor,
@@ -36,6 +37,8 @@ TextInput's. Lines don't wrap: the box scrolls sideways to keep the cursor in vi
 import Bounds exposing (Bounds)
 import Color
 import Coord exposing (Coord)
+import Duration exposing (Duration)
+import ElmSyntax
 import Keyboard
 import Quantity exposing (Quantity)
 import Scrollbar
@@ -75,10 +78,18 @@ type Glide
     | Easing Float
 
 
-{-| How the box looks: its font and size, its width, and how many lines tall it is.
+{-| How the box looks: its font and size, its width, how many lines tall it is, and
+whether the text is coloured as code.
 -}
 type alias Style =
-    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int }
+    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int, syntax : Syntax }
+
+
+{-| Plain text is all one colour; Elm code is coloured by ElmSyntax.elm.
+-}
+type Syntax
+    = PlainText
+    | ElmCode
 
 
 init : Model
@@ -466,11 +477,11 @@ wheel style clicks model =
 
 
 {-| How much of the distance left a glide from the wheel (or to the nearest line once
-fingers rest) keeps after a second: a three line step takes about a third of a second.
+fingers rest) keeps after a second
 -}
 wheelKept : Float
 wheelKept =
-    0.0001
+    0.00000001
 
 
 {-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down): the text
@@ -526,8 +537,12 @@ stopGlide model =
 
 {-| A frame, `seconds` after the last: move on towards `scroll`.
 -}
-animate : Float -> Model -> Model
-animate seconds model =
+animate : Duration -> Model -> Model
+animate timeElapsed model =
+    let
+        seconds =
+            Duration.inSeconds timeElapsed
+    in
     case model.glide of
         Still ->
             model
@@ -915,14 +930,66 @@ view scale viewport style offset hasFocus model =
     Sprite.toDevice scale (box ++ selection)
         ++ List.concatMap
             (\l ->
-                Sprite.text
+                Sprite.customText
                     scale
-                    Color.textColor
                     style.fontSize
-                    style.font
                     textArea
-                    l.text
+                    l.segments
                     (Coord.xy textLeft (top l.line))
             )
-            visible
+            (colored style first ls visible)
         ++ Sprite.toDevice scale (caret ++ scrollBar)
+
+
+{-| Each line in view, in pieces of one colour. For Elm code, the lines before the first
+in view are looked at too, for any comment or string that starts above it.
+-}
+colored : Style -> Int -> List String -> List { a | line : Int, text : String } -> List { line : Int, segments : List Sprite.Segment }
+colored style first allLines visible =
+    let
+        segment color text =
+            { text = text, color = color, font = style.font, decorations = [], link = Nothing }
+    in
+    case style.syntax of
+        PlainText ->
+            List.map (\l -> { line = l.line, segments = [ segment Color.textColor l.text ] }) visible
+
+        ElmCode ->
+            List.foldl
+                (\l ( state, acc ) ->
+                    let
+                        ( runs, next ) =
+                            ElmSyntax.highlightLine state l.text
+                    in
+                    ( next
+                    , { line = l.line, segments = List.map (\( kind, text ) -> segment (kindColor kind) text) runs } :: acc
+                    )
+                )
+                ( ElmSyntax.stateAt first allLines, [] )
+                visible
+                |> Tuple.second
+
+
+kindColor : ElmSyntax.Kind -> Color.Color
+kindColor kind =
+    case kind of
+        ElmSyntax.Plain ->
+            Color.textColor
+
+        ElmSyntax.Keyword ->
+            Color.codeKeywordColor
+
+        ElmSyntax.TypeName ->
+            Color.codeTypeColor
+
+        ElmSyntax.StringLiteral ->
+            Color.codeStringColor
+
+        ElmSyntax.NumberLiteral ->
+            Color.codeNumberColor
+
+        ElmSyntax.Comment ->
+            Color.codeCommentColor
+
+        ElmSyntax.Operator ->
+            Color.codeOperatorColor

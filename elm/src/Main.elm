@@ -1,4 +1,4 @@
-module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, WeatherState, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar with a clock, and apps that open from the toolbar,
 drawn by the UI framework (Ui.elm, from town-collab). Each open app gets a window, laid
@@ -21,6 +21,9 @@ import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
 import Clock
+import Code
+import Code.GitHub
+import Code.Types
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Cursor exposing (Cursor)
@@ -33,19 +36,24 @@ import Email.Types
 import HackerNews
 import HackerNews.Types
 import HostMessage
-import Ipv4
+import ImageCache exposing (ImageCache)
 import Json.Decode as D
+import Json.Encode as E
 import Keyboard exposing (Key(..))
 import Layout
+import Network
+import Network.Ipv4 as Ipv4
+import Network.Types
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
+import Paint
+import Paint.Types
 import Persist
 import Quantity exposing (Quantity)
 import ScreenshotViewer
 import ScreenshotViewer.Types
 import SeqDict exposing (SeqDict)
-import SourceCode
 import Sprite exposing (Triangle)
 import TextInput
 import TextInputMultiline
@@ -55,12 +63,9 @@ import Time
 import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
+import Weather exposing (WeatherState(..))
 import WebViewer
 import WebViewer.Types
-import Weather
-import Wifi exposing (Ssid)
-import Wired
-import Wpa2Password exposing (Wpa2Password)
 
 
 
@@ -84,10 +89,10 @@ type Input
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer RendererInfo
     | Stats SystemStats
-    | WifiDevice Wifi.Device
-    | WifiScan (List Wifi.Network)
-    | WifiStatus Wifi.Status
-    | WiredLinks (List Wired.Link)
+    | WifiDevice Network.WifiDevice
+    | WifiScan (List Network.WifiNetwork)
+    | WifiStatus Network.WifiStatus
+    | WiredLinks (List Network.WiredLink)
     | NetConfig { geoUrl : String, weatherUrl : String }
     | System SystemInfo
     | BootInfo BootInfo.Input
@@ -107,8 +112,13 @@ type Input
     | TlsOpened String
     | TlsData String Bytes
     | TlsClosed String String
+      -- How a build of Elm OS made here is going (the Code app's Build button).
+    | BuildUpdate Code.Types.BuildStatus
       -- Random bytes in hex, for AsciiCollab's client id.
     | RandomBytes (Maybe String)
+      -- The kernel's command line (/proc/cmdline), read at start: ELMOS_TEST=1 turns on
+      -- the test facts (`testFacts`).
+    | CommandLine (Maybe String)
 
 
 type alias SystemInfo =
@@ -195,10 +205,10 @@ toInput message =
                 (WifiDevice
                     (case name of
                         Just n ->
-                            Wifi.Card n
+                            Network.Card n
 
                         Nothing ->
-                            Wifi.NoCard
+                            Network.NoCard
                     )
                 )
 
@@ -241,7 +251,11 @@ toInput message =
             Ok (BootInfo (BootInfo.Dir path entries))
 
         HostMessage.Files id files ->
-            Ok (BootInfo (BootInfo.Files id files))
+            if id == commandLineId then
+                Ok (CommandLine (List.head files |> Maybe.andThen Tuple.second))
+
+            else
+                Ok (BootInfo (BootInfo.Files id files))
 
         HostMessage.Bytes path offset hex ->
             if path == AsciiCollab.randomBytesPath then
@@ -286,6 +300,9 @@ toInput message =
         HostMessage.TlsClosed id reason ->
             Ok (TlsClosed id reason)
 
+        HostMessage.Build status ->
+            Ok (BuildUpdate status)
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -317,19 +334,14 @@ type alias Model =
     , frames : Int
     , -- Last frame's `Ui.lazy` elements: never saved (tools/wire saves it as empty).
       lazyCache : Ui.LazyCache UiId
+    , -- Where the image chunks on screen are in the image texture: never saved (tools/wire
+      -- saves it as empty).
+      imageCache : ImageCache
     , shift : Bool
     , ctrl : Bool
     , clipboard : String
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
-    , wifiDevice : Wifi.Device
-    , networks : List Wifi.Network
-    , scanning : Bool
-    , wifiStatus : Wifi.Status
-    , wired : List Wired.Link -- empty until the host says, and on computers without a wired card
-    , selected : Maybe Wifi.Network
-    , -- save passwords here for networks that have been connected to before
-      savedWifiPasswords : SeqDict Ssid Wpa2Password
-    , showPassword : Bool
+    , network : Network.Network
     , weather : WeatherState
     , time : Maybe Time.Posix -- the wall clock, from each Frame and the host's Tick each second
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
@@ -348,11 +360,10 @@ type alias Model =
     , calculatorOpen : Bool
     , ticTacToe : TicTacToe.Model
     , ticTacToeOpen : Bool
+    , paint : Paint.Model
     , confirmPower : Maybe PowerAction
     , editorOpen : Bool
-
-    -- The editor's Open button was pressed: the list of modules shows instead of the text.
-    , editorPicking : Bool
+    , code : Code.Model
     , debugOpen : Bool
     , networkOpen : Bool
     , weatherOpen : Bool
@@ -372,6 +383,10 @@ type alias Model =
     , findBar : Maybe { display : String, selected : Int }
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
+
+    -- With ELMOS_TEST=1 on the kernel's command line, the facts the QEMU tests check, as
+    -- last written to the log (see `testFacts`); Nothing otherwise.
+    , testFacts : Maybe (List ( String, String ))
     }
 
 
@@ -396,7 +411,9 @@ type App
     | AsciiCollabApp
     | CalculatorApp
     | TicTacToeApp
+    | PaintApp
     | EditorApp
+    | CodeApp
     | ScreenshotViewerApp
     | DebugApp
     | NetworkApp
@@ -407,15 +424,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, EditorApp, ScreenshotViewerApp ]
-
-
-type WeatherState
-    = NoWeather
-    | FindingPlace
-    | LoadingForecast Weather.Place
-    | GotWeather Weather.Place Weather.Forecast
-    | WeatherFailed HttpError
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp ]
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -439,18 +448,12 @@ init =
     , frameIntervals = []
     , frames = 0
     , lazyCache = Ui.noLazyCache
+    , imageCache = ImageCache.empty
     , shift = False
     , ctrl = False
     , clipboard = ""
     , selectingText = False
-    , wifiDevice = Wifi.Unknown
-    , networks = []
-    , scanning = True
-    , wifiStatus = { state = Wifi.Idle, ssid = Wifi.stringToSsid "", ip = Nothing, error = "" }
-    , wired = []
-    , selected = Nothing
-    , savedWifiPasswords = SeqDict.empty
-    , showPassword = False
+    , network = Network.init
     , weather = NoWeather
     , time = Nothing
     , utcOffsetMinutes = Nothing
@@ -468,10 +471,11 @@ init =
     , calculator = Calculator.init
     , calculatorOpen = False
     , ticTacToe = TicTacToe.init
+    , paint = Paint.init
     , ticTacToeOpen = False
     , confirmPower = Nothing
     , editorOpen = False
-    , editorPicking = False
+    , code = Code.init
     , debugOpen = True
     , networkOpen = True
     , weatherOpen = True
@@ -484,6 +488,7 @@ init =
     , findBar = Nothing
     , takingScreenshot = Nothing
     , screenshots = []
+    , testFacts = Nothing
     }
 
 
@@ -550,8 +555,21 @@ step event model =
                 | mouse = Coord.plus main_.position (Coord.xy (Coord.xRaw main_.size // 2) (Coord.yRaw main_.size // 2))
                 , upgradingTo = Nothing
                 , reflashNeeded = Nothing
+                , testFacts = Nothing
               }
-            , BootInfo.start
+            , Effect.ReadFiles { id = commandLineId, paths = [ "/proc/cmdline" ] } :: BootInfo.start
+            )
+
+        CommandLine text ->
+            ( { model
+                | testFacts =
+                    if List.member "ELMOS_TEST=1" (String.words (Maybe.withDefault "" text)) then
+                        Just []
+
+                    else
+                        Nothing
+              }
+            , []
             )
 
         DisplaysChanged displays ->
@@ -680,6 +698,19 @@ step event model =
                             , []
                             )
 
+                        CodeRequest n ->
+                            Code.httpResponse
+                                n
+                                (case result of
+                                    Ok response ->
+                                        Ok { status = response.status, body = Effect.bodyToString response.body |> Maybe.withDefault "" }
+
+                                    Err error ->
+                                        Err (Effect.httpErrorToString error)
+                                )
+                                model.code
+                                |> Tuple.mapFirst (\code -> { model | code = code })
+
                 Nothing ->
                     ( model, [] )
 
@@ -690,6 +721,7 @@ step event model =
 
                 model2 =
                     dragScreenshot model { model | mouse = Coord.xy x y }
+                        |> paintStroke model
             in
             case model2.takingScreenshot of
                 Just data ->
@@ -792,6 +824,14 @@ step event model =
                                 , []
                                 )
 
+                            ( Paint Paint.Types.Canvas, { relativePositionToUi } ) :: _ ->
+                                ( { model
+                                    | paint = Paint.startStroke (Coord.minus relativePositionToUi cursor) model.paint
+                                    , uiState = Ui.setFocus Nothing model.uiState
+                                  }
+                                , []
+                                )
+
                             ( AsciiCollab AsciiCollab.Types.GridArea, { relativePositionToUi } ) :: _ ->
                                 ( { model
                                     | asciiCollab = AsciiCollab.clickGrid (Coord.minus relativePositionToUi cursor) model.asciiCollab
@@ -841,6 +881,7 @@ step event model =
                 , selectingText = False
                 , uiState = Ui.onMouseUp model.uiState
                 , screenshotViewer = ScreenshotViewer.stopDragging model.screenshotViewer
+                , paint = Paint.endStroke model.paint
               }
             , []
             )
@@ -907,14 +948,36 @@ step event model =
             else if model.uiState.focus == Just FindInput && model.findBar /= Nothing then
                 findBarKey key model
 
+            else if model.takingScreenshot /= Nothing && key == Keyboard.Escape then
+                ( { model | takingScreenshot = Nothing }, [] )
+
             else if model.uiState.focus == Nothing && model.findBar /= Nothing && key == Keyboard.Escape then
                 ( closeFindBar model, [] )
 
-            else if model.uiState.focus == Just PasswordInput then
+            else if model.uiState.focus == Just (Network Network.Types.PasswordInput) then
                 typeKey key model
 
             else if model.uiState.focus == Just EditorInput then
-                ( editorKey key model, [] )
+                ( multilineKey EditorInput (editorStyle model) key model, [] )
+
+            else if model.uiState.focus == Just (Code Code.Types.Input) && model.code.isOpen then
+                if model.ctrl && key == Keyboard.Character "s" then
+                    ( { model | code = Code.save (codeText model) model.code }, [] )
+
+                else
+                    ( multilineKey (Code Code.Types.Input) (codeStyle model) key model, [] )
+
+            else if
+                model.code.isOpen
+                    && model.code.committing
+                    && (model.uiState.focus == Just (Code Code.Types.TokenInput) || model.uiState.focus == Just (Code Code.Types.MessageInput))
+            then
+                case model.uiState.focus of
+                    Just focus ->
+                        ( singleLineKey focus (model.uiState.focus == Just (Code Code.Types.TokenInput)) key model, [] )
+
+                    Nothing ->
+                        ( model, [] )
 
             else if model.uiState.focus == Just (WebViewer WebViewer.Types.UrlInput) && model.webViewer.isOpen then
                 webViewerKey key model
@@ -953,16 +1016,16 @@ step event model =
             ( { model | stats = Just stats }, [] )
 
         WifiDevice device ->
-            ( { model | wifiDevice = device, scanning = device /= Wifi.NoCard && model.scanning }, [] )
+            ( { model | network = Network.gotDevice device model.network }, [] )
 
         WifiScan networks ->
-            reconnect { model | networks = networks, scanning = False }
+            reconnect { model | network = Network.gotScan networks model.network }
 
         WifiStatus status ->
-            whenOnline model { model | wifiStatus = status, savedWifiPasswords = savePassword status model }
+            whenOnline model { model | network = Network.gotStatus (passwordText model) status model.network }
 
         WiredLinks links ->
-            whenOnline model { model | wired = links }
+            whenOnline model { model | network = Network.gotWired links model.network }
 
         System info ->
             ( { model | system = Just info }, [] )
@@ -999,6 +1062,9 @@ step event model =
         TlsClosed id reason ->
             ( { model | email = Email.tlsClosed id reason model.email }, [] )
 
+        BuildUpdate status ->
+            ( { model | code = Code.buildUpdate status model.code }, [] )
+
         RandomBytes hex ->
             AsciiCollab.gotRandomBytes hex model.asciiCollab |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
 
@@ -1032,10 +1098,6 @@ updateScreenshotPreview data model =
     in
     case Nonempty.fromList (Ui.hover model.uiState mouse displayUi2) |> Maybe.map (Nonempty.get data.depth) of
         Just ( _, { relativePositionToUi, ui } ) ->
-            let
-                _ =
-                    Debug.log "rel" relativePositionToUi
-            in
             ( { model
                 | takingScreenshot =
                     Just
@@ -1058,65 +1120,17 @@ updateScreenshotPreview data model =
             )
 
 
-{-| Once a network the user picked is joined, its password is kept, so it can be
-joined again without asking (`reconnect`).
--}
-savePassword : Wifi.Status -> Model -> SeqDict Ssid Wpa2Password
-savePassword status model =
-    case model.selected of
-        Just network ->
-            if status.state == Wifi.Connected && network.ssid == status.ssid then
-                if needsPassword network then
-                    case SeqDict.get PasswordInput model.uiState.uiState of
-                        Just (TextInputState password) ->
-                            case Wpa2Password.fromString password.current.text of
-                                Ok ok ->
-                                    SeqDict.insert network.ssid ok model.savedWifiPasswords
-
-                                Err _ ->
-                                    SeqDict.remove network.ssid model.savedWifiPasswords
-
-                        _ ->
-                            SeqDict.remove network.ssid model.savedWifiPasswords
-
-                else
-                    SeqDict.remove network.ssid model.savedWifiPasswords
-
-            else
-                model.savedWifiPasswords
-
-        Nothing ->
-            model.savedWifiPasswords
-
-
 {-| After a scan, while wifi is idle (as after a restart), join the strongest network
 there is a saved password for. Not after a failure: a saved password that has stopped
 working would be tried again after every scan, every 30 seconds.
 -}
 reconnect : Model -> ( Model, List Effect )
 reconnect model =
-    let
-        known : List ( Wifi.Network, Wpa2Password )
-        known =
-            List.filterMap
-                (\network -> SeqDict.get network.ssid model.savedWifiPasswords |> Maybe.map (Tuple.pair network))
-                model.networks
-                |> List.sortBy (\( network, _ ) -> negate network.signal)
-    in
-    case known of
-        ( network, password ) :: _ ->
-            if model.wifiStatus.state == Wifi.Idle then
-                ( { model
-                    | weather = weatherWithoutWifi model
-                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
-                  }
-                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password } ]
-                )
+    case Network.reconnect model.network of
+        Just ( network, effect ) ->
+            ( { model | network = network, weather = weatherWithoutWifi model }, [ effect ] )
 
-            else
-                ( model, [] )
-
-        [] ->
+        Nothing ->
             ( model, [] )
 
 
@@ -1124,7 +1138,7 @@ reconnect model =
 -}
 whenOnline : Model -> Model -> ( Model, List Effect )
 whenOnline before after =
-    if isOnline after && not (isOnline before) then
+    if Network.isOnline after.network && not (Network.isOnline before.network) then
         fetchWeather after
 
     else
@@ -1136,16 +1150,11 @@ cable keeps the computer online.
 -}
 weatherWithoutWifi : Model -> WeatherState
 weatherWithoutWifi model =
-    if Wired.isConnected model.wired then
+    if Network.isWiredConnected model.network then
         model.weather
 
     else
         NoWeather
-
-
-isOnline : Model -> Bool
-isOnline model =
-    model.wifiStatus.state == Wifi.Connected || Wired.isConnected model.wired
 
 
 nonEmpty : String -> String -> String
@@ -1210,8 +1219,84 @@ appButton id =
         TicTacToeButton ->
             Just TicTacToeApp
 
+        Paint id2 ->
+            case id2 of
+                Paint.Types.OpenButton ->
+                    Just PaintApp
+
+                Paint.Types.CloseButton ->
+                    Nothing
+
+                Paint.Types.ClearButton ->
+                    Nothing
+
+                Paint.Types.Canvas ->
+                    Nothing
+
+                Paint.Types.ColorButton _ ->
+                    Nothing
+
+                Paint.Types.BrushButton _ ->
+                    Nothing
+
         EditorButton ->
             Just EditorApp
+
+        Code codeId ->
+            case codeId of
+                Code.Types.OpenButton ->
+                    Just CodeApp
+
+                Code.Types.Window ->
+                    Nothing
+
+                Code.Types.Input ->
+                    Nothing
+
+                Code.Types.CloseButton ->
+                    Nothing
+
+                Code.Types.ModulesButton ->
+                    Nothing
+
+                Code.Types.ModulesViewport ->
+                    Nothing
+
+                Code.Types.ModuleButton _ ->
+                    Nothing
+
+                Code.Types.SaveButton ->
+                    Nothing
+
+                Code.Types.RevertButton ->
+                    Nothing
+
+                Code.Types.BuildButton ->
+                    Nothing
+
+                Code.Types.ErrorsCloseButton ->
+                    Nothing
+
+                Code.Types.ErrorsViewport ->
+                    Nothing
+
+                Code.Types.CommitButton ->
+                    Nothing
+
+                Code.Types.CommitCloseButton ->
+                    Nothing
+
+                Code.Types.CommitViewport ->
+                    Nothing
+
+                Code.Types.TokenInput ->
+                    Nothing
+
+                Code.Types.MessageInput ->
+                    Nothing
+
+                Code.Types.PushButton ->
+                    Nothing
 
         ScreenshotViewer id2 ->
             case id2 of
@@ -1310,22 +1395,7 @@ appButton id =
         Lazy _ ->
             Nothing
 
-        RefreshButton ->
-            Nothing
-
-        NetworkButton _ ->
-            Nothing
-
-        PasswordInput ->
-            Nothing
-
-        ShowPasswordButton ->
-            Nothing
-
-        ConnectButton ->
-            Nothing
-
-        DisconnectButton ->
+        Network _ ->
             Nothing
 
         WeatherButton ->
@@ -1361,15 +1431,6 @@ appButton id =
         CloseEditorButton ->
             Nothing
 
-        EditorOpenButton ->
-            Nothing
-
-        EditorModulesViewport ->
-            Nothing
-
-        EditorModuleButton _ ->
-            Nothing
-
         News _ ->
             Nothing
 
@@ -1401,8 +1462,14 @@ appIsOpen app model =
         TicTacToeApp ->
             model.ticTacToeOpen
 
+        PaintApp ->
+            model.paint.isOpen
+
         EditorApp ->
             model.editorOpen
+
+        CodeApp ->
+            model.code.isOpen
 
         ScreenshotViewerApp ->
             model.screenshotViewer.isOpen
@@ -1430,45 +1497,8 @@ emailFieldFocused model =
 clickElement : Model -> UiId -> ( Model, List Effect )
 clickElement model id =
     case id of
-        RefreshButton ->
-            ( { model | scanning = True }, [ Effect.WifiScan ] )
-
-        NetworkButton ssid ->
-            case List.filter (\n -> n.ssid == ssid) model.networks |> List.head of
-                Just network ->
-                    ( { model
-                        | selected = Just network
-                        , uiState =
-                            Ui.setFocus
-                                (if needsPassword network then
-                                    Just PasswordInput
-
-                                 else
-                                    Nothing
-                                )
-                                model.uiState
-                      }
-                    , []
-                    )
-
-                Nothing ->
-                    ( model, [] )
-
-        PasswordInput ->
-            ( { model | uiState = Ui.setFocus (Just PasswordInput) model.uiState }, [] )
-
-        ShowPasswordButton ->
-            ( { model | showPassword = not model.showPassword }, [] )
-
-        ConnectButton ->
-            connect model
-
-        DisconnectButton ->
-            ( { model
-                | weather = weatherWithoutWifi model
-              }
-            , [ Effect.WifiDisconnect ]
-            )
+        Network networkId ->
+            clickNetwork model networkId
 
         WeatherButton ->
             fetchWeather model
@@ -1505,7 +1535,6 @@ clickElement model id =
         EditorButton ->
             ( { model
                 | editorOpen = not model.editorOpen
-                , editorPicking = False
                 , uiState =
                     Ui.setFocus
                         (if model.editorOpen then
@@ -1523,37 +1552,18 @@ clickElement model id =
             ( model, [] )
 
         EditorWindow ->
-            -- A click on the window around the text still types into it (unless the
-            -- list of modules is showing instead).
-            if model.editorPicking then
-                ( model, [] )
-
-            else
-                ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
+            -- A click on the window around the text still types into it.
+            ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
 
         CloseEditorButton ->
-            ( { model | editorOpen = False, editorPicking = False }, [] )
+            ( { model | editorOpen = False }, [] )
 
-        EditorOpenButton ->
-            ( { model | editorPicking = not model.editorPicking, uiState = Ui.setFocus Nothing model.uiState }, [] )
-
-        EditorModulesViewport ->
-            ( model, [] )
-
-        EditorModuleButton name ->
-            case SeqDict.get name SourceCode.sourceCode of
-                Just source ->
-                    ( { model
-                        | editorPicking = False
-                        , uiState =
-                            Ui.insertElement EditorInput (TextInputMultilineState (TextInputMultiline.withText source)) model.uiState
-                                |> Ui.setFocus (Just EditorInput)
-                      }
-                    , []
-                    )
-
-                Nothing ->
-                    ( model, [] )
+        Code codeId ->
+            let
+                ( code, uiState, effects ) =
+                    Code.onClick codeId (codeText model) model.uiState model.code
+            in
+            ( { model | code = code, uiState = uiState }, effects )
 
         CloseAboutButton ->
             ( { model | aboutOpen = False }, [] )
@@ -1689,6 +1699,9 @@ clickElement model id =
 
         WebViewer uiId2 ->
             webViewerClick uiId2 model
+
+        Paint uiId2 ->
+            ( { model | paint = Paint.onClick uiId2 model.paint }, [] )
 
         ScreenshotViewer uiId2 ->
             ( { model
@@ -1872,6 +1885,44 @@ webViewerKey key model =
               }
             , []
             )
+
+
+{-| A key typed in the one-line text box `id`: Escape leaves it, Ctrl+V pastes, and the
+rest edits it. What's copied out of a `secret` box (a token) doesn't go on the clipboard.
+-}
+singleLineKey : UiId -> Bool -> Key -> Model -> Model
+singleLineKey id secret key model =
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Escape ) ->
+            { model | uiState = Ui.setFocus Nothing model.uiState }
+
+        ( True, Keyboard.Character "v" ) ->
+            { model
+                | uiState =
+                    Ui.insertElement id
+                        (TextInputState (TextInput.paste (String.replace "\n" " " model.clipboard) (Ui.getTextInput id model.uiState)))
+                        model.uiState
+            }
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput id model.uiState)
+            in
+            { model
+                | uiState = Ui.insertElement id (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            if secret then
+                                model.clipboard
+
+                            else
+                                text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+            }
 
 
 dragSelectWebViewer : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
@@ -2272,6 +2323,8 @@ type HttpRequestId
     | NewsRequest
     | HackerNewsRequest HackerNews.HttpRequestId
     | WebViewerRequest Int
+      -- The Code app's commits (Code.GitHub.requestId).
+    | CodeRequest Int
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -2292,6 +2345,9 @@ httpRequestIdToString request =
         WebViewerRequest count ->
             "webviewer_" ++ WebViewer.requestIdToString count
 
+        CodeRequest n ->
+            Code.GitHub.requestId n
+
 
 stringToHttpRequestId : String -> Maybe HttpRequestId
 stringToHttpRequestId string =
@@ -2310,6 +2366,9 @@ stringToHttpRequestId string =
 
         "webviewer" :: rest ->
             WebViewer.stringToRequestId rest |> Maybe.map WebViewerRequest
+
+        [ "code", n ] ->
+            String.toInt n |> Maybe.map CodeRequest
 
         _ ->
             Nothing
@@ -2334,48 +2393,87 @@ closeCalculator model =
     }
 
 
-connect : Model -> ( Model, List Effect )
-connect model =
-    case model.selected of
-        Just network ->
-            if needsPassword network then
-                case SeqDict.get PasswordInput model.uiState.uiState of
-                    Just (TextInputState password) ->
-                        case Wpa2Password.fromString password.current.text of
-                            Ok password2 ->
-                                ( { model
-                                    | weather = weatherWithoutWifi model
-                                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
-                                  }
-                                , [ Effect.WifiConnect { ssid = network.ssid, password = Just password2 } ]
+{-| What is typed in the password box, if anything has been.
+-}
+passwordText : Model -> Maybe String
+passwordText model =
+    case SeqDict.get passwordId model.uiState.uiState of
+        Just (TextInputState password) ->
+            Just password.current.text
+
+        _ ->
+            Nothing
+
+
+passwordId : UiId
+passwordId =
+    Network Network.Types.PasswordInput
+
+
+clickNetwork : Model -> Network.Types.UiId -> ( Model, List Effect )
+clickNetwork model id =
+    case id of
+        Network.Types.RefreshButton ->
+            ( { model | network = Network.refresh model.network }, [ Effect.WifiScan ] )
+
+        Network.Types.NetworkButton ssid ->
+            case Network.select ssid model.network of
+                Just network ->
+                    ( { model
+                        | network = network
+                        , uiState =
+                            Ui.setFocus
+                                (if Network.selectedNeedsPassword network then
+                                    Just passwordId
+
+                                 else
+                                    Nothing
                                 )
+                                model.uiState
+                      }
+                    , []
+                    )
 
-                            Err error ->
-                                ( { model
-                                    | wifiStatus =
-                                        { state = Wifi.Failed, ssid = network.ssid, ip = Nothing, error = error }
-                                  }
-                                , []
-                                )
+                Nothing ->
+                    ( model, [] )
 
-                    _ ->
-                        ( model, [] )
+        Network.Types.PasswordInput ->
+            ( { model | uiState = Ui.setFocus (Just passwordId) model.uiState }, [] )
 
-            else
-                ( { model
-                    | weather = weatherWithoutWifi model
-                    , wifiStatus = { state = Wifi.Connecting, ssid = network.ssid, ip = Nothing, error = "" }
-                  }
-                , [ Effect.WifiConnect { ssid = network.ssid, password = Nothing } ]
-                )
+        Network.Types.ShowPasswordButton ->
+            ( { model | network = Network.toggleShowPassword model.network }, [] )
 
-        Nothing ->
+        Network.Types.ConnectButton ->
+            connect model
+
+        Network.Types.NetworkListViewport ->
             ( model, [] )
 
+        Network.Types.DisconnectButton ->
+            ( { model
+                | weather = weatherWithoutWifi model
+              }
+            , [ Effect.WifiDisconnect ]
+            )
 
-needsPassword : Wifi.Network -> Bool
-needsPassword network =
-    network.security /= Wifi.Open
+
+connect : Model -> ( Model, List Effect )
+connect model =
+    let
+        ( network, effects ) =
+            Network.connect (passwordText model) model.network
+    in
+    ( { model
+        | network = network
+        , weather =
+            if List.isEmpty effects then
+                model.weather
+
+            else
+                weatherWithoutWifi model
+      }
+    , effects
+    )
 
 
 typeKey : Key -> Model -> ( Model, List Effect )
@@ -2391,7 +2489,7 @@ typeKey key model =
             ( { model
                 | uiState =
                     Ui.updateElement
-                        PasswordInput
+                        passwordId
                         (\maybe ->
                             TextInput.paste
                                 model.clipboard
@@ -2418,15 +2516,15 @@ typeKey key model =
                         model.ctrl
                         model.shift
                         key
-                        (Ui.getTextInput PasswordInput model.uiState)
+                        (Ui.getTextInput passwordId model.uiState)
             in
             ( { model
                 | uiState =
-                    Ui.insertElement PasswordInput (TextInputState (limitPassword password)) model.uiState
+                    Ui.insertElement passwordId (TextInputState (limitPassword password)) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
-                            if model.showPassword then
+                            if model.network.showPassword then
                                 text
 
                             else
@@ -2439,6 +2537,33 @@ typeKey key model =
             )
 
 
+{-| Selects in the text box with many lines `id` while the mouse drags.
+-}
+dragSelectMultiline : UiId -> TextInputMultiline.Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectMultiline id style mouse position model =
+    { model
+        | uiState =
+            Ui.updateElement
+                id
+                (\maybe ->
+                    TextInputMultiline.mouseDownMove
+                        style
+                        mouse
+                        position
+                        (case maybe of
+                            Just (TextInputMultilineState editor) ->
+                                editor
+
+                            _ ->
+                                TextInputMultiline.init
+                        )
+                        |> TextInputMultilineState
+                        |> Just
+                )
+                model.uiState
+    }
+
+
 {-| The mouse moved with its button down after going down in the text box `focus`, at
 `position` on its display: select from there to the mouse (`mouse`, in that display's
 UI pixels).
@@ -2446,14 +2571,14 @@ UI pixels).
 dragSelect : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 dragSelect focus mouse position model =
     case focus of
-        PasswordInput ->
+        Network Network.Types.PasswordInput ->
             { model
                 | uiState =
                     Ui.updateElement
-                        PasswordInput
+                        passwordId
                         (\maybe ->
                             TextInput.mouseDownMove
-                                (passwordStyle model)
+                                (Network.passwordStyle model.network)
                                 mouse
                                 position
                                 (case maybe of
@@ -2471,41 +2596,30 @@ dragSelect focus mouse position model =
             }
 
         EditorInput ->
-            { model
-                | uiState =
-                    Ui.updateElement
-                        EditorInput
-                        (\maybe ->
-                            TextInputMultiline.mouseDownMove
-                                (editorStyle model)
-                                mouse
-                                position
-                                (case maybe of
-                                    Just (TextInputMultilineState editor) ->
-                                        editor
+            dragSelectMultiline EditorInput (editorStyle model) mouse position model
 
-                                    _ ->
-                                        TextInputMultiline.init
-                                )
-                                |> TextInputMultilineState
-                                |> Just
-                        )
-                        model.uiState
-            }
+        Code Code.Types.Input ->
+            dragSelectMultiline (Code Code.Types.Input) (codeStyle model) mouse position model
 
-        RefreshButton ->
+        Code _ ->
             model
 
-        NetworkButton _ ->
+        Network Network.Types.RefreshButton ->
             model
 
-        ShowPasswordButton ->
+        Network (Network.Types.NetworkButton _) ->
             model
 
-        ConnectButton ->
+        Network Network.Types.ShowPasswordButton ->
             model
 
-        DisconnectButton ->
+        Network Network.Types.ConnectButton ->
+            model
+
+        Network Network.Types.DisconnectButton ->
+            model
+
+        Network Network.Types.NetworkListViewport ->
             model
 
         WeatherButton ->
@@ -2551,15 +2665,6 @@ dragSelect focus mouse position model =
             model
 
         CloseEditorButton ->
-            model
-
-        EditorOpenButton ->
-            model
-
-        EditorModulesViewport ->
-            model
-
-        EditorModuleButton _ ->
             model
 
         DebugButton ->
@@ -2616,14 +2721,18 @@ dragSelect focus mouse position model =
         ScreenshotViewer _ ->
             model
 
+        Paint _ ->
+            model
+
         Lazy _ ->
             model
 
 
-{-| A key for the text editor. Its copies go in the same clipboard as the password box's.
+{-| A key for a text box with many lines (the text editor's or the Code app's), `id`.
+Its copies go in the same clipboard as the password box's.
 -}
-editorKey : Key -> Model -> Model
-editorKey key model =
+multilineKey : UiId -> TextInputMultiline.Style -> Key -> Model -> Model
+multilineKey id style key model =
     case ( model.ctrl, key ) of
         ( False, Keyboard.Escape ) ->
             { model | uiState = Ui.setFocus Nothing model.uiState }
@@ -2632,10 +2741,10 @@ editorKey key model =
             { model
                 | uiState =
                     Ui.updateElement
-                        EditorInput
+                        id
                         (\maybe ->
                             TextInputMultiline.paste
-                                (editorStyle model)
+                                style
                                 model.clipboard
                                 (case maybe of
                                     Just (TextInputMultilineState editor) ->
@@ -2654,14 +2763,14 @@ editorKey key model =
             let
                 ( editor, outMsg ) =
                     TextInputMultiline.keyMsg
-                        (editorStyle model)
+                        style
                         model.ctrl
                         model.shift
                         key
-                        (Ui.getTextInputMultiline EditorInput model.uiState)
+                        (Ui.getTextInputMultiline id model.uiState)
             in
             { model
-                | uiState = Ui.insertElement EditorInput (TextInputMultilineState editor) model.uiState
+                | uiState = Ui.insertElement id (TextInputMultilineState editor) model.uiState
                 , clipboard =
                     case outMsg of
                         TextInput.CopyText text ->
@@ -3045,6 +3154,29 @@ dragScreenshot before after =
     }
 
 
+{-| The mouse moved from where `before` has it to where `after` has it: paints along the
+way if a stroke is being drawn.
+-}
+paintStroke : Model -> Model -> Model
+paintStroke before after =
+    case after.paint.stroke of
+        Just _ ->
+            let
+                display : Display
+                display =
+                    displayOf PaintApp after
+            in
+            { after
+                | paint =
+                    Paint.strokeBy
+                        (Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse))
+                        after.paint
+            }
+
+        Nothing ->
+            after
+
+
 {-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
 the mouse scrolls.
 -}
@@ -3170,25 +3302,77 @@ displayWindows model display =
             (\( app, bounds ) ->
                 ( bounds.topLeft
                 , appView app (Coord.minus bounds.topLeft bounds.bottomRight) model
+                    |> warnIfWrongSize (Coord.minus bounds.topLeft bounds.bottomRight)
                 )
             )
             (windows model display)
         ++ (if display.id == (mainDisplay model).id then
-                case model.upgradingTo of
-                    Just build ->
-                        [ notice model ("Upgrade to " ++ build ++ " in progress") ]
+                case noticeText model of
+                    Just text ->
+                        [ notice model text ]
 
                     Nothing ->
-                        case model.reflashNeeded of
-                            Just build ->
-                                [ notice model ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it") ]
-
-                            Nothing ->
-                                []
+                        []
 
             else
                 []
            )
+
+
+{-| An app's view, with a warning over its top left corner if it isn't the size of the
+window it was given: an app must fill its window exactly, and when it doesn't, this says
+by how much rather than leaving you to hunt for it.
+-}
+warnIfWrongSize : Coord UiPixels -> Ui.Element UiId -> Ui.Element UiId
+warnIfWrongSize windowSize appElement =
+    let
+        viewSize : Coord UiPixels
+        viewSize =
+            Ui.size appElement
+    in
+    if viewSize == windowSize then
+        appElement
+
+    else
+        Ui.inFront
+            [ ( Coord.origin, appElement )
+            , ( Coord.origin
+              , Ui.el
+                    { padding = Ui.paddingXY 6 3
+                    , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.errorColor, fillColor = Color.fillColor }
+                    }
+                    (Ui.colorText
+                        Color.errorColor
+                        ("Wrong size: the app is "
+                            ++ sizeToString viewSize
+                            ++ ", its window "
+                            ++ sizeToString windowSize
+                        )
+                    )
+              )
+            ]
+
+
+sizeToString : Coord UiPixels -> String
+sizeToString coord =
+    String.fromInt (Coord.xRaw coord) ++ " x " ++ String.fromInt (Coord.yRaw coord)
+
+
+{-| What the notice in the main display's bottom right corner says, if there is one.
+-}
+noticeText : Model -> Maybe String
+noticeText model =
+    case model.upgradingTo of
+        Just build ->
+            Just ("Upgrade to " ++ build ++ " in progress")
+
+        Nothing ->
+            case model.reflashNeeded of
+                Just build ->
+                    Just ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it")
+
+                Nothing ->
+                    Nothing
 
 
 {-| The find bar, if it is open on this display, along its bottom, showing `count`.
@@ -3200,7 +3384,6 @@ findBarAt model display count =
 
     else
         []
-
 
 
 {-| The display the find bar is on: the one it was opened on, or the main one if that
@@ -3267,6 +3450,7 @@ findBarHeight display =
     Coord.yRaw (Ui.size (findBar display ""))
 
 
+
 -- WINDOW LAYOUT
 
 
@@ -3297,7 +3481,7 @@ windows model display =
     in
     inOrder
         |> List.filter (\app -> appIsOpen app model && (displayOf app model).id == display.id)
-        |> List.map (\app -> ( app, appLimits app model ))
+        |> List.map (\app -> ( app, appLimits app ))
         |> Layout.layout windowGap area
         |> List.map
             (\( app, bounds ) ->
@@ -3320,17 +3504,17 @@ shownOn display app model =
 -}
 windowGap : Int
 windowGap =
-    8
+    4
 
 
 {-| How big each app's window can be. The ones that are always the same size say what
 size their view is.
 -}
-appLimits : App -> Model -> Layout.Limits
-appLimits app model =
+appLimits : App -> Layout.Limits
+appLimits app =
     case app of
         AboutApp ->
-            Layout.fixed (Ui.size (aboutPage model))
+            aboutSize
 
         NewsApp ->
             { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
@@ -3348,10 +3532,13 @@ appLimits app model =
             { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
 
         CalculatorApp ->
-            Layout.fixed (Ui.size (Calculator.view False model.calculator))
+            Calculator.appSize
 
         TicTacToeApp ->
-            Layout.fixed (Ui.size (TicTacToe.view model.ticTacToe))
+            TicTacToe.appSize
+
+        PaintApp ->
+            Paint.appSize
 
         EditorApp ->
             { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
@@ -3359,17 +3546,84 @@ appLimits app model =
             , max = Coord.xy (Quantity.unwrap (em 60) + 16) 100000
             }
 
+        CodeApp ->
+            Code.appSize
+
         DebugApp ->
-            Layout.fixed (Ui.size (overlay model))
+            debugSize
 
         NetworkApp ->
-            Layout.fixed (Ui.size (networkPanel model))
+            networkSize
 
         WeatherApp ->
-            Layout.fixed (Ui.size (weatherPanel model))
+            weatherSize
 
         ScreenshotViewerApp ->
             { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
+
+
+aboutSize : Layout.Limits
+aboutSize =
+    Layout.fixed (Ui.size (aboutPage init))
+
+
+debugSize : Layout.Limits
+debugSize =
+    Layout.fixed (Ui.size (overlay debugSample))
+
+
+{-| What the debug app is sized from, once: the host has said everything it says.
+-}
+debugSample : Model
+debugSample =
+    { init
+        | displays = [ { id = 0, name = "eDP-1", position = Coord.xy 0 0, size = Coord.xy 1920 1080, sizeMm = ( 0, 0 ) } ]
+        , renderer = Just { gpu = True, name = "Renderer", hardwareCursor = True }
+        , stats =
+            Just
+                { cores = 8
+                , cpu = 0
+                , cpuElm = 0
+                , cpuHost = 0
+                , cpuGpu = 0
+                , memUsed = 0
+                , memTotal = 0
+                , gpuMs = Just 0
+                , elmMs = Just 0
+                , drawMs = Just 0
+                }
+        , frameIntervals = [ 16 ]
+        , bootInfo =
+            let
+                bootInfo =
+                    BootInfo.init
+            in
+            { bootInfo | boot = Just { initMs = 0, elmMs = 0, frameMs = 0 }, firmwareMs = Just 0 }
+    }
+
+
+networkSize : Layout.Limits
+networkSize =
+    Layout.fixed (Ui.size (networkPanel Network.sample))
+
+
+weatherSize : Layout.Limits
+weatherSize =
+    Layout.fixed (Ui.size (weatherPanel True weatherSample))
+
+
+{-| What the weather app is sized from, once: a forecast, which is the most it shows.
+-}
+weatherSample : WeatherState
+weatherSample =
+    GotWeather
+        { name = "Place", latitude = 0, longitude = 0 }
+        { temperature = 0, code = 0, wind = 0, humidity = 0, time = "2000-01-01T00:00", days = List.repeat 4 { date = "2000-01-01", code = 0, high = 0, low = 0 }, utcOffsetSeconds = Nothing }
+
+
+networkPanel : Network.Network -> Ui.Element UiId
+networkPanel network =
+    smallWindow { title = heading "Network", close = CloseNetworkButton, width = panelWidth } (Network.view network)
 
 
 {-| An app's view, in a window this big. The apps that are always the same size ignore
@@ -3402,17 +3656,23 @@ appView app size model =
         TicTacToeApp ->
             TicTacToe.view model.ticTacToe
 
+        PaintApp ->
+            Paint.view model.paint
+
         EditorApp ->
             editorWindow model
+
+        CodeApp ->
+            Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) model.code
 
         DebugApp ->
             overlay model
 
         NetworkApp ->
-            networkPanel model
+            networkPanel model.network
 
         WeatherApp ->
-            weatherPanel model
+            weatherPanel (Network.isOnline model.network) model.weather
 
         ScreenshotViewerApp ->
             ScreenshotViewer.view
@@ -3434,7 +3694,11 @@ smallWindow { title, close, width } rows =
         { padding = Ui.paddingXY 6 6, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
             4
-            (Ui.leftAndRight widest title (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+            (Ui.rowFromRight
+                { width = Quantity.unwrap widest, spacing = 0 }
+                [ \rest -> Ui.left (Units.uiPixels rest) title
+                , \_ -> Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close")
+                ]
                 :: rows
             )
         )
@@ -3491,7 +3755,7 @@ overlay model =
         perFrame maybeMs =
             case maybeMs of
                 Just ms ->
-                    fixed 2 ms ++ " ms/frame" ++ percentOfFrame ms model
+                    Weather.fixed 2 ms ++ " ms/frame" ++ percentOfFrame ms model
 
                 Nothing ->
                     "n/a"
@@ -3517,18 +3781,18 @@ overlay model =
                             "n/a (drawing on the CPU)"
                         )
                     , line "CPU"
-                        (fixed 0 stats.cpu
+                        (Weather.fixed 0 stats.cpu
                             ++ "% of "
                             ++ String.fromInt stats.cores
                             ++ " cores"
                         )
                     , line "1 core"
                         ("Elm "
-                            ++ fixed 0 stats.cpuElm
+                            ++ Weather.fixed 0 stats.cpuElm
                             ++ "%, host "
-                            ++ fixed 0 stats.cpuHost
+                            ++ Weather.fixed 0 stats.cpuHost
                             ++ "%, elmos-gpu "
-                            ++ fixed 0 stats.cpuGpu
+                            ++ Weather.fixed 0 stats.cpuGpu
                             ++ "%"
                         )
                     , line "Memory" (String.fromInt stats.memUsed ++ " / " ++ String.fromInt stats.memTotal ++ " MB")
@@ -3538,7 +3802,7 @@ overlay model =
                     []
 
         seconds ms =
-            fixed 2 (ms / 1000) ++ " s"
+            Weather.fixed 2 (ms / 1000) ++ " s"
     in
     smallWindow { title = Ui.monoText "Elm OS debug", close = CloseDebugButton, width = debugWidth }
         [ Ui.column
@@ -3628,11 +3892,11 @@ frameText model =
                     List.maximum intervals |> Maybe.withDefault 0
             in
             "avg "
-                ++ fixed 1 average
+                ++ Weather.fixed 1 average
                 ++ " ms, max "
-                ++ fixed 1 maximum
+                ++ Weather.fixed 1 maximum
                 ++ " ms ("
-                ++ fixed 0 (1000 / max 0.001 average)
+                ++ Weather.fixed 0 (1000 / max 0.001 average)
                 ++ " fps)"
 
 
@@ -3643,35 +3907,7 @@ percentOfFrame ms model =
             ""
 
         intervals ->
-            " (" ++ fixed 0 (100 * ms * toFloat (List.length intervals) / max 0.001 (List.sum intervals)) ++ "%)"
-
-
-{-| A number with a fixed count of decimals.
--}
-fixed : Int -> Float -> String
-fixed decimals value =
-    let
-        factor =
-            10 ^ decimals
-
-        n =
-            round (abs value * toFloat factor)
-
-        sign =
-            if value < 0 && n > 0 then
-                "-"
-
-            else
-                ""
-
-        whole =
-            String.fromInt (n // factor)
-    in
-    if decimals <= 0 then
-        sign ++ whole
-
-    else
-        sign ++ whole ++ "." ++ String.padLeft decimals '0' (String.fromInt (modBy factor n))
+            " (" ++ Weather.fixed 0 (100 * ms * toFloat (List.length intervals) / max 0.001 (List.sum intervals)) ++ "%)"
 
 
 {-| The program. The Model is kept on the data disk and comes back after a restart
@@ -3709,48 +3945,69 @@ draw msg model =
 
                 cursor =
                     cursorShape model uis
-            in
-            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis) }
-            , [ Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
-              , Effect.Render
-                    (\() ->
-                        let
-                            found : { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
-                            found =
-                                findCount model (List.map (\part -> ( part.display, Ui.inFront part.windows )) parts)
-                        in
-                        List.map2
-                            (\part ( _, ui ) ->
-                                { display = part.display.id
-                                , triangles =
-                                    view
-                                        model
-                                        cursor
-                                        part.display
-                                        { ui = ui
-                                        , content = Ui.inFront part.windows
-                                        , bar = findBarAt model part.display found.count
-                                        , find =
-                                            { query = findText model
-                                            , selected =
-                                                case found.selected of
-                                                    Just ( displayId, match ) ->
-                                                        if displayId == part.display.id then
-                                                            Just ( match.at, match.index )
 
-                                                        else
-                                                            Nothing
+                scenes : List { display : Int, triangles : List (Triangle DevicePixels) }
+                scenes =
+                    let
+                        found : { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
+                        found =
+                            findCount model (List.map (\part -> ( part.display, Ui.inFront part.windows )) parts)
+                    in
+                    List.map2
+                        (\part ( _, ui ) ->
+                            { display = part.display.id
+                            , triangles =
+                                view
+                                    model
+                                    cursor
+                                    part.display
+                                    { ui = ui
+                                    , content = Ui.inFront part.windows
+                                    , bar = findBarAt model part.display found.count
+                                    , find =
+                                        { query = findText model
+                                        , selected =
+                                            case found.selected of
+                                                Just ( displayId, match ) ->
+                                                    if displayId == part.display.id then
+                                                        Just ( match.at, match.index )
 
-                                                    Nothing ->
+                                                    else
                                                         Nothing
-                                            }
+
+                                                Nothing ->
+                                                    Nothing
                                         }
-                                }
+                                    }
+                            }
+                        )
+                        parts
+                        uis
+
+                -- The image chunks on screen, found in the image texture (or put there).
+                ( imageCache, placed, imageWrites ) =
+                    ImageCache.place model.imageCache (List.map .triangles scenes)
+
+                ( facts, factLogs ) =
+                    case model.testFacts of
+                        Just written ->
+                            let
+                                now =
+                                    testFacts model uis
+                            in
+                            ( Just now
+                            , List.filter (\fact -> not (List.member fact written)) now
+                                |> List.map (\( name, value ) -> Effect.Log ("test " ++ name ++ " " ++ value))
                             )
-                            parts
-                            uis
-                    )
-              ]
+
+                        Nothing ->
+                            ( Nothing, [] )
+            in
+            ( { model | lazyCache = Ui.lazyCache (List.map Tuple.second uis), imageCache = imageCache, testFacts = facts }
+            , Effect.SetCursor { image = Cursor.image (uiScale model) cursor, color = cursorColor model, scale = uiScale model }
+                :: imageWrites
+                ++ Effect.Render (\() -> List.map2 (\scene triangles -> { scene | triangles = triangles }) scenes placed)
+                :: factLogs
             )
 
         GotInput _ ->
@@ -3758,6 +4015,172 @@ draw msg model =
 
         Tick _ ->
             ( model, [] )
+
+
+{-| The id of the request for the kernel's command line (`CommandLine`).
+-}
+commandLineId : String
+commandLineId =
+    "cmdline"
+
+
+{-| What the QEMU tests (scripts/test-\*.py) check, by name, each as JSON. With
+ELMOS\_TEST=1 on the kernel's command line, `draw` writes each one to the log when it
+changes, as a line `[elm] test <name> <JSON>` (and all of them again whenever this
+program starts). The tests wait for those lines instead of reading the screen, so
+changing how something looks doesn't break them; they click buttons by their text, at
+the place `buttons` gives.
+
+  - pointer: where the mouse is, in device pixels, [x, y].
+  - windows: the open apps (`appName`) on each display, in layout order:
+    [["Debug", "Network", "Weather"]] with one display.
+  - buttons: every button and text box that can be seen, with its text (what is typed,
+    for a text box), whether it has the keyboard focus, and the middle of the part of it
+    that can be seen, in device pixels:
+    [{"label": ..., "textBox": false, "focused": false, "x": ..., "y": ...}, ...] (Ui.buttons).
+  - editor: the text editor's text. calculator: what its display shows.
+  - code: the Code app's module, the modules saved with changes, and how the last
+    build went: {"module": ..., "edited": [...], "build": "running Linking"}
+    ("failed <step>", "built <name>", "" before any).
+  - wifi: {"state": ..., "ssid": ..., "ip": ...}. weather: the place the forecast is for,
+    "" until there is one.
+  - notice: what the notice in the bottom right corner says, "" when there is none.
+
+-}
+testFacts : Model -> List ( Display, Ui.Element UiId ) -> List ( String, String )
+testFacts model uis =
+    let
+        json name value =
+            ( name, E.encode 0 value )
+
+        button : Display -> Ui.Clickable -> E.Value
+        button display found =
+            let
+                middle =
+                    Coord.plus display.position
+                        (Coord.toDevice
+                            (Display.uiScale display)
+                            (Coord.xy
+                                ((Coord.xRaw found.bounds.topLeft + Coord.xRaw found.bounds.bottomRight) // 2)
+                                ((Coord.yRaw found.bounds.topLeft + Coord.yRaw found.bounds.bottomRight) // 2)
+                            )
+                        )
+            in
+            E.object
+                [ ( "label", E.string found.label )
+                , ( "textBox", E.bool found.textBox )
+                , ( "focused", E.bool found.focused )
+                , ( "x", E.int (Coord.xRaw middle) )
+                , ( "y", E.int (Coord.yRaw middle) )
+                ]
+    in
+    [ json "pointer" (E.list E.int [ Coord.xRaw model.mouse, Coord.yRaw model.mouse ])
+    , json "windows"
+        (E.list (\display -> E.list (\( app, _ ) -> E.string (appName app)) (windows model display)) model.displays)
+    , json "buttons"
+        (E.list identity
+            (List.concatMap (\( display, ui ) -> List.map (button display) (Ui.buttons model.uiState ui)) uis)
+        )
+    , json "editor" (E.string (Ui.getTextInputMultiline EditorInput model.uiState).input.current.text)
+    , json "calculator" (E.string (Calculator.display model.calculator))
+    , json "code" (Code.testFact model.code)
+    , json "wifi"
+        (E.object
+            [ ( "state"
+              , E.string
+                    (case model.network.wifiStatus.state of
+                        Network.Idle ->
+                            "idle"
+
+                        Network.Connecting ->
+                            "connecting"
+
+                        Network.Dhcp ->
+                            "dhcp"
+
+                        Network.Connected ->
+                            "connected"
+
+                        Network.Failed ->
+                            "failed"
+                    )
+              )
+            , ( "ssid", E.string (Network.Types.ssidToString model.network.wifiStatus.ssid) )
+            , ( "ip", E.string (Maybe.withDefault "" (Maybe.map Ipv4.toString model.network.wifiStatus.ip)) )
+            ]
+        )
+    , json "weather"
+        (E.string
+            (case model.weather of
+                GotWeather place _ ->
+                    place.name
+
+                NoWeather ->
+                    ""
+
+                FindingPlace ->
+                    ""
+
+                LoadingForecast _ ->
+                    ""
+
+                WeatherFailed _ ->
+                    ""
+            )
+        )
+    , json "notice" (E.string (Maybe.withDefault "" (noticeText model)))
+    ]
+
+
+{-| An app's name in the test facts (`testFacts`).
+-}
+appName : App -> String
+appName app =
+    case app of
+        AboutApp ->
+            "About"
+
+        NewsApp ->
+            "News"
+
+        HackerNewsApp ->
+            "HackerNews"
+
+        EmailApp ->
+            "Email"
+
+        WebViewerApp ->
+            "WebViewer"
+
+        AsciiCollabApp ->
+            "AsciiCollab"
+
+        CalculatorApp ->
+            "Calculator"
+
+        TicTacToeApp ->
+            "TicTacToe"
+
+        PaintApp ->
+            "Paint"
+
+        EditorApp ->
+            "Editor"
+
+        CodeApp ->
+            "Code"
+
+        ScreenshotViewerApp ->
+            "ScreenshotViewer"
+
+        DebugApp ->
+            "Debug"
+
+        NetworkApp ->
+            "Network"
+
+        WeatherApp ->
+            "Weather"
 
 
 {-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
@@ -3842,197 +4265,6 @@ panelWidth =
     em 28
 
 
-{-| The network app: a line for each wired card, then wifi (left out on a computer with
-a wired card and no wifi).
--}
-networkPanel : Model -> Ui.Element UiId
-networkPanel model =
-    let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        fit string =
-            Sprite.ellipsis bodySize font width string
-
-        small =
-            Ui.paddingXY 6 3
-
-        title =
-            case model.wifiDevice of
-                Wifi.Card name ->
-                    "Wifi (" ++ name ++ ")"
-
-                Wifi.Unknown ->
-                    "Wifi"
-
-                Wifi.NoCard ->
-                    "Wifi"
-
-        header =
-            case model.wifiDevice of
-                Wifi.Card _ ->
-                    Ui.leftAndRight width
-                        (t title)
-                        (Ui.button { id = RefreshButton, padding = small }
-                            (t
-                                (if model.scanning then
-                                    "Scanning"
-
-                                 else
-                                    "Refresh"
-                                )
-                            )
-                        )
-
-                Wifi.Unknown ->
-                    t title
-
-                Wifi.NoCard ->
-                    t title
-
-        status : Wifi.Status
-        status =
-            model.wifiStatus
-
-        ssid : String
-        ssid =
-            Wifi.ssidToString model.wifiStatus.ssid
-
-        statusLine : Ui.Element id
-        statusLine =
-            case model.wifiDevice of
-                Wifi.Unknown ->
-                    t "Looking for a wifi card…"
-
-                Wifi.NoCard ->
-                    t "No wifi card found"
-
-                Wifi.Card _ ->
-                    case status.state of
-                        Wifi.Idle ->
-                            t "Not connected. Pick a network:"
-
-                        Wifi.Connecting ->
-                            t (fit ("Joining " ++ ssid ++ "…"))
-
-                        Wifi.Dhcp ->
-                            t (fit ("Getting an address on " ++ ssid))
-
-                        Wifi.Connected ->
-                            Ui.colorText
-                                connectedColor
-                                (fit
-                                    ("Connected to "
-                                        ++ ssid
-                                        ++ ", "
-                                        ++ (case status.ip of
-                                                Just ip ->
-                                                    Ipv4.toString ip
-
-                                                Nothing ->
-                                                    ""
-                                           )
-                                    )
-                                )
-
-                        Wifi.Failed ->
-                            Ui.colorText Color.errorColor (Sprite.wrap bodySize font width status.error)
-
-        networkRows =
-            case model.wifiDevice of
-                Wifi.Card _ ->
-                    if List.isEmpty model.networks then
-                        [ t
-                            (if model.scanning then
-                                "Looking for networks…"
-
-                             else
-                                "No networks found"
-                            )
-                        ]
-
-                    else
-                        List.take 8 model.networks |> List.map (networkRow model)
-
-                Wifi.Unknown ->
-                    []
-
-                Wifi.NoCard ->
-                    []
-
-        joinRows =
-            case model.selected of
-                Just selected ->
-                    if selected.ssid == status.ssid && status.state /= Wifi.Idle && status.state /= Wifi.Failed then
-                        []
-
-                    else if selected.security == Wifi.Enterprise || selected.security == Wifi.Wep || selected.security == Wifi.Wpa3 then
-                        [ Ui.colorText Color.errorColor "That kind of network isn't supported yet" ]
-
-                    else
-                        (if needsPassword selected then
-                            [ Ui.row
-                                6
-                                [ -- lined up with the text in the box, which is inset by its padding
-                                  Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (t "Password")
-                                , passwordInput model
-                                , Ui.button { id = ShowPasswordButton, padding = small }
-                                    (t
-                                        (if model.showPassword then
-                                            "Hide"
-
-                                         else
-                                            "Show"
-                                        )
-                                    )
-                                ]
-                            ]
-
-                         else
-                            []
-                        )
-                            ++ [ Ui.button
-                                    { id = ConnectButton, padding = small }
-                                    (t
-                                        (Sprite.ellipsis
-                                            bodySize
-                                            font
-                                            (width |> Quantity.minus (Units.uiPixels 12))
-                                            ("Connect to " ++ Wifi.ssidToString selected.ssid)
-                                        )
-                                    )
-                               ]
-
-                Nothing ->
-                    []
-
-        disconnectRow =
-            if status.state /= Wifi.Idle && status.state /= Wifi.Failed then
-                [ Ui.button { id = DisconnectButton, padding = small } (t "Disconnect") ]
-
-            else
-                []
-    in
-    smallWindow { title = heading "Network", close = CloseNetworkButton, width = width }
-        (wiredRows model
-            ++ (if model.wifiDevice == Wifi.NoCard && not (List.isEmpty model.wired) then
-                    []
-
-                else
-                    [ header, statusLine ]
-                        ++ networkRows
-                        ++ joinRows
-                        ++ disconnectRow
-               )
-        )
-
-
 {-| The date and time, once the host has said (each second), at the right end of the
 toolbar: just the time when the date doesn't fit in `room`. In UTC until the weather says
 where this computer is.
@@ -4058,339 +4290,11 @@ clock room model =
             Ui.empty
 
 
-{-| Two lines for each wired card: its name, and whether it has a cable and an address.
--}
-wiredRows : Model -> List (Ui.Element UiId)
-wiredRows model =
-    let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        link : Wired.Link -> List (Ui.Element id)
-        link l =
-            [ t ("Wired (" ++ l.name ++ ")")
-            , case l.state of
-                Wired.NoCable ->
-                    t "No cable plugged in"
-
-                Wired.Dhcp ->
-                    t "Getting an address…"
-
-                Wired.Connected ->
-                    Ui.colorText
-                        connectedColor
-                        (Sprite.ellipsis
-                            bodySize
-                            font
-                            width
-                            (case l.ip of
-                                Just ip ->
-                                    "Connected, " ++ Ipv4.toString ip
-
-                                Nothing ->
-                                    "Connected"
-                            )
-                        )
-
-                Wired.Failed ->
-                    Ui.colorText
-                        Color.errorColor
-                        (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
-            ]
-
-        divider =
-            Ui.quads
-                { size = ( width, Units.uiPixels 6 )
-                , triangles =
-                    Sprite.rectangle
-                        Color.outlineColor
-                        { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                        (Coord.xy 0 2)
-                        ( width, Units.uiPixels 2 )
-                }
-    in
-    case model.wired of
-        [] ->
-            []
-
-        links ->
-            List.concatMap link links
-                ++ (if model.wifiDevice == Wifi.NoCard then
-                        []
-
-                    else
-                        [ divider ]
-                   )
-
-
-connectedColor : Color
-connectedColor =
-    Color.successColor
-
-
-networkRow : Model -> Wifi.Network -> Ui.Element UiId
-networkRow model network =
-    let
-        font =
-            sans
-
-        connectedHere =
-            model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Wifi.Connected
-
-        label =
-            if connectedHere then
-                "connected"
-
-            else
-                case network.security of
-                    Wifi.Open ->
-                        "open"
-
-                    Wifi.Wpa ->
-                        "locked"
-
-                    Wifi.Enterprise ->
-                        "802.1X"
-
-                    Wifi.Wep ->
-                        "WEP"
-
-                    Wifi.Wpa3 ->
-                        "WPA3"
-
-        -- The row fills the panel: its button's padding is 4 UI pixels each side.
-        width =
-            panelWidth |> Quantity.minus (Units.uiPixels 8)
-
-        labelWidth =
-            em 5
-
-        bars =
-            signalBars network.signal
-
-        nameWidth =
-            width |> Quantity.minus labelWidth |> Quantity.minus (Units.uiPixels (12 + 16))
-    in
-    Ui.selectableButton { id = NetworkButton network.ssid, padding = Ui.paddingXY 4 2 }
-        (Maybe.map .ssid model.selected == Just network.ssid)
-        (Ui.leftAndRight width
-            (Ui.row 6 [ bars, Ui.text (Sprite.ellipsis bodySize font nameWidth (Wifi.ssidToString network.ssid)) ])
-            (Ui.text label)
-        )
-
-
-{-| Four bars, filled by signal strength in dBm.
--}
-signalBars : Int -> Ui.Element id
-signalBars dbm =
-    let
-        filled =
-            if dbm >= -55 then
-                4
-
-            else if dbm >= -65 then
-                3
-
-            else if dbm >= -75 then
-                2
-
-            else
-                1
-
-        bar i =
-            let
-                h =
-                    4 + 4 * i
-            in
-            Sprite.rectangle
-                (if i < filled then
-                    Color.textColor
-
-                 else
-                    Color.outlineColor
-                )
-                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                (Coord.xy (i * 4) (18 - h))
-                (Coord.xy 3 h)
-    in
-    Ui.quads { size = Coord.xy 16 18, triangles = List.concatMap bar (List.range 0 3) }
-
-
-{-| The password box: town-collab's text input, showing dots unless "Show" is on.
--}
-passwordStyle : Model -> TextInput.Style
-passwordStyle model =
-    { font = sans, fontSize = bodySize, width = em 14, masked = not model.showPassword }
-
-
-passwordInput : Model -> Ui.Element UiId
-passwordInput model =
-    Ui.textInput
-        { id = PasswordInput
-        , style = passwordStyle model
-        , isValid = True
-        }
-
-
-weatherPanel : Model -> Ui.Element UiId
-weatherPanel model =
-    smallWindow { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
-        (weatherRows model)
-
-
-weatherRows : Model -> List (Ui.Element UiId)
-weatherRows model =
-    let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        small =
-            Ui.paddingXY 6 3
-
-        degrees value =
-            String.fromInt (round value) ++ "°"
-    in
-    case model.weather of
-        NoWeather ->
-            if isOnline model then
-                [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
-
-            else
-                [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
-
-        FindingPlace ->
-            [ t "Finding where we are…" ]
-
-        LoadingForecast place ->
-            [ t (Sprite.ellipsis bodySize font width ("Weather in " ++ place.name ++ "…")) ]
-
-        WeatherFailed error ->
-            [ Ui.colorText Color.errorColor (Sprite.wrap bodySize font width (Effect.httpErrorToString error))
-            , Ui.button { id = WeatherButton, padding = small } (t "Try again")
-            ]
-
-        GotWeather place forecast ->
-            [ Ui.leftAndRight width
-                (t (Sprite.ellipsis bodySize font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
-                (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
-            , Ui.row
-                8
-                [ weatherIcon 3 forecast.code
-                , Ui.column
-                    3
-                    [ heading (fixed 1 forecast.temperature ++ "°C")
-                    , t (Weather.describe forecast.code)
-                    , t
-                        ("Wind "
-                            ++ String.fromInt (round forecast.wind)
-                            ++ " km/h, humidity "
-                            ++ String.fromInt (round forecast.humidity)
-                            ++ "%"
-                        )
-                    ]
-                ]
-            , Ui.column
-                3
-                (List.indexedMap
-                    (\i day ->
-                        Ui.row
-                            6
-                            [ weatherIcon 1 day.code
-                            , Ui.left (em 6)
-                                (t
-                                    (if i == 0 then
-                                        "Today"
-
-                                     else
-                                        Weather.weekday day.date
-                                    )
-                                )
-                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
-                            , t (Weather.describe day.code)
-                            ]
-                    )
-                    forecast.days
-                )
-            , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
-            ]
-
-
-{-| A small picture of the weather, 18 by 18 squares `unit` UI pixels wide.
--}
-weatherIcon : Int -> Int -> Ui.Element id
-weatherIcon unit code =
-    let
-        s =
-            toFloat unit
-
-        side =
-            18 * unit
-
-        sun =
-            Sprite.circle (Color.rgb255 250 190 40) s ( 9, 9 ) 6
-
-        smallSun =
-            Sprite.circle (Color.rgb255 250 190 40) s ( 6, 6 ) 4.5
-
-        cloudColor =
-            if code >= 61 || code == 3 then
-                Color.rgb255 120 125 135
-
-            else
-                Color.rgb255 170 175 185
-
-        cloud =
-            Sprite.circle cloudColor s ( 6, 11 ) 4
-                ++ Sprite.circle cloudColor s ( 11, 9 ) 5
-                ++ Sprite.circle cloudColor s ( 14, 12 ) 3.5
-                ++ [ Sprite.triangle cloudColor ( 6 * s, 15 * s ) ( 14 * s, 15 * s ) ( 6 * s, 11 * s ) ]
-
-        drops color =
-            List.map
-                (\x -> Sprite.triangle color ( x * s, 15 * s ) ( (x + 1.2) * s, 15 * s ) ( (x - 1) * s, 18 * s ))
-                [ 6, 10, 14 ]
-
-        rain =
-            drops (Color.rgb255 60 110 220)
-
-        snow =
-            List.concatMap (\x -> Sprite.circle Color.white s ( x, 16.5 ) 1.2) [ 6, 10, 14 ]
-
-        bolt =
-            [ Sprite.triangle (Color.rgb255 250 200 40) ( 10 * s, 13 * s ) ( 8 * s, 18 * s ) ( 12 * s, 15 * s ) ]
-
-        triangles =
-            if code <= 1 then
-                sun
-
-            else if code == 2 then
-                smallSun ++ cloud
-
-            else if code <= 48 then
-                cloud
-
-            else if code <= 67 || (code >= 80 && code <= 82) then
-                cloud ++ rain
-
-            else if code <= 86 then
-                cloud ++ snow
-
-            else
-                cloud ++ bolt
-    in
-    Ui.quads { size = Coord.xy side side, triangles = triangles }
+weatherPanel : Bool -> WeatherState -> Ui.Element UiId
+weatherPanel online weather =
+    smallWindow
+        { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
+        (Weather.weatherRows online weather)
 
 
 
@@ -4464,9 +4368,17 @@ toolbar model display =
                         (openHere TicTacToeApp)
                         (Ui.text "Tic Tac Toe")
                     , Ui.selectableButton
+                        { id = Paint Paint.Types.OpenButton, padding = small }
+                        (openHere PaintApp)
+                        (Ui.text "Paint")
+                    , Ui.selectableButton
                         { id = EditorButton, padding = small }
                         (openHere EditorApp)
                         (Ui.text "Text editor")
+                    , Ui.selectableButton
+                        { id = Code Code.Types.OpenButton, padding = small }
+                        (openHere CodeApp)
+                        (Ui.text "Code")
                     , Ui.selectableButton
                         { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
                         (openHere ScreenshotViewerApp)
@@ -4483,18 +4395,16 @@ toolbar model display =
                     , Ui.button { id = RestartButton, padding = small } (Ui.text "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (Ui.text "Power off")
                     ]
-
-        row =
-            Ui.row 4 buttons
-
-        width =
-            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels 16)
-
-        room =
-            width |> Quantity.minus (Coord.x (Ui.size row)) |> Quantity.minus (Units.uiPixels 8)
     in
-    Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
-        (Ui.leftAndRight width row (clock room model))
+    Ui.elWithWidth
+        { width = Coord.xRaw (Display.uiSize display), padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+        (\width ->
+            Ui.rowFromLeft
+                { width = width, spacing = 8 }
+                [ \_ -> Ui.row 4 buttons
+                , \room -> Ui.right { width = Units.uiPixels room } (clock (Units.uiPixels room) model)
+                ]
+        )
 
 
 {-| The toolbar's buttons and the gap above them, in UI pixels.
@@ -4606,7 +4516,26 @@ editorStyle model =
     , fontSize = bodySize
     , width = Units.uiPixels (windowWidth - 16)
     , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
+    , syntax = TextInputMultiline.PlainText
     }
+
+
+
+-- CODE
+
+
+{-| The Code app's text box, as big as its window.
+-}
+codeStyle : Model -> TextInputMultiline.Style
+codeStyle model =
+    Code.style (appUiSize CodeApp model)
+
+
+{-| The text in the Code app's text box.
+-}
+codeText : Model -> String
+codeText model =
+    (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState).input.current.text
 
 
 {-| The editor window's height besides its lines of text: the padding, the title, the
@@ -4663,30 +4592,11 @@ editorWindow model =
             6
             [ Ui.leftAndRight style.width
                 (heading "Text editor")
-                (Ui.row
-                    6
-                    [ Ui.button { id = EditorOpenButton, padding = Ui.paddingXY 6 3 } (t "Open")
-                    , Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close")
-                    ]
-                )
-            , if model.editorPicking then
-                Ui.viewport
-                    { id = EditorModulesViewport
-                    , viewportHeight = Units.uiPixels (Coord.yRaw (TextInputMultiline.size style))
-                    }
-                    (Ui.column
-                        4
-                        (List.map
-                            (\name -> Ui.button { id = EditorModuleButton name, padding = Ui.paddingXY 6 3 } (t name))
-                            (SeqDict.keys SourceCode.sourceCode)
-                        )
-                    )
-
-              else
-                Ui.textInputMultiline
-                    { id = EditorInput
-                    , style = style
-                    }
+                (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+            , Ui.textInputMultiline
+                { id = EditorInput
+                , style = style
+                }
             , Ui.leftAndRight style.width
                 (t status)
                 (Ui.customText bodySize

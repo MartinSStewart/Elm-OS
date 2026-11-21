@@ -141,8 +141,8 @@ const HINT: u32 = 0xffd27aff;
 
 fn quad(tris: &mut Vec<Tri>, x0: f32, y0: f32, x1: f32, y1: f32, u0: f32, v0: f32, u1: f32, v1: f32, rgba: u32) {
     let (a, b, c, d) = ([x0, y0, u0, v0], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]);
-    tris.push(Tri { p: [a, b, c], rgba, linear: 0, tile: [0; 4] });
-    tris.push(Tri { p: [a, c, d], rgba, linear: 0, tile: [0; 4] });
+    tris.push(Tri { p: [a, b, c], rgba, flags: 0, tile: [0; 4] });
+    tris.push(Tri { p: [a, c, d], rgba, flags: 0, tile: [0; 4] });
 }
 
 fn glyph_index(c: char) -> usize {

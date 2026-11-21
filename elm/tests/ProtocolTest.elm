@@ -16,6 +16,7 @@ import Effect exposing (Effect)
 import Expect
 import HostMessage
 import Main
+import Network.Types
 import Persist
 import Postcard
 import ProtocolExamples
@@ -25,7 +26,6 @@ import Test exposing (Test, describe, test)
 import Time
 import Units
 import Unsafe
-import Wifi
 
 
 byteList : List Int -> Bytes
@@ -39,7 +39,7 @@ effects : List Effect
 effects =
     [ Effect.SetCursor { image = { width = 24, height = 38, hotSpot = ( 1, 2 ), fill = ( 1, 3585 ), outline = Just ( 27, 3585 ) }, color = Color.rgb255 255 0 0, scale = Units.scaleFor (Quantity.Quantity 2560) }
     , Effect.WifiScan
-    , Effect.WifiConnect { ssid = Wifi.stringToSsid "Home", password = Unsafe.wpa2Password "password" |> Just }
+    , Effect.WifiConnect { ssid = Network.Types.stringToSsid "Home", password = Unsafe.wpa2Password "password" |> Just }
     , Effect.WifiDisconnect
     , Effect.Power Effect.PowerOff
     , Effect.Power Effect.Restart
@@ -71,6 +71,8 @@ effects =
     , Effect.TlsOpen { id = "email", host = "imap.fastmail.com", portNumber = 993 }
     , Effect.TlsSend { id = "email", data = byteList [ 97, 49, 32, 76, 79, 71, 79, 85, 84, 13, 10 ] }
     , Effect.TlsClose "email"
+    , Effect.WriteImage { left = 3, top = 300, width = 2, pixels = byteList [ 255, 0, 0, 255, 0, 0, 255, 128 ] }
+    , Effect.Build [ ( "Main.elm", "module Main exposing (main)\n" ), ( "Code/Types.elm", "" ) ]
     , Effect.Render
         (\() ->
             [ { display = 33, triangles = Sprite.atlasRectangle Color.white (Coord.xy 0 0) (Coord.xy 10 10) ( 4, 3588 ) }

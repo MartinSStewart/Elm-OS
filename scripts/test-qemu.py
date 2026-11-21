@@ -1,9 +1,17 @@
-"""Boot Elm OS headless in QEMU, drive it through QMP, and check the screen.
+"""Boot Elm OS headless in QEMU, drive it through QMP, and check what it does.
 
-Passes when the cursor follows the mouse, the toolbar's windows open, and
-(except with --usb) when Elm OS joins the simulated wifi network and fetches the
-weather, from a stand-in server here rather than the internet. With --usb the machine
-is a desktop without wifi: a wired Intel e1000e card, which must get an address.
+Passes when it draws, the cursor follows the mouse, the toolbar's buttons open and close
+their apps, the calculator works out 6 * 7, and Elm OS joins the simulated wifi network
+and fetches the weather, from a stand-in server here rather than the internet.
+
+Apart from one look at the screen (something is drawn, and the cursor moves with the
+mouse), the test reads the facts Elm writes to the serial log (scripts/testfacts.py,
+Main.testFacts): which apps are open, what the calculator shows, where each button is
+and what it says. So a change to how Elm OS looks doesn't break it.
+
+With --usb the machine is a desktop without wifi, booted from the USB image, whose
+kernel command line can't have ELMOS_TEST=1 and whose log goes to the screen: it checks
+only that Elm OS boots under UEFI, draws, and that the cursor follows the mouse.
 
     python3 scripts/test-qemu.py          plain virtio GPU: checks the CPU fallback
     python3 scripts/test-qemu.py --gpu    virtio GPU with virgl: checks the GPU renderer
@@ -15,7 +23,7 @@ QEMU's egl-headless display, which needs a GPU render node (/dev/dri/renderD128)
 """
 import hashlib, http.server, json, os, shutil, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
-import toolbar
+from testfacts import Facts
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tmp = tempfile.mkdtemp()
@@ -75,7 +83,7 @@ else:
             # make test has Elm draw the cursor, so the screenshots show it; make test-gpu
             # puts it on the cursor plane, which screendumps leave out.
             "-append", "console=ttyS0 loglevel=4 retain_initrd" + ("" if gpu else " ELMOS_CURSOR=software")
-            + f" ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
+            + f" ELMOS_TEST=1 ELMOS_GEO_URL={web_url}/geo.json ELMOS_WEATHER_URL={web_url}/forecast", "-vga", "none", *devices, "-device", "virtio-keyboard-pci",
             "-device", "virtio-tablet-pci", "-device", "virtio-mouse-pci"]
 qemu = subprocess.Popen(
     ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2", *boot, "-no-reboot",
@@ -186,74 +194,11 @@ def move(fx, fy):
     time.sleep(1)
 
 
-def near(c, want, tol=40):
-    return all(abs(a - b) <= tol for a, b in zip(c, want))
+def running():
+    return qemu.poll() is None
 
 
-if usb:
-    # On the stick, /init's messages go to the screen, not the serial port (a laptop
-    # has none), so wait for Elm's scene instead: the toolbar's buttons at the top left.
-    end = time.time() + 180
-    while True:
-        shot = screen()
-        if any(near(pixel(shot, x, y), (199, 185, 175), tol=25) for x in range(0, 120, 2) for y in (20, 40)):
-            break
-        if time.time() > end:
-            fail("Elm OS never drew its scene")
-        if qemu.poll() is not None:
-            fail("QEMU exited before Elm OS drew anything")
-        time.sleep(2)
-    print(f"booted from the USB image under UEFI, screen {shot[0]}x{shot[1]}")
-time.sleep(1)
-move(0.25, 0.25)
-shot = screen()
-w, h, _ = shot
-# The mouse cursor: a white arrow with a black outline, its tip at the pointer, drawn
-# from the texture atlas at 1 screen pixel per atlas pixel (2 at the 2x UI scale, Units.scaleFor).
-s = 2 if w >= 2000 else 1
-WHITE = (255, 255, 255)
-def cursor_at(shot, fx, fy):
-    x, y = int(fx * w), int(fy * h)
-    # x * w // 0x8000 in host.c; allow a pixel either way
-    return [pixel(shot, x + dx * s, y + 8 * s) for dx in (2, 3, 4)]
-# With a cursor plane, Elm still draws its own cursor, in orange, for comparison; the
-# plane's cursor isn't in screendumps.
-ORANGE = (255, 150, 40)
-here, there = cursor_at(shot, 0.25, 0.25), cursor_at(shot, 0.75, 0.25)
-print(f"screen {w}x{h}; under the mouse {here[1]}, elsewhere {there[1]}")
-if hw_cursor is None:  # on the stick: whichever it is
-    hw_cursor = near(here[1], ORANGE)
-fill = ORANGE if hw_cursor else WHITE
-if not all(near(c, fill) for c in here):
-    fail(f"expected the mouse cursor ({fill}) under the mouse, got {here}")
-if any(near(c, fill) for c in there):
-    fail("the cursor is not only under the mouse")
-
-# The debug app (elm/src/Main.elm) is the first window, so the layout (Layout.elm) puts
-# it in the top left corner, under the toolbar: a light panel with dark text, drawn
-# from the texture atlas's font. Windows start at FIRST_WINDOW (UI pixels): 8 to the
-# right of the screen's edge and 8 below the toolbar.
-FIRST_WINDOW = (12, 49)  # just inside the first window's top left border
-panel = pixel(shot, FIRST_WINDOW[0] * s, FIRST_WINDOW[1] * s)
-print(f"debug app's panel {panel}")
-if not near(panel, (220, 210, 199)):
-    fail(f"expected the debug app's panel in the top left corner, got {panel}")
-dark = sum(1 for x in range(14 * s, 200 * s) for y in range(56 * s, 80 * s) if max(pixel(shot, x, y)) < 60)
-if dark < 20:
-    fail(f"the debug app has no text ({dark} dark pixels)")
-
-move(0.75, 0.25)
-if not all(near(c, fill) for c in cursor_at(screen(), 0.75, 0.25)):
-    fail("the cursor did not follow the mouse")
-
-# A mouse (relative motion, like the desktop's) moves the pointer by its counts, times
-# the UI scale, times libinput-style acceleration: one quick 100-count report after a
-# rest is fast (2 counts/ms or more), so it goes the full 2x, 200 UI pixels.
-move(0.25, 0.25)
-cmd("input-send-event", events=[{"type": "rel", "data": {"axis": "x", "value": 100}}])
-time.sleep(1)
-if not all(near(c, fill) for c in cursor_at(screen(), 0.25 + 200 * s / w, 0.25)):
-    fail("a 100-count mouse flick didn't move the cursor 200 UI pixels")
+facts = Facts(lambda: open(serial_path, errors="replace").read(), fail, running)
 
 
 def save_png(shot, path):
@@ -264,127 +209,160 @@ def save_png(shot, path):
                           + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-def click(fx, fy):
+def region(shot, x0, y0, x1, y1):
+    w, _, px = shot
+    return b"".join(px[(y * w + x0) * 3:(y * w + x1) * 3] for y in range(y0, y1))
+
+
+def colours(shot):
+    """How many colours a sample of the screen's pixels has."""
+    w, h, px = shot
+    return len({px[i:i + 3] for i in range(0, len(px) - 2, 3 * 997)})
+
+
+# ---- the one look at the screen: Elm OS draws, and the cursor moves with the mouse
+
+end = time.time() + (180 if usb else 60)
+while True:
+    shot = screen()
+    if colours(shot) >= 8:
+        break
+    if time.time() > end:
+        save_png(shot, f"{ROOT}/build/screenshot.png")
+        fail("Elm OS never drew anything (build/screenshot.png)")
+    if not running():
+        fail("QEMU exited before Elm OS drew anything")
+    time.sleep(2)
+w, h, _ = shot
+s = 2 if w >= 2000 else 1  # the UI scale (Units.scaleFor)
+print(f"screen {w}x{h}: Elm OS draws")
+if usb:
+    print("booted from the USB image under UEFI")
+
+
+def at_pointer(fx, fy):
+    """Where the pointer is in device pixels, after moving the mouse to (fx, fy) of the screen."""
+    return int(fx * w), int(fy * h)
+
+
+def pointer_at(x, y):
+    """Waits for Elm to say the pointer is at (x, y), give or take a pixel."""
+    facts.wait("pointer", lambda p: abs(p[0] - x) <= 1 and abs(p[1] - y) <= 1, f"the pointer at {x},{y}")
+
+
+def move_and_wait(fx, fy):
     move(fx, fy)
+    if not usb:
+        pointer_at(*at_pointer(fx, fy))
+    time.sleep(0.5)  # for the frame drawn then to reach the screen
+
+
+# Under the pointer, then the same place with the pointer gone: they must differ, as Elm
+# draws the cursor (with a cursor plane, which screendumps leave out, Elm still draws an
+# orange copy of it).
+move_and_wait(0.25, 0.25)
+x, y = at_pointer(0.25, 0.25)
+under = (x, y, x + 10 * s, y + 16 * s)
+here = screen()
+move_and_wait(0.75, 0.25)
+there = screen()
+if region(here, *under) == region(there, *under):
+    save_png(here, f"{ROOT}/build/screenshot.png")
+    fail("the screen under the pointer didn't change when the pointer moved away (build/screenshot.png)")
+x, y = at_pointer(0.75, 0.25)
+if region(there, x, y, x + 10 * s, y + 16 * s) == region(here, x, y, x + 10 * s, y + 16 * s):
+    fail("the screen didn't change where the pointer moved to")
+print("the cursor follows the mouse")
+
+if usb:
+    cmd("system_powerdown")
+    try:
+        qemu.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        fail("the power button did not power off")
+    print("power button powers off")
+    print("PASS (the USB image: boots, draws, cursor; the rest needs make test)")
+    sys.exit(0)
+
+# ---- the rest from the facts Elm writes to the log
+
+# A mouse (relative motion, like the desktop's) moves the pointer by its counts, times
+# the UI scale, times libinput-style acceleration: one quick 100-count report after a
+# rest is fast (2 counts/ms or more), so it goes the full 2x, 200 UI pixels.
+move_and_wait(0.25, 0.25)
+x, y = at_pointer(0.25, 0.25)
+cmd("input-send-event", events=[{"type": "rel", "data": {"axis": "x", "value": 100}}])
+pointer_at(x + 200 * s, y)
+print("a 100-count mouse flick moves the pointer 200 UI pixels")
+
+
+def click_at(x, y):
+    move_and_wait(x / w, y / h)
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
-    time.sleep(0.4)
+    time.sleep(0.3)
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
-    time.sleep(0.5)
+    time.sleep(0.3)
 
 
-# The toolbar's buttons, found on screen (scripts/toolbar.py), so a new button doesn't
-# move the test's clicks.
-first = screen()
-try:
-    BUTTONS = toolbar.buttons(first, s)
-except RuntimeError as e:
-    save_png(first, f"{ROOT}/build/screenshot.png")
-    fail(f"{e} (build/screenshot.png)")
+def press(label):
+    """Clicks the button that says `label` (see Facts.button)."""
+    click_at(*facts.button(label))
 
 
-def press(name):
-    x, y = BUTTONS[name]
-    click(x / w, y / h)
+def windows(want, what):
+    facts.wait("windows", lambda open_: sum(open_, []) == want, what)
 
 
-# Close the apps open from the start (debug, network, weather), so each app below is
-# the only window, in the top left corner.
+# The debug, network and weather apps are open from the start; their toolbar buttons
+# close them.
+facts.wait("windows", lambda open_: {"Debug", "Network", "Weather"} <= set(sum(open_, [])), "the apps open at start")
 for name in ["Debug", "Network", "Weather"]:
     press(name)
-    time.sleep(0.5)
-time.sleep(1)
-corner = (FIRST_WINDOW[0] * s, FIRST_WINDOW[1] * s)
-before = pixel(screen(), *corner)
-if near(before, (220, 210, 199), tol=10):
-    fail("the Debug, Network and Weather buttons did not close their apps")
+windows([], "the Debug, Network and Weather buttons to close their apps")
 
 # The About button opens the about page; a second click closes it.
 press("About")
-time.sleep(1)
-opened = pixel(screen(), *corner)
+windows(["About"], "the About button to open the about page")
 press("About")
-time.sleep(1)
-closed = pixel(screen(), *corner)
-print(f"about page: {before}, open {opened}, closed {closed}")
-if not near(opened, (220, 210, 199), tol=10) or near(closed, (220, 210, 199), tol=10):
-    fail("the About button did not open and close the about page")
+windows([], "a second click on About to close the about page")
+print("the toolbar's buttons open and close their apps")
 
-# The Calculator button opens the calculator in the top left corner, with the
-# keyboard going to it: 6 * 7 on the number pad, then Enter.
-calc_title = corner
+# The Calculator button opens the calculator, with the keyboard going to it: 6 * 7 on
+# the number pad, then Enter.
 press("Calculator")
-time.sleep(1)
+windows(["Calculator"], "the Calculator button to open the calculator")
 for key in ["kp_6", "kp_multiply", "kp_7", "ret"]:
     cmd("send-key", keys=[{"type": "qcode", "data": key}])
     time.sleep(0.3)
-time.sleep(1)
-shot = screen()
-save_png(shot, f"{ROOT}/build/calculator.png")
-digits = sum(1 for x in range(18 * s, 210 * s) for y in range(84 * s, 140 * s) if max(pixel(shot, x, y)) < 60)
-print(f"calculator: panel {pixel(shot, *calc_title)}, {digits} dark pixels in its display")
-if not near(pixel(shot, *calc_title), (220, 210, 199), tol=10):
-    fail("the Calculator button did not open the calculator (build/calculator.png)")
-if digits < 20:
-    fail(f"the calculator's display is empty ({digits} dark pixels; build/calculator.png)")
+facts.wait("calculator", lambda shown: shown == "42", "the calculator to show 42")
+save_png(screen(), f"{ROOT}/build/calculator.png")
 press("Calculator")
-time.sleep(1)
-if near(pixel(screen(), *calc_title), (220, 210, 199), tol=10):
-    fail("a second click on the Calculator button did not close the calculator")
+windows([], "a second click on Calculator to close it")
+print("the calculator works out 6 * 7 = 42")
 
-# The network app again, alone in the top left corner.
+# The network app: refresh, pick the test network, type its password and press Enter.
+# Then the host joins it, gets an address by DHCP, and Elm fetches the weather.
 press("Network")
-time.sleep(1)
-
-
-def connected_pixels(shot):
-    """Green "Connected..." in the network app, below its title and the wifi header."""
-    return sum(1 for x in range(14 * s, 460 * s) for y in range(115 * s, 150 * s)
-               if near(pixel(shot, x, y), (30, 120, 60), tol=30))
-
-
-if usb:
-    # No wifi card, so the network app is just the wired card: its name, then
-    # "Connected, 10.0.2.15" in green once DHCP over the cable has worked.
-    end = time.time() + 60
-    while True:
-        shot = screen()
-        green = connected_pixels(shot)
-        if green >= 20:
-            break
-        if time.time() > end:
-            save_png(shot, f"{ROOT}/build/screenshot.png")
-            fail(f"expected the network app to say the wired card is connected ({green} green pixels; build/screenshot.png)")
-        time.sleep(2)
-    print("got an address over wired Ethernet")
-
-if not usb:
-    # The network app (top left, under its title): refresh, pick the test network,
-    # type its password and press Enter. Then the host joins it, gets an address by
-    # DHCP, and Elm fetches the weather.
-    wait_for("AP-ENABLED", timeout=60)
-    click(426 * s / w, 103 * s / h)  # Refresh
-    time.sleep(5)
-    click(100 * s / w, 162 * s / h)  # the first network
-    for ch in "password":
-        cmd("send-key", keys=[{"type": "qcode", "data": {"-": "minus"}.get(ch, ch)}])
-        time.sleep(0.2)
-    cmd("send-key", keys=[{"type": "qcode", "data": "ret"}])
-    wait_for("[net] wlan0: 10.0.2.", timeout=90)
-    print("joined the simulated wifi network")
-    end = time.time() + 60
-    while not any(r.startswith("/forecast") for r in web_requests):
-        if time.time() > end or qemu.poll() is not None:
-            fail(f"Elm never asked for the weather (requests: {web_requests})")
-        time.sleep(0.5)
-    time.sleep(3)
-    shot = screen()
-    if "segfault" in open(serial_path, errors="replace").read():
-        fail("/init crashed after fetching the weather")
-    # "Connected to ..." in green, and the weather below it.
-    green = connected_pixels(shot)
-    if green < 20:
-        fail(f"expected the network app to say it is connected ({green} green pixels)")
-    print(f"fetched the weather: {web_requests}")
+windows(["Network"], "the Network button to open the network app")
+wait_for("AP-ENABLED", timeout=60)
+press("Refresh")
+press("Elm OS test network...")  # scripts/wifi-sim-hostapd.conf
+for ch in "password":
+    cmd("send-key", keys=[{"type": "qcode", "data": ch}])
+    time.sleep(0.2)
+cmd("send-key", keys=[{"type": "qcode", "data": "ret"}])
+wait_for("[net] wlan0: 10.0.2.", timeout=90)
+wifi = facts.wait("wifi", lambda wifi: wifi["state"] == "connected", "Elm to hear the wifi is connected", timeout=60)
+print(f"joined the simulated wifi network: {wifi}")
+end = time.time() + 60
+while not any(r.startswith("/forecast") for r in web_requests):
+    if time.time() > end or not running():
+        fail(f"Elm never asked for the weather (requests: {web_requests})")
+    time.sleep(0.5)
+facts.wait("weather", lambda place: GEO["city"] in place, "the forecast for " + GEO["city"])
+if "segfault" in open(serial_path, errors="replace").read():
+    fail("/init crashed after fetching the weather")
+print(f"fetched the weather: {web_requests}")
 
 save_png(screen(), f"{ROOT}/build/screenshot.png")
 
@@ -394,7 +372,7 @@ try:
     qemu.wait(timeout=30)
 except subprocess.TimeoutExpired:
     fail("the power button did not power off")
-if not usb and "power button" not in open(serial_path, errors="replace").read():
+if "power button" not in open(serial_path, errors="replace").read():
     fail("QEMU stopped, but not through Elm OS's power-button handler")
 print("power button powers off")
 print("PASS (screenshot in build/screenshot.png)")

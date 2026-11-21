@@ -82,7 +82,7 @@ string s =
     BE.sequence [ unsigned (BE.getStringWidth s), BE.string s ]
 
 
-{-| A byte string (serde_bytes): its length, then the bytes.
+{-| A byte string (serde\_bytes): its length, then the bytes.
 -}
 bytes : Bytes -> BE.Encoder
 bytes b =
@@ -167,7 +167,7 @@ decodeString =
     decodeUnsigned |> BD.andThen BD.string
 
 
-{-| A byte string (serde_bytes): its length, then the bytes.
+{-| A byte string (serde\_bytes): its length, then the bytes.
 -}
 decodeBytes : BD.Decoder Bytes
 decodeBytes =

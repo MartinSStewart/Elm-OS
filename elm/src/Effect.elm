@@ -38,11 +38,11 @@ import Bytes.Encode as BE
 import Color exposing (Color)
 import Cursor
 import Duration exposing (Duration)
+import Network.Types exposing (Ssid)
+import Network.Wpa2Password exposing (Wpa2Password)
 import Postcard
 import Sprite exposing (Triangle)
 import Units exposing (DevicePixels, UiScale)
-import Wifi exposing (Ssid)
-import Wpa2Password exposing (Wpa2Password)
 
 
 port toHost : Bytes -> Cmd msg
@@ -114,6 +114,16 @@ type Effect
     | TlsOpen { id : String, host : String, portNumber : Int }
     | TlsSend { id : String, data : Bytes }
     | TlsClose String
+      -- RGBA pixels (4 bytes each, red first, not premultiplied) into the image
+      -- texture (2048 x 2048, see Sprite.InImage), `width` to a row, as many rows as
+      -- `pixels` holds, with the top left one at left, top. It is empty at every boot.
+      -- ImageCache.elm decides what goes where (apps draw images with Sprite.image).
+    | WriteImage { left : Int, top : Int, width : Int, pixels : Bytes }
+      -- Builds Elm OS again from these modules (each its path under elm/src and its
+      -- text) and switches to the new build (host/init/src/build.rs), which carries
+      -- the Model over. Refused unless the Model's types stay the same. Answered on
+      -- `fromHost` with build messages as it goes, then switching.
+    | Build (List ( String, String ))
 
 
 type PowerAction
@@ -212,10 +222,7 @@ message effects =
     BE.encode (Postcard.list encode effects)
 
 
-{-| 56 bytes per triangle, little-endian, as host/protocol's `read_render` reads them:
-x, y, u, v of each corner as 32-bit floats (screen pixels, atlas pixels), then the
-colour as an unsigned 32-bit 0xRRGGBBAA, then 0 to sample the atlas by the nearest pixel
-or 1 to blend the four around the point (`Sprite.Sampling`).
+{-| 60 bytes per triangle, as host/protocol's `read_render` reads them (`Sprite.encoder`).
 -}
 renderBytes : List (Triangle DevicePixels) -> Bytes
 renderBytes triangles =
@@ -254,11 +261,11 @@ encode effect =
         WifiConnect { ssid, password } ->
             Postcard.variant
                 3
-                [ Postcard.string (Wifi.ssidToString ssid)
+                [ Postcard.string (Network.Types.ssidToString ssid)
                 , Postcard.string
                     (case password of
                         Just password2 ->
-                            Wpa2Password.toString password2
+                            Network.Wpa2Password.toString password2
 
                         Nothing ->
                             ""
@@ -345,3 +352,9 @@ encode effect =
 
         TlsClose id ->
             Postcard.variant 24 [ Postcard.string id ]
+
+        WriteImage { left, top, width, pixels } ->
+            Postcard.variant 25 [ Postcard.unsigned left, Postcard.unsigned top, Postcard.unsigned width, Postcard.bytes pixels ]
+
+        Build modules ->
+            Postcard.variant 26 [ Postcard.list (\( path, text ) -> BE.sequence [ Postcard.string path, Postcard.string text ]) modules ]

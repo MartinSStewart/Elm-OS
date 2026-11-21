@@ -28,6 +28,8 @@
     {"tlsOpen": {"id": "email", "host": "imap.fastmail.com", "port": 993}},
     {"tlsSend": {"id": "email", "data": [97, 49, 32, 76, 79, 71, 79, 85, 84, 13, 10]}},
     {"tlsClose": {"id": "email"}},
+    {"writeImage": {"left": 3, "top": 300, "width": 2, "pixels": [255, 0, 0, 255, 0, 0, 255, 128]}},
+    {"build": {"modules": [["Main.elm", "module Main exposing (main)\n"], ["Code/Types.elm", ""]]}},
     {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 64, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 96, 65, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 32, 65, 0, 0, 96, 65, 0, 224, 96, 69, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 64, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 32, 65, 0, 0, 96, 65, 0, 224, 96, 69, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 128, 64, 0, 224, 96, 69, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0]}, {"display": 34, "triangles": []}]}
   ],
   "fromHost": [
@@ -66,6 +68,9 @@
     {"tlsOpened": {"id": "email"}},
     {"tlsData": {"id": "email", "data": [42, 32, 79, 75, 13, 10, 255]}},
     {"tlsClosed": {"id": "email", "reason": "closed by the server"}},
+    {"build": {"status": {"running": {"step": "Compiling"}}}},
+    {"build": {"status": {"failed": {"step": "Compiling", "output": "-- TYPE MISMATCH --"}}}},
+    {"build": {"status": {"built": {"build": "local-1a2b3c"}}}},
     {"displaysChanged": {"displays": [{"id": 33, "name": "eDP-1", "x": 0, "y": 0, "w": 2560, "h": 1600, "widthMm": 300, "heightMm": 190}]}},
     {"httpResponse": {"id": "weather", "status": 200, "body": [123, 125, 0, 255]}},
     {"httpError": {"id": "weather", "error": "timeout", "message": "the server took too long"}},

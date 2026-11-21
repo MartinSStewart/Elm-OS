@@ -120,7 +120,8 @@ place gap area columns =
             List.map2 Tuple.pair widths columns
                 |> List.foldl
                     (\( width, column ) ( x, soFar ) ->
-                        ( x + width + gap, soFar ++ placeColumn gap areaHeight x width column ))
+                        ( x + width + gap, soFar ++ placeColumn gap areaHeight x width column )
+                    )
                     ( 0, [] )
                 |> Tuple.second
     in
@@ -241,7 +242,7 @@ distribute total ranges =
         List.map .max ranges
 
 
-{-| `part` of `whole`, scaled to `total`: part * total / whole without overflowing on
+{-| `part` of `whole`, scaled to `total`: part \* total / whole without overflowing on
 big maximums.
 -}
 share : Int -> Int -> Int -> Int

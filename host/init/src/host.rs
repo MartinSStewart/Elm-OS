@@ -22,6 +22,7 @@
 //!   {"t":"boot","initMs":I,"elmMs":E,"frameMs":F}   once, when the first frame is on screen
 
 use common::atlas::{self, Tri};
+use common::images;
 use common::cursor::Picture;
 use protocol::{Display, PowerAction, ToElm};
 
@@ -89,6 +90,11 @@ struct Host {
     elm_started_at: Option<f64>,
     /// The Elm program the effects being run came from (elm::answer).
     program: u64,
+    /// The image texture (common/src/images.rs), as Elm wrote it: the CPU renderer
+    /// draws from it, and a GPU renderer that starts gets all of it.
+    images: Vec<u8>,
+    /// What Elm wrote into it that the GPU renderer hasn't been sent yet.
+    image_writes: Vec<images::Write>,
 }
 
 impl Host {
@@ -184,9 +190,11 @@ impl Host {
 
     fn draw(&mut self, scenes: &Scenes) {
         if let Renderer::Gpu(g) = &mut self.renderer {
-            if g.send_frame(scenes) {
+            if g.send_frame(&self.image_writes, scenes) {
+                self.image_writes.clear();
                 return;
             }
+            self.image_writes.clear();
             log!("host", "GPU renderer stopped; drawing on the CPU");
             self.renderer = Renderer::Nothing; // stops it, so we can take the display
             let before = self.displays.clone();
@@ -199,13 +207,14 @@ impl Host {
             }
         }
         if let Renderer::Cpu(d, atlas) = &mut self.renderer {
+            let textures = raster::Textures { atlas, images: &self.images };
             for i in 0..d.outputs.len() {
                 let o = &mut d.outputs[i];
                 o.back.fill(0);
                 let (w, h) = (o.out.w(), o.out.h());
                 for (_, tris) in scenes.iter().filter(|(id, _)| *id == o.out.connector) {
                     for t in tris {
-                        raster::fill_triangle(&mut o.back, o.stride, w, h, atlas, t);
+                        raster::fill_triangle(&mut o.back, o.stride, w, h, textures, t);
                     }
                 }
                 d.present(i);
@@ -233,6 +242,11 @@ impl Host {
     fn open_renderer(&mut self) {
         self.displays.clear();
         if let Some(g) = Gpu::start(self.software_cursor) {
+            // A new renderer has an empty image texture: it gets all of ours with its
+            // first frame (just what was written, if nothing was before).
+            if self.images.iter().any(|&b| b != 0) {
+                self.image_writes = vec![images::Write::everything(&self.images)];
+            }
             self.displays = g.displays.clone();
             self.hw_cursor = g.cursor_plane;
             self.renderer = Renderer::Gpu(g);
@@ -410,6 +424,15 @@ impl Host {
                 Effect::TlsOpen { id, host, port } => tls_socket::open(id, host, port),
                 Effect::TlsSend { id, data } => tls_socket::send(&id, data),
                 Effect::TlsClose { id } => tls_socket::close(&id),
+                Effect::WriteImage { left, top, width, pixels } => {
+                    if let Some(write) = (images::Write { left, top, width, pixels }).clipped() {
+                        write.apply(&mut self.images);
+                        if matches!(self.renderer, Renderer::Gpu(_)) {
+                            self.image_writes.push(write);
+                        }
+                    }
+                }
+                Effect::Build { modules } => crate::build::request(modules),
             }
         }
         if cursor_dirty {
@@ -522,6 +545,8 @@ pub fn run() -> ! {
         inputs: Inputs::new(&Area::single(640, 480)),
         elm_started_at: None,
         program: 0,
+        images: images::empty(),
+        image_writes: Vec::new(),
     };
     // The cursor's size depends on the screen's, which we only know once a renderer is
     // up; both renderers draw the cursor themselves at start, so fix it up after.
