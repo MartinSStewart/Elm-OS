@@ -377,11 +377,6 @@ type alias Model =
     -- listed in the corner of the display it is on.
     , inspected : Maybe { display : Int, sources : List Ui.Source }
     , screenshotViewer : ScreenshotViewer.Model
-
-    -- The find bar (Ctrl+F) is open along the bottom of this display (its Display.name;
-    -- the main one if it isn't connected), with this match selected (counted from 0 in
-    -- `findMatches` order, wrapping around). Its text is in `uiState`, under FindInput.
-    , findBar : Maybe { display : String, selected : Int }
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
 
@@ -486,7 +481,6 @@ init =
     , showUiBorders = False
     , inspected = Nothing
     , screenshotViewer = ScreenshotViewer.init
-    , findBar = Nothing
     , takingScreenshot = Nothing
     , screenshots = []
     , testFacts = Nothing
@@ -938,9 +932,6 @@ step event model =
             else if model.ctrl && model.shift && key == Character "Q" && down then
                 ( { model | showUiBorders = not model.showUiBorders, inspected = Nothing }, [] )
 
-            else if model.ctrl && down && (key == Character "f" || key == Character "F") then
-                openFindBar model
-
             else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
 
@@ -950,14 +941,8 @@ step event model =
             else if not down then
                 ( model, [] )
 
-            else if model.uiState.focus == Just FindInput && model.findBar /= Nothing then
-                findBarKey key model
-
             else if model.takingScreenshot /= Nothing && key == Keyboard.Escape then
                 ( { model | takingScreenshot = Nothing }, [] )
-
-            else if model.uiState.focus == Nothing && model.findBar /= Nothing && key == Keyboard.Escape then
-                ( closeFindBar model, [] )
 
             else if model.uiState.focus == Just (Network Network.Types.PasswordInput) then
                 typeKey key model
@@ -969,8 +954,22 @@ step event model =
                 if model.ctrl && key == Keyboard.Character "s" then
                     ( { model | code = Code.save (codeText model) model.code }, [] )
 
+                else if model.ctrl && key == Keyboard.Character "f" then
+                    let
+                        ( codeApp, uiState ) =
+                            Code.openFind (appUiSize CodeApp model) model.uiState model.code
+                    in
+                    ( { model | code = codeApp, uiState = uiState }, [] )
+
                 else
                     ( multilineKey (Code Code.Types.Input) (codeStyle model) key model, [] )
+
+            else if
+                model.code.isOpen
+                    && Code.findShown model.code
+                    && (model.uiState.focus == Just (Code Code.Types.FindInput) || model.uiState.focus == Just (Code Code.Types.ReplaceInput))
+            then
+                ( codeFindKey key model, [] )
 
             else if
                 model.code.isOpen
@@ -1304,6 +1303,27 @@ appButton id =
                 Code.Types.PushButton ->
                     Nothing
 
+                Code.Types.FindInput ->
+                    Nothing
+
+                Code.Types.ReplaceInput ->
+                    Nothing
+
+                Code.Types.FindPreviousButton ->
+                    Nothing
+
+                Code.Types.FindNextButton ->
+                    Nothing
+
+                Code.Types.ReplaceButton ->
+                    Nothing
+
+                Code.Types.ReplaceAllButton ->
+                    Nothing
+
+                Code.Types.FindCloseButton ->
+                    Nothing
+
         ScreenshotViewer id2 ->
             case id2 of
                 ScreenshotViewer.Types.OpenButton ->
@@ -1349,18 +1369,6 @@ appButton id =
             Nothing
 
         CloseWeatherButton ->
-            Nothing
-
-        FindInput ->
-            Nothing
-
-        CloseFindButton ->
-            Nothing
-
-        FindPreviousButton ->
-            Nothing
-
-        FindNextButton ->
             Nothing
 
         HackerNews id2 ->
@@ -1567,7 +1575,7 @@ clickElement model id =
         Code codeId ->
             let
                 ( code, uiState, effects ) =
-                    Code.onClick codeId (codeText model) model.uiState model.code
+                    Code.onClick codeId (codeStyle model) (codeText model) model.uiState model.code
             in
             ( { model | code = code, uiState = uiState }, effects )
 
@@ -1591,18 +1599,6 @@ clickElement model id =
 
         CloseWeatherButton ->
             ( { model | weatherOpen = False }, [] )
-
-        FindInput ->
-            ( { model | uiState = Ui.setFocus (Just FindInput) model.uiState }, [] )
-
-        CloseFindButton ->
-            ( closeFindBar model, [] )
-
-        FindPreviousButton ->
-            ( selectMatch (\selected -> selected - 1) model, [] )
-
-        FindNextButton ->
-            ( selectMatch (\selected -> selected + 1) model, [] )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -1952,192 +1948,6 @@ dragSelectWebViewer focus mouse position model =
                         |> TextInputState
                         |> Just
                 )
-                model.uiState
-    }
-
-
-{-| Ctrl+F: opens the find bar along the bottom of the display the mouse is on (or moves
-it there), with the keyboard in it and what was typed before selected, so typing
-replaces it.
--}
-openFindBar : Model -> ( Model, List Effect )
-openFindBar model =
-    let
-        state : TextInput.Model
-        state =
-            Ui.getTextInput FindInput model.uiState
-    in
-    ( { model
-        | findBar =
-            Just
-                { display = (mouseDisplay model).name
-                , selected = Maybe.map .selected model.findBar |> Maybe.withDefault 0
-                }
-        , uiState =
-            model.uiState
-                |> Ui.insertElement
-                    FindInput
-                    (TextInputState
-                        (TextInput.replaceState
-                            (\current -> { current | cursorPosition = String.length current.text, cursorSize = -(String.length current.text) })
-                            state
-                        )
-                    )
-                |> Ui.setFocus (Just FindInput)
-      }
-        |> selectMatch identity
-    , []
-    )
-
-
-{-| Every match of the find bar's text on the displays (each with its parts: Ui.findAll
-on `displayWindows`, without the find bar), in order: display by display, and on each
-in the order they come in its UI. Each says which display (its id) it is on.
--}
-findMatches : Model -> List ( Display, Ui.Element UiId ) -> List ( Int, Ui.FindMatch UiId )
-findMatches model windowsByDisplay =
-    List.concatMap
-        (\( display, windows2 ) -> Ui.findAll model.uiState (findText model) windows2 |> List.map (Tuple.pair display.id))
-        windowsByDisplay
-
-
-{-| Selects another match (`change` gets the one selected now; it wraps around) and
-scrolls the viewports it is in to show it.
--}
-selectMatch : (Int -> Int) -> Model -> Model
-selectMatch change model =
-    case model.findBar of
-        Just bar ->
-            let
-                matches : List ( Int, Ui.FindMatch UiId )
-                matches =
-                    findMatches model (List.map (\display -> ( display, Ui.inFront (displayWindows model display) )) model.displays)
-
-                total : Int
-                total =
-                    List.length matches
-
-                selected : Int
-                selected =
-                    if total == 0 then
-                        0
-
-                    else
-                        modBy total (change bar.selected)
-            in
-            { model
-                | findBar = Just { bar | selected = selected }
-                , uiState =
-                    case List.drop selected matches of
-                        ( _, match ) :: _ ->
-                            Ui.revealMatch match model.uiState
-
-                        [] ->
-                            model.uiState
-            }
-
-        Nothing ->
-            model
-
-
-{-| Closes the find bar. What was typed in it is kept for the next Ctrl+F.
--}
-closeFindBar : Model -> Model
-closeFindBar model =
-    { model
-        | findBar = Nothing
-        , uiState =
-            if model.uiState.focus == Just FindInput then
-                Ui.setFocus Nothing model.uiState
-
-            else
-                model.uiState
-    }
-
-
-{-| What every app's text is searched for: the find bar's text while it is open.
--}
-findText : Model -> String
-findText model =
-    case model.findBar of
-        Just _ ->
-            (Ui.getTextInput FindInput model.uiState).current.text
-
-        Nothing ->
-            ""
-
-
-{-| A key pressed while the find bar has the keyboard. Escape closes it.
--}
-findBarKey : Key -> Model -> ( Model, List Effect )
-findBarKey key model =
-    case ( model.ctrl, key ) of
-        ( False, Keyboard.Escape ) ->
-            ( closeFindBar model, [] )
-
-        ( False, Keyboard.Enter ) ->
-            ( selectMatch
-                (if model.shift then
-                    \selected -> selected - 1
-
-                 else
-                    \selected -> selected + 1
-                )
-                model
-            , []
-            )
-
-        ( True, Keyboard.Character "v" ) ->
-            ( { model
-                | uiState =
-                    Ui.insertElement
-                        FindInput
-                        (TextInputState (TextInput.paste (String.replace "\n" " " model.clipboard) (Ui.getTextInput FindInput model.uiState)))
-                        model.uiState
-              }
-                |> findTextChanged model
-            , []
-            )
-
-        _ ->
-            let
-                ( state, outMsg ) =
-                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput FindInput model.uiState)
-            in
-            ( { model
-                | uiState = Ui.insertElement FindInput (TextInputState state) model.uiState
-                , clipboard =
-                    case outMsg of
-                        TextInput.CopyText text ->
-                            text
-
-                        TextInput.NoOutMsg ->
-                            model.clipboard
-              }
-                |> findTextChanged model
-            , []
-            )
-
-
-{-| After a key in the find bar: if its text changed, selects the first match of the
-new text and shows it.
--}
-findTextChanged : Model -> Model -> Model
-findTextChanged before after =
-    if findText after == findText before then
-        after
-
-    else
-        selectMatch (\_ -> 0) after
-
-
-dragSelectFind : Coord UiPixels -> Coord UiPixels -> Model -> Model
-dragSelectFind mouse position model =
-    { model
-        | uiState =
-            Ui.insertElement
-                FindInput
-                (TextInputState (TextInput.mouseDownMove (findInputStyle (findBarDisplay model)) mouse position (Ui.getTextInput FindInput model.uiState)))
                 model.uiState
     }
 
@@ -2691,18 +2501,6 @@ dragSelect focus mouse position model =
         CloseWeatherButton ->
             model
 
-        FindInput ->
-            dragSelectFind mouse position model
-
-        CloseFindButton ->
-            model
-
-        FindPreviousButton ->
-            model
-
-        FindNextButton ->
-            model
-
         News _ ->
             model
 
@@ -2842,55 +2640,10 @@ cursorShape model uis =
 -- VIEW
 
 
-{-| For the find bar: the selected match (with the id of the display it is on) and what
-it says about the matches, such as "2 of 15".
+{-| What one display shows: its part of the UI (`ui`), and the cursor if the mouse is on it.
 -}
-findCount : Model -> List ( Display, Ui.Element UiId ) -> { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
-findCount model windowsByDisplay =
-    case model.findBar of
-        Just bar ->
-            if String.isEmpty (findText model) then
-                { count = "", selected = Nothing }
-
-            else
-                let
-                    matches : List ( Int, Ui.FindMatch UiId )
-                    matches =
-                        findMatches model windowsByDisplay
-
-                    total : Int
-                    total =
-                        List.length matches
-                in
-                if total == 0 then
-                    { count = "No matches", selected = Nothing }
-
-                else
-                    let
-                        selected : Int
-                        selected =
-                            modBy total bar.selected
-                    in
-                    { count = String.fromInt (selected + 1) ++ " of " ++ String.fromInt total
-                    , selected = List.drop selected matches |> List.head
-                    }
-
-        Nothing ->
-            { count = "", selected = Nothing }
-
-
-{-| What one display shows: its part of the UI (`ui`, for what the mouse is over), drawn
-as its windows (`content`, searched for the find bar's text, `find`) with the find
-bar (`bar`) over them,
-and the cursor if the mouse is on it.
--}
-view :
-    Model
-    -> Cursor
-    -> Display
-    -> { ui : Ui.Element UiId, content : Ui.Element UiId, bar : List ( Coord UiPixels, Ui.Element UiId ), find : Ui.Find }
-    -> List (Triangle DevicePixels)
-view model cursor display { ui, content, bar, find } =
+view : Model -> Cursor -> Display -> Ui.Element UiId -> List (Triangle DevicePixels)
+view model cursor display ui =
     let
         hovered : Maybe UiId
         hovered =
@@ -2906,18 +2659,8 @@ view model cursor display { ui, content, bar, find } =
         (Display.uiScale display)
         model.showUiBorders
         hovered
-        find
         display.size
-        content
-        ++ Ui.view
-            model.uiState
-            (Maybe.withDefault (Time.millisToPosix 0) model.time)
-            (Display.uiScale display)
-            model.showUiBorders
-            hovered
-            Ui.noFind
-            display.size
-            (Ui.inFront bar)
+        ui
         ++ inspectorView model display ui
         ++ (case model.takingScreenshot of
                 Just data ->
@@ -3017,7 +2760,6 @@ inspectorView model display ui =
                                 scale
                                 False
                                 Nothing
-                                Ui.noFind
                                 display.size
                                 (Ui.bottomRight { size = Display.uiSize display } (inspectorList inspected.sources))
 
@@ -3296,13 +3038,6 @@ notices.
 -}
 displayUi : Model -> Display -> Ui.Element UiId
 displayUi model display =
-    Ui.inFront (displayWindows model display ++ findBarAt model display "")
-
-
-{-| `displayUi` without the find bar: what it searches.
--}
-displayWindows : Model -> Display -> List ( Coord UiPixels, Ui.Element UiId )
-displayWindows model display =
     ( Coord.origin, toolbar model display )
         :: List.map
             (\( app, bounds ) ->
@@ -3323,6 +3058,7 @@ displayWindows model display =
             else
                 []
            )
+        |> Ui.inFront
 
 
 {-| An app's view, with a warning over its top left corner if it isn't the size of the
@@ -3381,81 +3117,6 @@ noticeText model =
                     Nothing
 
 
-{-| The find bar, if it is open on this display, along its bottom, showing `count`.
--}
-findBarAt : Model -> Display -> String -> List ( Coord UiPixels, Ui.Element UiId )
-findBarAt model display count =
-    if model.findBar /= Nothing && (findBarDisplay model).id == display.id then
-        [ ( Coord.xy 0 (Coord.yRaw (Display.uiSize display) - findBarHeight display), findBar display count ) ]
-
-    else
-        []
-
-
-{-| The display the find bar is on: the one it was opened on, or the main one if that
-isn't connected.
--}
-findBarDisplay : Model -> Display
-findBarDisplay model =
-    case model.findBar of
-        Just bar ->
-            List.filter (\display -> display.name == bar.display) model.displays
-                |> List.head
-                |> Maybe.withDefault (mainDisplay model)
-
-        Nothing ->
-            mainDisplay model
-
-
-{-| The find bar (Ctrl+F), across the bottom of a display: what to look for in every
-app's text, which match is selected and how many there are (`count`), and buttons to
-select the previous or next one (Shift+Enter and Enter do too). Ui.view does the
-highlighting, from `findText`.
--}
-findBar : Display -> String -> Ui.Element UiId
-findBar display count =
-    let
-        padding =
-            Ui.paddingXY 8 6
-
-        width =
-            Coord.x (Display.uiSize display) |> Quantity.minus (Units.uiPixels (2 * 8))
-    in
-    Ui.el
-        { padding = padding
-        , borderAndFill = Ui.BorderAndFill { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor }
-        }
-        (Ui.leftAndRight
-            width
-            (Ui.row
-                8
-                [ Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.text "Find")
-                , Ui.textInput { id = FindInput, style = findInputStyle display, isValid = True }
-                , Ui.button { id = FindPreviousButton, padding = Ui.paddingXY 6 3 } (Ui.text "Previous")
-                , Ui.button { id = FindNextButton, padding = Ui.paddingXY 6 3 } (Ui.text "Next")
-                , Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.left (em 8) (Ui.colorText Color.dimTextColor count))
-                ]
-            )
-            (Ui.button { id = CloseFindButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
-        )
-
-
-findInputStyle : Display -> TextInput.Style
-findInputStyle display =
-    { font = sans
-    , fontSize = bodySize
-    , width = Quantity.min (em 20) (Coord.x (Display.uiSize display) |> Quantity.minus (em 30))
-    , masked = False
-    }
-
-
-{-| How tall the find bar is: the windows on its display stop above it.
--}
-findBarHeight : Display -> Int
-findBarHeight display =
-    Coord.yRaw (Ui.size (findBar display ""))
-
-
 
 -- WINDOW LAYOUT
 
@@ -3471,15 +3132,8 @@ windows model display =
         areaTopLeft =
             Coord.xy windowGap (toolbarHeight + windowGap)
 
-        bottom =
-            if model.findBar /= Nothing && (findBarDisplay model).id == display.id then
-                findBarHeight display
-
-            else
-                0
-
         area =
-            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap (windowGap + bottom))) (Display.uiSize display)
+            Coord.minus (Coord.plus areaTopLeft (Coord.xy windowGap windowGap)) (Display.uiSize display)
 
         inOrder =
             List.filter (\app -> not (SeqDict.member app model.appDisplays)) allApps
@@ -3669,7 +3323,7 @@ appView app size model =
             editorWindow model
 
         CodeApp ->
-            Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) model.code
+            Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) (Code.findText model.uiState) model.code
 
         DebugApp ->
             overlay model
@@ -3941,54 +3595,16 @@ draw msg model =
     case msg of
         GotInput (Ok (Frame _ _)) ->
             let
-                parts : List { display : Display, windows : List ( Coord UiPixels, Ui.Element UiId ) }
-                parts =
-                    List.map (\display -> { display = display, windows = displayWindows model display }) model.displays
-
                 uis : List ( Display, Ui.Element UiId )
                 uis =
-                    List.map (\part -> ( part.display, Ui.inFront (part.windows ++ findBarAt model part.display "") )) parts
+                    List.map (\display -> ( display, displayUi model display )) model.displays
 
                 cursor =
                     cursorShape model uis
 
                 scenes : List { display : Int, triangles : List (Triangle DevicePixels) }
                 scenes =
-                    let
-                        found : { count : String, selected : Maybe ( Int, Ui.FindMatch UiId ) }
-                        found =
-                            findCount model (List.map (\part -> ( part.display, Ui.inFront part.windows )) parts)
-                    in
-                    List.map2
-                        (\part ( _, ui ) ->
-                            { display = part.display.id
-                            , triangles =
-                                view
-                                    model
-                                    cursor
-                                    part.display
-                                    { ui = ui
-                                    , content = Ui.inFront part.windows
-                                    , bar = findBarAt model part.display found.count
-                                    , find =
-                                        { query = findText model
-                                        , selected =
-                                            case found.selected of
-                                                Just ( displayId, match ) ->
-                                                    if displayId == part.display.id then
-                                                        Just ( match.at, match.index )
-
-                                                    else
-                                                        Nothing
-
-                                                Nothing ->
-                                                    Nothing
-                                        }
-                                    }
-                            }
-                        )
-                        parts
-                        uis
+                    List.map (\( display, ui ) -> { display = display.id, triangles = view model cursor display ui }) uis
 
                 -- The image chunks on screen, found in the image texture (or put there).
                 ( imageCache, placed, imageWrites ) =
@@ -4523,6 +4139,7 @@ editorStyle model =
     , width = Units.uiPixels (windowWidth - 16)
     , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
     , syntax = TextInputMultiline.PlainText
+    , highlights = []
     }
 
 
@@ -4534,7 +4151,39 @@ editorStyle model =
 -}
 codeStyle : Model -> TextInputMultiline.Style
 codeStyle model =
-    Code.style (appUiSize CodeApp model)
+    Code.style (appUiSize CodeApp model) model.code
+
+
+{-| A key typed in the Code app's find or replace box: the bar's own keys (Escape, Enter),
+and for the rest the box's, going on to the next match when the find box's text changes.
+-}
+codeFindKey : Key -> Model -> Model
+codeFindKey key model =
+    case model.uiState.focus of
+        Just focus ->
+            let
+                inFindBox : Bool
+                inFindBox =
+                    focus == Code Code.Types.FindInput
+            in
+            case Code.findKeyDown (codeStyle model) inFindBox model.shift key model.code model.uiState of
+                Just ( code, uiState ) ->
+                    { model | code = code, uiState = uiState }
+
+                Nothing ->
+                    let
+                        typed : Model
+                        typed =
+                            singleLineKey focus False key model
+                    in
+                    if inFindBox && Code.findText typed.uiState /= Code.findText model.uiState then
+                        { typed | uiState = Code.findChanged (codeStyle typed) typed.uiState }
+
+                    else
+                        typed
+
+        Nothing ->
+            model
 
 
 {-| The text in the Code app's text box.

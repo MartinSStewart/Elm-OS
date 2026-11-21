@@ -19,8 +19,6 @@ module Sprite exposing
     , dotGrid
     , ellipsis
     , encoder
-    , findMatches
-    , foundText
     , fromImageTexture
     , image
     , inAtlas
@@ -922,30 +920,22 @@ linkAt fontSize segments point =
 -}
 segmentLines : List Segment -> List (List Segment)
 segmentLines segments =
-    linesOf .text (\part segment -> { segment | text = part }) segments
-
-
-{-| Pieces of text broken into lines at each '\\n', given how to get a piece's text and
-how to make a piece with other text.
--}
-linesOf : (a -> String) -> (String -> a -> a) -> List a -> List (List a)
-linesOf getText withText pieces =
     let
         ( current, done ) =
             List.foldl
-                (\piece state ->
-                    case String.split "\n" (getText piece) of
+                (\segment state ->
+                    case String.split "\n" segment.text of
                         first :: rest ->
                             List.foldl
-                                (\part ( line, lines ) -> ( [ withText part piece ], List.reverse line :: lines ))
-                                (Tuple.mapFirst ((::) (withText first piece)) state)
+                                (\part ( line, lines ) -> ( [ { segment | text = part } ], List.reverse line :: lines ))
+                                (Tuple.mapFirst ((::) { segment | text = first }) state)
                                 rest
 
                         [] ->
                             state
                 )
                 ( [], [] )
-                pieces
+                segments
     in
     List.reverse (List.reverse current :: done)
 
@@ -1066,228 +1056,6 @@ customText uiScale fontSize clip segments position =
         )
         (segmentLines segments)
         |> List.concat
-
-
-{-| Where `query` is in some text, as ranges of the text's characters (start, end) in
-order, with ones that touch or overlap joined. Case is ignored, and a '\\n' in the text counts as
-a space, so a match can go from one line to the next, as wrapped text has a '\\n' where
-the space was. An empty query is found nowhere.
--}
-findMatches : String -> List Segment -> List ( Int, Int )
-findMatches query segments =
-    let
-        needle : String
-        needle =
-            findKey query
-    in
-    if String.isEmpty needle then
-        []
-
-    else
-        let
-            length : Int
-            length =
-                String.length needle
-        in
-        String.indexes needle (findKey (String.concat (List.map .text segments)))
-            |> List.foldl
-                (\start acc ->
-                    case acc of
-                        ( lastStart, lastEnd ) :: rest ->
-                            if start <= lastEnd then
-                                ( lastStart, max lastEnd (start + length) ) :: rest
-
-                            else
-                                ( start, start + length ) :: acc
-
-                        [] ->
-                            [ ( start, start + length ) ]
-                )
-                []
-            |> List.reverse
-
-
-{-| Text as `findMatches` compares it: lower case, with '\\n' as a space. Each character
-stays one character (one whose lower case is longer is kept as it is), so positions in
-it are positions in the text.
--}
-findKey : String -> String
-findKey string =
-    String.map
-        (\char ->
-            if char == '\n' then
-                ' '
-
-            else
-                let
-                    lower : Char
-                    lower =
-                        Char.toLower char
-                in
-                if String.length (String.fromChar lower) == String.length (String.fromChar char) then
-                    lower
-
-                else
-                    char
-        )
-        string
-
-
-{-| `customText` with each match of `query` (see `findMatches`) on an `otherBackground`
-rectangle as tall as the line, except the `selected` one (an index into `findMatches`),
-which is on `background`, in `color`. With no matches it's just `customText`.
-The matched characters are laid out as segments of their own, so there is no kerning
-between them and the characters next to them.
--}
-foundText :
-    UiScale
-    -> { query : String, selected : Maybe Int, background : Color, color : Color, otherBackground : Color }
-    -> FontSize
-    -> Bounds UiPixels
-    -> List Segment
-    -> Coord UiPixels
-    -> List (Triangle DevicePixels)
-foundText uiScale found fontSize clip segments position =
-    case findMatches found.query segments of
-        [] ->
-            customText uiScale fontSize clip segments position
-
-        matches ->
-            let
-                pieces : List ( Maybe Int, Segment )
-                pieces =
-                    splitAtMatches matches segments
-
-                s =
-                    Units.scaleInt uiScale
-
-                ( x, y ) =
-                    Coord.toTuple position
-
-                deviceClip =
-                    { left = Quantity.unwrap (Coord.x clip.topLeft) * s
-                    , right = Quantity.unwrap (Coord.x clip.bottomRight) * s
-                    , top = Quantity.unwrap (Coord.y clip.topLeft) * s
-                    , bottom = Quantity.unwrap (Coord.y clip.bottomRight) * s
-                    }
-
-                height =
-                    lineHeightRaw fontSize
-
-                backgrounds : List (Triangle DevicePixels)
-                backgrounds =
-                    List.indexedMap
-                        (\lineIndex line ->
-                            let
-                                ( placed, end ) =
-                                    layoutSegments fontSize (List.map Tuple.second line)
-
-                                starts : List Int
-                                starts =
-                                    List.map Tuple.first placed
-                            in
-                            List.map3
-                                (\( match, _ ) start next ->
-                                    if match /= Nothing && next > start then
-                                        let
-                                            left =
-                                                ((x * 64 + start) * s + 32) // 64
-
-                                            right =
-                                                ((x * 64 + next) * s + 32) // 64
-                                        in
-                                        clippedSprite
-                                            (if match == found.selected then
-                                                found.background
-
-                                             else
-                                                found.otherBackground
-                                            )
-                                            deviceClip
-                                            ( left, (y + lineIndex * height) * s )
-                                            ( right - left, height * s )
-                                            ( 2, 2 )
-                                            ( 4, 4 )
-                                            |> fromSprite Sprites.Solid
-
-                                    else
-                                        []
-                                )
-                                line
-                                starts
-                                (List.drop 1 starts ++ [ end ])
-                                |> List.concat
-                        )
-                        (linesOf (\( _, segment ) -> segment.text) (\part ( match, segment ) -> ( match, { segment | text = part } )) pieces)
-                        |> List.concat
-            in
-            backgrounds
-                ++ customText
-                    uiScale
-                    fontSize
-                    clip
-                    (List.map
-                        (\( match, segment ) ->
-                            if match /= Nothing && match == found.selected then
-                                { segment | color = found.color }
-
-                            else
-                                segment
-                        )
-                        pieces
-                    )
-                    position
-
-
-{-| Segments cut where the matches (ranges of their characters, in order, not
-overlapping) start and end, each piece saying which match it is in, if any (counted
-from 0). Empty pieces are left out.
--}
-splitAtMatches : List ( Int, Int ) -> List Segment -> List ( Maybe Int, Segment )
-splitAtMatches matches segments =
-    List.foldl
-        (\segment ( offset, remaining, acc ) ->
-            let
-                length =
-                    String.length segment.text
-
-                segmentEnd =
-                    offset + length
-
-                -- The pieces from `at` to the segment's end, and the matches left
-                -- for the next segments.
-                cut : Int -> List ( Int, Int, Int ) -> List ( Maybe Int, Segment ) -> ( List ( Int, Int, Int ), List ( Maybe Int, Segment ) )
-                cut at matches2 pieces =
-                    case matches2 of
-                        ( index, start, end ) :: rest ->
-                            if start >= segmentEnd then
-                                ( matches2, piece Nothing at segmentEnd pieces )
-
-                            else if end > segmentEnd then
-                                ( matches2, piece (Just index) (max at start) segmentEnd (piece Nothing at (max at start) pieces) )
-
-                            else
-                                cut end rest (piece (Just index) (max at start) end (piece Nothing at (max at start) pieces))
-
-                        [] ->
-                            ( [], piece Nothing at segmentEnd pieces )
-
-                piece : Maybe Int -> Int -> Int -> List ( Maybe Int, Segment ) -> List ( Maybe Int, Segment )
-                piece match from to pieces =
-                    if to > from then
-                        ( match, { segment | text = String.slice (from - offset) (to - offset) segment.text } ) :: pieces
-
-                    else
-                        pieces
-
-                ( remaining2, acc2 ) =
-                    cut offset remaining acc
-            in
-            ( segmentEnd, remaining2, acc2 )
-        )
-        ( 0, List.indexedMap (\index ( start, end ) -> ( index, start, end )) matches, [] )
-        segments
-        |> (\( _, _, acc ) -> List.reverse acc)
 
 
 {-| One kind of line across one line of text: a rectangle for each run of segments next to

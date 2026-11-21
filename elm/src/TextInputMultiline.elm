@@ -13,7 +13,9 @@ module TextInputMultiline exposing
     , mouseUp
     , overScrollbar
     , paste
+    , replaceRanges
     , scrollPixels
+    , select
     , size
     , stopGlide
     , view
@@ -79,11 +81,18 @@ type Glide
     | Easing Float
 
 
-{-| How the box looks: its font and size, its width, how many lines tall it is, and
-whether the text is coloured as code.
+{-| How the box looks: its font and size, its width, how many lines tall it is, whether
+the text is coloured as code, and ranges of the text (start, end, in order) to mark, as
+the matches of a search are.
 -}
 type alias Style =
-    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int, syntax : Syntax }
+    { font : Sprite.Font
+    , fontSize : Sprite.FontSize
+    , width : Quantity Int UiPixels
+    , lines : Int
+    , syntax : Syntax
+    , highlights : List ( Int, Int )
+    }
 
 
 {-| Plain text is all one colour; Elm code is coloured by ElmSyntax.elm.
@@ -430,6 +439,56 @@ isVertical key =
 paste : Style -> String -> Model -> Model
 paste style text model =
     { model | input = TextInput.paste text model.input |> limitHistory, goalX = Nothing } |> scrollToCursor style
+
+
+{-| Selects the text from `start` to `end`, with the cursor at its end, and scrolls to show
+it.
+-}
+select : Style -> Int -> Int -> Model -> Model
+select style start end model =
+    { model
+        | input = TextInput.replaceState (\state -> { state | cursorPosition = end, cursorSize = start - end }) model.input
+        , goalX = Nothing
+    }
+        |> scrollToCursor style
+
+
+{-| Replaces each of the ranges (start, end; in order, not overlapping) of the text with
+`replacement`, as one change to undo, and puts the cursor after the last one.
+-}
+replaceRanges : Style -> String -> List ( Int, Int ) -> Model -> Model
+replaceRanges style replacement ranges model =
+    if List.isEmpty ranges then
+        model
+
+    else
+        let
+            change : TextInput.State -> TextInput.State
+            change state =
+                let
+                    ( pieces, rest, cursor ) =
+                        List.foldl
+                            (\( start, end ) ( done, from, length ) ->
+                                let
+                                    before : String
+                                    before =
+                                        String.slice from start state.text
+                                in
+                                ( replacement :: before :: done
+                                , end
+                                , length + String.length before + String.length replacement
+                                )
+                            )
+                            ( [], 0, 0 )
+                            ranges
+                in
+                { text = String.concat (List.reverse pieces ++ [ String.dropLeft rest state.text ])
+                , cursorPosition = cursor
+                , cursorSize = 0
+                }
+        in
+        { model | input = TextInput.pushState change model.input |> limitHistory, goalX = Nothing }
+            |> scrollToCursor style
 
 
 {-| Scroll the smallest amount that shows the cursor's line, and no further than the text.
@@ -930,6 +989,36 @@ view scale viewport style offset hasFocus model =
                                     (Coord.xy (min clip.right right - max clip.left left) height)
                         )
 
+        -- The marked ranges, which are each inside one line.
+        marks =
+            List.concatMap
+                (\( start, end ) ->
+                    let
+                        ( line, column ) =
+                            lineAndColumn state.text start
+                    in
+                    if line < first || line > first + style.lines then
+                        []
+
+                    else
+                        let
+                            positions =
+                                carets style (lineAt ls line)
+
+                            left =
+                                textLeft + caretX positions column
+
+                            right =
+                                textLeft + caretX positions (column + end - start)
+                        in
+                        Sprite.rectangle
+                            Color.findMatchColor
+                            textArea
+                            (Coord.xy (max clip.left left) (top line))
+                            (Coord.xy (max 0 (min clip.right right - max clip.left left)) height)
+                )
+                style.highlights
+
         ( cursorLine, cursorColumn ) =
             lineAndColumn state.text state.cursorPosition
 
@@ -955,7 +1044,7 @@ view scale viewport style offset hasFocus model =
                 (scrolledPixels style model)
                 model
     in
-    Sprite.toDevice scale (box ++ selection)
+    Sprite.toDevice scale (box ++ marks ++ selection)
         ++ List.concatMap
             (\l ->
                 Sprite.customText

@@ -28,6 +28,14 @@ type UiId
     | TokenInput
     | MessageInput
     | PushButton
+      -- The find and replace bar over the code: the two text boxes and the buttons.
+    | FindInput
+    | ReplaceInput
+    | FindPreviousButton
+    | FindNextButton
+    | ReplaceButton
+    | ReplaceAllButton
+    | FindCloseButton
 
 
 {-| How a build of Elm OS made on this computer is going (host/init/src/build.rs,

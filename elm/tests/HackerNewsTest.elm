@@ -175,7 +175,7 @@ view lazyCache model =
 
 draw : Ui.Element UiId -> List (Sprite.Triangle DevicePixels)
 draw element =
-    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing Ui.noFind screen element
+    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing screen element
 
 
 latin1 : Bytes -> String
