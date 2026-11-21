@@ -2,6 +2,7 @@ module Code exposing
     ( Model
     , appSize
     , buildUpdate
+    , httpResponse
     , init
     , onClick
     , save
@@ -20,15 +21,19 @@ Build sends every module (saved or as built) to the host, which compiles Elm OS 
 computer and switches to the new build, carrying the Model over (host/init/src/build.rs).
 It refuses a build whose Model has other types: that would need a migration.
 
+Commit and push sends the saved modules to GitHub as a commit (Code/GitHub.elm).
+
 -}
 
-import Code.Types exposing (BuildStatus(..), UiId(..))
+import BuildInfo
+import Code.GitHub
+import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), UiId(..))
 import Color
 import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Json.Encode as E
 import Layout
-import Quantity
+import Quantity exposing (Quantity)
 import SeqDict exposing (SeqDict)
 import SourceCode
 import Sprite
@@ -55,6 +60,10 @@ type alias Model =
 
     -- The last build's errors show instead of the text.
     , showErrors : Bool
+
+    -- What a commit would hold, the token, the message and Push show instead of the text.
+    , committing : Bool
+    , git : Git
     }
 
 
@@ -66,6 +75,8 @@ init =
     , saved = SeqDict.empty
     , build = Nothing
     , showErrors = False
+    , committing = False
+    , git = Code.GitHub.init
     }
 
 
@@ -177,17 +188,159 @@ onClick id text uiState model =
         ErrorsViewport ->
             ( model, uiState, [] )
 
+        CommitButton ->
+            let
+                saved =
+                    if model.picking || model.module_ == Nothing then
+                        model
 
-{-| Every module, saved or as built, as its path under elm/src and its text.
+                    else
+                        save text model
+            in
+            ( { saved | committing = True, showErrors = False }
+            , Ui.setFocus
+                (Just
+                    (UiId.Code
+                        (if inputText TokenInput uiState == "" then
+                            TokenInput
+
+                         else
+                            MessageInput
+                        )
+                    )
+                )
+                uiState
+            , []
+            )
+
+        CommitCloseButton ->
+            ( { model | committing = False }, Ui.setFocus Nothing uiState, [] )
+
+        CommitViewport ->
+            ( model, uiState, [] )
+
+        TokenInput ->
+            ( model, Ui.setFocus (Just (UiId.Code TokenInput)) uiState, [] )
+
+        MessageInput ->
+            ( model, Ui.setFocus (Just (UiId.Code MessageInput)) uiState, [] )
+
+        PushButton ->
+            push uiState model
+
+
+{-| Starts committing and pushing the saved modules, with the token and message typed.
+-}
+push : Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId, List Effect )
+push uiState model =
+    let
+        git =
+            model.git
+
+        token =
+            String.trim (inputText TokenInput uiState)
+
+        message =
+            String.trim (inputText MessageInput uiState)
+
+        refuse why =
+            ( { model | git = { git | status = GitFailed "Starting" why } }, uiState, [] )
+    in
+    if gitWorking model.git then
+        ( model, uiState, [] )
+
+    else if SeqDict.isEmpty model.saved then
+        refuse "No module has saved changes."
+
+    else if token == "" then
+        refuse "Type a GitHub token first."
+
+    else if message == "" then
+        refuse "Type a commit message first."
+
+    else
+        case Code.GitHub.start { token = token, message = message, modules = model.saved } model.git of
+            Just ( git2, request ) ->
+                ( { model | git = git2 }, uiState, [ Effect.Http request ] )
+
+            Nothing ->
+                refuse noCommitToStartFrom
+
+
+noCommitToStartFrom : String
+noCommitToStartFrom =
+    "This build of Elm OS was made from code with changes that weren't committed, so there's no commit on GitHub to put these on top of."
+
+
+{-| GitHub's answer to the request with this number (Code.GitHub.requestId).
+-}
+httpResponse : Int -> Result String { status : Int, body : String } -> Model -> ( Model, List Effect )
+httpResponse n result model =
+    case Code.GitHub.respond n result model.git of
+        Code.GitHub.Next git request ->
+            ( { model | git = git }, [ Effect.Http request ] )
+
+        Code.GitHub.Finished git ->
+            ( { model | git = git }, [] )
+
+
+gitWorking : Git -> Bool
+gitWorking git =
+    case git.status of
+        GitWorking _ ->
+            True
+
+        GitIdle ->
+            False
+
+        GitPushed _ _ ->
+            False
+
+        GitFailed _ _ ->
+            False
+
+
+inputText : UiId -> Ui.Model UiId.UiId -> String
+inputText id uiState =
+    (Ui.getTextInput (UiId.Code id) uiState).current.text
+
+
+{-| Every module, saved or as built, as its path under elm/src and its text. BuildInfo
+is this build's own, so the new build says the same commit and branch.
 -}
 buildModules : Model -> List ( String, String )
 buildModules model =
     SeqDict.keys SourceCode.sourceCode
         |> List.filterMap
             (\name ->
-                moduleText name model
+                (if name == "BuildInfo" then
+                    Just buildInfoModule
+
+                 else
+                    moduleText name model
+                )
                     |> Maybe.map (\text -> ( String.replace "." "/" name ++ ".elm", text ))
             )
+
+
+buildInfoModule : String
+buildInfoModule =
+    String.join "\n"
+        [ "module BuildInfo exposing (branch, commit)"
+        , ""
+        , "{-| Written by the Code app (Code.elm), as it was in the build it ran on. -}"
+        , ""
+        , ""
+        , "commit : String"
+        , "commit ="
+        , "    " ++ E.encode 0 (E.string BuildInfo.commit)
+        , ""
+        , ""
+        , "branch : String"
+        , "branch ="
+        , "    " ++ E.encode 0 (E.string BuildInfo.branch)
+        , ""
+        ]
 
 
 {-| For Main.testFacts (the QEMU tests): the module open, the modules saved with
@@ -212,6 +365,22 @@ testFact model =
 
                     Nothing ->
                         ""
+                )
+          )
+        , ( "git"
+          , E.string
+                (case model.git.status of
+                    GitIdle ->
+                        ""
+
+                    GitWorking _ ->
+                        "working"
+
+                    GitPushed commit branch ->
+                        "pushed " ++ commit ++ " " ++ branch
+
+                    GitFailed step why ->
+                        "failed " ++ step ++ ": " ++ why
                 )
           )
         ]
@@ -313,7 +482,7 @@ view windowSize input model =
             TextInputMultiline.lineAndColumn state.text state.cursorPosition
 
         editing =
-            if model.picking || model.showErrors then
+            if model.picking || model.showErrors || model.committing then
                 Nothing
 
             else
@@ -324,11 +493,15 @@ view windowSize input model =
                 ( True, _ ) ->
                     "Build errors"
 
+                ( False, Nothing ) ->
+                    if model.committing then
+                        "Commit and push"
+
+                    else
+                        "Code"
+
                 ( False, Just name ) ->
                     name
-
-                ( False, Nothing ) ->
-                    "Code"
 
         unsaved =
             case editing of
@@ -353,7 +526,7 @@ view windowSize input model =
                     ]
 
                 Nothing ->
-                    if model.showErrors then
+                    if model.showErrors || model.committing then
                         []
 
                     else
@@ -376,12 +549,39 @@ view windowSize input model =
         -- Always there, even while a build is going: if the host never answers (an
         -- older host, or one with no tools partition), the button still works.
         buildButton =
-            [ button BuildButton "Build and run" ]
+            button BuildButton "Build and run"
+                :: (if SeqDict.isEmpty model.saved && not unsaved then
+                        []
+
+                    else
+                        [ button CommitButton "Commit" ]
+                   )
 
         buttons =
             case ( model.showErrors, editing ) of
                 ( True, _ ) ->
                     [ button ErrorsCloseButton "Back to code", button CloseButton "Close" ]
+
+                ( False, Nothing ) ->
+                    if model.committing then
+                        (if gitWorking model.git then
+                            []
+
+                         else
+                            [ button PushButton "Push" ]
+                        )
+                            ++ [ button CommitCloseButton "Back to code", button CloseButton "Close" ]
+
+                    else
+                        (case model.module_ of
+                            Just _ ->
+                                [ button ModulesButton "Back" ]
+
+                            Nothing ->
+                                []
+                        )
+                            ++ buildButton
+                            ++ [ button CloseButton "Close" ]
 
                 ( False, Just name ) ->
                     (if unsaved then
@@ -399,17 +599,6 @@ view windowSize input model =
                         ++ buildButton
                         ++ [ button ModulesButton "Modules", button CloseButton "Close" ]
 
-                ( False, Nothing ) ->
-                    (case model.module_ of
-                        Just _ ->
-                            [ button ModulesButton "Back" ]
-
-                        Nothing ->
-                            []
-                    )
-                        ++ buildButton
-                        ++ [ button CloseButton "Close" ]
-
         boxHeight =
             Units.uiPixels (Coord.yRaw (TextInputMultiline.size boxStyle))
 
@@ -422,7 +611,12 @@ view windowSize input model =
                     ""
 
         body =
-            if model.showErrors then
+            if model.committing then
+                Ui.viewport
+                    { id = UiId.Code CommitViewport, viewportHeight = boxHeight }
+                    (commitView boxStyle.width model)
+
+            else if model.showErrors then
                 Ui.viewport
                     { id = UiId.Code ErrorsViewport, viewportHeight = boxHeight }
                     -- Wrapped: a compiler's lines can be wider than the window.
@@ -453,7 +647,7 @@ view windowSize input model =
                                                 t name
                                             )
                                     )
-                                    (List.filter (\name -> not (String.startsWith "Evergreen." name)) (SeqDict.keys SourceCode.sourceCode))
+                                    (List.filter shownModule (SeqDict.keys SourceCode.sourceCode))
                                 )
                             )
 
@@ -475,3 +669,83 @@ view windowSize input model =
         , borderAndFill = Ui.windowBorderAndFill
         }
         content
+
+
+{-| Whether the list of modules shows it: not the frozen copies of old versions (they
+are only there for migrations), nor BuildInfo (the build writes it).
+-}
+shownModule : String -> Bool
+shownModule name =
+    not (String.startsWith "Evergreen." name) && name /= "BuildInfo"
+
+
+{-| The commit view: what a commit would hold and where it would go, the token and the
+message, and how the last commit went.
+-}
+commitView : Quantity Int UiPixels -> Model -> Element UiId.UiId
+commitView width model =
+    let
+        line color text =
+            Ui.customTextWrapped Sprite.Small width [ { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
+
+        input id masked =
+            Ui.textInput
+                { id = UiId.Code id
+                , style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = width, masked = masked }
+                , isValid = True
+                }
+
+        changed =
+            SeqDict.keys model.saved
+                |> List.filter (\name -> SeqDict.get name model.git.pushed /= SeqDict.get name model.saved)
+
+        where_ =
+            case Code.GitHub.startingPoint model.git of
+                ( "", _ ) ->
+                    line Color.errorColor noCommitToStartFrom
+
+                ( base, branch ) ->
+                    line Color.dimTextColor
+                        ("On top of commit "
+                            ++ String.left 12 base
+                            ++ (if branch == "" then
+                                    ", on a new branch."
+
+                                else
+                                    ", pushed to " ++ branch ++ " (or to a new branch, if " ++ branch ++ " has moved on since)."
+                               )
+                        )
+
+        status =
+            case model.git.status of
+                GitIdle ->
+                    []
+
+                GitWorking _ ->
+                    [ line Color.textColor "Committing and pushing..." ]
+
+                GitPushed commit branch ->
+                    [ line Color.successColor ("Pushed commit " ++ String.left 12 commit ++ " to " ++ branch ++ ".") ]
+
+                GitFailed step why ->
+                    [ line Color.errorColor (step ++ " failed. " ++ why) ]
+    in
+    Ui.column 8
+        ([ line Color.textColor
+            ("Saved modules: "
+                ++ String.join ", " (SeqDict.keys model.saved)
+                ++ (if List.isEmpty changed then
+                        " (all already pushed)"
+
+                    else
+                        ""
+                   )
+            )
+         , where_
+         , line Color.dimTextColor "GitHub token (a fine-grained one that can only write the contents of Elm-OS)"
+         , input TokenInput True
+         , line Color.dimTextColor "Commit message"
+         , input MessageInput False
+         ]
+            ++ status
+        )

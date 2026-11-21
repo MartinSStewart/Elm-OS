@@ -22,6 +22,7 @@ import Calculator
 import Calculator.Types
 import Clock
 import Code
+import Code.GitHub
 import Code.Types
 import Color exposing (Color)
 import Coord exposing (Coord)
@@ -697,6 +698,19 @@ step event model =
                             , []
                             )
 
+                        CodeRequest n ->
+                            Code.httpResponse
+                                n
+                                (case result of
+                                    Ok response ->
+                                        Ok { status = response.status, body = Effect.bodyToString response.body |> Maybe.withDefault "" }
+
+                                    Err error ->
+                                        Err (Effect.httpErrorToString error)
+                                )
+                                model.code
+                                |> Tuple.mapFirst (\code -> { model | code = code })
+
                 Nothing ->
                     ( model, [] )
 
@@ -949,6 +963,18 @@ step event model =
 
                 else
                     ( multilineKey (Code Code.Types.Input) (codeStyle model) key model, [] )
+
+            else if
+                model.code.isOpen
+                    && model.code.committing
+                    && (model.uiState.focus == Just (Code Code.Types.TokenInput) || model.uiState.focus == Just (Code Code.Types.MessageInput))
+            then
+                case model.uiState.focus of
+                    Just focus ->
+                        ( singleLineKey focus (model.uiState.focus == Just (Code Code.Types.TokenInput)) key model, [] )
+
+                    Nothing ->
+                        ( model, [] )
 
             else if model.uiState.focus == Just (WebViewer WebViewer.Types.UrlInput) && model.webViewer.isOpen then
                 webViewerKey key model
@@ -1249,6 +1275,24 @@ appButton id =
                     Nothing
 
                 Code.Types.ErrorsViewport ->
+                    Nothing
+
+                Code.Types.CommitButton ->
+                    Nothing
+
+                Code.Types.CommitCloseButton ->
+                    Nothing
+
+                Code.Types.CommitViewport ->
+                    Nothing
+
+                Code.Types.TokenInput ->
+                    Nothing
+
+                Code.Types.MessageInput ->
+                    Nothing
+
+                Code.Types.PushButton ->
                     Nothing
 
         ScreenshotViewer id2 ->
@@ -1840,6 +1884,44 @@ webViewerKey key model =
             )
 
 
+{-| A key typed in the one-line text box `id`: Escape leaves it, Ctrl+V pastes, and the
+rest edits it. What's copied out of a `secret` box (a token) doesn't go on the clipboard.
+-}
+singleLineKey : UiId -> Bool -> Key -> Model -> Model
+singleLineKey id secret key model =
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Escape ) ->
+            { model | uiState = Ui.setFocus Nothing model.uiState }
+
+        ( True, Keyboard.Character "v" ) ->
+            { model
+                | uiState =
+                    Ui.insertElement id
+                        (TextInputState (TextInput.paste (String.replace "\n" " " model.clipboard) (Ui.getTextInput id model.uiState)))
+                        model.uiState
+            }
+
+        _ ->
+            let
+                ( state, outMsg ) =
+                    TextInput.keyMsg model.ctrl model.shift key (Ui.getTextInput id model.uiState)
+            in
+            { model
+                | uiState = Ui.insertElement id (TextInputState state) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            if secret then
+                                model.clipboard
+
+                            else
+                                text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+            }
+
+
 dragSelectWebViewer : UiId -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 dragSelectWebViewer focus mouse position model =
     { model
@@ -2238,6 +2320,8 @@ type HttpRequestId
     | NewsRequest
     | HackerNewsRequest HackerNews.HttpRequestId
     | WebViewerRequest Int
+      -- The Code app's commits (Code.GitHub.requestId).
+    | CodeRequest Int
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -2258,6 +2342,9 @@ httpRequestIdToString request =
         WebViewerRequest count ->
             "webviewer_" ++ WebViewer.requestIdToString count
 
+        CodeRequest n ->
+            Code.GitHub.requestId n
+
 
 stringToHttpRequestId : String -> Maybe HttpRequestId
 stringToHttpRequestId string =
@@ -2276,6 +2363,9 @@ stringToHttpRequestId string =
 
         "webviewer" :: rest ->
             WebViewer.stringToRequestId rest |> Maybe.map WebViewerRequest
+
+        [ "code", n ] ->
+            String.toInt n |> Maybe.map CodeRequest
 
         _ ->
             Nothing

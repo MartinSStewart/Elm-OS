@@ -4,6 +4,7 @@ import Code
 import Code.Types exposing (BuildStatus(..))
 import Coord
 import Expect
+import SeqDict
 import TextInputMultiline
 import Test exposing (Test, describe, test)
 import Ui
@@ -32,4 +33,5 @@ suite =
         , test "editing with a failed build" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", build = failed } |> Expect.equal window)
         , test "list of modules" (\_ -> sizeOf model |> Expect.equal window)
         , test "errors" (\_ -> sizeOf { model | showErrors = True, picking = False, build = failed } |> Expect.equal window)
+        , test "commit" (\_ -> sizeOf { model | committing = True, picking = False, saved = SeqDict.fromList [ ( "Code", "module Code" ) ] } |> Expect.equal window)
         ]

@@ -297,11 +297,18 @@ elm/src/Sprites.elm: $(SPRITES) host/common/src/sprites.rs host/common/src/atlas
 	$(CARGO) run -q --manifest-path host/Cargo.toml -p common --example sprites-elm \
 	  --target-dir $(abspath $(BUILD)/cargo-tools) -- $(abspath $@)
 
-$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm") elm/src/Sprites.elm
+$(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name "*.elm") elm/src/Sprites.elm \
+                     $(BUILD)/BuildInfo.elm
 	@mkdir -p $(BUILD)/wire
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
 	$(call WIRE,$(BUILD)/wire,--src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes)
+	cmp -s $(BUILD)/BuildInfo.elm $(BUILD)/wire/src/BuildInfo.elm || cp $(BUILD)/BuildInfo.elm $(BUILD)/wire/src/BuildInfo.elm
 	touch $@
+
+# The commit and branch elm/src came from, for the Code app's commits (elm/src/BuildInfo.elm
+# is its stub). Rewritten only when they change.
+$(BUILD)/BuildInfo.elm: FORCE
+	@mkdir -p $(BUILD); tools/build-info.sh > $@.new; cmp -s $@.new $@ && rm $@.new || mv $@.new $@
 
 # Runs tools/wire with the flags $(2), writing into the directory $(1). When it fails,
 # it still writes the program with placeholder codecs, so this compiles that: often
