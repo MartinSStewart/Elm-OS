@@ -553,6 +553,7 @@ fn supervise() {
     let mounted = crate::persist::wait_mounted();
     if mounted {
         show_last_panic();
+        programs::drop_stale_local_build();
         state().build = programs::current();
     }
     let mut failures = 0u32;

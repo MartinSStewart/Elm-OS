@@ -190,6 +190,8 @@ fn build(modules: Vec<(String, String)>) -> Result<String, Failure> {
     let base = base.strip_suffix("-local").unwrap_or(&base).to_owned();
     let manifest = serde_json::json!({
         "commit": format!("{base}-local"),
+        // The image's own build, so a newer image makes this one out of date (programs.rs).
+        "builtIn": std::fs::read_to_string("/etc/elmos/commit").unwrap_or_default().trim(),
         "hostVersion": std::fs::read_to_string("/etc/elmos/host-version").unwrap_or_default().trim(),
         "modelVersion": shape.lines().next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0),
         "modelShape": shape,

@@ -198,3 +198,44 @@ pub fn remove_all_but(keep: &Build) {
     }
     let _ = std::fs::File::open(persist::Disk::path("programs")).and_then(|d| d.sync_all());
 }
+
+/// The built-in build's commit, as a build made on this computer records it.
+fn built_in_commit() -> String {
+    std::fs::read_to_string("/etc/elmos/commit").unwrap_or_default().trim().to_owned()
+}
+
+/// Whether `current` names a build made on this computer (build.rs) while the built-in
+/// build was another commit than now: a new image came since, so the build is out of
+/// date and would hide it. Builds made before the manifest said which built-in build
+/// they were made beside are judged by the commit they were made on top of.
+fn stale_local_build() -> Option<String> {
+    let name = persist::on_disk(|d| d.read("programs/current"))??.trim().to_owned();
+    if !name.starts_with("local-") {
+        return None;
+    }
+    let text = std::fs::read_to_string(persist::Disk::path(&format!("programs/{name}/manifest.json"))).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let now = built_in_commit();
+    if now.is_empty() {
+        return None;
+    }
+    let made_beside = match manifest.get("builtIn").and_then(|v| v.as_str()) {
+        Some(commit) => commit.to_owned(),
+        None => {
+            let commit = manifest.get("commit")?.as_str()?;
+            commit.strip_suffix("-local").unwrap_or(commit).to_owned()
+        }
+    };
+    (made_beside != now).then_some(name)
+}
+
+/// At boot: forgets a build made on this computer that a newer image has outdated, so
+/// the image's build runs (the edits in the Code app's Model are untouched).
+pub fn drop_stale_local_build() {
+    if let Some(name) = stale_local_build() {
+        log!("host", "build {name} was made beside an older image; running the image's build instead");
+        if set_current(&None) {
+            remove_all_but(&None);
+        }
+    }
+}
