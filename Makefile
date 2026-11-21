@@ -501,9 +501,10 @@ $(BUILD)/link-args: $(BUILD)/eco-setting Makefile
 	@mkdir -p $(BUILD)
 	printf '%s\n' $(subst $(RT),/tools/eco/lib/eco-runtime,$(call ELM_LINK_ARGS,@OUT@,@ELM_O@,/tools/libelmos_link.a)) > $@
 
-# After elm.o, so that every package elm.json names is downloaded and compiled.
-$(BUILD)/tools.fs: $(BUILD)/elm.o $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args elm/elm.json \
-                   scripts/make-tools-fs.sh $(BUILD)/source-date
+# After elm.o, so that every package elm.json names is downloaded and compiled, but not
+# remade when only the Elm code changes: `make run` would spend 10 s on it each time.
+$(BUILD)/tools.fs: $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args elm/elm.json \
+                   scripts/make-tools-fs.sh $(BUILD)/source-date $(TOOLS_ECO_ROOT)/bin/eco | $(BUILD)/elm.o
 	@echo "Making the tools partition (eco and its libraries, about 600 MB)" $(SAY)
 	scripts/make-tools-fs.sh $(TOOLS_ECO_ROOT) elm/elm.json $(BUILD)/wire-tool $(BUILD)/libelmos_link.a $(BUILD)/link-args $@ > /dev/null
 
@@ -721,10 +722,10 @@ RUN_DATA = if grep -q elmos-draft-build $(BUILD)/wire/src/ElmOs.elm; then \
              cp --sparse=always $(BUILD)/data-qemu.img $(BUILD)/data-draft.img; \
              export QEMU_DATA=$(BUILD)/data-draft.img; fi
 
-run: all $(BUILD)/data-qemu.img | check-run-deps
+run: all $(BUILD)/data-qemu.img $(BUILD)/tools-qemu.img | check-run-deps check-usb-deps
 	$(RUN_DATA); scripts/run-qemu.sh
 
-run-cpu: all $(BUILD)/data-qemu.img | check-run-deps
+run-cpu: all $(BUILD)/data-qemu.img $(BUILD)/tools-qemu.img | check-run-deps check-usb-deps
 	$(RUN_DATA); QEMU_GPU=0 scripts/run-qemu.sh
 
 test: all $(BUILD)/data-empty.img | check-run-deps

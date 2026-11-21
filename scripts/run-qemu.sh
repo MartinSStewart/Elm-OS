@@ -23,6 +23,10 @@
 # see check-migration in the Makefile). The USB image has its own data partition, but --usb opens the image
 # read-only, so there nothing is kept from one run to the next.
 #
+# build/tools-qemu.img (make run makes it) is the "Elm OS tools" disk, read-only, so the
+# Code app's "Build and run" can compile Elm OS inside QEMU (host/init/src/build.rs). That
+# needs the 4 GB of memory the guest gets; without KVM the compile takes many minutes.
+#
 # retain_initrd keeps the initramfs readable (/sys/firmware/initrd), so the debug
 # overlay can show its SHA-256, to compare with `sha256sum build/initramfs-qemu.cpio`.
 #
@@ -59,10 +63,12 @@ else
   GPU="-device virtio-gpu-pci,$XRES"
   DISPLAY_OPT="${QEMU_DISPLAY:-gtk}"
 fi
-exec qemu-system-x86_64 $ACCEL -m 2G -smp 2 \
+TOOLS=
+[ -f build/tools-qemu.img ] && TOOLS="-drive if=virtio,format=raw,readonly=on,file=build/tools-qemu.img"
+exec qemu-system-x86_64 $ACCEL -m 4G -smp 4 \
   -kernel build/bzImage -initrd build/initramfs-qemu.cpio \
   -nic user,model=virtio-net-pci \
-  -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" \
+  -drive if=virtio,format=raw,file="${QEMU_DATA:-build/data-qemu.img}" $TOOLS \
   -append "console=ttyS0 quiet retain_initrd" \
   -vga none $GPU -device virtio-keyboard-pci -device virtio-tablet-pci \
   -display "$DISPLAY_OPT" -serial mon:stdio -no-reboot "$@"

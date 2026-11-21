@@ -425,11 +425,11 @@ view windowSize input model =
             if model.showErrors then
                 Ui.viewport
                     { id = UiId.Code ErrorsViewport, viewportHeight = boxHeight }
-                    (Ui.column 0
-                        (List.map
-                            (\l -> Ui.customText Sprite.Small [ { text = l, color = Color.textColor, font = Sprite.Mono, decorations = [], link = Nothing } ])
-                            (String.lines errors)
-                        )
+                    -- Wrapped: a compiler's lines can be wider than the window.
+                    (Ui.customTextWrapped
+                        Sprite.Small
+                        boxStyle.width
+                        [ { text = errors, color = Color.textColor, font = Sprite.Mono, decorations = [], link = Nothing } ]
                     )
 
             else
