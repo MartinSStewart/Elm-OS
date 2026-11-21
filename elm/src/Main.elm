@@ -3376,7 +3376,9 @@ overlay model =
         line label value =
             Ui.row
                 0
-                [ Ui.monoText (String.padRight 10 ' ' label), Ui.monoText value ]
+                [ Ui.monoText (String.padRight 10 ' ' label)
+                , Ui.monoText (Sprite.ellipsis Sprite.Small mono (Quantity.minus (Units.uiPixels (10 * 10)) debugWidth) value)
+                ]
 
         rendererLine =
             case model.renderer of
