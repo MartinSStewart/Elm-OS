@@ -151,8 +151,8 @@ suite =
                 -- so wrapped items stuck out of the window by its width.
                 News.view
                     Ui.noLazyCache
-                    (Units.uiPixels 300)
-                    (Units.uiPixels 400)
+                    (Units.ui 300)
+                    (Units.ui 400)
                     (LoadedNews [ { date = date 2026 11 7, topics = News.parseWikitext day } ])
                     |> Ui.size
                     |> Coord.xRaw

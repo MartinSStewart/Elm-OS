@@ -821,7 +821,7 @@ scrollTo viewportHeight contentSize pixels state =
     let
         offset : Quantity Float UiPixels
         offset =
-            Units.uiPixels (negate pixels) |> clampScroll viewportHeight contentSize
+            Units.ui (negate pixels) |> clampScroll viewportHeight contentSize
     in
     { state | offset = offset, target = offset, momentum = 0 }
 
@@ -1018,7 +1018,7 @@ glide timeElapsed model =
 
         moved : Quantity Float UiPixels
         moved =
-            Quantity.plus (Units.uiPixels (model.momentum * seconds)) model.offset
+            Quantity.plus (Units.ui (model.momentum * seconds)) model.offset
 
         offset : Quantity Float UiPixels
         offset =
@@ -1050,7 +1050,7 @@ scroll scrollBy size2 data model =
     case scrollBy of
         WheelClicks clicks ->
             { model
-                | target = Quantity.plus (Units.uiPixels (toFloat (clicks * 150))) model.target |> clampOffset
+                | target = Quantity.plus (Units.ui (toFloat (clicks * 150))) model.target |> clampOffset
                 , momentum = 0
             }
 
@@ -1066,7 +1066,7 @@ scroll scrollBy size2 data model =
             }
 
         Momentum velocity ->
-            { model | momentum = velocity, bottom = clampOffset (Units.uiPixels -1.0e9) }
+            { model | momentum = velocity, bottom = clampOffset (Units.ui -1.0e9) }
 
 
 {-| Keep an offset between the top of the content and its bottom. Content no taller than
@@ -1127,7 +1127,7 @@ overScrollbar point viewportHeight child =
 
 scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
 scrollBaseSpeed =
-    Quantity.rate (Units.uiPixels 1000) Duration.second
+    Quantity.rate (Units.ui 1000) Duration.second
 
 
 type BorderAndFill
@@ -2575,9 +2575,9 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                             (Color.pressColor opacity)
                                             1
                                             (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
-                                            (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUiPixels |> min 100)
+                                            (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUi |> min 100)
                                             |> Sprite.move position
-                                            |> Sprite.clipTo (boundsToArea (Bounds.shrink (Units.uiPixels 2) viewport3))
+                                            |> Sprite.clipTo (boundsToArea (Bounds.shrink (Units.ui 2) viewport3))
                                             |> Sprite.toDevice scale
 
                                     else
@@ -2700,7 +2700,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
 
 buttonCircleGrowSpeed : Quantity Float (Rate UiPixels Seconds)
 buttonCircleGrowSpeed =
-    Quantity.rate (Units.uiPixels 250) Duration.second
+    Quantity.rate (Units.ui 250) Duration.second
 
 
 borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
@@ -2721,7 +2721,7 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                 ++ Sprite.rectangle borderColor
                     viewport2
                     (Coord.plus
-                        ( Coord.x size2 |> Quantity.minus (Units.uiPixels borderWidth), Quantity.zero )
+                        ( Coord.x size2 |> Quantity.minus (Units.ui borderWidth), Quantity.zero )
                         position
                     )
                     verticalSize
@@ -2729,7 +2729,7 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                 ++ Sprite.rectangle borderColor
                     viewport2
                     (Coord.plus
-                        ( Quantity.zero, Coord.y size2 |> Quantity.minus (Units.uiPixels borderWidth) )
+                        ( Quantity.zero, Coord.y size2 |> Quantity.minus (Units.ui borderWidth) )
                         position
                     )
                     horizontalSize

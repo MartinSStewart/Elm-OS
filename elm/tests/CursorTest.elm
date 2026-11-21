@@ -24,7 +24,7 @@ ui =
     Ui.elWithId Panel
         { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
         (Ui.row 0
-            [ Ui.textInput { id = Name, style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.uiPixels 200, masked = False }, isValid = True }
+            [ Ui.textInput { id = Name, style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.ui 200, masked = False }, isValid = True }
             , Ui.button { id = OkButton, padding = Ui.paddingXY 10 10 } (Ui.text "OK")
             ]
         )

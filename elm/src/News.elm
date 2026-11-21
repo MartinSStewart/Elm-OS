@@ -46,7 +46,7 @@ view lazyCache width height news =
     let
         viewportHeight : Quantity Int UiPixels
         viewportHeight =
-            height |> Quantity.minus (Quantity.plus (Units.uiPixels (10 + 4)) (Sprite.lineHeight Sprite.Small))
+            height |> Quantity.minus (Quantity.plus (Units.ui (10 + 4)) (Sprite.lineHeight Sprite.Small))
     in
     Ui.el
         { padding = { top = 10, bottom = 0, left = 0, right = 0 }, borderAndFill = Ui.windowBorderAndFill }
@@ -99,7 +99,7 @@ daysView width days =
                                         (itemView
                                             (width
                                                 |> Quantity.minus
-                                                    (Units.uiPixels
+                                                    (Units.ui
                                                         (viewportPadding * 2 + headerPaddingX)
                                                     )
                                             )
@@ -148,7 +148,7 @@ daysView width days =
                                 " (Sunday)"
                        )
                     |> Ui.text
-                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Units.uiPixels (headerPaddingX * 2)))
+                    |> Ui.left (Coord.x (Ui.size body) |> Quantity.minus (Units.ui (headerPaddingX * 2)))
                     |> Ui.el { padding = Ui.paddingXY headerPaddingX 4, borderAndFill = Ui.FillOnly dateColor }
                 , body
                 ]
@@ -193,12 +193,12 @@ itemView width (Item item) =
             [ bullet
             , Ui.customTextWrapped
                 Sprite.Small
-                (width |> Quantity.minus (Quantity.plus (Units.uiPixels spacing) (Coord.x (Ui.size bullet))))
+                (width |> Quantity.minus (Quantity.plus (Units.ui spacing) (Coord.x (Ui.size bullet))))
                 (inlineSegments item.content)
             ]
         , Ui.column
             itemSpacing
-            (List.map (itemView (width |> Quantity.minus (Units.uiPixels indentation))) item.children)
+            (List.map (itemView (width |> Quantity.minus (Units.ui indentation))) item.children)
             |> Ui.el { padding = { top = 0, bottom = 0, left = indentation, right = 0 }, borderAndFill = Ui.NoBorderOrFill }
         ]
 

@@ -110,7 +110,7 @@ strokeBy ( dx, dy ) model =
         Just ( x, y ) ->
             let
                 to =
-                    ( x + Units.inUiPixels dx, y + Units.inUiPixels dy )
+                    ( x + Units.inUi dx, y + Units.inUi dy )
             in
             if to == ( x, y ) then
                 model
@@ -270,7 +270,7 @@ view : Model -> Element UiId
 view model =
     let
         width =
-            Units.uiPixels canvasWidth
+            Units.ui canvasWidth
 
         title =
             Ui.leftAndRight width

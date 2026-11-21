@@ -22,7 +22,7 @@ viewportOnto : Int -> Ui.Element ()
 viewportOnto contentHeight =
     Ui.viewport
         { id = ()
-        , viewportHeight = Units.uiPixels 100
+        , viewportHeight = Units.ui 100
         }
         (Ui.quads { size = Coord.xy 10 contentHeight, triangles = [] })
 
@@ -52,14 +52,14 @@ suite =
     describe "Ui scrolling"
         [ test "touchpad pixels move the content at once"
             (\_ ->
-                Ui.init |> scroll (Ui.ScrollPixels (Units.uiPixels -12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
+                Ui.init |> scroll (Ui.ScrollPixels (Units.ui -12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
             )
         , test "momentum glides on, slowing down, and stops"
             (\_ ->
                 let
                     start =
                         Ui.init
-                            |> scroll (Ui.ScrollPixels (Units.uiPixels -100))
+                            |> scroll (Ui.ScrollPixels (Units.ui -100))
                             |> scroll (Ui.Momentum -500)
 
                     a =
@@ -88,8 +88,8 @@ suite =
                 let
                     short : Ui.Model () -> Ui.Model ()
                     short model =
-                        Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels -40)) (viewportOnto 50) model
-                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels 40)) (viewportOnto 50) m)
+                        Ui.onWheel () (Ui.ScrollPixels (Units.ui -40)) (viewportOnto 50) model
+                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.ui 40)) (viewportOnto 50) m)
                             |> (\m -> Ui.onWheel () (Ui.WheelClicks -3) (viewportOnto 50) m)
                             |> (\m -> Ui.onWheel () (Ui.Momentum -500) (viewportOnto 50) m)
                             |> frames 100
@@ -113,13 +113,13 @@ suite =
                         Ui.dragScrollbar
                             ()
                             (Coord.xy 8 2000)
-                            { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 }
+                            { position = Coord.origin, viewportHeight = Units.ui 100, contentSize = Coord.xy 10 1000 }
                             pressed
                 in
                 Expect.all
                     [ \_ -> offset pressed |> Expect.within (Expect.Absolute 1.0e-9) 0
                     , \_ -> offset dragged |> Expect.within (Expect.Absolute 1.0e-9) -900
-                    , \_ -> offset (Ui.dragScrollbar () (Coord.xy 8 2000) { position = Coord.origin, viewportHeight = Units.uiPixels 100, contentSize = Coord.xy 10 1000 } (Ui.onMouseUp pressed)) |> Expect.within (Expect.Absolute 1.0e-9) 0
+                    , \_ -> offset (Ui.dragScrollbar () (Coord.xy 8 2000) { position = Coord.origin, viewportHeight = Units.ui 100, contentSize = Coord.xy 10 1000 } (Ui.onMouseUp pressed)) |> Expect.within (Expect.Absolute 1.0e-9) 0
                     ]
                     ()
             )
@@ -132,7 +132,7 @@ suite =
                     wide =
                         Ui.viewport
                             { id = ()
-                            , viewportHeight = Units.uiPixels 100
+                            , viewportHeight = Units.ui 100
                             }
                             (Ui.quads { size = Coord.xy 100 1000, triangles = [] })
 
@@ -182,7 +182,7 @@ suite =
                 let
                     scrolled : Ui.Model ()
                     scrolled =
-                        Ui.init |> scroll (Ui.ScrollPixels (Units.uiPixels -300))
+                        Ui.init |> scroll (Ui.ScrollPixels (Units.ui -300))
 
                     screenshot : Ui.Screenshot
                     screenshot =

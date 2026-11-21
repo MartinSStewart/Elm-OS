@@ -13,7 +13,7 @@ pixels a character at Small), so widths are easy to count.
 -}
 wrapMono : Int -> List Segment -> List String
 wrapMono width segments =
-    Sprite.wrapLines Small (Units.uiPixels width) segments
+    Sprite.wrapLines Small (Units.ui width) segments
         |> List.map (\line -> List.map .text line |> String.concat)
 
 
@@ -36,13 +36,13 @@ suite =
             )
         , test "joins segments of the same look, keeps others apart"
             (\() ->
-                Sprite.wrapLines Small (Units.uiPixels 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono, decorations = [], link = Nothing } ]
+                Sprite.wrapLines Small (Units.ui 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono, decorations = [], link = Nothing } ]
                     |> List.map (List.map .text)
                     |> Expect.equal [ [ "a b", "c" ] ]
             )
         , test "wrapSegments joins the lines with '\\n'"
             (\() ->
-                Sprite.wrapSegments Small (Units.uiPixels 100) [ mono "aaaa bbbb cccc" ]
+                Sprite.wrapSegments Small (Units.ui 100) [ mono "aaaa bbbb cccc" ]
                     |> List.map .text
                     |> String.concat
                     |> Expect.equal "aaaa bbbb\ncccc"
@@ -53,7 +53,7 @@ suite =
 
 fitsWidth : Expect.Expectation
 fitsWidth =
-    Sprite.wrapSegments Small (Units.uiPixels 200) [ { text = String.repeat 20 "lorem ipsum dolor ", color = Color.black, font = Sans Regular, decorations = [], link = Nothing } ]
+    Sprite.wrapSegments Small (Units.ui 200) [ { text = String.repeat 20 "lorem ipsum dolor ", color = Color.black, font = Sans Regular, decorations = [], link = Nothing } ]
         |> List.map .text
         |> String.concat
         |> String.split "\n"

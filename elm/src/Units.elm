@@ -3,12 +3,12 @@ module Units exposing
     , LocalUiPixels
     , UiPixels
     , UiScale
-    , inUiPixels
+    , inUi
     , scaleFor
     , scaleInt
     , toDevice
     , toUi
-    , uiPixels
+    , ui
     )
 
 {-| The two kinds of pixel, like CSS pixels and device pixels on the web.
@@ -46,13 +46,13 @@ type alias UiScale =
     Quantity Int (Rate DevicePixels UiPixels)
 
 
-uiPixels : number -> Quantity number UiPixels
-uiPixels =
+ui : number -> Quantity number UiPixels
+ui =
     Quantity
 
 
-inUiPixels : Quantity number UiPixels -> number
-inUiPixels =
+inUi : Quantity number UiPixels -> number
+inUi =
     Quantity.unwrap
 
 

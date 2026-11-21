@@ -180,7 +180,7 @@ view : Model -> Element UiId
 view model =
     let
         title =
-            Ui.leftAndRight (Units.uiPixels width)
+            Ui.leftAndRight (Units.ui width)
                 (Ui.text "Tic Tac Toe")
                 (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
 

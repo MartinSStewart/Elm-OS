@@ -703,7 +703,7 @@ style windowSize model =
     let
         width : Quantity Int UiPixels
         width =
-            Units.uiPixels (Coord.xRaw windowSize - 16)
+            Units.ui (Coord.xRaw windowSize - 16)
 
         barHeight : Int
         barHeight =
@@ -884,7 +884,7 @@ view windowSize input needle model =
                         ++ [ button ModulesButton "Modules", button CloseButton "Close" ]
 
         boxHeight =
-            Units.uiPixels (Coord.yRaw (TextInputMultiline.size boxStyle))
+            Units.ui (Coord.yRaw (TextInputMultiline.size boxStyle))
 
         errors =
             case model.build of
@@ -1026,7 +1026,7 @@ findBar width =
         input id =
             Ui.textInput
                 { id = UiId.Code id
-                , style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.uiPixels inputWidth, masked = False }
+                , style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.ui inputWidth, masked = False }
                 , isValid = True
                 }
     in

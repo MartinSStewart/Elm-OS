@@ -825,14 +825,14 @@ postView width index { id, title, comments } =
             8
     in
     Ui.leftAndRight
-        (Units.uiPixels width)
+        (Units.ui width)
         (Ui.row
             spacing
             [ Ui.colorText
                 Color.dimTextColor
                 (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
             , Ui.text
-                (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
+                (Sprite.ellipsis Small (Sans Regular) (Units.ui (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
             ]
         )
         (Ui.right
@@ -881,7 +881,7 @@ commentsView lazyCache windowSize width postId title comments =
             , \rest ->
                 Ui.customText
                     Small
-                    [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels rest) title
+                    [ { text = Sprite.ellipsis Small (Sans Bold) (Units.ui rest) title
                       , color = Color.textColor
                       , font = Sans Bold
                       , decorations = []
@@ -902,7 +902,7 @@ commentsView lazyCache windowSize width postId title comments =
             CommentsLoadFailed error ->
                 Ui.text (Effect.httpErrorToString error)
           )
-            |> Ui.left (Units.uiPixels width)
+            |> Ui.left (Units.ui width)
             |> scrolling (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
         ]
 
@@ -931,11 +931,11 @@ commentView lazyCache width (Comment comment) =
         text =
             Ui.rowFromLeft
                 { width = width, spacing = toggleSpacing }
-                [ \_ -> Ui.right { width = Units.uiPixels toggleWidth } repliesButton
+                [ \_ -> Ui.right { width = Units.ui toggleWidth } repliesButton
                 , \rest ->
                     Ui.customTextWrapped
                         Small
-                        (Units.uiPixels rest)
+                        (Units.ui rest)
                         (commentHeader comment.author comment.date
                             ++ List.map (spanSegment (greyColor comment.grey)) comment.content
                         )
@@ -948,7 +948,7 @@ commentView lazyCache width (Comment comment) =
             [ text
             , Ui.rowFromLeft
                 { width = width, spacing = 0 }
-                [ \_ -> Ui.left (Units.uiPixels replyIndent) Ui.empty
+                [ \_ -> Ui.left (Units.ui replyIndent) Ui.empty
                 , \rest -> commentsColumn lazyCache rest comment.children
                 ]
             ]
@@ -956,8 +956,8 @@ commentView lazyCache width (Comment comment) =
     else
         Ui.rowFromLeft
             { width = width, spacing = toggleSpacing }
-            [ \_ -> Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-            , \rest -> Ui.customTextWrapped Small (Units.uiPixels rest) (commentHeader comment.author comment.date)
+            [ \_ -> Ui.right { width = Units.ui toggleWidth } repliesButton
+            , \rest -> Ui.customTextWrapped Small (Units.ui rest) (commentHeader comment.author comment.date)
             ]
 
 
@@ -1052,6 +1052,6 @@ scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
 scrolling viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
+        , viewportHeight = Units.ui (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
         }
         content

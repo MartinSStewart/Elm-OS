@@ -395,7 +395,7 @@ urlStyle : Coord UiPixels -> TextInput.Style
 urlStyle windowSize =
     { font = Sans Regular
     , fontSize = Small
-    , width = Units.uiPixels (max 100 (Coord.xRaw windowSize - 2 * windowPadding - goButtonWidth - spacing - 8))
+    , width = Units.ui (max 100 (Coord.xRaw windowSize - 2 * windowPadding - goButtonWidth - spacing - 8))
     , masked = False
     }
 
@@ -423,7 +423,7 @@ view windowSize model =
             Ui.column
                 spacing
                 [ Ui.leftAndRight
-                    (Units.uiPixels width)
+                    (Units.ui width)
                     (Ui.customText Small [ { text = "Web viewer", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
                     (Ui.right { width = Coord.x (Ui.size close) } close)
                 , Ui.row
@@ -464,7 +464,7 @@ view windowSize model =
         (Ui.column
             spacing
             [ header
-            , Ui.left (Units.uiPixels width) content
+            , Ui.left (Units.ui width) content
                 |> Ui.viewport
                     { id =
                         WebViewer
@@ -476,7 +476,7 @@ view windowSize model =
                                     Types.HtmlViewport
                             )
                     , viewportHeight =
-                        Units.uiPixels
+                        Units.ui
                             (Coord.yRaw windowSize - 2 * windowPadding - Coord.yRaw (Ui.size header) - spacing)
                     }
             ]
@@ -503,5 +503,5 @@ wrapped : Int -> Color.Color -> Font -> String -> Element id
 wrapped width color font text =
     Ui.customTextWrapped
         Small
-        (Units.uiPixels width)
+        (Units.ui width)
         [ { text = text, color = color, font = font, decorations = [], link = Nothing } ]

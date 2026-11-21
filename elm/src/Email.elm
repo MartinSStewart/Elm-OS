@@ -612,7 +612,7 @@ spacing =
 -}
 inputStyle : TextInput.Style
 inputStyle =
-    { font = Sans Regular, fontSize = Small, width = Units.uiPixels 320, masked = False }
+    { font = Sans Regular, fontSize = Small, width = Units.ui 320, masked = False }
 
 
 {-| The password box hides what is typed.
@@ -654,7 +654,7 @@ wrapped : Int -> Color.Color -> String -> Element id
 wrapped width color text =
     Ui.customTextWrapped
         Small
-        (Units.uiPixels width)
+        (Units.ui width)
         [ { text = text, color = color, font = Sans Regular, decorations = [], link = Nothing } ]
 
 
@@ -705,7 +705,7 @@ closeRow width title extra =
             Ui.button { id = Email Email.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "Close")
     in
     Ui.leftAndRight
-        (Units.uiPixels width)
+        (Units.ui width)
         (Ui.row spacing [ heading title, Maybe.withDefault Ui.empty extra ])
         (Ui.right { width = Coord.x (Ui.size close) } close)
 
@@ -738,7 +738,7 @@ inboxView windowSize width account model =
            else
             Ui.column 0 (List.map (summaryView width) model.inbox)
           )
-            |> Ui.left (Units.uiPixels width)
+            |> Ui.left (Units.ui width)
             |> scrolling (Email Email.Types.ListViewport) windowSize (Coord.yRaw (Ui.size header))
         ]
 
@@ -782,12 +782,12 @@ summaryView width summary2 =
             width - fromWidth - Quantity.unwrap dateWidth - 3 * spacing
     in
     Ui.leftAndRight
-        (Units.uiPixels width)
+        (Units.ui width)
         (Ui.row
             spacing
-            [ Ui.left (Units.uiPixels fromWidth)
+            [ Ui.left (Units.ui fromWidth)
                 (Ui.customText Small
-                    [ { text = Sprite.ellipsis Small font (Units.uiPixels fromWidth) summary2.from
+                    [ { text = Sprite.ellipsis Small font (Units.ui fromWidth) summary2.from
                       , color = Color.textColor
                       , font = font
                       , decorations = []
@@ -796,7 +796,7 @@ summaryView width summary2 =
                     ]
                 )
             , Ui.customText Small
-                [ { text = Sprite.ellipsis Small font (Units.uiPixels subjectWidth) summary2.subject
+                [ { text = Sprite.ellipsis Small font (Units.ui subjectWidth) summary2.subject
                   , color = Color.textColor
                   , font = font
                   , decorations = []
@@ -837,7 +837,7 @@ messageView windowSize width model page =
                         (Sprite.ellipsis
                             Small
                             (Sans Bold)
-                            (Units.uiPixels (width - Coord.xRaw (Ui.size back) - spacing))
+                            (Units.ui (width - Coord.xRaw (Ui.size back) - spacing))
                             (Maybe.map .subject summary2 |> Maybe.withDefault "")
                         )
                     ]
@@ -862,7 +862,7 @@ messageView windowSize width model page =
             MessageFailed error ->
                 wrapped width Color.errorColor error
           )
-            |> Ui.left (Units.uiPixels width)
+            |> Ui.left (Units.ui width)
             |> scrolling (Email Email.Types.MessageViewport) windowSize (Coord.yRaw (Ui.size header))
         ]
 
@@ -874,6 +874,6 @@ scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
 scrolling viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - spacing)
+        , viewportHeight = Units.ui (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - spacing)
         }
         content

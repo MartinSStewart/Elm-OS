@@ -897,7 +897,7 @@ step event model =
                     scrollUnderMouse (Ui.WheelClicks clicks) model
 
         Scroll pixels ->
-            scrollUnderMouse (Ui.ScrollPixels (Units.uiPixels pixels)) model
+            scrollUnderMouse (Ui.ScrollPixels (Units.ui pixels)) model
 
         ScrollMomentum velocity ->
             if velocity == 0 then
@@ -3003,7 +3003,7 @@ findInput id model =
 -}
 em : Int -> Quantity Int UiPixels
 em n =
-    Units.uiPixels (16 * n)
+    Units.ui (16 * n)
 
 
 {-| The UI's font: Noto Sans Regular.
@@ -3356,7 +3356,7 @@ smallWindow { title, close, width } rows =
             4
             (Ui.rowFromRight
                 { width = Quantity.unwrap widest, spacing = 0 }
-                [ \rest -> Ui.left (Units.uiPixels rest) title
+                [ \rest -> Ui.left (Units.ui rest) title
                 , \_ -> Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close")
                 ]
                 :: rows
@@ -3394,7 +3394,7 @@ overlay model =
                               else
                                 "CPU, "
                              )
-                                ++ Sprite.ellipsis Sprite.Small mono (Units.uiPixels (40 * 10)) name
+                                ++ Sprite.ellipsis Sprite.Small mono (Units.ui (40 * 10)) name
                             )
                         ]
 
@@ -3509,7 +3509,7 @@ change, and its window shouldn't.
 -}
 debugWidth : Quantity Int UiPixels
 debugWidth =
-    Units.uiPixels 600
+    Units.ui 600
 
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
@@ -4026,7 +4026,7 @@ toolbar model display =
             Ui.rowFromLeft
                 { width = width, spacing = 8 }
                 [ \_ -> Ui.row 4 buttons
-                , \room -> Ui.right { width = Units.uiPixels room } (clock (Units.uiPixels room) model)
+                , \room -> Ui.right { width = Units.ui room } (clock (Units.ui room) model)
                 ]
         )
 
@@ -4138,7 +4138,7 @@ editorStyle model =
     in
     { font = sans
     , fontSize = bodySize
-    , width = Units.uiPixels (windowWidth - 16)
+    , width = Units.ui (windowWidth - 16)
     , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
     , syntax = TextInputMultiline.PlainText
     , highlights = []

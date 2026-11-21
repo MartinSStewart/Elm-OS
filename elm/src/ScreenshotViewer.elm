@@ -301,7 +301,7 @@ view scale window screenshots model =
 
         header =
             Ui.leftAndRight
-                (Units.uiPixels (Coord.xRaw area + listWidth + spacing))
+                (Units.ui (Coord.xRaw area + listWidth + spacing))
                 (Ui.row
                     spacing
                     [ headerButton Types.ZoomOutButton "-"
@@ -349,7 +349,7 @@ previewList : UiScale -> Int -> List Ui.Screenshot -> Model -> Element UiId
 previewList scale height screenshots model =
     Ui.viewport
         { id = ScreenshotViewer Types.PreviewList
-        , viewportHeight = Units.uiPixels height
+        , viewportHeight = Units.ui height
         }
         (Ui.column
             spacing
@@ -357,7 +357,7 @@ previewList scale height screenshots model =
                 [ Ui.el
                     { padding = Ui.paddingXY buttonPadding buttonPadding, borderAndFill = Ui.NoBorderOrFill }
                     (Ui.customTextWrapped Sprite.Small
-                        (Units.uiPixels (Coord.xRaw previewSize))
+                        (Units.ui (Coord.xRaw previewSize))
                         [ { text = "No screenshots yet. Press Print Screen, then click what to capture.", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
                     )
                 ]

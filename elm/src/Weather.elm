@@ -41,7 +41,7 @@ type WeatherState
 -}
 em : Int -> Quantity Int UiPixels
 em n =
-    Units.uiPixels (16 * n)
+    Units.ui (16 * n)
 
 
 weatherRows : Bool -> WeatherState -> List (Ui.Element UiId)

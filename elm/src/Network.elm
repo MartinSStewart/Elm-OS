@@ -304,14 +304,14 @@ listHeight =
         rowHeight =
             Coord.y (Ui.size (networkRow sample sampleNetwork))
     in
-    Quantity.multiplyBy 8 rowHeight |> Quantity.plus (Units.uiPixels (4 * 7))
+    Quantity.multiplyBy 8 rowHeight |> Quantity.plus (Units.ui (4 * 7))
 
 
 {-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
 -}
 em : Int -> Quantity Int UiPixels
 em n =
-    Units.uiPixels (16 * n)
+    Units.ui (16 * n)
 
 
 sans : Sprite.Font
@@ -493,7 +493,7 @@ view model =
                                         (Sprite.ellipsis
                                             bodySize
                                             font
-                                            (width |> Quantity.minus (Units.uiPixels 12))
+                                            (width |> Quantity.minus (Units.ui 12))
                                             ("Connect to " ++ Network.Types.ssidToString selected.ssid)
                                         )
                                     )
@@ -585,13 +585,13 @@ wiredRows model =
 
         divider =
             Ui.quads
-                { size = ( width, Units.uiPixels 6 )
+                { size = ( width, Units.ui 6 )
                 , triangles =
                     Sprite.rectangle
                         Color.outlineColor
                         { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
                         (Coord.xy 0 2)
-                        ( width, Units.uiPixels 2 )
+                        ( width, Units.ui 2 )
                 }
     in
     case model.wired of
@@ -645,7 +645,7 @@ networkRow model network =
 
         -- The row fills the panel: its button's padding is 4 UI pixels each side.
         width =
-            panelWidth |> Quantity.minus (Units.uiPixels 8)
+            panelWidth |> Quantity.minus (Units.ui 8)
 
         labelWidth =
             em 5
@@ -654,7 +654,7 @@ networkRow model network =
             signalBars network.signal
 
         nameWidth =
-            width |> Quantity.minus labelWidth |> Quantity.minus (Units.uiPixels (12 + 16))
+            width |> Quantity.minus labelWidth |> Quantity.minus (Units.ui (12 + 16))
     in
     Ui.selectableButton { id = uiId (Network.Types.NetworkButton network.ssid), padding = Ui.paddingXY 4 2 }
         (Maybe.map .ssid model.selected == Just network.ssid)

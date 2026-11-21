@@ -755,7 +755,7 @@ view scale viewport style offset hasFocus isValid current =
             Color.textColor
             style.fontSize
             style.font
-            { topLeft = ( Units.uiPixels clip.left, Quantity.zero ), bottomRight = ( Units.uiPixels clip.right, Units.uiPixels 99999 ) }
+            { topLeft = ( Units.ui clip.left, Quantity.zero ), bottomRight = ( Units.ui clip.right, Units.ui 99999 ) }
             (shownText style current.text)
             (Coord.xy textLeft (y + padding))
         ++ Sprite.toDevice scale caret

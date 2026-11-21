@@ -641,7 +641,7 @@ view focused model =
                 line Big Color.textColor big
 
             else
-                line Small Color.textColor (Sprite.ellipsis Small sans (Units.uiPixels inner) big)
+                line Small Color.textColor (Sprite.ellipsis Small sans (Units.ui inner) big)
 
         displayBox =
             Ui.el
@@ -661,7 +661,7 @@ view focused model =
                 (Ui.column 0 [ line Small Color.dimTextColor (expression model), bigLine ])
 
         title =
-            Ui.leftAndRight (Units.uiPixels width)
+            Ui.leftAndRight (Units.ui width)
                 (Ui.text "Calculator")
                 (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
     in
