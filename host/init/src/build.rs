@@ -136,6 +136,9 @@ fn build(modules: Vec<(String, String)>) -> Result<String, Failure> {
         Command::new(Path::new(TOOLS).join("eco/bin/eco"))
             .current_dir(&wire)
             .env("HOME", Path::new(TOOLS).join("home"))
+            // Four pieces compiled at once, whatever the number of cores: the bytes depend
+            // on it, and the Makefile uses four too (ECO_SPLIT_CODEGEN there).
+            .env("ECO_SPLIT_CODEGEN", "4")
             .args(["make", "src/ElmOs.elm", &format!("--output={}", path_str(&object))]),
     )?;
 

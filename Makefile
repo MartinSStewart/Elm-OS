@@ -74,6 +74,10 @@ ECO_PATCHED_DIR ?= $(ECO_DIR)-patched
 ifeq ($(origin ECO),undefined)
 # elmos-bin/eco runs bin/eco with a package cache of its own (ECO_DIR/home/.eco), not
 # ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
+# The patched eco compiles an object in this many pieces at once (tools/eco-patched/0005). Its
+# default is one per core, but the bytes depend on the count, so it's fixed: builds on computers
+# with other numbers of cores stay the same. host/init/src/build.rs uses the same number.
+export ECO_SPLIT_CODEGEN := 4
 ifeq ($(ECO_PATCHED),1)
 ECO        := $(ECO_PATCHED_DIR)/elmos-bin/eco
 export PATH := $(ECO_PATCHED_DIR)/elmos-bin:$(PATH)
