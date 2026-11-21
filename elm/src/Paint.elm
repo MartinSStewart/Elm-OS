@@ -20,10 +20,10 @@ import Array
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Image exposing (Image)
+import Layout
 import Paint.Types
 import Set exposing (Set)
 import Sprite
-import Layout
 import Ui exposing (Element)
 import UiId exposing (UiId(..))
 import Units exposing (UiPixels)
@@ -229,6 +229,7 @@ paintChunk index r color dabs chunk =
                 (List.range (max top (y - r)) (min (top + chunkSize - 1) (y + r)))
     in
     List.foldl dab (Image.chunkPixels chunk) dabs |> Image.chunkFromPixels
+
 
 
 -- CLICKS

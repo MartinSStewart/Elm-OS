@@ -8,18 +8,18 @@ and replies are hidden at first under a comment with more than 8 of them.
 -}
 
 import Bytes exposing (Bytes)
+import Dict exposing (Dict)
 import Evergreen.V16.Color
 import Evergreen.V16.Coord exposing (Coord)
-import Dict exposing (Dict)
 import Evergreen.V16.Effect
 import Evergreen.V16.HackerNews.Types exposing (Comment(..), Post, PostId(..), Span)
-import Hex
-import Quantity exposing (Quantity)
-import SeqDict exposing (SeqDict)
 import Evergreen.V16.Sprite exposing (Font(..), FontSize(..), Style(..))
 import Evergreen.V16.Ui exposing (Element)
 import Evergreen.V16.UiId exposing (UiId(..))
 import Evergreen.V16.Units exposing (UiPixels)
+import Hex
+import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
 
 
 type alias Model =
@@ -54,10 +54,7 @@ type CommentsState
     | CommentsLoadFailed Evergreen.V16.Effect.HttpError
 
 
+
 -- UPDATE
-
-
 -- PARSING
-
-
 -- VIEW

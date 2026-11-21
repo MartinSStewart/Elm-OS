@@ -4,8 +4,8 @@ module Evergreen.V16.Coord exposing (..)
 Units.DevicePixels), like town-collab's Coord.
 -}
 
-import Quantity exposing (Quantity(..))
 import Evergreen.V16.Units exposing (DevicePixels, LocalUiPixels, UiPixels, UiScale)
+import Quantity exposing (Quantity(..))
 
 
 type alias Coord units =

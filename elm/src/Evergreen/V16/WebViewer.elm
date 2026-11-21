@@ -42,10 +42,7 @@ type Page
     | Failed { url : String, error : String }
 
 
+
 -- UPDATE
-
-
 -- THE TEXT OF A PAGE
-
-
 -- VIEW

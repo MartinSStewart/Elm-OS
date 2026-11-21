@@ -2,8 +2,6 @@ module Wire exposing
     ( Decoder
     , Value
     , andMap
-    , fromBytes
-    , toBytes
     , decodeArray
     , decodeBool
     , decodeBytes
@@ -58,8 +56,10 @@ module Wire exposing
     , encodeTuple3
     , encodeUnit
     , fail
+    , fromBytes
     , lazy
     , succeed
+    , toBytes
     )
 
 {-| What the encoders and decoders that tools/wire writes are made of. tools/wire

@@ -38,10 +38,7 @@ type alias Model =
     }
 
 
+
 -- LAYOUT
-
-
 -- UPDATE
-
-
 -- VIEW

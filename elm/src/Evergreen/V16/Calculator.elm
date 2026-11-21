@@ -15,11 +15,12 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 import Evergreen.V16.Calculator.Types exposing (Key(..), Operator(..))
 import Evergreen.V16.Color
 import Evergreen.V16.Coord exposing (Coord)
-import Quantity
 import Evergreen.V16.Sprite exposing (Font(..), FontSize(..), Style(..))
 import Evergreen.V16.Ui exposing (Element)
 import Evergreen.V16.UiId exposing (UiId(..))
 import Evergreen.V16.Units exposing (UiPixels)
+import Quantity
+
 
 
 -- MODEL
@@ -46,13 +47,8 @@ type Entry
     | Error
 
 
+
 -- UPDATE
-
-
 -- SHOWING NUMBERS
-
-
 -- KEYBOARD
-
-
 -- VIEW

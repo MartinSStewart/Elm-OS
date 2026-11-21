@@ -9,5 +9,6 @@ type Color
     = Color Int
 
 
+
 -- The palette. Everything outside this module picks its colours from here, so
 -- that the whole OS changes theme in one place. It is a dark theme.

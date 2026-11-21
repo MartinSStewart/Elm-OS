@@ -31,6 +31,7 @@ import Bytes.Encode as BE
 import Char
 
 
+
 -- READING A RESPONSE
 
 
@@ -356,10 +357,28 @@ decodeWordsHelp words afterEncoded acc =
         word :: rest ->
             case encodedWord word of
                 Just decoded ->
-                    decodeWordsHelp rest True (decoded :: (if afterEncoded || List.isEmpty acc then acc else " " :: acc))
+                    decodeWordsHelp rest
+                        True
+                        (decoded
+                            :: (if afterEncoded || List.isEmpty acc then
+                                    acc
+
+                                else
+                                    " " :: acc
+                               )
+                        )
 
                 Nothing ->
-                    decodeWordsHelp rest False (word :: (if List.isEmpty acc then acc else " " :: acc))
+                    decodeWordsHelp rest
+                        False
+                        (word
+                            :: (if List.isEmpty acc then
+                                    acc
+
+                                else
+                                    " " :: acc
+                               )
+                        )
 
 
 {-| `=?charset?B?base64?=` or `=?charset?Q?text?=`, as a byte string. Only UTF-8 and
@@ -789,7 +808,15 @@ quotedPrintable isHeader text =
                             go (a :: b :: rest) ('=' :: acc)
 
                 '_' :: rest ->
-                    go rest ((if isHeader then ' ' else '_') :: acc)
+                    go rest
+                        ((if isHeader then
+                            ' '
+
+                          else
+                            '_'
+                         )
+                            :: acc
+                        )
 
                 c :: rest ->
                     go rest (c :: acc)

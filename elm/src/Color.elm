@@ -14,10 +14,10 @@ module Color exposing
     , fillColor
     , fillColor2
     , fillColor3
-    , focusedInputColor
     , findMatchColor
     , findMatchTextColor
     , findOtherMatchColor
+    , focusedInputColor
     , focusedUiColor
     , highlightColor
     , linkColor
@@ -238,6 +238,7 @@ paintPalette =
     , rgb255 240 130 180
     , rgb255 120 75 40
     ]
+
 
 
 -- Elm code in the Code app (ElmSyntax.elm), on fillColor3 or focusedInputColor. Names

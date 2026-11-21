@@ -22,8 +22,8 @@ decoder give the same bytes as the host's, so the two sides can't drift apart.
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
-import Evergreen.V16.Color exposing (Color)
 import Duration exposing (Duration)
+import Evergreen.V16.Color exposing (Color)
 import Evergreen.V16.Sprite exposing (Triangle)
 import Evergreen.V16.Units exposing (DevicePixels, UiScale)
 import Evergreen.V16.Wifi exposing (Ssid)

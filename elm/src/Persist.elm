@@ -795,7 +795,7 @@ unframeStep ( left, payloads ) =
                 )
 
 
-{-| `LENGTH CRC32 `: how many bytes it took, the length and the CRC-32's hex digits.
+{-| `LENGTH CRC32`: how many bytes it took, the length and the CRC-32's hex digits.
 Nothing if it isn't one, or is cut short (there are only `left` bytes).
 -}
 headerStep : Int -> ( Int, List Char ) -> BD.Decoder (BD.Step ( Int, List Char ) (Maybe ( Int, ( Int, String ) )))

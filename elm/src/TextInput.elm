@@ -567,7 +567,7 @@ view scale viewport style offset hasFocus isValid current =
 
                     else
                         Sprite.rectangle
-                            (Color.selectionColor)
+                            Color.selectionColor
                             viewport
                             (Coord.xy (max clip.left selectionStart) (y + padding))
                             (Coord.xy (min clip.right selectionEnd - max clip.left selectionStart) height)

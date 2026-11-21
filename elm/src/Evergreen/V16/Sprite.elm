@@ -26,15 +26,15 @@ line's baseline is on a whole pixel, which the light hinting fits the glyphs to.
 -}
 
 import Array exposing (Array)
-import Evergreen.V16.Bounds exposing (Bounds)
 import Bytes exposing (Endianness(..))
 import Bytes.Encode as BE
+import Dict exposing (Dict)
+import Evergreen.V16.Bounds exposing (Bounds)
 import Evergreen.V16.Color exposing (Color)
 import Evergreen.V16.Coord exposing (Coord)
-import Dict exposing (Dict)
-import Quantity exposing (Quantity(..))
 import Evergreen.V16.Sprites
 import Evergreen.V16.Units exposing (DevicePixels, UiPixels, UiScale)
+import Quantity exposing (Quantity(..))
 
 
 {-| A corner of a triangle: where it is (in the triangle's units) and where it samples the atlas (atlas pixels).
@@ -78,6 +78,7 @@ still blends with the rest of it.
 type Sampling
     = Nearest
     | Linear
+
 
 
 -- TEXT

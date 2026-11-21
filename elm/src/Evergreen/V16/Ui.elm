@@ -19,18 +19,18 @@ for now: underlined text and sprites from town-collab's texture.
 
 -}
 
+import Duration exposing (Duration, Seconds)
 import Evergreen.V16.Bounds exposing (Bounds)
 import Evergreen.V16.Button
 import Evergreen.V16.Color exposing (Color)
 import Evergreen.V16.Coord exposing (Coord)
-import Duration exposing (Duration, Seconds)
-import Quantity exposing (Quantity, Rate)
-import SeqDict exposing (SeqDict)
 import Evergreen.V16.Sprite exposing (Triangle)
 import Evergreen.V16.TextInput
 import Evergreen.V16.TextInputMultiline
-import Time
 import Evergreen.V16.Units exposing (DevicePixels, UiPixels, UiScale)
+import Quantity exposing (Quantity, Rate)
+import SeqDict exposing (SeqDict)
+import Time
 
 
 type alias RowColumn =
@@ -148,18 +148,11 @@ type alias Padding =
     { top : Int, bottom : Int, left : Int, right : Int }
 
 
+
 -- TEXT
-
-
 -- TEXT INPUTS
-
-
 -- BUTTONS
-
-
 -- LAYOUT
-
-
 -- LAZY
 
 
@@ -176,6 +169,7 @@ noLazyCache =
     LazyCache SeqDict.empty
 
 
+
 -- WHERE ELEMENTS ARE MADE
 
 
@@ -185,10 +179,7 @@ type alias Source =
     { module_ : String, line : Int, function : String }
 
 
+
 -- HOVER AND FOCUS
-
-
 -- FIND (Ctrl+F)
-
-
 -- DRAWING

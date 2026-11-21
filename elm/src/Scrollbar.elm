@@ -113,7 +113,8 @@ isOver geometry point =
         ( x, y ) =
             Coord.toTuple point
     in
-    scrollable geometry > 0
+    scrollable geometry
+        > 0
         && (x >= 0)
         && (x < width)
         && (y >= 0)

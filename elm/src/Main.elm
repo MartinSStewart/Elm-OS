@@ -21,6 +21,8 @@ import Bytes exposing (Bytes)
 import Calculator
 import Calculator.Types
 import Clock
+import Code
+import Code.Types
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Cursor exposing (Cursor)
@@ -44,8 +46,6 @@ import Network.Types
 import News
 import News.Types exposing (NewsState(..))
 import Nonempty
-import Code
-import Code.Types
 import Paint
 import Paint.Types
 import Persist
@@ -1384,9 +1384,6 @@ appButton id =
         CloseEditorButton ->
             Nothing
 
-
-
-
         News _ ->
             Nothing
 
@@ -2576,9 +2573,6 @@ dragSelect focus mouse position model =
 
         CloseEditorButton ->
             model
-
-
-
 
         DebugButton ->
             model
@@ -4431,6 +4425,7 @@ editorStyle model =
     , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
     , syntax = TextInputMultiline.PlainText
     }
+
 
 
 -- CODE

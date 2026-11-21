@@ -17,6 +17,7 @@ import Bytes.Encode as BE
 import Char
 
 
+
 -- READING A RESPONSE
 
 
@@ -31,16 +32,9 @@ type alias Fetched =
     }
 
 
+
 -- WRITING A COMMAND
-
-
 -- BYTES
-
-
 -- HEADERS
-
-
 -- MESSAGE TEXT
-
-
 -- TRANSFER ENCODINGS

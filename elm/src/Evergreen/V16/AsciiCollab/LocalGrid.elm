@@ -5,9 +5,9 @@ and the changes made here that the server hasn't sent back yet, applied on top. 
 the server sends a change back it is dropped from the local ones, so each counts once.
 -}
 
+import Dict exposing (Dict)
 import Evergreen.V16.AsciiCollab.Types exposing (Bounds, CellUnit, Change(..), ClientChange(..), Grid(..), LocalChange(..), Nonempty(..), ServerChange(..), UserId)
 import Evergreen.V16.Coord
-import Dict exposing (Dict)
 import SeqSet exposing (SeqSet)
 
 

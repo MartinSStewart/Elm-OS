@@ -3,22 +3,22 @@ module TextInputMultiline exposing
     , Model
     , Style
     , Syntax(..)
+    , animate
     , init
     , keyMsg
     , lineAndColumn
+    , momentum
     , mouseDown
     , mouseDownMove
     , mouseUp
-    , animate
-    , momentum
     , overScrollbar
     , paste
-    , size
-    , withText
-    , view
     , scrollPixels
+    , size
     , stopGlide
+    , view
     , wheel
+    , withText
     )
 
 {-| A text box with many lines, for the text editor: TextInput's model (text, cursor,

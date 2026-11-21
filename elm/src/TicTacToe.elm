@@ -18,9 +18,9 @@ The board is a list of nine squares, top row first, each empty or holding a mark
 
 import Color
 import Coord exposing (Coord)
+import Layout
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TicTacToe.Types
-import Layout
 import Ui exposing (Element)
 import UiId exposing (UiId(..))
 import Units exposing (UiPixels)

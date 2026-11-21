@@ -15,8 +15,8 @@ The package types ascii-collab uses are here too, written out: mgold/elm-nonempt
 -}
 
 import Bytes exposing (Bytes)
-import Evergreen.V16.Coord exposing (Coord)
 import Dict exposing (Dict)
+import Evergreen.V16.Coord exposing (Coord)
 import SeqSet exposing (SeqSet)
 
 

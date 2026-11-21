@@ -29,23 +29,23 @@ back on the next connection, so this computer stays the same user.
 -}
 
 import Array
-import Evergreen.V16.AsciiCollab.LocalGrid as LocalGrid exposing (LocalModel)
-import Evergreen.V16.AsciiCollab.Types exposing (Ascii, AsciiUnit, Bounds(..), CellUnit, Change(..), ClientChange(..), Grid(..), LocalChange(..), Nonempty(..), UserId(..))
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
+import Dict
+import Evergreen.V16.AsciiCollab.LocalGrid as LocalGrid exposing (LocalModel)
+import Evergreen.V16.AsciiCollab.Types exposing (Ascii, AsciiUnit, Bounds(..), CellUnit, Change(..), ClientChange(..), Grid(..), LocalChange(..), Nonempty(..), UserId(..))
 import Evergreen.V16.Color exposing (Color)
 import Evergreen.V16.Coord exposing (Coord)
-import Dict
 import Evergreen.V16.Effect
-import Hex
-import Quantity
-import SeqSet
 import Evergreen.V16.Sprite
-import Time
 import Evergreen.V16.Ui
 import Evergreen.V16.UiId exposing (UiId(..))
 import Evergreen.V16.Units exposing (UiPixels)
+import Hex
+import Quantity
+import SeqSet
+import Time
 import Wire
 
 
@@ -89,16 +89,9 @@ type State
     | Loaded LocalModel
 
 
+
 -- OPENING AND CLOSING
-
-
 -- SENDING AND RECEIVING
-
-
 -- THE VIEW'S PLACE
-
-
 -- INPUT
-
-
 -- VIEW

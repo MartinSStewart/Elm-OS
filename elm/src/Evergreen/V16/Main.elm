@@ -13,45 +13,46 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 
 -}
 
+import Bytes exposing (Bytes)
+import Date
+import Duration exposing (Duration)
 import Evergreen.V16.AsciiCollab
 import Evergreen.V16.AsciiCollab.Types
 import Evergreen.V16.BootInfo
 import Evergreen.V16.Bounds exposing (Bounds)
-import Bytes exposing (Bytes)
 import Evergreen.V16.Calculator
 import Evergreen.V16.Calculator.Types
 import Evergreen.V16.Color exposing (Color)
 import Evergreen.V16.Coord exposing (Coord)
-import Date
 import Evergreen.V16.Display exposing (Display)
-import Duration exposing (Duration)
 import Evergreen.V16.Effect exposing (HttpError(..))
 import Evergreen.V16.Email
 import Evergreen.V16.Email.Types
 import Evergreen.V16.HackerNews
 import Evergreen.V16.HackerNews.Types
 import Evergreen.V16.Ipv4
-import Json.Decode as D
 import Evergreen.V16.News.Types exposing (NewsState(..))
-import Quantity exposing (Quantity)
 import Evergreen.V16.ScreenshotViewer
 import Evergreen.V16.ScreenshotViewer.Types
-import SeqDict exposing (SeqDict)
 import Evergreen.V16.Sprite exposing (Triangle)
 import Evergreen.V16.TextInput
 import Evergreen.V16.TextInputMultiline
 import Evergreen.V16.TicTacToe
 import Evergreen.V16.TicTacToe.Types
-import Time
 import Evergreen.V16.Ui exposing (ElementState(..))
 import Evergreen.V16.UiId exposing (UiId(..))
 import Evergreen.V16.Units exposing (DevicePixels, UiPixels, UiScale)
+import Evergreen.V16.Weather
 import Evergreen.V16.WebViewer
 import Evergreen.V16.WebViewer.Types
-import Evergreen.V16.Weather
 import Evergreen.V16.Wifi exposing (Ssid)
 import Evergreen.V16.Wired
 import Evergreen.V16.Wpa2Password exposing (Wpa2Password)
+import Json.Decode as D
+import Quantity exposing (Quantity)
+import SeqDict exposing (SeqDict)
+import Time
+
 
 
 -- INPUT
@@ -77,6 +78,7 @@ type alias SystemStats =
     , elmMs : Maybe Float
     , drawMs : Maybe Float
     }
+
 
 
 -- MODEL
@@ -191,16 +193,9 @@ type WeatherState
     | WeatherFailed HttpError
 
 
+
 -- VIEW
-
-
 -- WINDOW LAYOUT
-
-
 -- NETWORK AND WEATHER
-
-
 -- TOOLBAR AND ABOUT PAGE
-
-
 -- TEXT EDITOR

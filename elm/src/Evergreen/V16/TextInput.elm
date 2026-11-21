@@ -11,9 +11,9 @@ shows dots.
 import Evergreen.V16.Bounds exposing (Bounds)
 import Evergreen.V16.Color
 import Evergreen.V16.Coord exposing (Coord)
-import Quantity exposing (Quantity)
 import Evergreen.V16.Sprite exposing (Triangle)
 import Evergreen.V16.Units exposing (DevicePixels, UiPixels, UiScale)
+import Quantity exposing (Quantity)
 
 
 type alias Model =

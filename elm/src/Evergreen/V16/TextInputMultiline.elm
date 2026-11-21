@@ -16,10 +16,10 @@ TextInput's. Lines don't wrap: the box scrolls sideways to keep the cursor in vi
 import Evergreen.V16.Bounds exposing (Bounds)
 import Evergreen.V16.Color
 import Evergreen.V16.Coord exposing (Coord)
-import Quantity exposing (Quantity)
 import Evergreen.V16.Sprite exposing (Triangle)
 import Evergreen.V16.TextInput
 import Evergreen.V16.Units exposing (DevicePixels, UiPixels, UiScale)
+import Quantity exposing (Quantity)
 
 
 {-| The text and its history, the first line in view once the box stops scrolling
@@ -59,16 +59,9 @@ type alias Style =
     { font : Evergreen.V16.Sprite.Font, fontSize : Evergreen.V16.Sprite.FontSize, width : Quantity Int UiPixels, lines : Int }
 
 
+
 -- LINES
-
-
 -- WORDS
-
-
 -- EDITING
-
-
 -- MOUSE
-
-
 -- VIEW

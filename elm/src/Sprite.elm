@@ -8,21 +8,21 @@ module Sprite exposing
     , Tile
     , Triangle
     , asciiChar
-    , atlasRectangle
     , asciiIndex
+    , atlasRectangle
     , caretPositions
+    , chunkOf
     , circle
     , clipTo
     , customText
     , customTextSize
-    , findMatches
-    , foundText
-    , chunkOf
-    , fromImageTexture
-    , image
     , dotGrid
     , ellipsis
     , encoder
+    , findMatches
+    , foundText
+    , fromImageTexture
+    , image
     , inAtlas
     , lineHeight
     , linkAt
@@ -542,7 +542,7 @@ dotGridTile =
     { left = 0, top = 0, width = width, height = height }
 
 
-{-| A rectangle (position, size) covered in the dot grid tile (sprites/dot-grid.*.webp),
+{-| A rectangle (position, size) covered in the dot grid tile (sprites/dot-grid.\*.webp),
 repeated from its top left corner, cut to `clip`: two triangles, however big the
 rectangle. Made in UI pixels, so on a 2x screen it shows the 2x picture.
 -}
@@ -1142,7 +1142,11 @@ between them and the characters next to them.
 foundText :
     UiScale
     -> { query : String, selected : Maybe Int, background : Color, color : Color, otherBackground : Color }
-    -> FontSize -> Bounds UiPixels -> List Segment -> Coord UiPixels -> List (Triangle DevicePixels)
+    -> FontSize
+    -> Bounds UiPixels
+    -> List Segment
+    -> Coord UiPixels
+    -> List (Triangle DevicePixels)
 foundText uiScale found fontSize clip segments position =
     case findMatches found.query segments of
         [] ->
@@ -1199,7 +1203,11 @@ foundText uiScale found fontSize clip segments position =
                                              else
                                                 found.otherBackground
                                             )
-                                            deviceClip ( left, (y + lineIndex * height) * s ) ( right - left, height * s ) ( 2, 2 ) ( 4, 4 )
+                                            deviceClip
+                                            ( left, (y + lineIndex * height) * s )
+                                            ( right - left, height * s )
+                                            ( 2, 2 )
+                                            ( 4, 4 )
                                             |> fromSprite Sprites.Solid
 
                                     else
@@ -1807,7 +1815,7 @@ type alias Scan =
     }
 
 
-{-| One line (no '\n' in it) broken at the spaces before words that would go past
+{-| One line (no '\\n' in it) broken at the spaces before words that would go past
 `limit64`. Words are found with String.indexes and each is measured once.
 -}
 wrapLine : FontSize -> Int -> List Segment -> WrapState
@@ -2077,7 +2085,7 @@ width64 fontSize font string =
 Arrays indexed by character code: an Array.get is a good deal quicker than a Dict.get
 with a Char, let alone a pair of them. `kerning` has, for each character, how much
 closer or further the characters after it go. `asciiPairs` has, for two ASCII characters
-(at first * 128 + second), the kerning between them plus the second's advance: one
+(at first \* 128 + second), the kerning between them plus the second's advance: one
 look-up for most characters.
 -}
 type alias Metrics =

@@ -13,7 +13,7 @@ and says when the first frame was on screen; working out what they mean is here.
     from. That leaves out the data partition after it, which changes as Elm OS saves
     things (Persist.elm). `make usb` writes that hash to build/elmos-usb.img.sha256
     (and `make docker` prints it).
-  - Battery: every battery in /sys/class/power_supply that powers the computer (not
+  - Battery: every battery in /sys/class/power\_supply that powers the computer (not
     a mouse's), added up.
   - Clock: the CPU cores' clock speeds (cpufreq), and how the kernel picks them: the
     policy (powersave or performance) and, on Intel CPUs that choose their own clocks
@@ -66,12 +66,9 @@ type alias BootTimes =
     { initMs : Float, elmMs : Float, frameMs : Float }
 
 
+
 -- GPT (scripts/make-usb-image.sh: 512-byte sectors, partition 1 an EFI system
 -- partition named "Elm OS", then the "Elm OS data" partition, which changes as
 -- Elm OS saves things, so the hash is of the image up to the end of partition 1)
-
-
 -- BATTERY
-
-
 -- WHAT THE OVERLAY SHOWS
