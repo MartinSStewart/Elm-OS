@@ -1,4 +1,4 @@
-module App exposing (Kind(..), Model, Msg, config, init, sample)
+module WireApp exposing (Kind(..), Model, Msg, config, init, sample)
 
 {-| A program whose Model and Msg have every kind of type tools/wire handles.
 -}

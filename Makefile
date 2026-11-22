@@ -346,7 +346,14 @@ endef
 # Only what's needed is copied: the Model's types and what the migration uses. So run
 # `make migration` again after writing the migration: while the newest version isn't
 # committed, it's copied again from the code as it is now, with what the migration uses
-# now, and the migration is left as it is.
+# now, and the migration is left as it is (but for the names of shared modules, below).
+#
+# Only what changed is copied: a module whose copy would be the same as an earlier
+# version's is shared, so V<n> imports Evergreen.V<j>.Ui, and the migration passes its
+# types on as they are. A migration that names a shared module as Evergreen.V<n>.Ui is
+# changed to name Evergreen.V<j>.Ui; a function the earlier copy doesn't have goes into a
+# copy of the module with only that function (a supplement). So an old version can't be
+# deleted on its own while a newer one may import it; `make migration-reset` deletes all.
 migration: $(BUILD)/wire-tool
 	@latest=$$(tools/latest-version.sh); \
 	if [ -n "$$latest" ] && [ -n "$$(git status --porcelain -- elm/src/Evergreen/V$$latest)" ]; then \
@@ -387,6 +394,9 @@ $(BUILD)/wire-tool.o: tools/wire/elm.json $(wildcard tools/wire/src/*.elm) $(BUI
 	@mkdir -p $(BUILD)
 	cd tools/wire && $(ECO) make src/Main.elm --output=$(abspath $@)
 
+WIRE_FREEZE_TEST = $(BUILD)/wire-tool --src $(BUILD)/wire-freeze-test/src --out $(BUILD)/wire-freeze-test/out \
+  --runtime elm/src/Wire.elm --entry ElmOs --config Nest.config --model Nest.Model --msg Nest.Msg --freeze yes
+
 # tools/wire's own test: a program whose Model has every kind of type it handles
 # (tools/wire/test), whose generated code must compile and read back what it writes.
 test-wire: $(BUILD)/wire-tool | check-deps
@@ -395,15 +405,32 @@ test-wire: $(BUILD)/wire-tool | check-deps
 	cp -r tools/wire/test/src/. $(BUILD)/wire-test/in/
 	cp -r elm/elm.json tools/wire/test/tests $(BUILD)/wire-test/
 	$(BUILD)/wire-tool --src $(BUILD)/wire-test/in --out $(BUILD)/wire-test/src --runtime elm/src/Wire.elm \
-	  --entry ElmOs --config App.config --model App.Model --msg App.Msg
+	  --entry ElmOs --config WireApp.config --model WireApp.Model --msg WireApp.Msg
 	cd $(BUILD)/wire-test && $(ECO) make src/ElmOs.elm --output=/dev/null && \
 	  npx --yes elm-test@0.19.1-revision16 --compiler $(ECO_BIN)
 	# Freezing a parent module and its child modules (tools/wire/test/freeze) must give
 	# frozen modules that import only what they use, or they can import each other.
 	rm -rf $(BUILD)/wire-freeze-test && cp -r tools/wire/test/freeze $(BUILD)/wire-freeze-test
-	$(BUILD)/wire-tool --src $(BUILD)/wire-freeze-test/src --out $(BUILD)/wire-freeze-test/out --runtime elm/src/Wire.elm \
-	  --entry ElmOs --config Nest.config --model Nest.Model --msg Nest.Msg --freeze yes
+	$(WIRE_FREEZE_TEST)
 	cd $(BUILD)/wire-freeze-test && $(ECO) make src/Evergreen/V1/Nest.elm --output=/dev/null
+	# Version 2 copies only what changed (tools/wire/test/freeze/v2): Nest.Inner and Nest,
+	# whose Model has it. Nest.Leaf is version 1's, which the migration passes on as it is.
+	cp tools/wire/test/freeze/v2/Nest/Inner.elm $(BUILD)/wire-freeze-test/src/Nest/
+	$(WIRE_FREEZE_TEST)
+	test -e $(BUILD)/wire-freeze-test/src/Evergreen/V2/Nest/Inner.elm
+	test ! -e $(BUILD)/wire-freeze-test/src/Evergreen/V2/Nest/Leaf.elm
+	grep -q "leaf = old.leaf" $(BUILD)/wire-freeze-test/src/Evergreen/Migrate/V2.elm
+	cd $(BUILD)/wire-freeze-test && $(ECO) make src/Evergreen/Migrate/V2.elm --output=/dev/null
+	# A migration that calls a function of Nest.Leaf that version 1's copy doesn't have
+	# gets a supplement (version 2's Nest.Leaf, with only that function), and its names
+	# for what's shared become version 1's.
+	cp tools/wire/test/freeze/v2/Nest/Leaf.elm $(BUILD)/wire-freeze-test/src/Nest/
+	cp tools/wire/test/freeze/v2/Evergreen/Migrate/V2.elm $(BUILD)/wire-freeze-test/src/Evergreen/Migrate/
+	rm -r $(BUILD)/wire-freeze-test/src/Evergreen/V2
+	$(WIRE_FREEZE_TEST) --version 2
+	! grep -q "^type" $(BUILD)/wire-freeze-test/src/Evergreen/V2/Nest/Leaf.elm
+	grep -q "^leaf : Evergreen.V1.Nest.Leaf.Leaf" $(BUILD)/wire-freeze-test/src/Evergreen/Migrate/V2.elm
+	cd $(BUILD)/wire-freeze-test && $(ECO) make src/Evergreen/Migrate/V2.elm --output=/dev/null
 	@echo "passed: test-wire" $(SAY)
 
 $(BUILD)/wire-tool: $(BUILD)/wire-tool.o

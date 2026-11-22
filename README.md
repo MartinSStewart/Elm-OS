@@ -286,6 +286,18 @@ what those use in turn (for a version with no call into the code, about 1,400 li
 `Main.init`, about 1,500). Once committed it never changes, so the migration keeps compiling
 whatever happens to the code later.
 
+Only what changed is copied. A module whose copy would be the same as an earlier version's (the
+same declarations, naming the same modules) is shared: version n+1 imports
+`Evergreen.V<j>.<Module>` instead, so those types are the very same types in both versions and the
+migration passes them on as they are. A changed type is copied with every module that uses it, up
+to `Main`, which every version has. Version 21 of dev's Model, for example, is 12 modules and about
+830 lines instead of 47 and 2,270, and its migration about 690 lines instead of 1,850. The
+migration can still name `Evergreen.V<n+1>.<Module>` for a shared module: `make migration` changes
+that to the earlier version that has it, and a function that copy doesn't have goes into a
+*supplement*, a copy of the module with only that function, which imports the rest (types too)
+from the earlier copy. Since newer versions import older ones, an old version can't be deleted on
+its own; `make migration-reset` deletes them all.
+
 `make migration-reset` starts the versions again: it deletes `elm/src/Evergreen` and freezes the
 program as the version after the newest there was, with no migration to it. A computer whose Model
 is older starts afresh. The numbers go on rather than starting from 1, because a computer only
@@ -293,7 +305,8 @@ switches to a build whose Model version isn't older than its own (`host/init/src
 
 A build reads a snapshot of any earlier version by running the migrations one after another.
 Old versions cost the Elm program a little (version 1's codecs are about 50 KB). `make test-wire`
-checks a migration from version 1 to 2 of its own test program (`tools/wire/test/src/Evergreen`).
+checks a migration from version 1 to 2 of its own test program (`tools/wire/test/src/Evergreen`),
+and that freezing shares what didn't change (`tools/wire/test/freeze`).
 Version 2 of Elm OS's own Model added `upgradingTo` (below); a Model saved by a version 1 build
 was checked to come back in a version 2 one, migrated.
 

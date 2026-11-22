@@ -1,6 +1,6 @@
 module Evergreen.Migrate.V2 exposing (model)
 
-{-| How a Model saved by version 1 becomes one of version 2 (changed: App.Kind, App.Model).
+{-| How a Model saved by version 1 becomes one of version 2 (changed: WireApp.Kind, WireApp.Model).
 
 tools/wire (`make migration`) wrote this. Where it couldn't tell what to do, it
 wrote `Unimplemented`, which doesn't compile: replace each one. The rest is
@@ -9,20 +9,20 @@ yours to change too; it's only ever written once.
 -}
 
 import Dict
-import Evergreen.V1.App
 import Evergreen.V1.Sub.Things
-import Evergreen.V2.App
+import Evergreen.V1.WireApp
 import Evergreen.V2.Sub.Things
+import Evergreen.V2.WireApp
 import Quantity
 import SeqDict
 
 
-model : Evergreen.V1.App.Model -> Evergreen.V2.App.Model
+model : Evergreen.V1.WireApp.Model -> Evergreen.V2.WireApp.Model
 model old =
     migrate_App_Model old
 
 
-migrate_App_Model : Evergreen.V1.App.Model -> Evergreen.V2.App.Model
+migrate_App_Model : Evergreen.V1.WireApp.Model -> Evergreen.V2.WireApp.Model
 migrate_App_Model old =
     { int = old.int
     , float = old.float
@@ -56,17 +56,17 @@ migrate_App_Model old =
     }
 
 
-migrate_App_Kind : Evergreen.V1.App.Kind -> Evergreen.V2.App.Kind
+migrate_App_Kind : Evergreen.V1.WireApp.Kind -> Evergreen.V2.WireApp.Kind
 migrate_App_Kind old =
     case old of
-        Evergreen.V1.App.Alpha ->
-            Evergreen.V2.App.Alpha
+        Evergreen.V1.WireApp.Alpha ->
+            Evergreen.V2.WireApp.Alpha
 
-        Evergreen.V1.App.Beta w3_x0 ->
-            Evergreen.V2.App.Beta w3_x0
+        Evergreen.V1.WireApp.Beta w3_x0 ->
+            Evergreen.V2.WireApp.Beta w3_x0
 
-        Evergreen.V1.App.Gamma text ->
-            Evergreen.V2.App.Beta (String.length text)
+        Evergreen.V1.WireApp.Gamma text ->
+            Evergreen.V2.WireApp.Beta (String.length text)
 
 
 migrate_Sub_Things_Box : (old_a -> new_a) -> Evergreen.V1.Sub.Things.Box old_a -> Evergreen.V2.Sub.Things.Box new_a

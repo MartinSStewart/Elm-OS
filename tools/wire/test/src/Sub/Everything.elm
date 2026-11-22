@@ -1,6 +1,6 @@
 module Sub.Everything exposing (..)
 
-{-| Imported with `exposing (..)` ahead of Sub.Things, so that the Tree in App only
+{-| Imported with `exposing (..)` ahead of Sub.Things, so that the Tree in WireApp only
 resolves to Sub.Things.Tree if tools/wire checks what this module really exposes.
 -}
 

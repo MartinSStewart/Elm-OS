@@ -1,6 +1,5 @@
 module WireTest exposing (suite)
 
-import App
 import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Bytes.Encode as BE
@@ -10,6 +9,7 @@ import SeqDict
 import SeqSet
 import Test exposing (Test, describe, test)
 import Wire
+import WireApp
 
 
 bytesToList : Bytes -> List Int
@@ -62,10 +62,10 @@ roundTrip encoder decoder value =
 suite : Test
 suite =
     describe "tools/wire"
-        [ test "the Model reads back" (\_ -> roundTrip ElmOs.codecs.encodeModel ElmOs.codecs.modelDecoder App.sample)
+        [ test "the Model reads back" (\_ -> roundTrip ElmOs.codecs.encodeModel ElmOs.codecs.modelDecoder WireApp.sample)
         , test "SeqSet and SeqDict read back in insertion order"
             (\_ ->
-                case Wire.fromBytes ElmOs.codecs.modelDecoder (Wire.toBytes (ElmOs.codecs.encodeModel App.sample)) of
+                case Wire.fromBytes ElmOs.codecs.modelDecoder (Wire.toBytes (ElmOs.codecs.encodeModel WireApp.sample)) of
                     Just m ->
                         ( SeqSet.toList m.seqSet, SeqDict.keys m.seqDict, SeqDict.keys m.kindSeqDict )
                             |> Expect.equal ( [ 3, 1, 2 ], [ ( 2, "b" ), ( 1, "a" ) ], [ "b", "a" ] )
@@ -74,7 +74,7 @@ suite =
                         Expect.fail "couldn't decode it"
             )
         , test "a record's fields go in alphabetical order (array [\"a\", \"b\"], then bool True)"
-            (\_ -> encode (ElmOs.codecs.encodeModel App.sample) |> List.take 6 |> Expect.equal [ 4, 2, 97, 2, 98, 1 ])
+            (\_ -> encode (ElmOs.codecs.encodeModel WireApp.sample) |> List.take 6 |> Expect.equal [ 4, 2, 97, 2, 98, 1 ])
         , test "Ints are Lamdera's zigzag varints (from lamdera/compiler's Wire3 runtime)"
             (\_ ->
                 [ 0, 1, -1, 107, 108, -108, 4715, 4716, 32767, 32768, 8388607, 8388608, 2147483647, 2147483648, -2147483649 ]
@@ -134,7 +134,7 @@ suite =
             )
         , test "the Model's codecs write snapshot Ints (the Posix is past 32 bits)"
             (\_ ->
-                encode (ElmOs.codecs.encodeModel App.sample)
+                encode (ElmOs.codecs.encodeModel WireApp.sample)
                     |> containsRun [ 255, 0, 0, 1, 139, 207, 229, 104, 0 ]
                     |> Expect.equal True
             )

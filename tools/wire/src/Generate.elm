@@ -606,7 +606,7 @@ generateWith options modules modelKey msgKey configKey =
                         rootShape defs used identity modelKey
 
                     frozenShapes =
-                        List.map (\k -> ( k, rootShape defs used (unfreeze k) (frozenKey k modelKey) )) versions
+                        List.map (\k -> ( k, rootShape defs used unfreezeAny (frozenKey k modelKey) )) versions
 
                     shapes =
                         { model = modelShape
@@ -698,10 +698,18 @@ unsavedValue m name =
     if isLazyKey m name then
         Just "Restored"
 
-    else if unfreezeAny m.name == "Ui" && name == "LazyCache" then
+    else
+        unsavedCache ( m.name, name )
+
+
+{-| The caches that are never saved, and the empty one each starts as.
+-}
+unsavedCache : Key -> Maybe String
+unsavedCache ( moduleName, name ) =
+    if unfreezeAny moduleName == "Ui" && name == "LazyCache" then
         Just "noLazyCache"
 
-    else if unfreezeAny m.name == "ImageCache" && name == "ImageCache" then
+    else if unfreezeAny moduleName == "ImageCache" && name == "ImageCache" then
         Just "empty"
 
     else
@@ -2237,24 +2245,16 @@ frozenKey version ( moduleName, name ) =
     ( frozenModuleName version moduleName, name )
 
 
+{-| A type's name in a frozen version, given where that version has each module.
+-}
+homeKey : (String -> String) -> Key -> Key
+homeKey home ( moduleName, name ) =
+    ( home moduleName, name )
+
+
 migrationModule : Int -> String
 migrationModule version =
     "Evergreen.Migrate.V" ++ String.fromInt version
-
-
-{-| A frozen module's name as the module it is a copy of.
--}
-unfreeze : Int -> String -> String
-unfreeze version moduleName =
-    let
-        prefix =
-            frozenModuleName version ""
-    in
-    if String.startsWith prefix moduleName then
-        String.dropLeft (String.length prefix) moduleName
-
-    else
-        moduleName
 
 
 {-| Any frozen module's name as the module it is a copy of.
@@ -2345,7 +2345,7 @@ changeErrors defs used modelKey latest =
             rootDefShapes defs used identity modelKey
 
         frozen =
-            rootDefShapes defs used (unfreeze latest) (frozenKey latest modelKey)
+            rootDefShapes defs used unfreezeAny (frozenKey latest modelKey)
     in
     if current == frozen then
         []
@@ -2436,32 +2436,28 @@ freezeWith original givenVersion _ modules modelKey _ _ =
         ( _, reachErrors ) =
             reach defs used [ ( modelKey, keyName modelKey ) ] Set.empty []
 
-        migration =
-            if List.member (version - 1) versions && not (Dict.member (migrationModule version) modules) then
-                [ migrationFile defs used modelKey (version - 1) ]
-
-            else
-                []
-
         -- The program's modules, as they are in the source files (`modules` has
         -- Ui.lazy's calls rewritten), apart from tools/wire's runtime (Wire), which
-        -- the build adds. What's kept of them: the migration to this version (the one
-        -- written now, or the one there already), the Model, and the values given to
-        -- types that are never saved (`unsavedValue`), which only the build's codecs use.
+        -- the build adds. What's kept of them: the migration to this version if there
+        -- is one already, the Model, and the values given to types that are never saved
+        -- (`unsavedValue`), which only the build's codecs use. A migration written now
+        -- needs nothing more: it only names the Model's types.
         program =
             original
                 |> Dict.values
                 |> List.filter (\m -> not (isFrozen m.name) && m.name /= "Wire")
-                |> List.map (\m -> { name = m.name, path = m.path, source = m.source, file = m.file })
+                |> List.map toFreezeSource
+
+        earlier =
+            original
+                |> Dict.values
+                |> List.filter (\m -> isFrozen m.name && not (String.startsWith "Evergreen.Migrate." m.name))
+                |> List.map toFreezeSource
 
         rootModules =
-            (List.filterMap (\f -> parseFile f |> Result.toMaybe) migration
-                |> List.map (\( f, file ) -> { name = migrationModule version, path = f.path, source = f.source, file = file })
-            )
-                ++ (Dict.get (migrationModule version) original
-                        |> Maybe.map (\m -> [ { name = m.name, path = m.path, source = m.source, file = m.file } ])
-                        |> Maybe.withDefault []
-                   )
+            Dict.get (migrationModule version) original
+                |> Maybe.map (\m -> [ toFreezeSource m ])
+                |> Maybe.withDefault []
 
         unsavedRoots =
             original
@@ -2469,8 +2465,18 @@ freezeWith original givenVersion _ modules modelKey _ _ =
                 |> List.filter (\m -> not (isFrozen m.name))
                 |> List.concatMap (\m -> Dict.keys m.types |> List.filterMap (unsavedValue m) |> List.filter (not << startsUpper) |> List.map (Tuple.pair m.name))
 
-        copies =
-            Freeze.freeze version program { modules = rootModules, names = modelKey :: unsavedRoots }
+        frozen =
+            Freeze.freeze version
+                program
+                earlier
+                { modules = rootModules, names = modelKey :: unsavedRoots, always = [ Tuple.first modelKey ] }
+
+        migration =
+            if List.member (version - 1) versions && not (Dict.member (migrationModule version) modules) then
+                [ migrationFile defs used modelKey (version - 1) frozen.homes ]
+
+            else
+                []
     in
     if not (Dict.member modelKey defs) then
         Err [ "--model: there is no type " ++ keyName modelKey ++ " in the source files" ]
@@ -2485,27 +2491,17 @@ freezeWith original givenVersion _ modules modelKey _ _ =
         Err [ "the Model's types are the same as version " ++ String.fromInt latest ++ "'s, so there's nothing to freeze." ]
 
     else
-        Ok (copies ++ migration)
+        Ok (frozen.files ++ frozen.roots ++ migration)
+
+
+toFreezeSource : Module -> Freeze.Source
+toFreezeSource m =
+    { name = m.name, path = m.path, source = m.source, file = m.file }
 
 
 startsUpper : String -> Bool
 startsUpper s =
     String.left 1 s /= String.toLower (String.left 1 s)
-
-
-{-| Every module a frozen module or a migration might refer to: the frozen copies of
-the user's modules, and the packages' modules that hold types.
--}
-otherModules : Dict Key Def -> Int -> String -> List String
-otherModules defs version self =
-    (defs
-        |> Dict.keys
-        |> List.map Tuple.first
-        |> List.filter (\m -> not (isFrozen m))
-        |> List.map (frozenModuleName version)
-    )
-        ++ packageModules
-        |> List.filter (\m -> m /= self)
 
 
 {-| The packages' modules whose types tools/wire knows how to write (`builtins`), apart
@@ -2618,22 +2614,6 @@ takeWhile ok list =
             []
 
 
-{-| How the frozen module of `self` (in `version`) writes a type: its own types bare,
-the user's other types as their frozen copies, and the packages' types in full.
--}
-frozenRef : Dict Key Def -> Int -> String -> Key -> String
-frozenRef defs version self ( moduleName, name ) =
-    if Dict.member ( moduleName, name ) defs && not (isFrozen moduleName) then
-        if moduleName == self then
-            name
-
-        else
-            frozenModuleName version moduleName ++ "." ++ name
-
-    else
-        packageRef ( moduleName, name )
-
-
 {-| The types every module can name bare; the rest are written `Module.Type`.
 -}
 packageRef : Key -> String
@@ -2696,6 +2676,11 @@ type alias Mig =
     , used : Dict Key (List Bool)
     , old : Int
     , new : Int
+
+    -- Where each module's types are in the old version and the new one: its own
+    -- copy (Evergreen.V<n>.Ui) or an earlier version's that it shares (see Freeze.elm).
+    , oldHome : String -> String
+    , newHome : String -> String
     }
 
 
@@ -2704,11 +2689,31 @@ of the same name in version `new`, as far as it can tell how. Where it can't (a 
 record field, a variant that's gone, a type that changed into another one), it
 writes `Unimplemented`, which doesn't compile until someone writes what goes there.
 -}
-migrationFile : Dict Key Def -> Dict Key (List Bool) -> Key -> Int -> SourceFile
-migrationFile defs used modelKey old =
+migrationFile : Dict Key Def -> Dict Key (List Bool) -> Key -> Int -> Dict String String -> SourceFile
+migrationFile defs used modelKey old newHomes =
     let
         mig =
-            { defs = defs, used = used, old = old, new = old + 1 }
+            { defs = defs
+            , used = used
+            , old = old
+            , new = old + 1
+            , oldHome = \m -> Dict.get m oldHomes |> Maybe.withDefault (frozenModuleName old m)
+            , newHome = \m -> Dict.get m newHomes |> Maybe.withDefault (frozenModuleName (old + 1) m)
+            }
+
+        -- Where the old version's types are: the modules its Model is made of.
+        oldHomes =
+            reach defs used [ ( frozenKey old modelKey, keyName (frozenKey old modelKey) ) ] Set.empty []
+                |> Tuple.first
+                |> Set.toList
+                |> List.map (\( m, _ ) -> ( unfreezeAny m, m ))
+                |> Dict.fromList
+
+        shared =
+            newHomes
+                |> Dict.toList
+                |> List.filter (\( m, home ) -> home /= frozenModuleName mig.new m)
+                |> List.map Tuple.second
 
         functions =
             migrationFunctions mig [ Tuple.mapFirst identity modelKey ] Set.empty []
@@ -2731,7 +2736,7 @@ migrationFile defs used modelKey old =
 
         changes =
             describeChanges
-                (rootDefShapes defs used (unfreeze old) (frozenKey old modelKey))
+                (rootDefShapes defs used unfreezeAny (frozenKey old modelKey))
                 (rootDefShapes defs used identity modelKey)
     in
     { path = String.replace "." "/" name ++ ".elm"
@@ -2744,30 +2749,32 @@ migrationFile defs used modelKey old =
              , "tools/wire (`make migration`) wrote this. Where it couldn't tell what to do, it"
              , "wrote `Unimplemented`, which doesn't compile: replace each one. The rest is"
              , "yours to change too; it's only ever written once."
-             , ""
-             , "-}"
-             , ""
              ]
+                ++ (if List.isEmpty shared then
+                        []
+
+                    else
+                        [ ""
+                        , "Version " ++ String.fromInt mig.new ++ " shares the modules that didn't change with earlier versions, so"
+                        , "their types are the same types and are passed on as they are: " ++ String.join ", " shared ++ "."
+                        , "A function of version " ++ String.fromInt mig.new ++ " can still be called as `Evergreen.V" ++ String.fromInt mig.new ++ ".<Module>.<name>`:"
+                        , "`make migration` then names the module it's in, or copies it if no earlier copy has it."
+                        ]
+                   )
+                ++ [ ""
+                   , "-}"
+                   , ""
+                   ]
                 ++ List.map (\i -> "import " ++ i)
                     (importsIn body
-                        (otherModules defs old "" ++ otherModules defs mig.new "" |> List.filter (\m -> m /= ""))
-                        |> List.filter (\m -> not (String.startsWith (frozenModuleName old "") m) || Dict.member m (frozenModulesOf defs old))
+                        ((defs |> Dict.keys |> List.map Tuple.first |> List.filter isFrozen)
+                            ++ Dict.values newHomes
+                            ++ packageModules
+                        )
                     )
                 ++ [ "", "", body, "" ]
             )
     }
-
-
-{-| The frozen modules of a version that exist.
--}
-frozenModulesOf : Dict Key Def -> Int -> Dict String ()
-frozenModulesOf defs version =
-    defs
-        |> Dict.keys
-        |> List.map Tuple.first
-        |> List.filter (\m -> String.startsWith (frozenModuleName version "") m)
-        |> List.map (\m -> ( m, () ))
-        |> Dict.fromList
 
 
 migrateName : Key -> String
@@ -2801,7 +2808,7 @@ migrationFunctions mig queue done out =
 bothVersions : Mig -> Key -> Maybe ( Def, Def )
 bothVersions mig key =
     Maybe.map2 Tuple.pair
-        (Dict.get (frozenKey mig.old key) mig.defs)
+        (Dict.get (homeKey mig.oldHome key) mig.defs)
         (Dict.get key mig.defs)
         |> Maybe.andThen
             (\( o, n ) ->
@@ -2834,10 +2841,10 @@ migrationFunction mig key =
                     { mig = mig, oldVars = oldVars }
 
                 oldType =
-                    String.join " " (keyName (frozenKey mig.old key) :: List.map (\g -> "old_" ++ g) newDef.generics)
+                    String.join " " (keyName (homeKey mig.oldHome key) :: List.map (\g -> "old_" ++ g) newDef.generics)
 
                 newType =
-                    String.join " " (keyName (frozenKey mig.new key) :: List.map (\g -> "new_" ++ g) newDef.generics)
+                    String.join " " (keyName (homeKey mig.newHome key) :: List.map (\g -> "new_" ++ g) newDef.generics)
 
                 signature =
                     migrateName key
@@ -2851,18 +2858,22 @@ migrationFunction mig key =
                     String.concat (List.map (\g -> " migrate_" ++ g) mappedVars)
 
                 ( body, needs ) =
-                    case ( oldDef.body, newDef.body ) of
-                        ( Alias (TRecord oldFields), Alias (TRecord newFields) ) ->
+                    case ( unsavedCache key, oldDef.body, newDef.body ) of
+                        ( Just value, _, _ ) ->
+                            -- Never saved (see `unsavedValue`): the new version's empty one.
+                            ( "    " ++ mig.newHome (Tuple.first key) ++ "." ++ value, Set.empty )
+
+                        ( Nothing, Alias (TRecord oldFields), Alias (TRecord newFields) ) ->
                             let
                                 r =
                                     convRecordFields env 1 oldFields newFields "old"
                             in
                             ( "    " ++ layoutRecord 4 r.fields, r.needs )
 
-                        ( Alias oldTy, Alias newTy ) ->
+                        ( Nothing, Alias oldTy, Alias newTy ) ->
                             conv env 1 oldTy newTy "old" |> Tuple.mapFirst (\c -> "    " ++ c.expr)
 
-                        ( Custom oldVariants, Custom newVariants ) ->
+                        ( Nothing, Custom oldVariants, Custom newVariants ) ->
                             let
                                 branches =
                                     List.map
@@ -2872,7 +2883,7 @@ migrationFunction mig key =
                                                     List.indexedMap (\i _ -> "w3_x" ++ String.fromInt i) oldArgs
 
                                                 pattern =
-                                                    String.join " " ((frozenModuleName mig.old (Tuple.first key) ++ "." ++ ctor) :: vars)
+                                                    String.join " " ((mig.oldHome (Tuple.first key) ++ "." ++ ctor) :: vars)
                                             in
                                             case List.filter (\( c, _ ) -> c == ctor) newVariants of
                                                 [ ( _, newArgs ) ] ->
@@ -2884,7 +2895,7 @@ migrationFunction mig key =
                                                         ( "        "
                                                             ++ pattern
                                                             ++ " ->\n            "
-                                                            ++ String.join " " ((frozenModuleName mig.new (Tuple.first key) ++ "." ++ ctor) :: List.map (Tuple.first >> .expr >> wrapArg) converted)
+                                                            ++ String.join " " ((mig.newHome (Tuple.first key) ++ "." ++ ctor) :: List.map (Tuple.first >> .expr >> wrapArg) converted)
                                                         , List.foldl (\( _, n ) acc -> Set.union n acc) Set.empty converted
                                                         )
 
@@ -3099,7 +3110,7 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
             env.mig
 
         unfrozenOld =
-            Tuple.mapFirst (unfreeze mig.old) oldKey
+            Tuple.mapFirst unfreezeAny oldKey
     in
     if Dict.member newKey mig.defs && not (isFrozen (Tuple.first newKey)) then
         -- One of the user's types: its function, when it's in both versions.
@@ -3113,11 +3124,16 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
                         |> List.filter (\( flag, _, _ ) -> flag)
                         |> List.map (\( _, o, n ) -> convFn env depth o n)
             in
-            Just
-                (changedConv
-                    (String.join " " (migrateName newKey :: List.map (\( f, _, _ ) -> f) mappers ++ [ value ]))
-                    (List.foldl (\( _, _, n ) acc -> Set.union n acc) (Set.singleton newKey) mappers)
-                )
+            if homeKey mig.newHome newKey == oldKey && List.all (\( _, isSame, _ ) -> isSame) mappers then
+                -- The new version shares the old one's copy of the type: it's the same type.
+                Just (sameConv value)
+
+            else
+                Just
+                    (changedConv
+                        (String.join " " (migrateName newKey :: List.map (\( f, _, _ ) -> f) mappers ++ [ value ]))
+                        (List.foldl (\( _, _, n ) acc -> Set.union n acc) (Set.singleton newKey) mappers)
+                    )
 
         else
             Nothing

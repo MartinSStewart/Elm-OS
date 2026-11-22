@@ -6,6 +6,7 @@ module NoExposingFunctions exposing (rule)
     -- reported
     -- fine: types
 
+
     import Html exposing (Html, div)
     import Html.Attributes exposing ((|>))
     import Maybe exposing (Maybe(..))
