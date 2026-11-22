@@ -903,7 +903,7 @@ view windowSize input needle model =
             else if model.showErrors then
                 Ui.viewport
                     { id = UiId.Code ErrorsViewport, viewportHeight = boxHeight }
-                    -- Wrapped: a compiler's lines can be wider than the window.
+                    -- Wrapped: a compiler's lines can be wider than the App.
                     (Ui.customTextWrapped
                         Sprite.Small
                         boxStyle.width

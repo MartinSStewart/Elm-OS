@@ -29,7 +29,6 @@ import Sprite
 import Ui
 import UiId exposing (UiId)
 import Weather.Types
-import Window
 
 
 type WeatherState
@@ -55,12 +54,12 @@ limits =
         )
 
 
-{-| The weather app's window. It offers to get the weather only when `online`.
+{-| The weather app's App. It offers to get the weather only when `online`.
 -}
 view : Bool -> WeatherState -> Ui.Element UiId
 view online weather =
-    Window.smallWindow
-        { title = Window.heading "Weather", close = UiId.Weather Weather.Types.CloseButton, width = Window.panelWidth }
+    App.smallWindow
+        { title = App.heading "Weather", close = UiId.Weather Weather.Types.CloseButton, width = App.panelWidth }
         (rows online weather)
 
 
@@ -71,7 +70,7 @@ rows online model =
             Sprite.Sans Sprite.Regular
 
         width =
-            Window.em 28
+            App.em 28
 
         t =
             Ui.text
@@ -103,7 +102,7 @@ rows online model =
 
         GotWeather place forecast ->
             [ Ui.leftAndRight width
-                (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (Window.em 6)) ("Weather in " ++ place.name)))
+                (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (App.em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Refresh"))
             , Ui.row
                 8
@@ -136,7 +135,7 @@ rows online model =
                         Ui.row
                             6
                             [ weatherIcon 1 day.code
-                            , Ui.left (Window.em 6)
+                            , Ui.left (App.em 6)
                                 (t
                                     (if i == 0 then
                                         "Today"
@@ -145,7 +144,7 @@ rows online model =
                                         weekday day.date
                                     )
                                 )
-                            , Ui.left (Window.em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.left (App.em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
                             , t (describe day.code)
                             ]
                     )

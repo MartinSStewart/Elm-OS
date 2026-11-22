@@ -868,7 +868,7 @@ messageView windowSize width model page =
 
 
 {-| Content in a viewport that reaches from below the header (`headerHeight` high) to
-the bottom of the window.
+the bottom of the App.
 -}
 scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
 scrolling viewportId windowSize headerHeight content =

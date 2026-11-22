@@ -74,7 +74,6 @@ import Weather exposing (WeatherState(..))
 import Weather.Types
 import WebViewer
 import WebViewer.Types
-import Window
 
 
 
@@ -3145,7 +3144,7 @@ windowGap =
 
 
 {-| What the OS needs of an app: its name, window size limits, and a view that takes the
-size of its window.
+size of its App.
 -}
 appConfig : App -> Model -> App.App
 appConfig app model =
@@ -3662,7 +3661,7 @@ toolbar model display =
 -}
 toolbarHeight : Int
 toolbarHeight =
-    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight Window.bodySize)
+    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight App.bodySize)
 
 
 {-| In the bottom right corner: while the host switches to a newer build, or when the
@@ -3689,7 +3688,7 @@ notice model text =
 -- CODE
 
 
-{-| The Code app's text box, as big as its window.
+{-| The Code app's text box, as big as its App.
 -}
 codeStyle : Model -> TextInputMultiline.Style
 codeStyle model =

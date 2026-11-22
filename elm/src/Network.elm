@@ -44,7 +44,6 @@ import TextInput
 import Ui
 import UiId exposing (UiId)
 import Units exposing (UiPixels)
-import Window
 
 
 type alias Network =
@@ -338,12 +337,12 @@ limits =
     App.fixed (Ui.size (view sample))
 
 
-{-| The network app's window.
+{-| The network app's App.
 -}
 view : Network -> Ui.Element UiId
 view network =
-    Window.smallWindow
-        { title = Window.heading "Network", close = UiId.Network Network.Types.CloseButton, width = Window.panelWidth }
+    App.smallWindow
+        { title = App.heading "Network", close = UiId.Network Network.Types.CloseButton, width = App.panelWidth }
         (rows network)
 
 

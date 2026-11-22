@@ -617,7 +617,7 @@ appSize =
     App.fixed (Ui.size (view False init))
 
 
-{-| The calculator's window. `focused` when keys go to it: then its display has the
+{-| The calculator's App. `focused` when keys go to it: then its display has the
 focus colour around it.
 -}
 view : Bool -> Model -> Element UiId

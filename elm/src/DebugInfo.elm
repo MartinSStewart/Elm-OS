@@ -15,7 +15,6 @@ import Ui
 import UiId exposing (UiId)
 import Units exposing (DevicePixels, UiPixels)
 import Weather
-import Window
 
 
 {-| What the app shows, from the Model.
@@ -169,7 +168,7 @@ view model =
         seconds ms =
             Weather.fixed 2 (ms / 1000) ++ " s"
     in
-    Window.smallWindow { title = Ui.monoText "Elm OS debug", close = UiId.DebugInfo DebugInfo.Types.CloseButton, width = debugWidth }
+    App.smallWindow { title = Ui.monoText "Elm OS debug", close = UiId.DebugInfo DebugInfo.Types.CloseButton, width = debugWidth }
         [ Ui.column
             3
             (line "Build" (BootInfo.buildText model.bootInfo)

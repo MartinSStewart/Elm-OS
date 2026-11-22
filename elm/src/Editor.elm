@@ -14,16 +14,15 @@ import TextInputMultiline
 import Ui
 import UiId exposing (UiId)
 import Units exposing (UiPixels)
-import Window
 
 
 {-| How big the window can be.
 -}
 limits : App.Limits
 limits =
-    { min = Coord.xy (Quantity.unwrap (Window.em 32) + 16) 250
-    , preferred = Coord.xy (Quantity.unwrap (Window.em 40) + 16) (chrome + 24 * Quantity.unwrap (Sprite.lineHeight Window.bodySize))
-    , max = Coord.xy (Quantity.unwrap (Window.em 60) + 16) 100000
+    { min = Coord.xy (Quantity.unwrap (App.em 32) + 16) 250
+    , preferred = Coord.xy (Quantity.unwrap (App.em 40) + 16) (chrome + 24 * Quantity.unwrap (Sprite.lineHeight App.bodySize))
+    , max = Coord.xy (Quantity.unwrap (App.em 60) + 16) 100000
     }
 
 
@@ -35,10 +34,10 @@ style windowSize =
         ( windowWidth, windowHeight ) =
             Coord.toTuple windowSize
     in
-    { font = Window.sans
-    , fontSize = Window.bodySize
+    { font = App.sans
+    , fontSize = App.bodySize
     , width = Units.ui (windowWidth - 16)
-    , lines = max 1 ((windowHeight - chrome) // Quantity.unwrap (Sprite.lineHeight Window.bodySize))
+    , lines = max 1 ((windowHeight - chrome) // Quantity.unwrap (Sprite.lineHeight App.bodySize))
     , syntax = TextInputMultiline.PlainText
     , highlights = []
     }
@@ -49,7 +48,7 @@ status line, the spacing between them and the text box's own padding.
 -}
 chrome : Int
 chrome =
-    2 * 8 + Quantity.unwrap (Sprite.lineHeight Window.headingSize) + Quantity.unwrap (Sprite.lineHeight Window.bodySize) + 2 * 6 + 2 * 4
+    2 * 8 + Quantity.unwrap (Sprite.lineHeight App.headingSize) + Quantity.unwrap (Sprite.lineHeight App.bodySize) + 2 * 6 + 2 * 4
 
 
 {-| The window, in a window this big, with the text box's state.
@@ -92,7 +91,7 @@ view windowSize textInput =
         (Ui.column
             6
             [ Ui.leftAndRight textStyle.width
-                (Window.heading "Text editor")
+                (App.heading "Text editor")
                 (Ui.button { id = UiId.Editor Editor.Types.CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
             , Ui.textInputMultiline
                 { id = UiId.Editor Editor.Types.Input
@@ -100,11 +99,11 @@ view windowSize textInput =
                 }
             , Ui.leftAndRight textStyle.width
                 (t status)
-                (Ui.customText Window.bodySize
+                (Ui.customText App.bodySize
                     [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
-                    , { text = " undo, ", color = Color.outlineColor, font = Window.sans, decorations = [], link = Nothing }
+                    , { text = " undo, ", color = Color.outlineColor, font = App.sans, decorations = [], link = Nothing }
                     , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
-                    , { text = " redo", color = Color.outlineColor, font = Window.sans, decorations = [], link = Nothing }
+                    , { text = " redo", color = Color.outlineColor, font = App.sans, decorations = [], link = Nothing }
                     ]
                 )
             ]

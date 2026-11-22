@@ -8,7 +8,6 @@ import App
 import Sprite
 import Ui
 import UiId exposing (UiId)
-import Window
 
 
 {-| What the host says about this computer, where it has said.
@@ -33,16 +32,16 @@ view : Info -> Ui.Element UiId
 view info =
     let
         font =
-            Window.sans
+            App.sans
 
         t =
             Ui.text
 
         valueWidth =
-            Window.em 26
+            App.em 26
 
         line label value =
-            Ui.row 0 [ Ui.left (Window.em 5) (t label), t (Sprite.ellipsis Window.bodySize font valueWidth value) ]
+            Ui.row 0 [ Ui.left (App.em 5) (t label), t (Sprite.ellipsis App.bodySize font valueWidth value) ]
 
         orUnknown =
             Maybe.withDefault "?"
@@ -53,7 +52,7 @@ view info =
         }
         (Ui.column
             4
-            [ Window.heading "Elm OS"
+            [ App.heading "Elm OS"
             , t "A Linux kernel that boots straight into one Elm program."
             , t ""
             , line "Version" (orUnknown info.commit)
@@ -71,9 +70,9 @@ view info =
                 (orUnknown info.graphics)
             , t ""
             , t
-                (Sprite.wrap Window.bodySize
+                (Sprite.wrap App.bodySize
                     font
-                    (Window.em 31)
+                    (App.em 31)
                     ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
                         ++ "The UI framework and the debug app's pixel font are from town-collab. "
                         ++ "Text is in Noto Sans (SIL Open Font License). "
