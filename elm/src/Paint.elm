@@ -16,11 +16,11 @@ A stroke rebuilds the chunks it touches; Sprite.image draws it.
 
 -}
 
+import App
 import Array
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Image exposing (Image)
-import Layout
 import Paint.Types
 import Set exposing (Set)
 import Sprite
@@ -342,6 +342,6 @@ brushButton model radius =
 
 {-| The window's size, worked out once.
 -}
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
-    Layout.fixed (Ui.size (view init))
+    App.fixed (Ui.size (view init))

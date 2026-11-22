@@ -30,10 +30,10 @@ password) and what the host's networking threads (host/init/src/net) tell Elm ab
 cards. The ids of its elements are in Network/Types.elm.
 -}
 
+import App
 import Color exposing (Color)
 import Coord
 import Effect exposing (Effect)
-import Layout
 import Network.Ipv4 as Ipv4 exposing (Ipv4)
 import Network.Types exposing (Ssid)
 import Network.Wpa2Password as Wpa2Password exposing (Wpa2Password)
@@ -333,9 +333,9 @@ panelWidth =
 
 {-| The network app's window size, from `sample`, once.
 -}
-limits : Layout.Limits
+limits : App.Limits
 limits =
-    Layout.fixed (Ui.size (view sample))
+    App.fixed (Ui.size (view sample))
 
 
 {-| The network app's window.

@@ -48,7 +48,6 @@ import ImageCache exposing (ImageCache)
 import Json.Decode as D
 import Json.Encode as E
 import Keyboard exposing (Key(..))
-import Layout
 import Network
 import Network.Ipv4 as Ipv4
 import Network.Types
@@ -3120,7 +3119,7 @@ windows model display =
     inOrder
         |> List.filter (\app -> appIsOpen app model && (displayOf app model).id == display.id)
         |> List.map (\app -> ( app, (appConfig app model).limits ))
-        |> Layout.layout windowGap area
+        |> App.layout windowGap area
         |> List.map
             (\( app, bounds ) ->
                 ( app

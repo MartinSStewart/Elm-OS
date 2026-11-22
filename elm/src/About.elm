@@ -4,7 +4,7 @@ module About exposing (Info, limits, view)
 -}
 
 import About.Types
-import Layout
+import App
 import Sprite
 import Ui
 import UiId exposing (UiId)
@@ -24,9 +24,9 @@ type alias Info =
 
 {-| The app's window size, from a view with nothing known, once.
 -}
-limits : Layout.Limits
+limits : App.Limits
 limits =
-    Layout.fixed (Ui.size (view { commit = Nothing, kernel = Nothing, cpu = Nothing, memTotalMb = Nothing, graphics = Nothing }))
+    App.fixed (Ui.size (view { commit = Nothing, kernel = Nothing, cpu = Nothing, memTotalMb = Nothing, graphics = Nothing }))
 
 
 view : Info -> Ui.Element UiId

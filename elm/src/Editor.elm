@@ -4,10 +4,10 @@ module Editor exposing (limits, style, view)
 text stays when the window closes, until Elm OS restarts.
 -}
 
+import App
 import Color
 import Coord exposing (Coord)
 import Editor.Types
-import Layout
 import Quantity
 import Sprite
 import TextInputMultiline
@@ -19,7 +19,7 @@ import Window exposing (bodySize, em, heading, sans)
 
 {-| How big the window can be.
 -}
-limits : Layout.Limits
+limits : App.Limits
 limits =
     { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
     , preferred = Coord.xy (Quantity.unwrap (em 40) + 16) (chrome + 24 * Quantity.unwrap (Sprite.lineHeight bodySize))

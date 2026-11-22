@@ -31,6 +31,7 @@ Commit and push sends the saved modules to GitHub as a commit (Code/GitHub.elm).
 
 -}
 
+import App
 import BuildInfo
 import Code.Find
 import Code.GitHub
@@ -40,7 +41,6 @@ import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Json.Encode as E
 import Keyboard
-import Layout
 import Quantity exposing (Quantity)
 import SeqDict exposing (SeqDict)
 import SourceCode
@@ -674,7 +674,7 @@ load name uiState model =
 
 {-| How big the window can be.
 -}
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
     { min = Coord.xy 400 250
     , preferred = Coord.xy 900 (chrome + 30 * lineHeight)

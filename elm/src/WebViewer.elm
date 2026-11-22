@@ -26,7 +26,7 @@ import Bytes exposing (Bytes)
 import Color
 import Coord exposing (Coord)
 import Effect
-import Html.Parser exposing (Node(..))
+import HtmlParser exposing (Node(..))
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TextInput
 import Ui exposing (Element)
@@ -194,7 +194,7 @@ start a new line (a blank line between paragraphs), a `<br>` ends one.
 -}
 pageText : String -> String
 pageText html =
-    Html.Parser.parse html
+    HtmlParser.parse html
         |> List.foldr textOf []
         |> resolveBreaks
         |> String.split "\n"

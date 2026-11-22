@@ -16,9 +16,9 @@ The board is a list of nine squares, top row first, each empty or holding a mark
 
 -}
 
+import App
 import Color
 import Coord exposing (Coord)
-import Layout
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TicTacToe.Types
 import Ui exposing (Element)
@@ -256,6 +256,6 @@ squareView model i =
 
 {-| The window's size, worked out once.
 -}
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
-    Layout.fixed (Ui.size (view init))
+    App.fixed (Ui.size (view init))

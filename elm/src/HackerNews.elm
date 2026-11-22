@@ -30,7 +30,7 @@ import Dict exposing (Dict)
 import Effect
 import HackerNews.Types exposing (Comment(..), Post, PostId(..), Span)
 import Hex
-import Html.Parser
+import HtmlParser
 import Quantity exposing (Quantity)
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
@@ -387,20 +387,20 @@ for none, and no link for a job), which is matched to the post by the id in its 
 parsePosts : String -> List Post
 parsePosts html =
     let
-        tree : List Html.Parser.Node
+        tree : List HtmlParser.Node
         tree =
-            Html.Parser.parse html
+            HtmlParser.parse html
 
         commentCounts : Dict String Int
         commentCounts =
-            Html.Parser.findAll (isElement "td" "subtext") tree
-                |> Html.Parser.findAll (isElement "a" "")
+            HtmlParser.findAll (isElement "td" "subtext") tree
+                |> HtmlParser.findAll (isElement "a" "")
                 |> List.filterMap
                     (\link ->
                         let
                             text : String
                             text =
-                                Html.Parser.textContent [ link ]
+                                HtmlParser.textContent [ link ]
                         in
                         Maybe.map2
                             (\href count -> ( href, count ))
@@ -417,7 +417,7 @@ parsePosts html =
                     )
                 |> Dict.fromList
     in
-    Html.Parser.findAll (isElement "tr" "athing") tree
+    HtmlParser.findAll (isElement "tr" "athing") tree
         |> List.filterMap
             (\row ->
                 Maybe.map2
@@ -428,11 +428,11 @@ parsePosts html =
                         }
                     )
                     (attribute "id" row)
-                    (Html.Parser.findAll (isElement "span" "titleline") [ row ]
+                    (HtmlParser.findAll (isElement "span" "titleline") [ row ]
                         |> List.concatMap nodeChildren
-                        |> Html.Parser.findAll (isElement "a" "")
+                        |> HtmlParser.findAll (isElement "a" "")
                         |> List.head
-                        |> Maybe.map (\link -> Html.Parser.textContent [ link ] |> String.trim)
+                        |> Maybe.map (\link -> HtmlParser.textContent [ link ] |> String.trim)
                     )
             )
 
@@ -447,28 +447,28 @@ kept, so the comments under it stay under it.
 -}
 parseComments : String -> List Comment
 parseComments html =
-    Html.Parser.parse html
-        |> Html.Parser.findAll (isElement "tr" "comtr")
+    HtmlParser.parse html
+        |> HtmlParser.findAll (isElement "tr" "comtr")
         |> List.filterMap
             (\row ->
                 Maybe.map2
                     (\indent content ->
                         { indent = indent
                         , author =
-                            Html.Parser.findAll (isElement "span" "comhead") [ row ]
+                            HtmlParser.findAll (isElement "span" "comhead") [ row ]
                                 |> List.concatMap nodeChildren
                                 |> List.filter (isElement "a" "")
                                 |> List.head
-                                |> Maybe.map (\link -> Html.Parser.textContent [ link ] |> String.trim)
+                                |> Maybe.map (\link -> HtmlParser.textContent [ link ] |> String.trim)
                                 |> Maybe.withDefault ""
                         , date =
-                            Html.Parser.findAll (isElement "span" "age") [ row ]
+                            HtmlParser.findAll (isElement "span" "age") [ row ]
                                 |> List.head
                                 |> Maybe.andThen (attribute "title")
                                 |> Maybe.andThen (\title -> String.words title |> List.head)
                                 |> Maybe.map (\date -> String.left 16 date |> String.replace "T" " ")
                         , grey =
-                            Html.Parser.findAll (isElement "div" "commtext") [ row ]
+                            HtmlParser.findAll (isElement "div" "commtext") [ row ]
                                 |> List.head
                                 |> Maybe.andThen (attribute "class")
                                 |> Maybe.map greyLevel
@@ -476,12 +476,12 @@ parseComments html =
                         , content = content
                         }
                     )
-                    (Html.Parser.findAll (isElement "td" "ind") [ row ]
+                    (HtmlParser.findAll (isElement "td" "ind") [ row ]
                         |> List.head
                         |> Maybe.andThen (attribute "indent")
                         |> Maybe.andThen String.toInt
                     )
-                    (Html.Parser.findAll (isElement "div" "comment") [ row ]
+                    (HtmlParser.findAll (isElement "div" "comment") [ row ]
                         |> List.head
                         |> Maybe.map (\comment -> commentText (nodeChildren comment))
                     )
@@ -510,78 +510,78 @@ greyLevel classes =
 
 {-| Whether a node is a tag with this name and class (any class, for "").
 -}
-isElement : String -> String -> Html.Parser.Node -> Bool
+isElement : String -> String -> HtmlParser.Node -> Bool
 isElement name class node =
     case node of
-        Html.Parser.Element tag attributes _ ->
+        HtmlParser.Element tag attributes _ ->
             tag
                 == name
                 && (String.isEmpty class
-                        || (Html.Parser.getAttribute "class" attributes
+                        || (HtmlParser.getAttribute "class" attributes
                                 |> Maybe.withDefault ""
                                 |> String.words
                                 |> List.member class
                            )
                    )
 
-        Html.Parser.Text _ ->
+        HtmlParser.Text _ ->
             False
 
-        Html.Parser.Comment _ ->
+        HtmlParser.Comment _ ->
             False
 
 
-attribute : String -> Html.Parser.Node -> Maybe String
+attribute : String -> HtmlParser.Node -> Maybe String
 attribute name node =
     case node of
-        Html.Parser.Element _ attributes _ ->
-            Html.Parser.getAttribute name attributes
+        HtmlParser.Element _ attributes _ ->
+            HtmlParser.getAttribute name attributes
 
-        Html.Parser.Text _ ->
+        HtmlParser.Text _ ->
             Nothing
 
-        Html.Parser.Comment _ ->
+        HtmlParser.Comment _ ->
             Nothing
 
 
-nodeChildren : Html.Parser.Node -> List Html.Parser.Node
+nodeChildren : HtmlParser.Node -> List HtmlParser.Node
 nodeChildren node =
     case node of
-        Html.Parser.Element _ _ nodes ->
+        HtmlParser.Element _ _ nodes ->
             nodes
 
-        Html.Parser.Text _ ->
+        HtmlParser.Text _ ->
             []
 
-        Html.Parser.Comment _ ->
+        HtmlParser.Comment _ ->
             []
 
 
 {-| A comment's text: a paragraph starts after an empty line, links (`<a>`) and italics
 (`<i>`) are marked, and the reply link is left out.
 -}
-commentText : List Html.Parser.Node -> List Span
+commentText : List HtmlParser.Node -> List Span
 commentText nodes =
     commentSpans Nothing False nodes |> mergeSpans
 
 
-commentSpans : Maybe String -> Bool -> List Html.Parser.Node -> List Span
+commentSpans : Maybe String -> Bool -> List HtmlParser.Node -> List Span
 commentSpans link isItalic nodes =
     List.concatMap
         (\node ->
             case node of
-                Html.Parser.Text text ->
+                HtmlParser.Text text ->
                     [ { text = String.replace "\n" " " text, link = link, isItalic = isItalic } ]
 
-                Html.Parser.Comment _ ->
+                HtmlParser.Comment _ ->
                     []
 
-                Html.Parser.Element "p" _ nodes2 ->
+                HtmlParser.Element "p" _ nodes2 ->
                     { text = "\n\n", link = Nothing, isItalic = False } :: commentSpans link isItalic nodes2
 
-                Html.Parser.Element "a" attributes nodes2 ->
+                HtmlParser.Element "a" attributes nodes2 ->
                     commentSpans
-                        (case Html.Parser.getAttribute "href" attributes of
+                        (case HtmlParser.getAttribute "href" attributes of
                             Just href ->
                                 Just href
 
@@ -591,11 +591,11 @@ commentSpans link isItalic nodes =
                         isItalic
                         nodes2
 
-                Html.Parser.Element "i" _ nodes2 ->
+                HtmlParser.Element "i" _ nodes2 ->
                     commentSpans link True nodes2
 
-                Html.Parser.Element _ attributes nodes2 ->
-                    if Html.Parser.getAttribute "class" attributes == Just "reply" then
+                HtmlParser.Element _ attributes nodes2 ->
+                    if HtmlParser.getAttribute "class" attributes == Just "reply" then
                         []
 
                     else

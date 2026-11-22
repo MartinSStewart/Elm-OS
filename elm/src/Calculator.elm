@@ -23,11 +23,11 @@ The Model is plain data (no functions), like the rest of Elm OS's model.
 
 -}
 
+import App
 import Calculator.Types exposing (Key(..), Operator(..))
 import Color
 import Coord exposing (Coord)
 import Keyboard
-import Layout
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
@@ -612,9 +612,9 @@ width =
     4 * Coord.xRaw buttonSize + 3 * spacing
 
 
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
-    Layout.fixed (Ui.size (view False init))
+    App.fixed (Ui.size (view False init))
 
 
 {-| The calculator's window. `focused` when keys go to it: then its display has the

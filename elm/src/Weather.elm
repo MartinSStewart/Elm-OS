@@ -19,11 +19,11 @@ Both go over HTTPS: Main asks the host for them with Effect.get, and the host fe
 them with rustls (host/init/src/http.rs).
 -}
 
+import App
 import Color
 import Coord
 import Effect exposing (HttpError)
 import Json.Decode as D
-import Layout
 import Quantity
 import Sprite
 import Ui
@@ -42,9 +42,9 @@ type WeatherState
 
 {-| The weather app's window size, from a forecast, which is the most it shows, once.
 -}
-limits : Layout.Limits
+limits : App.Limits
 limits =
-    Layout.fixed
+    App.fixed
         (Ui.size
             (view True
                 (GotWeather

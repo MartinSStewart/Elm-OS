@@ -3,12 +3,12 @@ module DebugInfo exposing (Info, limits, view)
 {-| The debug app: the build, the displays, the mouse, frame times and the boot's timings.
 -}
 
+import App
 import BootInfo
 import Color
 import Coord exposing (Coord)
 import DebugInfo.Types exposing (RendererInfo, SystemStats)
 import Display exposing (Display)
-import Layout
 import Quantity exposing (Quantity)
 import Sprite
 import Ui
@@ -32,9 +32,9 @@ type alias Info =
 
 {-| The app's window size, from `sample`, once.
 -}
-limits : Layout.Limits
+limits : App.Limits
 limits =
-    Layout.fixed (Ui.size (view sample))
+    App.fixed (Ui.size (view sample))
 
 
 {-| What the debug app is sized from: the host has said everything it says.

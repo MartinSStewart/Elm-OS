@@ -1,4 +1,4 @@
-module Html.Parser exposing
+module HtmlParser exposing
     ( Node(..), Attributes
     , parse
     , getAttribute, attributeList, findAll, textContent
