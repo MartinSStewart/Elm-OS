@@ -369,7 +369,7 @@ fill points model =
 
 
 fillAround : Image -> Int -> Int -> Int -> ( Int, Int ) -> Work -> Work
-fillAround canvas r color target ( cx, cy ) work1 =
+fillAround canvas r color target ( cx, cy ) previous =
     let
         inCircle ( x, y ) =
             (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r + r
@@ -379,13 +379,13 @@ fillAround canvas r color target ( cx, cy ) work1 =
                 (\chunkY -> List.map (\chunkX -> chunkY * chunksAcross + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth - 1) (cx + r) // chunkSize)))
                 (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight - 1) (cy + r) // chunkSize))
 
-        work0 =
-            { work1 | reached = Set.empty }
+        start =
+            { previous | reached = Set.empty }
 
         work =
             List.foldl
                 (\index w -> { w | chunks = Dict.update index (loadChunk canvas index) w.chunks })
-                work0
+                start
                 reached
 
         isTarget w ( x, y ) =
