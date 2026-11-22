@@ -6,7 +6,7 @@ import Expect
 import Keyboard
 import Quantity
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import TextInput
 import TextInputMultiline
 import Time
@@ -71,8 +71,8 @@ cursor model =
 
 suite : Test
 suite =
-    describe "TextInputMultiline"
-        [ test "fingers moving down move the text up, following them smoothly"
+    Test.describe "TextInputMultiline"
+        [ Test.test "fingers moving down move the text up, following them smoothly"
             (\_ ->
                 let
                     atBottom =
@@ -89,7 +89,7 @@ suite =
                     , TextInputMultiline.scrollPixels style (-1 * lineHeight) long |> (\m -> ( m.position, m.scroll ))
                     ]
             )
-        , test "resting fingers let the text settle on a whole line"
+        , Test.test "resting fingers let the text settle on a whole line"
             (\_ ->
                 let
                     moved =
@@ -102,7 +102,7 @@ suite =
                         [ frames 0.1 moved, frames 1 moved ]
                     )
             )
-        , test "a flick glides on and stops on a whole line"
+        , Test.test "a flick glides on and stops on a whole line"
             (\_ ->
                 let
                     -- 20 lines a second, slowing down as viewports do: 6.6 lines in all
@@ -113,7 +113,7 @@ suite =
                     ( 7, 7, TextInputMultiline.Still )
                     (flicked |> frames 4 |> (\m -> ( m.position, m.scroll, m.glide )))
             )
-        , test "a touch stops a glide where it is"
+        , Test.test "a touch stops a glide where it is"
             (\_ ->
                 TextInputMultiline.momentum style (0.997 ^ 1000) (20 * lineHeight) long
                     |> frames 0.2
@@ -122,7 +122,7 @@ suite =
                     |> .position
                     |> Expect.equal 3
             )
-        , test "the wheel glides three lines a click"
+        , Test.test "the wheel glides three lines a click"
             (\_ ->
                 let
                     turned =
@@ -130,43 +130,43 @@ suite =
                 in
                 Expect.equal ( ( 0, 3 ), 3 ) ( ( turned.position, turned.scroll ), (frames 1 turned).position )
             )
-        , test "Up and Down keep the column through a shorter line"
+        , Test.test "Up and Down keep the column through a shorter line"
             (\_ ->
                 after "abcdefgh\nab\nabcdefgh" [ Keyboard.ArrowUp, Keyboard.ArrowUp ]
                     |> cursor
                     |> Expect.equal ( 0, 8 )
             )
-        , test "the column is kept going down again"
+        , Test.test "the column is kept going down again"
             (\_ ->
                 after "abcdefgh\nab\nabcdefgh" [ Keyboard.ArrowUp, Keyboard.ArrowUp, Keyboard.ArrowDown, Keyboard.ArrowDown ]
                     |> cursor
                     |> Expect.equal ( 2, 8 )
             )
-        , test "on the short line the cursor is at its end"
+        , Test.test "on the short line the cursor is at its end"
             (\_ ->
                 after "abcdefgh\nab\nabcdefgh" [ Keyboard.ArrowUp ]
                     |> cursor
                     |> Expect.equal ( 1, 2 )
             )
-        , test "Up from the first line goes to the start, and Down comes back to the column"
+        , Test.test "Up from the first line goes to the start, and Down comes back to the column"
             (\_ ->
                 after "abcdef\nabcdef" [ Keyboard.ArrowUp, Keyboard.ArrowUp, Keyboard.ArrowDown ]
                     |> cursor
                     |> Expect.equal ( 1, 6 )
             )
-        , test "a sideways move forgets the column"
+        , Test.test "a sideways move forgets the column"
             (\_ ->
                 after "abcdefgh\nab\nabcdefgh" [ Keyboard.ArrowUp, Keyboard.ArrowLeft, Keyboard.ArrowUp ]
                     |> cursor
                     |> Expect.equal ( 0, 1 )
             )
-        , test "typing forgets the column"
+        , Test.test "typing forgets the column"
             (\_ ->
                 after "abcdefgh\nab\nabcdefgh" [ Keyboard.ArrowUp, Keyboard.Character "x", Keyboard.ArrowUp ]
                     |> cursor
                     |> Expect.equal ( 0, 3 )
             )
-        , test "Ctrl+Right stops at the end of each word and at symbols"
+        , Test.test "Ctrl+Right stops at the end of each word and at symbols"
             (\_ ->
                 let
                     press model =
@@ -190,7 +190,7 @@ suite =
                 List.map at [ start, one, two, three ]
                     |> Expect.equal [ 0, 3, 7, 12 ]
             )
-        , test "a triple click in a multiline box selects the line"
+        , Test.test "a triple click in a multiline box selects the line"
             (\_ ->
                 let
                     click =
@@ -200,12 +200,12 @@ suite =
                     |> (\state -> ( TextInput.selectionMin state, TextInput.selectionMax state ))
                     |> Expect.equal ( 3, 8 )
             )
-        , test "Enter starts a new line"
+        , Test.test "Enter starts a new line"
             (\_ ->
                 (after "ab\ncd" []).input.current.text
                     |> Expect.equal "ab\ncd"
             )
-        , test "pressing the scroll bar's track below the thumb scrolls to the bottom, and leaves the cursor"
+        , Test.test "pressing the scroll bar's track below the thumb scrolls to the bottom, and leaves the cursor"
             (\_ ->
                 let
                     pressed =
@@ -214,7 +214,7 @@ suite =
                 ( pressed.scroll, cursor pressed, pressed.grab /= Nothing )
                     |> Expect.equal ( 91, ( 0, 0 ), True )
             )
-        , test "dragging the scroll bar to the top scrolls to the top, and letting go stops it"
+        , Test.test "dragging the scroll bar to the top scrolls to the top, and letting go stops it"
             (\_ ->
                 let
                     dragged =
@@ -227,7 +227,7 @@ suite =
                 ( dragged.scroll, cursor dragged, released.grab )
                     |> Expect.equal ( 0, ( 0, 0 ), Nothing )
             )
-        , test "the scroll bar is only there when the text is taller than the box"
+        , Test.test "the scroll bar is only there when the text is taller than the box"
             (\_ ->
                 ( TextInputMultiline.overScrollbar style (Coord.xy 390 10) long
                 , TextInputMultiline.overScrollbar style (Coord.xy 390 10) (TextInputMultiline.withText "a\nb")
@@ -235,7 +235,7 @@ suite =
                 )
                     |> Expect.equal ( True, False, False )
             )
-        , test "undo takes back the last key"
+        , Test.test "undo takes back the last key"
             (\_ ->
                 (after "abc" [ Keyboard.Character "d" ]
                     |> (\model -> { model | input = TextInput.keyMsg True False (Keyboard.Character "z") model.input |> Tuple.first })

@@ -15,7 +15,7 @@ import Coord
 import Dict
 import Expect
 import SeqSet
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Wire
 import WireCodecs
 
@@ -91,13 +91,13 @@ typed char localPosition =
 
 suite : Test
 suite =
-    describe "ascii-collab"
-        [ test "ConnectToBackend is the bytes ascii-collab.app answered (tag 1, Bounds' fields max then min, Quantities tagged 0)"
+    Test.describe "ascii-collab"
+        [ Test.test "ConnectToBackend is the bytes ascii-collab.app answered (tag 1, Bounds' fields max then min, Quantities tagged 0)"
             (\_ ->
                 toBackend (ConnectToBackend (bounds ( 0, 0 ) ( 3, 3 )) Nothing)
                     |> Expect.equal [ 1, 0, 0, 6, 0, 6, 0, 0, 0, 0, 0 ]
             )
-        , test "GridChange: tag 3, then a Nonempty of LocalGridChange (tag 1 of LocalChange), fields cellPosition, change, localPosition"
+        , Test.test "GridChange: tag 3, then a Nonempty of LocalGridChange (tag 1 of LocalChange), fields cellPosition, change, localPosition"
             (\_ ->
                 toBackend
                     (GridChange
@@ -108,21 +108,21 @@ suite =
                     )
                     |> Expect.equal [ 3, 0, 1, 0, 1, 0, 4, 0, 0, 72, 0, 34, 2, 0 ]
             )
-        , test "a ToFrontend reads"
+        , Test.test "a ToFrontend reads"
             (\_ ->
                 -- ChangeBroadcast (tag 2): one ServerChange (tag 2 of Change) ServerToggleUserVisibilityForAll (tag 1) (UserId 5)
                 Wire.fromBytes WireCodecs.decodeToFrontend (listToBytes [ 2, 0, 2, 1, 0, 10, 0 ])
                     |> Expect.equal (Just (ChangeBroadcast (Nonempty (ServerChange (ServerToggleUserVisibilityForAll (UserId 5))) [])))
             )
-        , test "characters left of and above 0 are in cell -1"
+        , Test.test "characters left of and above 0 are in cell -1"
             (\_ ->
                 [ Coord.xy -1 -1, Coord.xy -16 0, Coord.xy -17 15, Coord.xy 16 33 ]
                     |> List.map (\coord -> Grid.asciiToCellAndLocalCoord coord |> Tuple.mapFirst Coord.toTuple)
                     |> Expect.equal [ ( ( -1, -1 ), 255 ), ( ( -1, 0 ), 0 ), ( ( -2, 0 ), 255 ), ( ( 1, 2 ), 16 ) ]
             )
-        , test "the grid's characters are Elm OS's pixel font's"
+        , Test.test "the grid's characters are Elm OS's pixel font's"
             (\_ -> List.map (\char -> Grid.fromChar char |> Maybe.map Grid.toChar) [ 'a', '║', '█', ' ', '€' ] |> Expect.equal [ Just 'a', Just '║', Just '█', Just ' ', Nothing ])
-        , test "typing shows at once, and the server sending it back doesn't apply it twice"
+        , Test.test "typing shows at once, and the server sending it back doesn't apply it twice"
             (\_ ->
                 let
                     local =
@@ -134,7 +134,7 @@ suite =
                 ( cellText local ( 0, 0 ), cellText confirmed ( 0, 0 ), List.length confirmed.localMsgs )
                     |> Expect.equal ( "hi", "hi", 1 )
             )
-        , test "undo takes back the changes since the last undo point, and redo puts them back"
+        , Test.test "undo takes back the changes since the last undo point, and redo puts them back"
             (\_ ->
                 let
                     local =
@@ -149,7 +149,7 @@ suite =
                 ( cellText local ( 0, 0 ), cellText undone ( 0, 0 ), cellText (LocalGrid.update (LocalChange LocalRedo) undone) ( 0, 0 ) )
                     |> Expect.equal ( "ab", "a", "ab" )
             )
-        , test "someone else's change shows"
+        , Test.test "someone else's change shows"
             (\_ ->
                 LocalGrid.init loadingData
                     |> LocalGrid.fromBackend

@@ -6,7 +6,7 @@ import Effect exposing (Effect)
 import Email
 import Email.Imap as Imap
 import Expect
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 
 
 bytes : String -> Bytes
@@ -78,8 +78,8 @@ header2 =
 
 suite : Test
 suite =
-    describe "Email"
-        [ test "lists the inbox over a session that arrives in pieces"
+    Test.describe "Email"
+        [ Test.test "lists the inbox over a session that arrives in pieces"
             (\_ ->
                 let
                     ( model, effects ) =
@@ -118,7 +118,7 @@ suite =
                     , Nothing
                     )
             )
-        , test "a wrong password shows the server's reason"
+        , Test.test "a wrong password shows the server's reason"
             (\_ ->
                 let
                     ( model, _ ) =
@@ -129,7 +129,7 @@ suite =
                 in
                 Expect.equal ( model.error, model.session ) ( Just "Couldn't log in: [AUTHENTICATIONFAILED] Invalid credentials", Nothing )
             )
-        , test "a session that hangs ends"
+        , Test.test "a session that hangs ends"
             (\_ ->
                 let
                     ( model, _ ) =
@@ -140,14 +140,14 @@ suite =
                 in
                 Expect.equal ( model2.session, model2.error ) ( Nothing, Just "The server took too long to answer." )
             )
-        , test "the server for an address"
+        , Test.test "the server for an address"
             (\_ ->
                 Expect.equal
                     (List.map Email.serverFor [ "a@gmail.com", "a@Fastmail.com", "a@mycompany.org" ])
                     [ "imap.gmail.com", "imap.fastmail.com", "imap.mycompany.org" ]
             )
-        , describe "Imap"
-            [ test "a literal waits for all its bytes"
+        , Test.describe "Imap"
+            [ Test.test "a literal waits for all its bytes"
                 (\_ ->
                     Expect.equal
                         ( Imap.nextResponse "* 1 FETCH (BODY[TEXT] {5}\u{000D}\nhel"
@@ -157,31 +157,31 @@ suite =
                         , Just ( Imap.Untagged [ Imap.Text "* 1 FETCH (BODY[TEXT] ", Imap.Literal "hello", Imap.Text ")" ], "rest" )
                         )
                 )
-            , test "a tagged response"
+            , Test.test "a tagged response"
                 (\_ ->
                     Imap.nextResponse "a2 NO nope\u{000D}\n"
                         |> Expect.equal (Just ( Imap.Tagged "a2" Imap.StatusNo "nope", "" ))
                 )
-            , test "plain text body"
+            , Test.test "plain text body"
                 (\_ ->
                     Imap.decodeBody [] "Hello\u{000D}\nthere\u{000D}\n"
                         |> Expect.equal "Hello\nthere"
                 )
-            , test "quoted-printable UTF-8 body"
+            , Test.test "quoted-printable UTF-8 body"
                 (\_ ->
                     Imap.decodeBody
                         [ ( "content-type", "text/plain; charset=utf-8" ), ( "content-transfer-encoding", "quoted-printable" ) ]
                         "Gr=C3=BC=C3=9Fe, a long =\nline"
                         |> Expect.equal "Grüße, a long line"
                 )
-            , test "the plain part of a multipart message, base64"
+            , Test.test "the plain part of a multipart message, base64"
                 (\_ ->
                     Imap.decodeBody
                         [ ( "content-type", "multipart/alternative; boundary=\"XX\"" ) ]
                         (crlf "preamble\n--XX\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: base64\n\nSGVsbG8gd29ybGQh\n--XX\nContent-Type: text/html\n\n<p>Other</p>\n--XX--\n")
                         |> Expect.equal "Hello world!"
                 )
-            , test "HTML only"
+            , Test.test "HTML only"
                 (\_ ->
                     Imap.decodeBody
                         [ ( "content-type", "text/html" ) ]

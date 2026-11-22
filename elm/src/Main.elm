@@ -74,7 +74,7 @@ import Weather exposing (WeatherState(..))
 import Weather.Types
 import WebViewer
 import WebViewer.Types
-import Window exposing (bodySize)
+import Window
 
 
 
@@ -3662,7 +3662,7 @@ toolbar model display =
 -}
 toolbarHeight : Int
 toolbarHeight =
-    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight bodySize)
+    8 + 2 * 3 + Quantity.unwrap (Sprite.lineHeight Window.bodySize)
 
 
 {-| In the bottom right corner: while the host switches to a newer build, or when the

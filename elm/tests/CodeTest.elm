@@ -6,7 +6,7 @@ import Coord
 import Expect
 import SeqDict
 import SourceCode
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import TextInputMultiline
 import Ui
 
@@ -29,13 +29,13 @@ suite =
         failed =
             Just (BuildFailed "Compiling" (String.repeat 30 "a long line of compiler output that is wider than the window, much wider\n"))
     in
-    describe "Code app size"
-        [ test "editing" (\_ -> sizeOf { model | picking = False, module_ = Just "Code" } |> Expect.equal window)
-        , test "editing with a failed build" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", build = failed } |> Expect.equal window)
-        , test "editing with the find bar" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", finding = True } |> Expect.equal window)
-        , test "list of modules" (\_ -> sizeOf model |> Expect.equal window)
-        , test "errors" (\_ -> sizeOf { model | showErrors = True, picking = False, build = failed } |> Expect.equal window)
-        , test "commit" (\_ -> sizeOf { model | committing = True, picking = False, saved = SeqDict.fromList [ ( "Code", "module Code" ) ] } |> Expect.equal window)
+    Test.describe "Code app size"
+        [ Test.test "editing" (\_ -> sizeOf { model | picking = False, module_ = Just "Code" } |> Expect.equal window)
+        , Test.test "editing with a failed build" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", build = failed } |> Expect.equal window)
+        , Test.test "editing with the find bar" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", finding = True } |> Expect.equal window)
+        , Test.test "list of modules" (\_ -> sizeOf model |> Expect.equal window)
+        , Test.test "errors" (\_ -> sizeOf { model | showErrors = True, picking = False, build = failed } |> Expect.equal window)
+        , Test.test "commit" (\_ -> sizeOf { model | committing = True, picking = False, saved = SeqDict.fromList [ ( "Code", "module Code" ) ] } |> Expect.equal window)
         ]
 
 
@@ -60,11 +60,11 @@ forgetting =
                 , git = { git | from = "aaa", base = "ccc", branch = "dev" }
             }
     in
-    describe "Forgetting pushed changes"
-        [ test "a build of another commit has Color as saved, so it stops being a change"
+    Test.describe "Forgetting pushed changes"
+        [ Test.test "a build of another commit has Color as saved, so it stops being a change"
             (\_ -> (Code.forgetPushed "bbb" pushed).saved |> SeqDict.keys |> Expect.equal [ "Main" ])
-        , test "a build of the same commit (one made here) keeps everything"
+        , Test.test "a build of the same commit (one made here) keeps everything"
             (\_ -> Code.forgetPushed "aaa" pushed |> Expect.equal pushed)
-        , test "without a push, nothing goes"
+        , Test.test "without a push, nothing goes"
             (\_ -> Code.forgetPushed "bbb" { pushed | git = git } |> Expect.equal { pushed | git = git })
         ]

@@ -7,7 +7,7 @@ import Effect exposing (HttpRequest)
 import Expect
 import Json.Decode as D
 import SeqDict
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 
 
 {-| A commit of the Code app's saved modules, step by step, with GitHub's answers made
@@ -15,8 +15,8 @@ up here: what each request asks for, and what happens after each answer.
 -}
 suite : Test
 suite =
-    describe "Committing to GitHub"
-        [ test "the first request gets the commit to build on, with the token"
+    Test.describe "Committing to GitHub"
+        [ Test.test "the first request gets the commit to build on, with the token"
             (\_ ->
                 case started of
                     Just ( _, request ) ->
@@ -27,7 +27,7 @@ suite =
                     Nothing ->
                         Expect.fail "didn't start"
             )
-        , test "without a commit to build on, it doesn't start"
+        , Test.test "without a commit to build on, it doesn't start"
             (\_ ->
                 Code.GitHub.start { token = "secret", message = "m", modules = modules } { git | base = "", from = "not this build" }
                     |> Maybe.map Tuple.second
@@ -38,7 +38,7 @@ suite =
                             \_ -> Expect.pass
                        )
             )
-        , test "the tree has the modules under elm/src, on the base's tree"
+        , Test.test "the tree has the modules under elm/src, on the base's tree"
             (\_ ->
                 case answers [ ok """{"sha":"base1","tree":{"sha":"tree1"}}""" ] of
                     ( _, Just request ) ->
@@ -51,7 +51,7 @@ suite =
                     _ ->
                         Expect.fail "no request"
             )
-        , test "the commit is on top of the base, with the message"
+        , Test.test "the commit is on top of the base, with the message"
             (\_ ->
                 case answers [ ok baseAnswer, ok """{"sha":"tree2"}""" ] of
                     ( _, Just request ) ->
@@ -61,7 +61,7 @@ suite =
                     _ ->
                         Expect.fail "no request"
             )
-        , test "the branch is moved on to the commit, never forced"
+        , Test.test "the branch is moved on to the commit, never forced"
             (\_ ->
                 case answers [ ok baseAnswer, ok """{"sha":"tree2"}""", ok """{"sha":"commit2"}""" ] of
                     ( _, Just request ) ->
@@ -71,7 +71,7 @@ suite =
                     _ ->
                         Expect.fail "no request"
             )
-        , test "once pushed, the next commit goes on top of this one"
+        , Test.test "once pushed, the next commit goes on top of this one"
             (\_ ->
                 case answers [ ok baseAnswer, ok """{"sha":"tree2"}""", ok """{"sha":"commit2"}""", ok "{}" ] of
                     ( git2, Nothing ) ->
@@ -80,7 +80,7 @@ suite =
                     _ ->
                         Expect.fail "another request"
             )
-        , test "if the branch moved on, a new branch gets the commit"
+        , Test.test "if the branch moved on, a new branch gets the commit"
             (\_ ->
                 case answers [ ok baseAnswer, ok """{"sha":"tree2"}""", ok """{"sha":"commit2"}""", answer 422 """{"message":"Update is not a fast forward"}""" ] of
                     ( _, Just request ) ->
@@ -90,21 +90,21 @@ suite =
                     _ ->
                         Expect.fail "no request"
             )
-        , test "and further commits go to that branch"
+        , Test.test "and further commits go to that branch"
             (\_ ->
                 answers [ ok baseAnswer, ok """{"sha":"tree2"}""", ok """{"sha":"commit2"}""", answer 422 "{}", answer 201 "{}" ]
                     |> Tuple.first
                     |> .status
                     |> Expect.equal (GitPushed "commit2" "elmos-edits-commit2")
             )
-        , test "a refusal says why"
+        , Test.test "a refusal says why"
             (\_ ->
                 answers [ answer 401 """{"message":"Bad credentials"}""" ]
                     |> Tuple.first
                     |> .status
                     |> Expect.equal (GitFailed "Getting the commit to build on" "GitHub answered 401: Bad credentials (the token is wrong or has expired)")
             )
-        , test "an answer to an older request changes nothing"
+        , Test.test "an answer to an older request changes nothing"
             (\_ ->
                 case started of
                     Just ( waiting, _ ) ->

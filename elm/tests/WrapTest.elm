@@ -4,7 +4,7 @@ import Color
 import Expect
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Segment, Style(..))
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Units
 
 
@@ -24,30 +24,30 @@ mono text =
 
 suite : Test
 suite =
-    describe "Sprite.wrapLines"
-        [ test "breaks between words, dropping the space at the break" (\() -> wrapMono 100 [ mono "aaaa bbbb cccc" ] |> Expect.equal [ "aaaa bbbb", "cccc" ])
-        , test "keeps a line that fits exactly" (\() -> wrapMono 90 [ mono "aaaa bbbb" ] |> Expect.equal [ "aaaa bbbb" ])
-        , test "keeps '\\n' and empty lines" (\() -> wrapMono 100 [ mono "aa\n\nbb" ] |> Expect.equal [ "aa", "", "bb" ])
-        , test "breaks a word wider than a line between characters" (\() -> wrapMono 40 [ mono "abcdefghij x" ] |> Expect.equal [ "abcd", "efgh", "ij x" ])
-        , test "a word split across segments stays together"
+    Test.describe "Sprite.wrapLines"
+        [ Test.test "breaks between words, dropping the space at the break" (\() -> wrapMono 100 [ mono "aaaa bbbb cccc" ] |> Expect.equal [ "aaaa bbbb", "cccc" ])
+        , Test.test "keeps a line that fits exactly" (\() -> wrapMono 90 [ mono "aaaa bbbb" ] |> Expect.equal [ "aaaa bbbb" ])
+        , Test.test "keeps '\\n' and empty lines" (\() -> wrapMono 100 [ mono "aa\n\nbb" ] |> Expect.equal [ "aa", "", "bb" ])
+        , Test.test "breaks a word wider than a line between characters" (\() -> wrapMono 40 [ mono "abcdefghij x" ] |> Expect.equal [ "abcd", "efgh", "ij x" ])
+        , Test.test "a word split across segments stays together"
             (\() ->
                 wrapMono 60 [ mono "aa b", { text = "bb", color = Color.white, font = Mono, decorations = [], link = Nothing }, mono "b" ]
                     |> Expect.equal [ "aa", "bbbb" ]
             )
-        , test "joins segments of the same look, keeps others apart"
+        , Test.test "joins segments of the same look, keeps others apart"
             (\() ->
                 Sprite.wrapLines Small (Units.ui 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono, decorations = [], link = Nothing } ]
                     |> List.map (List.map .text)
                     |> Expect.equal [ [ "a b", "c" ] ]
             )
-        , test "wrapSegments joins the lines with '\\n'"
+        , Test.test "wrapSegments joins the lines with '\\n'"
             (\() ->
                 Sprite.wrapSegments Small (Units.ui 100) [ mono "aaaa bbbb cccc" ]
                     |> List.map .text
                     |> String.concat
                     |> Expect.equal "aaaa bbbb\ncccc"
             )
-        , test "no line is wider than the width, in Noto Sans" (\() -> fitsWidth)
+        , Test.test "no line is wider than the width, in Noto Sans" (\() -> fitsWidth)
         ]
 
 

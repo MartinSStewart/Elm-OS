@@ -13,7 +13,7 @@ import Main
 import Network
 import Network.Types
 import Persist
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Time
 import Unsafe
 import Wire
@@ -240,19 +240,19 @@ pending host =
 
 suite : Test
 suite =
-    describe "Persist"
-        [ test "CRC-32 is zlib's"
+    Test.describe "Persist"
+        [ Test.test "CRC-32 is zlib's"
             (\_ -> Persist.crc32 (text "123456789") |> Expect.equal 0xCBF43926)
-        , test "CRC-32 of non-ASCII text is of its UTF-8 bytes"
+        , Test.test "CRC-32 of non-ASCII text is of its UTF-8 bytes"
             (\_ -> Persist.crc32 (text "é€😀") |> Expect.equal 0x84D8CDA6)
-        , test "the host frames a snapshot the same way"
+        , Test.test "the host frames a snapshot the same way"
             (\_ -> Persist.frame (text "[1]") |> Expect.equal (text "3 4c2f32b8 [1]\n"))
-        , test "entries read back"
+        , Test.test "entries read back"
             (\_ ->
                 Persist.unframe (join [ Persist.frame (text "[1,2]"), Persist.frame (bytes [ 10, 0, 255 ]), Persist.frame (text "") ])
                     |> Expect.equal [ text "[1,2]", bytes [ 10, 0, 255 ], text "" ]
             )
-        , test "an entry cut short is dropped"
+        , Test.test "an entry cut short is dropped"
             (\_ ->
                 let
                     both =
@@ -262,7 +262,7 @@ suite =
                     |> List.map (\n -> List.length (Persist.unframe (bytes (List.take n both))))
                     |> Expect.equal (List.repeat 17 0 ++ List.repeat 17 1 ++ [ 2 ])
             )
-        , test "a damaged entry and everything after it are dropped"
+        , Test.test "a damaged entry and everything after it are dropped"
             (\_ ->
                 Persist.unframe
                     (join
@@ -283,7 +283,7 @@ suite =
                     )
                     |> Expect.equal [ text "[1,2]" ]
             )
-        , test "the generated codec reads back the Model it wrote"
+        , Test.test "the generated codec reads back the Model it wrote"
             (\_ ->
                 let
                     model =
@@ -293,7 +293,7 @@ suite =
                     |> BD.decode ElmOs.codecs.modelDecoder
                     |> Expect.equal (Just model)
             )
-        , test "restoring gives the Model as it was"
+        , Test.test "restoring gives the Model as it was"
             (\_ ->
                 let
                     ( live, host ) =
@@ -309,7 +309,7 @@ suite =
                     ]
                     ()
             )
-        , test "a power cut in the middle of the log keeps the messages before it"
+        , Test.test "a power cut in the middle of the log keeps the messages before it"
             (\_ ->
                 let
                     ( _, host ) =
@@ -320,7 +320,7 @@ suite =
                 in
                 Tuple.first (restart cut) |> Expect.equal (Just (afterRestart (List.take 9 session)))
             )
-        , test "after a restart, new messages follow the restored Model"
+        , Test.test "after a restart, new messages follow the restored Model"
             (\_ ->
                 let
                     ( _, host ) =
@@ -339,7 +339,7 @@ suite =
                     ]
                     ()
             )
-        , test "messages that come while the Model is restored are applied after the logged ones"
+        , Test.test "messages that come while the Model is restored are applied after the logged ones"
             (\_ ->
                 let
                     ( _, host ) =
@@ -349,7 +349,7 @@ suite =
                     |> Tuple.first
                     |> Expect.equal (Just restartedAt15)
             )
-        , test "a message the host sends again is applied once"
+        , Test.test "a message the host sends again is applied once"
             (\_ ->
                 let
                     ( _, host ) =
@@ -372,7 +372,7 @@ suite =
                     |> Persist.appModel
                     |> Expect.equal (Just (afterRestart (List.take 15 session)))
             )
-        , test "a snapshot whose log wasn't trimmed skips the messages it has"
+        , Test.test "a snapshot whose log wasn't trimmed skips the messages it has"
             (\_ ->
                 let
                     ( _, host ) =
@@ -385,7 +385,7 @@ suite =
                 Tuple.first (restart { rebooted | log = host.log })
                     |> Expect.equal (Just (afterRestart session))
             )
-        , test "a log started again from 1 after the snapshot (it was lost) doesn't lose new messages"
+        , Test.test "a log started again from 1 after the snapshot (it was lost) doesn't lose new messages"
             (\_ ->
                 let
                     ( _, host ) =
@@ -399,7 +399,7 @@ suite =
                     |> Tuple.first
                     |> Expect.equal (Just restartedAt15)
             )
-        , test "a snapshot from other types is ignored, kept, and its log isn't replayed"
+        , Test.test "a snapshot from other types is ignored, kept, and its log isn't replayed"
             (\_ ->
                 let
                     ( _, host ) =
@@ -414,7 +414,7 @@ suite =
                 ( model, Dict.get "/data/snapshot-unreadable" after.files )
                     |> Expect.equal ( Just Main.persistConfig.init, Just other )
             )
-        , test "a snapshot in the JSON format before Wire3 starts afresh, and is kept"
+        , Test.test "a snapshot in the JSON format before Wire3 starts afresh, and is kept"
             (\_ ->
                 let
                     ( _, host ) =
@@ -429,7 +429,7 @@ suite =
                 ( model, Dict.get "/data/snapshot-unreadable" after.files )
                     |> Expect.equal ( Just Main.persistConfig.init, Just old )
             )
-        , test "a request still waiting at a power cut is answered as interrupted at the next boot"
+        , Test.test "a request still waiting at a power cut is answered as interrupted at the next boot"
             (\_ ->
                 let
                     ( _, host ) =
@@ -438,7 +438,7 @@ suite =
                 -- "geo" was waiting (see the next test).
                 pending (Tuple.second (restart host)) |> Expect.equal []
             )
-        , test "a request the host is still answering when it starts the program again is left waiting"
+        , Test.test "a request the host is still answering when it starts the program again is left waiting"
             (\_ ->
                 let
                     ( _, host ) =

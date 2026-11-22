@@ -29,7 +29,7 @@ import Sprite
 import Ui
 import UiId exposing (UiId)
 import Weather.Types
-import Window exposing (em)
+import Window
 
 
 type WeatherState
@@ -71,7 +71,7 @@ rows online model =
             Sprite.Sans Sprite.Regular
 
         width =
-            em 28
+            Window.em 28
 
         t =
             Ui.text
@@ -103,7 +103,7 @@ rows online model =
 
         GotWeather place forecast ->
             [ Ui.leftAndRight width
-                (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
+                (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (Window.em 6)) ("Weather in " ++ place.name)))
                 (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Refresh"))
             , Ui.row
                 8
@@ -136,7 +136,7 @@ rows online model =
                         Ui.row
                             6
                             [ weatherIcon 1 day.code
-                            , Ui.left (em 6)
+                            , Ui.left (Window.em 6)
                                 (t
                                     (if i == 0 then
                                         "Today"
@@ -145,7 +145,7 @@ rows online model =
                                         weekday day.date
                                     )
                                 )
-                            , Ui.left (em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.left (Window.em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
                             , t (describe day.code)
                             ]
                     )

@@ -5,7 +5,7 @@ import Cursor exposing (Cursor)
 import Expect
 import Quantity
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Ui
 import Units
 
@@ -37,11 +37,11 @@ cursorAt x y =
 
 suite : Test
 suite =
-    describe "Mouse cursors"
-        [ test "an I-beam over a text input" (\_ -> cursorAt 5 5 |> Expect.equal Cursor.Text)
-        , test "a hand over a button, its label too" (\_ -> cursorAt 215 15 |> Expect.equal Cursor.Pointer)
-        , test "the arrow elsewhere" (\_ -> cursorAt 5000 5 |> Expect.equal Cursor.Arrow)
-        , test "every picture has an outline, its hot spot on it, and its 2x picture is twice the size"
+    Test.describe "Mouse cursors"
+        [ Test.test "an I-beam over a text input" (\_ -> cursorAt 5 5 |> Expect.equal Cursor.Text)
+        , Test.test "a hand over a button, its label too" (\_ -> cursorAt 215 15 |> Expect.equal Cursor.Pointer)
+        , Test.test "the arrow elsewhere" (\_ -> cursorAt 5000 5 |> Expect.equal Cursor.Arrow)
+        , Test.test "every picture has an outline, its hot spot on it, and its 2x picture is twice the size"
             (\_ ->
                 Cursor.all
                     |> List.filter

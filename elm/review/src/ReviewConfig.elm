@@ -21,6 +21,7 @@ import ExposeAllRecordFields
 import NoConfusingPrefixOperator
 import NoDebug.TodoOrToString
 import NoExposingEverything
+import NoExposingFunctions
 import NoImportingEverything
 import NoInconsistentAliases
 import NoMissingTypeAnnotation
@@ -70,6 +71,7 @@ rules =
     , NoConfusingPrefixOperator.rule
     , NoDebug.TodoOrToString.rule
     , NoExposingEverything.rule
+    , NoExposingFunctions.rule
     , NoImportingEverything.rule []
     , NoMissingTypeAnnotation.rule
     , NoMissingTypeExpose.rule

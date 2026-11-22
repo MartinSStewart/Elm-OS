@@ -5,7 +5,7 @@ import Duration
 import Expect
 import Quantity
 import SeqDict
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Time
 import Ui
 import Units
@@ -49,12 +49,12 @@ frames n model =
 
 suite : Test
 suite =
-    describe "Ui scrolling"
-        [ test "touchpad pixels move the content at once"
+    Test.describe "Ui scrolling"
+        [ Test.test "touchpad pixels move the content at once"
             (\_ ->
                 Ui.init |> scroll (Ui.ScrollPixels (Units.ui -12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
             )
-        , test "momentum glides on, slowing down, and stops"
+        , Test.test "momentum glides on, slowing down, and stops"
             (\_ ->
                 let
                     start =
@@ -79,11 +79,11 @@ suite =
                     ]
                     ()
             )
-        , test "a glide stops at the end of the content"
+        , Test.test "a glide stops at the end of the content"
             (\_ ->
                 Ui.init |> scroll (Ui.Momentum -8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -900
             )
-        , test "content shorter than the viewport doesn't scroll"
+        , Test.test "content shorter than the viewport doesn't scroll"
             (\_ ->
                 let
                     short : Ui.Model () -> Ui.Model ()
@@ -96,11 +96,11 @@ suite =
                 in
                 Ui.init |> short |> offset |> Expect.within (Expect.Absolute 1.0e-9) 0
             )
-        , test "a viewport is its content's width (the scroll bar lies over the content)"
+        , Test.test "a viewport is its content's width (the scroll bar lies over the content)"
             (\_ ->
                 Ui.size viewport |> Expect.equal (Coord.xy 10 100)
             )
-        , test "dragging the scroll bar thumb to the bottom scrolls to the end"
+        , Test.test "dragging the scroll bar thumb to the bottom scrolls to the end"
             (\_ ->
                 let
                     pressed : Ui.Model ()
@@ -123,7 +123,7 @@ suite =
                     ]
                     ()
             )
-        , test "the scroll bar fades in over the viewport and widens over the scroll bar"
+        , Test.test "the scroll bar fades in over the viewport and widens over the scroll bar"
             (\_ ->
                 let
                     -- 100 wide content, so the viewport is 102 wide and its scroll bar is
@@ -169,7 +169,7 @@ suite =
                     ]
                     ()
             )
-        , test "stopMomentum stops it"
+        , Test.test "stopMomentum stops it"
             (\_ ->
                 let
                     stopped =
@@ -177,7 +177,7 @@ suite =
                 in
                 offset (frames 10 stopped) |> Expect.within (Expect.Absolute 1.0e-9) (offset stopped)
             )
-        , test "a screenshot keeps the viewport's scroll under an Int id"
+        , Test.test "a screenshot keeps the viewport's scroll under an Int id"
             (\_ ->
                 let
                     scrolled : Ui.Model ()

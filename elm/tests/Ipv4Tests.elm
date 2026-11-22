@@ -3,12 +3,12 @@ module Ipv4Tests exposing (suite)
 import Expect
 import Fuzz exposing (Fuzzer)
 import Network.Ipv4 as Ipv4
-import Test exposing (Test, describe)
+import Test exposing (Test)
 
 
 suite : Test
 suite =
-    describe "Ipv4"
+    Test.describe "Ipv4"
         [ Test.fuzz fuzzIpv4Strings "Round trip" (\text -> Ipv4.fromString text |> Result.map Ipv4.toString |> Expect.equal (Ok text))
         ]
 

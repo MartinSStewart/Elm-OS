@@ -3,7 +3,7 @@ module CodeFindTest exposing (suite)
 import Code.Find
 import Expect
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import TextInput
 import TextInputMultiline
 import Units
@@ -11,27 +11,27 @@ import Units
 
 suite : Test
 suite =
-    describe "Code.Find and the editor's find support"
-        [ test "matches ignore case and don't overlap"
+    Test.describe "Code.Find and the editor's find support"
+        [ Test.test "matches ignore case and don't overlap"
             (\_ ->
                 Code.Find.matches "aa" "Aaaa xAA"
                     |> Expect.equal [ ( 0, 2 ), ( 2, 4 ), ( 6, 8 ) ]
             )
-        , test "an empty needle matches nothing"
+        , Test.test "an empty needle matches nothing"
             (\_ ->
                 Code.Find.matches "" "abc" |> Expect.equal []
             )
-        , test "next wraps around"
+        , Test.test "next wraps around"
             (\_ ->
                 ( Code.Find.next 5 [ ( 1, 2 ), ( 7, 8 ) ], Code.Find.next 9 [ ( 1, 2 ), ( 7, 8 ) ] )
                     |> Expect.equal ( Just ( 7, 8 ), Just ( 1, 2 ) )
             )
-        , test "previous wraps around"
+        , Test.test "previous wraps around"
             (\_ ->
                 ( Code.Find.previous 5 [ ( 1, 2 ), ( 7, 8 ) ], Code.Find.previous 1 [ ( 1, 2 ), ( 7, 8 ) ] )
                     |> Expect.equal ( Just ( 1, 2 ), Just ( 7, 8 ) )
             )
-        , test "replaceRanges replaces every range in one undo step"
+        , Test.test "replaceRanges replaces every range in one undo step"
             (\_ ->
                 let
                     replaced : TextInputMultiline.Model
@@ -45,7 +45,7 @@ suite =
                 )
                     |> Expect.equal ( "1 two 1", 7, [ "one two one" ] )
             )
-        , test "select puts the cursor at the end of the range"
+        , Test.test "select puts the cursor at the end of the range"
             (\_ ->
                 let
                     selected : TextInput.State

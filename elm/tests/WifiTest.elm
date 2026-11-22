@@ -12,7 +12,7 @@ import Network
 import Network.Types
 import Network.Wpa2Password as Wpa2Password
 import SeqDict
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Unsafe
 
 
@@ -80,29 +80,29 @@ status state ssid =
 
 suite : Test
 suite =
-    describe "Wifi"
-        [ test "while idle, a scan with saved networks joins the strongest of them"
+    Test.describe "Wifi"
+        [ Test.test "while idle, a scan with saved networks joins the strongest of them"
             (\_ ->
                 run [ status Network.Idle "", scan ] saved
                     |> Tuple.second
                     |> connects
                     |> Expect.equal [ "Home password" ]
             )
-        , test "after a failure, scans don't try again"
+        , Test.test "after a failure, scans don't try again"
             (\_ ->
                 run [ status Network.Failed "Home", scan ] saved
                     |> Tuple.second
                     |> connects
                     |> Expect.equal []
             )
-        , test "while connected, scans don't join anything"
+        , Test.test "while connected, scans don't join anything"
             (\_ ->
                 run [ status Network.Connected "Cafe", scan ] saved
                     |> Tuple.second
                     |> connects
                     |> Expect.equal []
             )
-        , test "without saved networks, nothing is joined"
+        , Test.test "without saved networks, nothing is joined"
             (\_ ->
                 run [ status Network.Idle "", scan ] Main.persistConfig.init
                     |> Tuple.second

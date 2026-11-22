@@ -3,7 +3,7 @@ module LayoutTest exposing (suite)
 import Coord
 import Expect
 import Layout
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 
 
 fixed : Int -> Int -> Layout.Limits
@@ -32,42 +32,42 @@ run w h windows =
 
 suite : Test
 suite =
-    describe "Layout"
-        [ test "nothing open" (\_ -> run 1000 800 [] |> Expect.equal [])
-        , test "one window gets its preferred size in the top left"
+    Test.describe "Layout"
+        [ Test.test "nothing open" (\_ -> run 1000 800 [] |> Expect.equal [])
+        , Test.test "one window gets its preferred size in the top left"
             (\_ -> run 1000 800 [ ( "a", fixed 200 100 ) ] |> Expect.equal [ ( "a", ( 0, 0 ), ( 200, 100 ) ) ])
-        , test "small windows that fit stack in one column"
+        , Test.test "small windows that fit stack in one column"
             (\_ ->
                 run 1000 800 [ ( "a", fixed 200 100 ), ( "b", fixed 300 100 ) ]
                     |> Expect.equal [ ( "a", ( 0, 0 ), ( 200, 100 ) ), ( "b", ( 0, 108 ), ( 300, 100 ) ) ]
             )
-        , test "windows too tall for one column go side by side"
+        , Test.test "windows too tall for one column go side by side"
             (\_ ->
                 run 1000 800 [ ( "a", fixed 200 500 ), ( "b", fixed 300 500 ) ]
                     |> Expect.equal [ ( "a", ( 0, 0 ), ( 200, 500 ) ), ( "b", ( 208, 0 ), ( 300, 500 ) ) ]
             )
-        , test "a stretchy window takes the whole height beside a small one"
+        , Test.test "a stretchy window takes the whole height beside a small one"
             (\_ ->
                 run 1300 800 [ ( "calc", fixed 250 300 ), ( "hn", stretchy ) ]
                     |> Expect.equal [ ( "calc", ( 0, 0 ), ( 250, 300 ) ), ( "hn", ( 258, 0 ), ( 900, 800 ) ) ]
             )
-        , test "windows keep their limits when there is room"
+        , Test.test "windows keep their limits when there is room"
             (\_ ->
                 run 3000 2000 [ ( "a", stretchy ), ( "b", stretchy ), ( "c", fixed 100 100 ) ]
                     |> List.map (\( _, _, size ) -> size)
                     |> Expect.equal [ ( 900, 2000 ), ( 900, 1892 ), ( 100, 100 ) ]
             )
-        , test "the oldest windows are left out when they don't all fit"
+        , Test.test "the oldest windows are left out when they don't all fit"
             (\_ ->
                 run 900 400 (List.map (\i -> ( String.fromInt i, fixed 400 300 )) (List.range 1 4))
                     |> Expect.equal [ ( "3", ( 0, 0 ), ( 400, 300 ) ), ( "4", ( 408, 0 ), ( 400, 300 ) ) ]
             )
-        , test "the newest window stays, squeezed, when even it doesn't fit"
+        , Test.test "the newest window stays, squeezed, when even it doesn't fit"
             (\_ ->
                 run 300 200 [ ( "old", fixed 100 100 ), ( "new", fixed 400 300 ) ]
                     |> Expect.equal [ ( "new", ( 0, 0 ), ( 300, 200 ) ) ]
             )
-        , test "windows never overlap"
+        , Test.test "windows never overlap"
             (\_ ->
                 let
                     placed =

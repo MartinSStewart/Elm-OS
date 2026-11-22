@@ -4,7 +4,7 @@ import Color
 import Coord
 import Expect
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Ui
 
 
@@ -15,8 +15,8 @@ segment text link =
 
 tests : Test
 tests =
-    describe "links in text"
-        [ test "linkAt finds the link under a point"
+    Test.describe "links in text"
+        [ Test.test "linkAt finds the link under a point"
             (\_ ->
                 let
                     segments =
@@ -28,7 +28,7 @@ tests =
                 )
                     |> Expect.equal ( Nothing, Just "https://a.example", Nothing )
             )
-        , test "Ui.hover finds a text with links only over a link"
+        , Test.test "Ui.hover finds a text with links only over a link"
             (\_ ->
                 let
                     element =

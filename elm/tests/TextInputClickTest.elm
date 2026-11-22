@@ -1,7 +1,7 @@
 module TextInputClickTest exposing (suite)
 
 import Expect
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import TextInput
 import Time
 
@@ -22,24 +22,24 @@ clickAt ms index =
 
 suite : Test
 suite =
-    describe "double and triple click"
-        [ test "a double click inside a word selects the word"
+    Test.describe "double and triple click"
+        [ Test.test "a double click inside a word selects the word"
             (\_ -> selected 2 7 "hello world foo" |> Expect.equal ( 6, 11 ))
-        , test "a double click at the edge of a word selects that word"
+        , Test.test "a double click at the edge of a word selects that word"
             (\_ -> selected 2 6 "hello world foo" |> Expect.equal ( 6, 11 ))
-        , test "a double click on a space selects the nearer word"
+        , Test.test "a double click on a space selects the nearer word"
             (\_ -> selected 2 12 "hello world   foo" |> Expect.equal ( 6, 11 ))
-        , test "a double click on a space at the nearer end selects the word after"
+        , Test.test "a double click on a space at the nearer end selects the word after"
             (\_ -> selected 2 14 "hello world   foo" |> Expect.equal ( 14, 17 ))
-        , test "a double click on a space exactly between words selects the word after"
+        , Test.test "a double click on a space exactly between words selects the word after"
             (\_ -> selected 2 6 "ab  cd" |> Expect.equal ( 4, 6 ))
-        , test "a double click on an empty line selects nothing, not a word on another line"
+        , Test.test "a double click on an empty line selects nothing, not a word on another line"
             (\_ -> selected 2 3 "ab\n\ncd" |> Expect.equal ( 3, 3 ))
-        , test "a double click past the last word selects it"
+        , Test.test "a double click past the last word selects it"
             (\_ -> selected 2 7 "hello   " |> Expect.equal ( 0, 5 ))
-        , test "a triple click selects everything"
+        , Test.test "a triple click selects everything"
             (\_ -> selected 3 2 "ab\ncd ef" |> Expect.equal ( 0, 8 ))
-        , test "clicks close in time and place count up, and a fourth starts again"
+        , Test.test "clicks close in time and place count up, and a fourth starts again"
             (\_ ->
                 let
                     ( a, m1 ) =
@@ -56,7 +56,7 @@ suite =
                 in
                 [ a, b, c, d ] |> Expect.equal [ 1, 2, 3, 1 ]
             )
-        , test "a slow click or a click elsewhere starts again"
+        , Test.test "a slow click or a click elsewhere starts again"
             (\_ ->
                 let
                     ( _, m1 ) =
