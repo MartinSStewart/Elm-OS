@@ -1,4 +1,4 @@
-module Main exposing (App, Model, Msg, PowerAction, RendererInfo, ScreenshotPreview, SystemInfo, SystemStats, persistConfig)
+module Main exposing (App, Model, Msg, PowerAction, ScreenshotPreview, persistConfig)
 
 {-| Elm OS: a mouse cursor, a toolbar with a clock, and apps that open from the toolbar,
 drawn by the UI framework (Ui.elm, from town-collab). Each open app gets a window, laid
@@ -13,6 +13,9 @@ list of effects (Effect.elm), such as the triangles to draw, which go back on on
 
 -}
 
+import About
+import About.Types
+import App
 import AsciiCollab
 import AsciiCollab.Types
 import BootInfo
@@ -29,8 +32,12 @@ import Color exposing (Color)
 import Coord exposing (Coord)
 import Cursor exposing (Cursor)
 import Date
+import DebugInfo
+import DebugInfo.Types
 import Display exposing (Display)
 import Duration exposing (Duration)
+import Editor
+import Editor.Types
 import Effect exposing (Effect, HttpError(..))
 import Email
 import Email.Types
@@ -65,8 +72,10 @@ import Ui exposing (ElementState(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather exposing (WeatherState(..))
+import Weather.Types
 import WebViewer
 import WebViewer.Types
+import Window exposing (bodySize)
 
 
 
@@ -88,14 +97,14 @@ type Input
     | Scroll Float -- touchpad scrolling, UI pixels, positive is down
     | ScrollMomentum Float -- the fingers lifted: keep going at this many UI pixels a second, 0 stops
     | Key Int Bool Bool -- code, down, autorepeat
-    | Renderer RendererInfo
-    | Stats SystemStats
+    | Renderer DebugInfo.Types.RendererInfo
+    | Stats DebugInfo.Types.SystemStats
     | WifiDevice Network.WifiDevice
     | WifiScan (List Network.WifiNetwork)
     | WifiStatus Network.WifiStatus
     | WiredLinks (List Network.WiredLink)
     | NetConfig { geoUrl : String, weatherUrl : String }
-    | System SystemInfo
+    | System About.Types.SystemInfo
     | BootInfo BootInfo.Input
       -- The host is about to replace this program with a newer build (named by the
       -- string): show it, and answer once the snapshot is written.
@@ -120,28 +129,6 @@ type Input
       -- The kernel's command line (/proc/cmdline), read at start: ELMOS_TEST=1 turns on
       -- the test facts (`testFacts`).
     | CommandLine (Maybe String)
-
-
-type alias SystemInfo =
-    { kernel : String, cpu : String, commit : String }
-
-
-type alias RendererInfo =
-    { gpu : Bool, name : String, hardwareCursor : Bool }
-
-
-type alias SystemStats =
-    { cores : Int
-    , cpu : Float
-    , cpuElm : Float
-    , cpuHost : Float
-    , cpuGpu : Float
-    , memUsed : Int
-    , memTotal : Int
-    , gpuMs : Maybe Float
-    , elmMs : Maybe Float
-    , drawMs : Maybe Float
-    }
 
 
 {-| What a message from the host (HostMessage.elm) means here.
@@ -328,8 +315,8 @@ type alias Model =
     , mouse : Coord DevicePixels
     , colorIndex : Int
     , pressed : Bool
-    , renderer : Maybe RendererInfo
-    , stats : Maybe SystemStats
+    , renderer : Maybe DebugInfo.Types.RendererInfo
+    , stats : Maybe DebugInfo.Types.SystemStats
     , lastFrame : Maybe Float
     , frameIntervals : List Float -- milliseconds, newest first
     , frames : Int
@@ -348,7 +335,7 @@ type alias Model =
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
     , geoUrl : String
     , weatherUrl : String
-    , system : Maybe SystemInfo
+    , system : Maybe About.Types.SystemInfo
     , bootInfo : BootInfo.Model
     , aboutOpen : Bool
     , newsOpen : Bool
@@ -947,8 +934,8 @@ step event model =
             else if model.uiState.focus == Just (Network Network.Types.PasswordInput) then
                 typeKey key model
 
-            else if model.uiState.focus == Just EditorInput then
-                ( multilineKey EditorInput (editorStyle model) key model, [] )
+            else if model.uiState.focus == Just (Editor Editor.Types.Input) then
+                ( multilineKey (Editor Editor.Types.Input) (Editor.style (appUiSize EditorApp model)) key model, [] )
 
             else if model.uiState.focus == Just (Code Code.Types.Input) && model.code.isOpen then
                 if model.ctrl && key == Keyboard.Character "s" then
@@ -1212,8 +1199,13 @@ click model id =
 appButton : UiId -> Maybe App
 appButton id =
     case id of
-        AboutButton ->
-            Just AboutApp
+        About aboutId ->
+            case aboutId of
+                About.Types.OpenButton ->
+                    Just AboutApp
+
+                About.Types.CloseButton ->
+                    Nothing
 
         NewsButton ->
             Just NewsApp
@@ -1244,8 +1236,19 @@ appButton id =
                 Paint.Types.BrushButton _ ->
                     Nothing
 
-        EditorButton ->
-            Just EditorApp
+        Editor editorId ->
+            case editorId of
+                Editor.Types.OpenButton ->
+                    Just EditorApp
+
+                Editor.Types.Input ->
+                    Nothing
+
+                Editor.Types.Window ->
+                    Nothing
+
+                Editor.Types.CloseButton ->
+                    Nothing
 
         Code codeId ->
             case codeId of
@@ -1353,23 +1356,24 @@ appButton id =
                 ScreenshotViewer.Types.FitButton ->
                     Nothing
 
-        DebugButton ->
-            Just DebugApp
+        DebugInfo debugId ->
+            case debugId of
+                DebugInfo.Types.OpenButton ->
+                    Just DebugApp
 
-        NetworkAppButton ->
-            Just NetworkApp
+                DebugInfo.Types.CloseButton ->
+                    Nothing
 
-        WeatherAppButton ->
-            Just WeatherApp
+        Weather weatherId ->
+            case weatherId of
+                Weather.Types.OpenButton ->
+                    Just WeatherApp
 
-        CloseDebugButton ->
-            Nothing
+                Weather.Types.RefreshButton ->
+                    Nothing
 
-        CloseNetworkButton ->
-            Nothing
-
-        CloseWeatherButton ->
-            Nothing
+                Weather.Types.CloseButton ->
+                    Nothing
 
         HackerNews id2 ->
             case id2 of
@@ -1409,14 +1413,34 @@ appButton id =
         Lazy _ ->
             Nothing
 
-        Network _ ->
-            Nothing
+        Network networkId ->
+            case networkId of
+                Network.Types.OpenButton ->
+                    Just NetworkApp
 
-        WeatherButton ->
-            Nothing
+                Network.Types.CloseButton ->
+                    Nothing
 
-        CloseAboutButton ->
-            Nothing
+                Network.Types.RefreshButton ->
+                    Nothing
+
+                Network.Types.NetworkButton _ ->
+                    Nothing
+
+                Network.Types.PasswordInput ->
+                    Nothing
+
+                Network.Types.ShowPasswordButton ->
+                    Nothing
+
+                Network.Types.ConnectButton ->
+                    Nothing
+
+                Network.Types.DisconnectButton ->
+                    Nothing
+
+                Network.Types.NetworkListViewport ->
+                    Nothing
 
         PowerOffButton ->
             Nothing
@@ -1434,15 +1458,6 @@ appButton id =
             Nothing
 
         TicTacToe _ ->
-            Nothing
-
-        EditorInput ->
-            Nothing
-
-        EditorWindow ->
-            Nothing
-
-        CloseEditorButton ->
             Nothing
 
         News _ ->
@@ -1514,11 +1529,24 @@ clickElement model id =
         Network networkId ->
             clickNetwork model networkId
 
-        WeatherButton ->
-            fetchWeather model
+        Weather weatherId ->
+            case weatherId of
+                Weather.Types.RefreshButton ->
+                    fetchWeather model
 
-        AboutButton ->
-            ( { model | aboutOpen = not model.aboutOpen }, [] )
+                Weather.Types.OpenButton ->
+                    ( { model | weatherOpen = not model.weatherOpen }, [] )
+
+                Weather.Types.CloseButton ->
+                    ( { model | weatherOpen = False }, [] )
+
+        About aboutId ->
+            case aboutId of
+                About.Types.OpenButton ->
+                    ( { model | aboutOpen = not model.aboutOpen }, [] )
+
+                About.Types.CloseButton ->
+                    ( { model | aboutOpen = False }, [] )
 
         NewsButton ->
             let
@@ -1546,31 +1574,33 @@ clickElement model id =
                 ( False, _ ) ->
                     ( { model | newsOpen = isOpen }, [] )
 
-        EditorButton ->
-            ( { model
-                | editorOpen = not model.editorOpen
-                , uiState =
-                    Ui.setFocus
-                        (if model.editorOpen then
-                            Nothing
+        Editor editorId ->
+            case editorId of
+                Editor.Types.OpenButton ->
+                    ( { model
+                        | editorOpen = not model.editorOpen
+                        , uiState =
+                            Ui.setFocus
+                                (if model.editorOpen then
+                                    Nothing
 
-                         else
-                            Just EditorInput
-                        )
-                        model.uiState
-              }
-            , []
-            )
+                                 else
+                                    Just (Editor Editor.Types.Input)
+                                )
+                                model.uiState
+                      }
+                    , []
+                    )
 
-        EditorInput ->
-            ( model, [] )
+                Editor.Types.Input ->
+                    ( model, [] )
 
-        EditorWindow ->
-            -- A click on the window around the text still types into it.
-            ( { model | uiState = Ui.setFocus (Just EditorInput) model.uiState }, [] )
+                Editor.Types.Window ->
+                    -- A click on the window around the text still types into it.
+                    ( { model | uiState = Ui.setFocus (Just (Editor Editor.Types.Input)) model.uiState }, [] )
 
-        CloseEditorButton ->
-            ( { model | editorOpen = False }, [] )
+                Editor.Types.CloseButton ->
+                    ( { model | editorOpen = False }, [] )
 
         Code codeId ->
             let
@@ -1579,26 +1609,13 @@ clickElement model id =
             in
             ( { model | code = code, uiState = uiState }, effects )
 
-        CloseAboutButton ->
-            ( { model | aboutOpen = False }, [] )
+        DebugInfo debugId ->
+            case debugId of
+                DebugInfo.Types.OpenButton ->
+                    ( { model | debugOpen = not model.debugOpen }, [] )
 
-        DebugButton ->
-            ( { model | debugOpen = not model.debugOpen }, [] )
-
-        CloseDebugButton ->
-            ( { model | debugOpen = False }, [] )
-
-        NetworkAppButton ->
-            ( { model | networkOpen = not model.networkOpen }, [] )
-
-        CloseNetworkButton ->
-            ( { model | networkOpen = False }, [] )
-
-        WeatherAppButton ->
-            ( { model | weatherOpen = not model.weatherOpen }, [] )
-
-        CloseWeatherButton ->
-            ( { model | weatherOpen = False }, [] )
+                DebugInfo.Types.CloseButton ->
+                    ( { model | debugOpen = False }, [] )
 
         CalculatorButton ->
             if model.calculatorOpen then
@@ -2229,6 +2246,12 @@ passwordId =
 clickNetwork : Model -> Network.Types.UiId -> ( Model, List Effect )
 clickNetwork model id =
     case id of
+        Network.Types.OpenButton ->
+            ( { model | networkOpen = not model.networkOpen }, [] )
+
+        Network.Types.CloseButton ->
+            ( { model | networkOpen = False }, [] )
+
         Network.Types.RefreshButton ->
             ( { model | network = Network.refresh model.network }, [ Effect.WifiScan ] )
 
@@ -2411,8 +2434,8 @@ dragSelect focus mouse position model =
                         model.uiState
             }
 
-        EditorInput ->
-            dragSelectMultiline EditorInput (editorStyle model) mouse position model
+        Editor Editor.Types.Input ->
+            dragSelectMultiline (Editor Editor.Types.Input) (Editor.style (appUiSize EditorApp model)) mouse position model
 
         Code Code.Types.Input ->
             dragSelectMultiline (Code Code.Types.Input) (codeStyle model) mouse position model
@@ -2438,16 +2461,16 @@ dragSelect focus mouse position model =
         Network Network.Types.NetworkListViewport ->
             model
 
-        WeatherButton ->
+        Network Network.Types.OpenButton ->
             model
 
-        AboutButton ->
+        Network Network.Types.CloseButton ->
+            model
+
+        About _ ->
             model
 
         NewsButton ->
-            model
-
-        CloseAboutButton ->
             model
 
         CalculatorButton ->
@@ -2474,31 +2497,19 @@ dragSelect focus mouse position model =
         TicTacToe _ ->
             model
 
-        EditorButton ->
+        Editor Editor.Types.OpenButton ->
             model
 
-        EditorWindow ->
+        Editor Editor.Types.Window ->
             model
 
-        CloseEditorButton ->
+        Editor Editor.Types.CloseButton ->
             model
 
-        DebugButton ->
+        DebugInfo _ ->
             model
 
-        CloseDebugButton ->
-            model
-
-        NetworkAppButton ->
-            model
-
-        CloseNetworkButton ->
-            model
-
-        WeatherAppButton ->
-            model
-
-        CloseWeatherButton ->
+        Weather _ ->
             model
 
         News _ ->
@@ -2999,39 +3010,6 @@ findInput id model =
         |> List.head
 
 
-{-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
--}
-em : Int -> Quantity Int UiPixels
-em n =
-    Units.ui (16 * n)
-
-
-{-| The UI's font: Noto Sans Regular.
--}
-sans : Sprite.Font
-sans =
-    Sprite.Sans Sprite.Regular
-
-
-bodySize : Sprite.FontSize
-bodySize =
-    Sprite.Small
-
-
-{-| For titles and the temperature: the next size up.
--}
-headingSize : Sprite.FontSize
-headingSize =
-    Sprite.Big
-
-
-{-| A title in `headingSize`.
--}
-heading : String -> Ui.Element id
-heading string =
-    Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]
-
-
 {-| Everything the UI framework draws on a display: the toolbar along the top, each
 app open on this display in the window `windows` gives it, and on the main display the
 notices.
@@ -3042,7 +3020,7 @@ displayUi model display =
         :: List.map
             (\( app, bounds ) ->
                 ( bounds.topLeft
-                , appView app (Coord.minus bounds.topLeft bounds.bottomRight) model
+                , (appConfig app model).view (Coord.minus bounds.topLeft bounds.bottomRight)
                     |> warnIfWrongSize (Coord.minus bounds.topLeft bounds.bottomRight)
                 )
             )
@@ -3141,7 +3119,7 @@ windows model display =
     in
     inOrder
         |> List.filter (\app -> appIsOpen app model && (displayOf app model).id == display.id)
-        |> List.map (\app -> ( app, appLimits app ))
+        |> List.map (\app -> ( app, (appConfig app model).limits ))
         |> Layout.layout windowGap area
         |> List.map
             (\( app, bounds ) ->
@@ -3167,409 +3145,124 @@ windowGap =
     8
 
 
-{-| How big each app's window can be. The ones that are always the same size say what
-size their view is.
+{-| What the OS needs of an app: its name, window size limits, and a view that takes the
+size of its window.
 -}
-appLimits : App -> Layout.Limits
-appLimits app =
+appConfig : App -> Model -> App.App
+appConfig app model =
     case app of
         AboutApp ->
-            aboutSize
+            { name = "About"
+            , view =
+                \_ ->
+                    About.view
+                        { commit = Maybe.map .commit model.system
+                        , kernel = Maybe.map .kernel model.system
+                        , cpu = Maybe.map .cpu model.system
+                        , memTotalMb = Maybe.map .memTotal model.stats
+                        , graphics = Maybe.map .name model.renderer
+                        }
+            , limits = About.limits
+            }
 
         NewsApp ->
-            { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
-
-        EmailApp ->
-            { min = Coord.xy 400 300, preferred = Coord.xy 900 700, max = Coord.xy 1200 100000 }
-
-        WebViewerApp ->
-            { min = Coord.xy 400 300, preferred = Coord.xy 900 900, max = Coord.xy 1400 100000 }
+            { name = "News"
+            , view = \size -> News.view model.lazyCache (Coord.x size) (Coord.y size) model.news
+            , limits = { min = Coord.xy 500 300, preferred = Coord.xy 800 1100, max = Coord.xy 1000 100000 }
+            }
 
         HackerNewsApp ->
-            { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
+            { name = "HackerNews"
+            , view = \size -> HackerNews.view model.lazyCache size model.hackerNews
+            , limits = { min = Coord.xy 400 300, preferred = Coord.xy HackerNews.maxWindowWidth 1100, max = Coord.xy HackerNews.maxWindowWidth 100000 }
+            }
+
+        EmailApp ->
+            { name = "Email"
+            , view = \size -> Email.view size model.email
+            , limits = { min = Coord.xy 400 300, preferred = Coord.xy 900 700, max = Coord.xy 1200 100000 }
+            }
+
+        WebViewerApp ->
+            { name = "WebViewer"
+            , view = \size -> WebViewer.view size model.webViewer
+            , limits = { min = Coord.xy 400 300, preferred = Coord.xy 900 900, max = Coord.xy 1400 100000 }
+            }
 
         AsciiCollabApp ->
-            { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
+            { name = "AsciiCollab"
+            , view = \size -> AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
+            , limits = { min = Coord.xy 400 300, preferred = Coord.xy 1200 800, max = Coord.xy 100000 100000 }
+            }
 
         CalculatorApp ->
-            Calculator.appSize
+            { name = "Calculator"
+            , view = \_ -> Calculator.view (calculatorFocused model) model.calculator
+            , limits = Calculator.appSize
+            }
 
         TicTacToeApp ->
-            TicTacToe.appSize
+            { name = "TicTacToe"
+            , view = \_ -> TicTacToe.view model.ticTacToe
+            , limits = TicTacToe.appSize
+            }
 
         PaintApp ->
-            Paint.appSize
+            { name = "Paint"
+            , view = \_ -> Paint.view model.paint
+            , limits = Paint.appSize
+            }
 
         EditorApp ->
-            { min = Coord.xy (Quantity.unwrap (em 32) + 16) 250
-            , preferred = Coord.xy (Quantity.unwrap (em 40) + 16) (editorChrome + 24 * Quantity.unwrap (Sprite.lineHeight bodySize))
-            , max = Coord.xy (Quantity.unwrap (em 60) + 16) 100000
+            { name = "Editor"
+            , view = \size -> Editor.view size (Ui.getTextInputMultiline (Editor Editor.Types.Input) model.uiState)
+            , limits = Editor.limits
             }
 
         CodeApp ->
-            Code.appSize
+            { name = "Code"
+            , view = \size -> Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) (Code.findText model.uiState) model.code
+            , limits = Code.appSize
+            }
 
         DebugApp ->
-            debugSize
+            { name = "Debug"
+            , view =
+                \_ ->
+                    DebugInfo.view
+                        { displays = model.displays
+                        , mouse = model.mouse
+                        , renderer = model.renderer
+                        , stats = model.stats
+                        , frameIntervals = model.frameIntervals
+                        , bootInfo = model.bootInfo
+                        }
+            , limits = DebugInfo.limits
+            }
 
         NetworkApp ->
-            networkSize
+            { name = "Network"
+            , view = \_ -> Network.view model.network
+            , limits = Network.limits
+            }
 
         WeatherApp ->
-            weatherSize
+            { name = "Weather"
+            , view = \_ -> Weather.view (Network.isOnline model.network) model.weather
+            , limits = Weather.limits
+            }
 
         ScreenshotViewerApp ->
-            { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
-
-
-aboutSize : Layout.Limits
-aboutSize =
-    Layout.fixed (Ui.size (aboutPage init))
-
-
-debugSize : Layout.Limits
-debugSize =
-    Layout.fixed (Ui.size (overlay debugSample))
-
-
-{-| What the debug app is sized from, once: the host has said everything it says.
--}
-debugSample : Model
-debugSample =
-    { init
-        | displays = [ { id = 0, name = "eDP-1", position = Coord.xy 0 0, size = Coord.xy 1920 1080, sizeMm = ( 0, 0 ) } ]
-        , renderer = Just { gpu = True, name = "Renderer", hardwareCursor = True }
-        , stats =
-            Just
-                { cores = 8
-                , cpu = 0
-                , cpuElm = 0
-                , cpuHost = 0
-                , cpuGpu = 0
-                , memUsed = 0
-                , memTotal = 0
-                , gpuMs = Just 0
-                , elmMs = Just 0
-                , drawMs = Just 0
-                }
-        , frameIntervals = [ 16 ]
-        , bootInfo =
-            let
-                bootInfo =
-                    BootInfo.init
-            in
-            { bootInfo | boot = Just { initMs = 0, elmMs = 0, frameMs = 0 }, firmwareMs = Just 0 }
-    }
-
-
-networkSize : Layout.Limits
-networkSize =
-    Layout.fixed (Ui.size (networkPanel Network.sample))
-
-
-weatherSize : Layout.Limits
-weatherSize =
-    Layout.fixed (Ui.size (weatherPanel True weatherSample))
-
-
-{-| What the weather app is sized from, once: a forecast, which is the most it shows.
--}
-weatherSample : WeatherState
-weatherSample =
-    GotWeather
-        { name = "Place", latitude = 0, longitude = 0 }
-        { temperature = 0, code = 0, wind = 0, humidity = 0, time = "2000-01-01T00:00", days = List.repeat 4 { date = "2000-01-01", code = 0, high = 0, low = 0 }, utcOffsetSeconds = Nothing }
-
-
-networkPanel : Network.Network -> Ui.Element UiId
-networkPanel network =
-    smallWindow { title = heading "Network", close = CloseNetworkButton, width = panelWidth } (Network.view network)
-
-
-{-| An app's view, in a window this big. The apps that are always the same size ignore
-it.
--}
-appView : App -> Coord UiPixels -> Model -> Ui.Element UiId
-appView app size model =
-    case app of
-        AboutApp ->
-            aboutPage model
-
-        NewsApp ->
-            News.view model.lazyCache (Coord.x size) (Coord.y size) model.news
-
-        HackerNewsApp ->
-            HackerNews.view model.lazyCache size model.hackerNews
-
-        EmailApp ->
-            Email.view size model.email
-
-        WebViewerApp ->
-            WebViewer.view size model.webViewer
-
-        AsciiCollabApp ->
-            AsciiCollab.view size (model.uiState.focus == Just (AsciiCollab AsciiCollab.Types.GridArea)) model.asciiCollab
-
-        CalculatorApp ->
-            Calculator.view (calculatorFocused model) model.calculator
-
-        TicTacToeApp ->
-            TicTacToe.view model.ticTacToe
-
-        PaintApp ->
-            Paint.view model.paint
-
-        EditorApp ->
-            editorWindow model
-
-        CodeApp ->
-            Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) (Code.findText model.uiState) model.code
-
-        DebugApp ->
-            overlay model
-
-        NetworkApp ->
-            networkPanel model.network
-
-        WeatherApp ->
-            weatherPanel (Network.isOnline model.network) model.weather
-
-        ScreenshotViewerApp ->
-            ScreenshotViewer.view
-                (Display.uiScale (displayOf ScreenshotViewerApp model))
-                size
-                model.screenshots
-                model.screenshotViewer
-
-
-{-| A small app's window: a bordered box with a title and a Close button above its rows.
--}
-smallWindow : { title : Ui.Element UiId, close : UiId, width : Quantity Int UiPixels } -> List (Ui.Element UiId) -> Ui.Element UiId
-smallWindow { title, close, width } rows =
-    let
-        widest =
-            List.foldl (\row soFar -> Quantity.max (Coord.x (Ui.size row)) soFar) width rows
-    in
-    Ui.el
-        { padding = Ui.paddingXY 6 6, borderAndFill = Ui.windowBorderAndFill }
-        (Ui.column
-            4
-            (Ui.rowFromRight
-                { width = Quantity.unwrap widest, spacing = 0 }
-                [ \rest -> Ui.left (Units.ui rest) title
-                , \_ -> Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close")
-                ]
-                :: rows
-            )
-        )
-
-
-{-| The debug app: the build, the displays, the mouse, frame times and the boot's timings.
--}
-overlay : Model -> Ui.Element UiId
-overlay model =
-    let
-        -- The debug app keeps town-collab's pixel font.
-        mono =
-            Sprite.Mono
-
-        line label value =
-            Ui.row
-                0
-                [ Ui.monoText (String.padRight 10 ' ' label)
-                , Ui.monoText (Sprite.ellipsis Sprite.Small mono (Quantity.minus (Units.uiPixels (10 * 10)) debugWidth) value)
-                ]
-
-        rendererLine =
-            case model.renderer of
-                Just { gpu, name } ->
-                    Ui.row
-                        4
-                        [ Ui.monoText (String.padRight 10 ' ' "Renderer")
-                        , badge Sprite.Small gpu
-                        , Ui.monoText
-                            ((if gpu then
-                                "GPU, "
-
-                              else
-                                "CPU, "
-                             )
-                                ++ Sprite.ellipsis Sprite.Small mono (Units.ui (40 * 10)) name
-                            )
-                        ]
-
-                Nothing ->
-                    line "Renderer" "?"
-
-        cursorLine =
-            line "Cursor"
-                (case Maybe.map .hardwareCursor model.renderer of
-                    Just True ->
-                        "cursor plane, moved by the host (orange: Elm's)"
-
-                    _ ->
-                        "drawn by Elm"
-                )
-
-        onGpu =
-            Maybe.map .gpu model.renderer |> Maybe.withDefault False
-
-        perFrame maybeMs =
-            case maybeMs of
-                Just ms ->
-                    Weather.fixed 2 ms ++ " ms/frame" ++ percentOfFrame ms model
-
-                Nothing ->
-                    "n/a"
-
-        statsLines =
-            case model.stats of
-                Just stats ->
-                    [ line "Elm"
-                        (perFrame stats.elmMs)
-                    , line
-                        (if onGpu then
-                            "Submit"
-
-                         else
-                            "Raster"
-                        )
-                        (perFrame stats.drawMs)
-                    , line "GPU time"
-                        (if onGpu then
-                            perFrame stats.gpuMs
-
-                         else
-                            "n/a (drawing on the CPU)"
-                        )
-                    , line "CPU"
-                        (Weather.fixed 0 stats.cpu
-                            ++ "% of "
-                            ++ String.fromInt stats.cores
-                            ++ " cores"
-                        )
-                    , line "1 core"
-                        ("Elm "
-                            ++ Weather.fixed 0 stats.cpuElm
-                            ++ "%, host "
-                            ++ Weather.fixed 0 stats.cpuHost
-                            ++ "%, elmos-gpu "
-                            ++ Weather.fixed 0 stats.cpuGpu
-                            ++ "%"
-                        )
-                    , line "Memory" (String.fromInt stats.memUsed ++ " / " ++ String.fromInt stats.memTotal ++ " MB")
-                    ]
-
-                Nothing ->
-                    []
-
-        seconds ms =
-            Weather.fixed 2 (ms / 1000) ++ " s"
-    in
-    smallWindow { title = Ui.monoText "Elm OS debug", close = CloseDebugButton, width = debugWidth }
-        [ Ui.column
-            3
-            (line "Build" (BootInfo.buildText model.bootInfo)
-                :: List.indexedMap
-                    (\i display ->
-                        line
-                            (if i == 0 then
-                                "Screen"
-
-                             else
-                                ""
-                            )
-                            (display.name
-                                ++ " "
-                                ++ String.fromInt (Coord.xRaw display.size)
-                                ++ " x "
-                                ++ String.fromInt (Coord.yRaw display.size)
-                                ++ ", UI scale "
-                                ++ String.fromInt (Units.scaleInt (Display.uiScale display))
-                                ++ "x"
-                            )
-                    )
-                    model.displays
-                ++ [ line "Mouse" (String.fromInt (Coord.xRaw model.mouse) ++ ", " ++ String.fromInt (Coord.yRaw model.mouse))
-                   , rendererLine
-                   , cursorLine
-                   , line "Frame" (frameText model)
-                   ]
-                ++ statsLines
-                ++ (line "Clock" (BootInfo.clockText model.bootInfo)
-                        :: line "Battery" (BootInfo.batteryText model.bootInfo)
-                        :: List.map (\( label, text ) -> line label text) (BootInfo.bootRows seconds model.bootInfo)
-                   )
-            )
-        ]
-
-
-{-| The debug app's width, unless a line is longer: its lines change length as the numbers
-change, and its window shouldn't.
--}
-debugWidth : Quantity Int UiPixels
-debugWidth =
-    Units.ui 600
-
-
-{-| Green for the GPU, orange for the CPU, as the host's old corner badge was.
--}
-badge : Sprite.FontSize -> Bool -> Ui.Element id
-badge fontSize gpu =
-    let
-        side =
-            Sprite.lineHeight fontSize
-
-        size =
-            ( side, side )
-    in
-    Ui.quads
-        { size = size
-        , triangles =
-            Sprite.rectangle
-                (if gpu then
-                    Color.rgb 0.3 0.8 0.45
-
-                 else
-                    Color.rgb 1 0.6 0.1
-                )
-                { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
-                Coord.origin
-                size
-        }
-
-
-frameText : Model -> String
-frameText model =
-    case model.frameIntervals of
-        [] ->
-            "waiting"
-
-        intervals ->
-            let
-                average =
-                    List.sum intervals / toFloat (List.length intervals)
-
-                maximum =
-                    List.maximum intervals |> Maybe.withDefault 0
-            in
-            "avg "
-                ++ Weather.fixed 1 average
-                ++ " ms, max "
-                ++ Weather.fixed 1 maximum
-                ++ " ms ("
-                ++ Weather.fixed 0 (1000 / max 0.001 average)
-                ++ " fps)"
-
-
-percentOfFrame : Float -> Model -> String
-percentOfFrame ms model =
-    case model.frameIntervals of
-        [] ->
-            ""
-
-        intervals ->
-            " (" ++ Weather.fixed 0 (100 * ms * toFloat (List.length intervals) / max 0.001 (List.sum intervals)) ++ "%)"
+            { name = "ScreenshotViewer"
+            , view =
+                \size ->
+                    ScreenshotViewer.view
+                        (Display.uiScale (displayOf ScreenshotViewerApp model))
+                        size
+                        model.screenshots
+                        model.screenshotViewer
+            , limits = { min = Coord.xy 500 400, preferred = Coord.xy 1200 900, max = Coord.xy 100000 100000 }
+            }
 
 
 {-| The program. The Model is kept on the data disk and comes back after a restart
@@ -3656,7 +3349,7 @@ changing how something looks doesn't break them; they click buttons by their tex
 the place `buttons` gives.
 
   - pointer: where the mouse is, in device pixels, [x, y].
-  - windows: the open apps (`appName`) on each display, in layout order:
+  - windows: the open apps (`appConfig`) on each display, in layout order:
     [["Debug", "Network", "Weather"]] with one display.
   - buttons: every button and text box that can be seen, with its text (what is typed,
     for a text box), whether it has the keyboard focus, and the middle of the part of it
@@ -3700,12 +3393,12 @@ testFacts model uis =
     in
     [ json "pointer" (E.list E.int [ Coord.xRaw model.mouse, Coord.yRaw model.mouse ])
     , json "windows"
-        (E.list (\display -> E.list (\( app, _ ) -> E.string (appName app)) (windows model display)) model.displays)
+        (E.list (\display -> E.list (\( app, _ ) -> E.string (appConfig app model).name) (windows model display)) model.displays)
     , json "buttons"
         (E.list identity
             (List.concatMap (\( display, ui ) -> List.map (button display) (Ui.buttons model.uiState ui)) uis)
         )
-    , json "editor" (E.string (Ui.getTextInputMultiline EditorInput model.uiState).input.current.text)
+    , json "editor" (E.string (Ui.getTextInputMultiline (Editor Editor.Types.Input) model.uiState).input.current.text)
     , json "calculator" (E.string (Calculator.display model.calculator))
     , json "code" (Code.testFact model.code)
     , json "wifi"
@@ -3754,57 +3447,6 @@ testFacts model uis =
         )
     , json "notice" (E.string (Maybe.withDefault "" (noticeText model)))
     ]
-
-
-{-| An app's name in the test facts (`testFacts`).
--}
-appName : App -> String
-appName app =
-    case app of
-        AboutApp ->
-            "About"
-
-        NewsApp ->
-            "News"
-
-        HackerNewsApp ->
-            "HackerNews"
-
-        EmailApp ->
-            "Email"
-
-        WebViewerApp ->
-            "WebViewer"
-
-        AsciiCollabApp ->
-            "AsciiCollab"
-
-        CalculatorApp ->
-            "Calculator"
-
-        TicTacToeApp ->
-            "TicTacToe"
-
-        PaintApp ->
-            "Paint"
-
-        EditorApp ->
-            "Editor"
-
-        CodeApp ->
-            "Code"
-
-        ScreenshotViewerApp ->
-            "ScreenshotViewer"
-
-        DebugApp ->
-            "Debug"
-
-        NetworkApp ->
-            "Network"
-
-        WeatherApp ->
-            "Weather"
 
 
 {-| A message from the host. The host's Tick, once a second, paces BootInfo's battery
@@ -3882,13 +3524,6 @@ webSocketInput input model =
 -- NETWORK AND WEATHER
 
 
-{-| How wide the network and weather apps' contents are, in UI pixels.
--}
-panelWidth : Quantity Int UiPixels
-panelWidth =
-    em 28
-
-
 {-| The date and time, once the host has said (each second), at the right end of the
 toolbar: just the time when the date doesn't fit in `room`. In UTC until the weather says
 where this computer is.
@@ -3912,13 +3547,6 @@ clock room model =
 
         Nothing ->
             Ui.empty
-
-
-weatherPanel : Bool -> WeatherState -> Ui.Element UiId
-weatherPanel online weather =
-    smallWindow
-        { title = heading "Weather", close = CloseWeatherButton, width = panelWidth }
-        (Weather.weatherRows online weather)
 
 
 
@@ -3965,7 +3593,7 @@ toolbar model display =
                     ]
 
                 Nothing ->
-                    [ Ui.selectableButton { id = AboutButton, padding = small } (openHere AboutApp) (Ui.text "About")
+                    [ Ui.selectableButton { id = About About.Types.OpenButton, padding = small } (openHere AboutApp) (Ui.text "About")
                     , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (Ui.text "Wikipedia")
                     , Ui.selectableButton
                         { id = HackerNews HackerNews.Types.OpenButton, padding = small }
@@ -3996,7 +3624,7 @@ toolbar model display =
                         (openHere PaintApp)
                         (Ui.text "Paint")
                     , Ui.selectableButton
-                        { id = EditorButton, padding = small }
+                        { id = Editor Editor.Types.OpenButton, padding = small }
                         (openHere EditorApp)
                         (Ui.text "Text editor")
                     , Ui.selectableButton
@@ -4008,14 +3636,14 @@ toolbar model display =
                         (openHere ScreenshotViewerApp)
                         (Ui.text "Screenshots")
                     , Ui.selectableButton
-                        { id = NetworkAppButton, padding = small }
+                        { id = Network Network.Types.OpenButton, padding = small }
                         (openHere NetworkApp)
                         (Ui.text "Network")
                     , Ui.selectableButton
-                        { id = WeatherAppButton, padding = small }
+                        { id = Weather Weather.Types.OpenButton, padding = small }
                         (openHere WeatherApp)
                         (Ui.text "Weather")
-                    , Ui.selectableButton { id = DebugButton, padding = small } (openHere DebugApp) (Ui.text "Debug")
+                    , Ui.selectableButton { id = DebugInfo DebugInfo.Types.OpenButton, padding = small } (openHere DebugApp) (Ui.text "Debug")
                     , Ui.button { id = RestartButton, padding = small } (Ui.text "Restart")
                     , Ui.button { id = PowerOffButton, padding = small } (Ui.text "Power off")
                     ]
@@ -4056,93 +3684,6 @@ notice model text =
                 )
     in
     ( Display.uiSize (mainDisplay model) |> Coord.minus (Ui.size element), element )
-
-
-aboutPage : Model -> Ui.Element UiId
-aboutPage model =
-    let
-        font =
-            sans
-
-        t =
-            Ui.text
-
-        valueWidth =
-            em 26
-
-        line label value =
-            Ui.row 0 [ Ui.left (em 5) (t label), t (Sprite.ellipsis bodySize font valueWidth value) ]
-
-        system =
-            model.system
-
-        field f =
-            Maybe.map f system |> Maybe.withDefault "?"
-    in
-    Ui.el
-        { padding = Ui.paddingXY 12 10
-        , borderAndFill = Ui.windowBorderAndFill
-        }
-        (Ui.column
-            4
-            [ heading "Elm OS"
-            , t "A Linux kernel that boots straight into one Elm program."
-            , t ""
-            , line "Version" (field .commit)
-            , line "Kernel" (field .kernel)
-            , line "CPU" (field .cpu)
-            , line "Memory"
-                (case model.stats of
-                    Just stats ->
-                        String.fromInt stats.memTotal ++ " MB"
-
-                    Nothing ->
-                        "?"
-                )
-            , line "Graphics"
-                (case model.renderer of
-                    Just r ->
-                        r.name
-
-                    Nothing ->
-                        "?"
-                )
-            , t ""
-            , t
-                (Sprite.wrap bodySize
-                    font
-                    (em 31)
-                    ("The Elm program is compiled to native code by eco (github.com/eco-lang/eco-compiler). "
-                        ++ "The UI framework and the debug app's pixel font are from town-collab. "
-                        ++ "Text is in Noto Sans (SIL Open Font License). "
-                        ++ "Weather: open-meteo.com, location: geojs.io."
-                    )
-                )
-            , t ""
-            , Ui.button { id = CloseAboutButton, padding = Ui.paddingXY 6 3 } (t "Close")
-            ]
-        )
-
-
-
--- TEXT EDITOR
-
-
-{-| The text box: as big as the editor's window lets it be.
--}
-editorStyle : Model -> TextInputMultiline.Style
-editorStyle model =
-    let
-        ( windowWidth, windowHeight ) =
-            Coord.toTuple (appUiSize EditorApp model)
-    in
-    { font = sans
-    , fontSize = bodySize
-    , width = Units.ui (windowWidth - 16)
-    , lines = max 1 ((windowHeight - editorChrome) // Quantity.unwrap (Sprite.lineHeight bodySize))
-    , syntax = TextInputMultiline.PlainText
-    , highlights = []
-    }
 
 
 
@@ -4193,75 +3734,3 @@ codeFindKey key model =
 codeText : Model -> String
 codeText model =
     (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState).input.current.text
-
-
-{-| The editor window's height besides its lines of text: the padding, the title, the
-status line, the spacing between them and the text box's own padding.
--}
-editorChrome : Int
-editorChrome =
-    2 * 8 + Quantity.unwrap (Sprite.lineHeight headingSize) + Quantity.unwrap (Sprite.lineHeight bodySize) + 2 * 6 + 2 * 4
-
-
-{-| The text editor's window: a title and a close button, the text, and where the cursor is.
-The text stays when the window closes, until Elm OS restarts.
--}
-editorWindow : Model -> Ui.Element UiId
-editorWindow model =
-    let
-        t =
-            Ui.text
-
-        style =
-            editorStyle model
-
-        textInput : TextInputMultiline.Model
-        textInput =
-            Ui.getTextInputMultiline EditorInput model.uiState
-
-        state =
-            textInput.input.current
-
-        ( line, column ) =
-            TextInputMultiline.lineAndColumn state.text state.cursorPosition
-
-        lineCount =
-            List.length (String.split "\n" state.text)
-
-        status =
-            "Line "
-                ++ String.fromInt (line + 1)
-                ++ " of "
-                ++ String.fromInt lineCount
-                ++ ", column "
-                ++ String.fromInt (column + 1)
-                ++ (if state.cursorSize == 0 then
-                        ""
-
-                    else
-                        ", " ++ String.fromInt (abs state.cursorSize) ++ " selected"
-                   )
-    in
-    Ui.elWithId
-        EditorWindow
-        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
-        (Ui.column
-            6
-            [ Ui.leftAndRight style.width
-                (heading "Text editor")
-                (Ui.button { id = CloseEditorButton, padding = Ui.paddingXY 6 3 } (t "Close"))
-            , Ui.textInputMultiline
-                { id = EditorInput
-                , style = style
-                }
-            , Ui.leftAndRight style.width
-                (t status)
-                (Ui.customText bodySize
-                    [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
-                    , { text = " undo, ", color = Color.outlineColor, font = sans, decorations = [], link = Nothing }
-                    , { text = "Ctrl+Y", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
-                    , { text = " redo", color = Color.outlineColor, font = sans, decorations = [], link = Nothing }
-                    ]
-                )
-            ]
-        )

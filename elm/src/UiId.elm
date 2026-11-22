@@ -11,9 +11,12 @@ app keeps such types in `<App>/Types.elm`, not in `<App>.elm`.
 
 -}
 
+import About.Types
 import AsciiCollab.Types
 import Calculator.Types
 import Code.Types
+import DebugInfo.Types
+import Editor.Types
 import Email.Types
 import HackerNews.Types
 import Network.Types
@@ -21,30 +24,22 @@ import News.Types
 import Paint.Types
 import ScreenshotViewer.Types
 import TicTacToe.Types
+import Weather.Types
 import WebViewer.Types
 
 
 type UiId
-    = WeatherButton
-    | AboutButton
+    = About About.Types.UiId
+    | DebugInfo DebugInfo.Types.UiId
+    | Editor Editor.Types.UiId
+    | Weather Weather.Types.UiId
     | NewsButton
-    | CloseAboutButton
     | CalculatorButton
     | TicTacToeButton
     | PowerOffButton
     | RestartButton
     | ConfirmPowerButton
     | CancelPowerButton
-    | EditorButton
-    | EditorInput
-    | EditorWindow
-    | CloseEditorButton
-    | DebugButton
-    | CloseDebugButton
-    | NetworkAppButton
-    | CloseNetworkButton
-    | WeatherAppButton
-    | CloseWeatherButton
     | Network Network.Types.UiId
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId

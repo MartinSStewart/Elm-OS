@@ -15,10 +15,10 @@ module Network exposing
     , init
     , isOnline
     , isWiredConnected
+    , limits
     , passwordStyle
     , reconnect
     , refresh
-    , sample
     , select
     , selectedNeedsPassword
     , toggleShowPassword
@@ -33,6 +33,7 @@ cards. The ids of its elements are in Network/Types.elm.
 import Color exposing (Color)
 import Coord
 import Effect exposing (Effect)
+import Layout
 import Network.Ipv4 as Ipv4 exposing (Ipv4)
 import Network.Types exposing (Ssid)
 import Network.Wpa2Password as Wpa2Password exposing (Wpa2Password)
@@ -43,6 +44,7 @@ import TextInput
 import Ui
 import UiId exposing (UiId)
 import Units exposing (UiPixels)
+import Window
 
 
 type alias Network =
@@ -329,11 +331,27 @@ panelWidth =
     em 28
 
 
+{-| The network app's window size, from `sample`, once.
+-}
+limits : Layout.Limits
+limits =
+    Layout.fixed (Ui.size (view sample))
+
+
+{-| The network app's window.
+-}
+view : Network -> Ui.Element UiId
+view network =
+    Window.smallWindow
+        { title = Window.heading "Network", close = UiId.Network Network.Types.CloseButton, width = Window.panelWidth }
+        (rows network)
+
+
 {-| The network app's rows: a line for each wired card, then wifi (left out on a computer with
 a wired card and no wifi).
 -}
-view : Network -> List (Ui.Element UiId)
-view model =
+rows : Network -> List (Ui.Element UiId)
+rows model =
     let
         font =
             sans

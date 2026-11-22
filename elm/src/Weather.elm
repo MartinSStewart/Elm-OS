@@ -9,7 +9,8 @@ module Weather exposing
     , defaultWeatherUrl
     , fixed
     , forecastUrl
-    , weatherRows
+    , limits
+    , view
     )
 
 {-| The weather where this computer is: its rough location from its public IP address
@@ -22,11 +23,13 @@ import Color
 import Coord
 import Effect exposing (HttpError)
 import Json.Decode as D
-import Quantity exposing (Quantity)
+import Layout
+import Quantity
 import Sprite
 import Ui
-import UiId exposing (UiId(..))
-import Units exposing (UiPixels)
+import UiId exposing (UiId)
+import Weather.Types
+import Window exposing (em)
 
 
 type WeatherState
@@ -37,15 +40,32 @@ type WeatherState
     | WeatherFailed HttpError
 
 
-{-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
+{-| The weather app's window size, from a forecast, which is the most it shows, once.
 -}
-em : Int -> Quantity Int UiPixels
-em n =
-    Units.ui (16 * n)
+limits : Layout.Limits
+limits =
+    Layout.fixed
+        (Ui.size
+            (view True
+                (GotWeather
+                    { name = "Place", latitude = 0, longitude = 0 }
+                    { temperature = 0, code = 0, wind = 0, humidity = 0, time = "2000-01-01T00:00", days = List.repeat 4 { date = "2000-01-01", code = 0, high = 0, low = 0 }, utcOffsetSeconds = Nothing }
+                )
+            )
+        )
 
 
-weatherRows : Bool -> WeatherState -> List (Ui.Element UiId)
-weatherRows online model =
+{-| The weather app's window. It offers to get the weather only when `online`.
+-}
+view : Bool -> WeatherState -> Ui.Element UiId
+view online weather =
+    Window.smallWindow
+        { title = Window.heading "Weather", close = UiId.Weather Weather.Types.CloseButton, width = Window.panelWidth }
+        (rows online weather)
+
+
+rows : Bool -> WeatherState -> List (Ui.Element UiId)
+rows online model =
     let
         font =
             Sprite.Sans Sprite.Regular
@@ -65,7 +85,7 @@ weatherRows online model =
     case model of
         NoWeather ->
             if online then
-                [ Ui.button { id = WeatherButton, padding = small } (t "Get the weather") ]
+                [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Get the weather") ]
 
             else
                 [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
@@ -78,13 +98,13 @@ weatherRows online model =
 
         WeatherFailed error ->
             [ Ui.colorText Color.errorColor (Sprite.wrap Sprite.Small font width (Effect.httpErrorToString error))
-            , Ui.button { id = WeatherButton, padding = small } (t "Try again")
+            , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Try again")
             ]
 
         GotWeather place forecast ->
             [ Ui.leftAndRight width
                 (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (em 6)) ("Weather in " ++ place.name)))
-                (Ui.button { id = WeatherButton, padding = small } (t "Refresh"))
+                (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Refresh"))
             , Ui.row
                 8
                 [ weatherIcon 3 forecast.code

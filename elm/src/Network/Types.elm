@@ -20,7 +20,9 @@ ssidToString (Ssid ssid) =
 
 
 type UiId
-    = RefreshButton
+    = OpenButton
+    | CloseButton
+    | RefreshButton
     | NetworkButton Ssid
     | PasswordInput
     | ShowPasswordButton
