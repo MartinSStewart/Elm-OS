@@ -14,7 +14,7 @@ module Paint exposing
 {-| A paint program: pick a colour, a brush and a tool, and draw on the canvas with the mouse.
 
 The fill tool fills the pixels of the colour under the mouse that are joined to it, but only
-up to `fillRadiusFactor` times the brush's radius from the mouse. Dragging fills again from
+those within `fillRadiusFactor` times the brush's radius from the mouse by walking distance. Dragging fills again from
 wherever the mouse is, but only the colour that was under the mouse when it went down, and the
 pixels the stroke has already filled count as that colour.
 
@@ -308,18 +308,19 @@ fillRadius model =
 
 
 {-| The chunks being filled, as pixels, which of them changed, the pixels filled in the stroke
-so far, and the pixels the current dab has reached.
+so far, and how far each pixel the current dab has reached is from its centre.
 -}
 type alias Work =
     { chunks : Dict Int (Array.Array Int)
     , changed : Set Int
     , filled : Set Int
-    , reached : Set Int
+    , distances : Dict Int Int
     }
 
 
 {-| Fill around each point, in the brush's colour: the pixels of the stroke's target colour
-that are inside the fill radius and joined to the point.
+that are within the fill radius of the point by walking (over pixels that are the target
+colour, a step to any of the 8 pixels around one, diagonals costing the square root of 2).
 -}
 fill : List ( Int, Int ) -> Model -> Model
 fill points model =
@@ -334,7 +335,7 @@ fill points model =
 
                 start : Work
                 start =
-                    { chunks = Dict.empty, changed = Set.empty, filled = stroke.filled, reached = Set.empty }
+                    { chunks = Dict.empty, changed = Set.empty, filled = stroke.filled, distances = Dict.empty }
             in
             if color == stroke.target then
                 -- Nothing to do, and the fill would never stop: it would find its own pixels.
@@ -371,59 +372,126 @@ fill points model =
 fillAround : Image -> Int -> Int -> Int -> ( Int, Int ) -> Work -> Work
 fillAround canvas r color target ( cx, cy ) previous =
     let
-        inCircle ( x, y ) =
-            (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r + r
-
-        reached =
+        chunksReached =
             List.concatMap
                 (\chunkY -> List.map (\chunkX -> chunkY * chunksAcross + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth - 1) (cx + r) // chunkSize)))
                 (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight - 1) (cy + r) // chunkSize))
 
         start =
-            { previous | reached = Set.empty }
-
-        work =
             List.foldl
                 (\index w -> { w | chunks = Dict.update index (loadChunk canvas index) w.chunks })
-                start
-                reached
+                { previous | distances = Dict.empty }
+                chunksReached
 
-        isTarget w ( x, y ) =
-            Dict.get (chunkIndexOf x y) w.chunks
-                |> Maybe.andThen (Array.get (inChunk x y))
-                |> (==) (Just target)
+        -- The pixels the fill walks over: ones of the target colour, and ones filled already in
+        -- this stroke.
+        isWalkable w ( x, y ) =
+            Set.member (y * canvasWidth + x) w.filled
+                || (Dict.get (chunkIndexOf x y) w.chunks
+                        |> Maybe.andThen (Array.get (inChunk x y))
+                        |> (==) (Just target)
+                   )
 
-        seeds =
-            [ ( cx, cy ) ]
+        -- Distances are in thousandths of a pixel.
+        limit =
+            r * straightCost
 
-        spread : List ( Int, Int ) -> Work -> Work
-        spread stack w =
-            case stack of
-                [] ->
+        -- Walks out from the mouse, a pixel at a time (the 8 pixels around it), to every
+        -- walkable pixel that is within the limit, by the shortest walk. A pixel's distance
+        -- can fall when a shorter way to it is found, and then it is walked on from again.
+        spread : Queue -> Work -> Work
+        spread queue w =
+            case queue of
+                Queue [] [] ->
                     w
 
-                ( x, y ) :: rest ->
-                    let
-                        key =
-                            y * canvasWidth + x
-                    in
-                    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight || not (inCircle ( x, y )) || Set.member key w.reached then
-                        spread rest w
+                Queue [] back ->
+                    spread (Queue (List.reverse back) []) w
 
-                    else if Set.member key w.filled then
-                        spread
-                            (( x - 1, y ) :: ( x + 1, y ) :: ( x, y - 1 ) :: ( x, y + 1 ) :: rest)
-                            { w | reached = Set.insert key w.reached }
-
-                    else if isTarget w ( x, y ) then
-                        spread
-                            (( x - 1, y ) :: ( x + 1, y ) :: ( x, y - 1 ) :: ( x, y + 1 ) :: rest)
-                            (setPixel color ( x, y ) w)
+                Queue (( x, y, distance ) :: front) back ->
+                    if distance > (Dict.get (y * canvasWidth + x) w.distances |> Maybe.withDefault distance) then
+                        spread (Queue front back) w
 
                     else
-                        spread rest w
+                        let
+                            ( queue2, w2 ) =
+                                List.foldl (step x y distance) ( Queue front back, w ) neighbours
+                        in
+                        spread queue2 w2
+
+        step x y distance ( dx, dy, cost ) ( queue, w ) =
+            let
+                nx =
+                    x + dx
+
+                ny =
+                    y + dy
+
+                key =
+                    ny * canvasWidth + nx
+
+                nextDistance =
+                    distance + cost
+
+                -- Whether it was reached already, as quickly.
+                alreadyReached =
+                    nextDistance >= (Dict.get key w.distances |> Maybe.withDefault (nextDistance + 1))
+            in
+            if nx < 0 || ny < 0 || nx >= canvasWidth || ny >= canvasHeight || nextDistance > limit || alreadyReached || not (isWalkable w ( nx, ny )) then
+                ( queue, w )
+
+            else
+                ( push ( nx, ny, nextDistance ) queue
+                , setDistance nextDistance key (setPixel color ( nx, ny ) w)
+                )
     in
-    spread seeds work
+    if isWalkable start ( cx, cy ) then
+        spread (Queue [ ( cx, cy, 0 ) ] []) (setDistance 0 (cy * canvasWidth + cx) (setPixel color ( cx, cy ) start))
+
+    else
+        start
+
+
+{-| A first in, first out queue: what to take next, and what was added since (newest first).
+-}
+type Queue
+    = Queue (List ( Int, Int, Int )) (List ( Int, Int, Int ))
+
+
+push : ( Int, Int, Int ) -> Queue -> Queue
+push item (Queue front back) =
+    Queue front (item :: back)
+
+
+{-| What it costs to step to each of the 8 pixels around one, in thousandths of a pixel
+(a diagonal step is the square root of 2 times as far).
+-}
+neighbours : List ( Int, Int, Int )
+neighbours =
+    [ ( -1, 0, straightCost )
+    , ( 1, 0, straightCost )
+    , ( 0, -1, straightCost )
+    , ( 0, 1, straightCost )
+    , ( -1, -1, diagonalCost )
+    , ( 1, -1, diagonalCost )
+    , ( -1, 1, diagonalCost )
+    , ( 1, 1, diagonalCost )
+    ]
+
+
+straightCost : Int
+straightCost =
+    1000
+
+
+diagonalCost : Int
+diagonalCost =
+    1414
+
+
+setDistance : Int -> Int -> Work -> Work
+setDistance distance key work =
+    { work | distances = Dict.insert key distance work.distances }
 
 
 loadChunk : Image -> Int -> Maybe (Array.Array Int) -> Maybe (Array.Array Int)
@@ -436,17 +504,26 @@ loadChunk canvas index loaded =
             Array.get index canvas.chunks |> Maybe.map Image.chunkPixels
 
 
+{-| Paints the pixel and notes it as filled, unless it was filled already.
+-}
 setPixel : Int -> ( Int, Int ) -> Work -> Work
 setPixel color ( x, y ) work =
     let
         index =
             chunkIndexOf x y
+
+        key =
+            y * canvasWidth + x
     in
-    { chunks = Dict.update index (Maybe.map (Array.set (inChunk x y) color)) work.chunks
-    , changed = Set.insert index work.changed
-    , filled = Set.insert (y * canvasWidth + x) work.filled
-    , reached = Set.insert (y * canvasWidth + x) work.reached
-    }
+    if Set.member key work.filled then
+        work
+
+    else
+        { work
+            | chunks = Dict.update index (Maybe.map (Array.set (inChunk x y) color)) work.chunks
+            , changed = Set.insert index work.changed
+            , filled = Set.insert key work.filled
+        }
 
 
 
