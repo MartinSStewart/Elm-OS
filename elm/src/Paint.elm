@@ -15,7 +15,8 @@ module Paint exposing
 
 The fill tool fills the pixels of the colour under the mouse that are joined to it, but only
 up to `fillRadiusFactor` times the brush's radius from the mouse. Dragging fills again from
-wherever the mouse is, but only the colour that was under the mouse when it went down.
+wherever the mouse is, but only the colour that was under the mouse when it went down, and the
+pixels the stroke has already filled count as that colour.
 
 The canvas is a 640 x 384 pixel Image (one pixel per UI pixel): 32 x 32 pixel chunks.
 A stroke rebuilds the chunks it touches; Sprite.image draws it.
@@ -54,6 +55,10 @@ type alias Stroke =
 
     -- The colour under the mouse when it went down (0xRRGGBBAA), which the fill tool replaces.
     , target : Int
+
+    -- The pixels the fill tool has filled so far in this stroke, as y * canvasWidth + x. The
+    -- fill treats them as still being the target colour.
+    , filled : Set Int
     }
 
 
@@ -118,7 +123,7 @@ startStroke point model =
             Coord.toTuple point
 
         stroke =
-            { at = at, target = pixelAt at model.canvas |> Maybe.withDefault 0 }
+            { at = at, filled = Set.empty, target = pixelAt at model.canvas |> Maybe.withDefault 0 }
     in
     case model.tool of
         Paint.Types.Pen ->
@@ -302,11 +307,14 @@ fillRadius model =
     model.brush * fillRadiusFactor
 
 
-{-| The chunks being filled, as pixels, and which of them changed.
+{-| The chunks being filled, as pixels, which of them changed, the pixels filled in the stroke
+so far, and the pixels the current dab has reached.
 -}
 type alias Work =
     { chunks : Dict Int (Array.Array Int)
     , changed : Set Int
+    , filled : Set Int
+    , reached : Set Int
     }
 
 
@@ -326,17 +334,20 @@ fill points model =
 
                 start : Work
                 start =
-                    { chunks = Dict.empty, changed = Set.empty }
-
-                work =
-                    List.foldl (fillAround canvas (fillRadius model) color stroke.target) start points
+                    { chunks = Dict.empty, changed = Set.empty, filled = stroke.filled, reached = Set.empty }
             in
             if color == stroke.target then
+                -- Nothing to do, and the fill would never stop: it would find its own pixels.
                 model
 
             else
+                let
+                    work =
+                        List.foldl (fillAround canvas (fillRadius model) color stroke.target) start points
+                in
                 { model
-                    | canvas =
+                    | stroke = Just { stroke | filled = work.filled }
+                    , canvas =
                         { canvas
                             | chunks =
                                 Set.foldl
@@ -358,7 +369,7 @@ fill points model =
 
 
 fillAround : Image -> Int -> Int -> Int -> ( Int, Int ) -> Work -> Work
-fillAround canvas r color target ( cx, cy ) work0 =
+fillAround canvas r color target ( cx, cy ) work1 =
     let
         inCircle ( x, y ) =
             (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r + r
@@ -367,6 +378,9 @@ fillAround canvas r color target ( cx, cy ) work0 =
             List.concatMap
                 (\chunkY -> List.map (\chunkX -> chunkY * chunksAcross + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth - 1) (cx + r) // chunkSize)))
                 (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight - 1) (cy + r) // chunkSize))
+
+        work0 =
+            { work1 | reached = Set.empty }
 
         work =
             List.foldl
@@ -389,13 +403,25 @@ fillAround canvas r color target ( cx, cy ) work0 =
                     w
 
                 ( x, y ) :: rest ->
-                    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight || not (inCircle ( x, y )) || not (isTarget w ( x, y )) then
+                    let
+                        key =
+                            y * canvasWidth + x
+                    in
+                    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight || not (inCircle ( x, y )) || Set.member key w.reached then
                         spread rest w
 
-                    else
+                    else if Set.member key w.filled then
+                        spread
+                            (( x - 1, y ) :: ( x + 1, y ) :: ( x, y - 1 ) :: ( x, y + 1 ) :: rest)
+                            { w | reached = Set.insert key w.reached }
+
+                    else if isTarget w ( x, y ) then
                         spread
                             (( x - 1, y ) :: ( x + 1, y ) :: ( x, y - 1 ) :: ( x, y + 1 ) :: rest)
                             (setPixel color ( x, y ) w)
+
+                    else
+                        spread rest w
     in
     spread seeds work
 
@@ -418,6 +444,8 @@ setPixel color ( x, y ) work =
     in
     { chunks = Dict.update index (Maybe.map (Array.set (inChunk x y) color)) work.chunks
     , changed = Set.insert index work.changed
+    , filled = Set.insert (y * canvasWidth + x) work.filled
+    , reached = Set.insert (y * canvasWidth + x) work.reached
     }
 
 

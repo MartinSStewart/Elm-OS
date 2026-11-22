@@ -31,10 +31,21 @@ suite =
                     model =
                         fillModel 2
                             |> Paint.startStroke (Coord.xy 100 100)
-                            |> Paint.strokeBy (Coord.xy 30 0)
+                            |> Paint.strokeBy (Coord.xy 20 0)
                 in
                 Expect.equal [ Just True, Just True, Just True ]
-                    [ isRed 110 100 model, isRed 125 100 model, isRed 140 100 model ]
+                    [ isRed 110 100 model, isRed 120 100 model, isRed 130 100 model ]
+            )
+        , Test.test "pressing on the fill's own colour does nothing, and ends"
+            (\_ ->
+                let
+                    model =
+                        fillModel 2
+                            |> Paint.startStroke (Coord.xy 100 100)
+                            |> Paint.endStroke
+                            |> Paint.startStroke (Coord.xy 102 100)
+                in
+                Expect.equal [ Just True, Just False ] [ isRed 100 100 model, isRed 111 100 model ]
             )
         , Test.test "dragging only fills the colour the mouse went down on"
             (\_ ->
