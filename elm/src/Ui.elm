@@ -1916,7 +1916,7 @@ columnFromTop data children =
         width =
             Coord.xRaw data.size
     in
-    List.foldr
+    List.foldl
         (\child ( rest, made ) ->
             let
                 element : Element id
@@ -1928,6 +1928,7 @@ columnFromTop data children =
         ( Coord.yRaw data.size, [] )
         children
         |> Tuple.second
+        |> List.reverse
         |> column data.spacing
         |> padToWidth 2 (Coord.yRaw data.size)
 

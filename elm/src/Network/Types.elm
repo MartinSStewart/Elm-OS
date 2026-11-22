@@ -28,5 +28,4 @@ type UiId
     | ShowPasswordButton
     | ConnectButton
     | DisconnectButton
-      -- The list of wifi networks, which scrolls so the app is always the same height.
     | NetworkListViewport
