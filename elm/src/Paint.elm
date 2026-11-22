@@ -6,8 +6,11 @@ module Paint exposing
     , init
     , onClick
     , pixelAt
+    , redo
     , startStroke
     , strokeBy
+    , undo
+    , undoOrRedo
     , view
     )
 
@@ -44,6 +47,10 @@ type alias Model =
     , brush : Int -- the brush's radius, in canvas pixels
     , tool : Paint.Types.Tool
 
+    -- The canvases before the latest changes (newest first), and the ones undone.
+    , undoable : List Image
+    , redoable : List Image
+
     -- While the mouse is down on the canvas.
     , stroke : Maybe Stroke
     }
@@ -69,6 +76,8 @@ init =
     , color = Color.black
     , brush = 3
     , tool = Paint.Types.Pen
+    , undoable = []
+    , redoable = []
     , stroke = Nothing
     }
 
@@ -117,8 +126,11 @@ blank =
 {-| The mouse went down on the canvas, at this pixel of it.
 -}
 startStroke : Coord UiPixels -> Model -> Model
-startStroke point model =
+startStroke point model0 =
     let
+        model =
+            remember model0
+
         at =
             Coord.toTuple point
 
@@ -131,6 +143,51 @@ startStroke point model =
 
         Paint.Types.Fill ->
             fill [ at ] { model | stroke = Just stroke }
+
+
+{-| How many changes can be undone. A canvas is about 1 MB in a snapshot, so it's not many.
+-}
+historySize : Int
+historySize =
+    10
+
+
+{-| Keeps the canvas as it is, to go back to, and forgets what was undone.
+-}
+remember : Model -> Model
+remember model =
+    { model | undoable = List.take historySize (model.canvas :: model.undoable), redoable = [] }
+
+
+undo : Model -> Model
+undo model =
+    case model.undoable of
+        image :: older ->
+            { model | canvas = image, undoable = older, redoable = model.canvas :: model.redoable, stroke = Nothing }
+
+        [] ->
+            model
+
+
+redo : Model -> Model
+redo model =
+    case model.redoable of
+        image :: newer ->
+            { model | canvas = image, redoable = newer, undoable = model.canvas :: model.undoable, stroke = Nothing }
+
+        [] ->
+            model
+
+
+{-| Ctrl+Z, or with shift Ctrl+Shift+Z.
+-}
+undoOrRedo : Bool -> Model -> Model
+undoOrRedo shift model =
+    if shift then
+        redo model
+
+    else
+        undo model
 
 
 {-| The mouse moved by this much while drawing: paints along the way.
@@ -539,8 +596,18 @@ onClick id model =
         Paint.Types.CloseButton ->
             { model | isOpen = False, stroke = Nothing }
 
+        Paint.Types.UndoButton ->
+            undo model
+
+        Paint.Types.RedoButton ->
+            redo model
+
         Paint.Types.ClearButton ->
-            { model | canvas = blank }
+            let
+                remembered =
+                    remember model
+            in
+            { remembered | canvas = blank }
 
         Paint.Types.Canvas ->
             model
@@ -574,7 +641,9 @@ view model =
             Ui.leftAndRight width
                 (Ui.text "Paint")
                 (Ui.row 4
-                    [ Ui.button { id = Paint Paint.Types.ClearButton, padding = Ui.paddingXY 8 0 } (Ui.text "Clear")
+                    [ Ui.button { id = Paint Paint.Types.UndoButton, padding = Ui.paddingXY 8 0 } (Ui.text "Undo")
+                    , Ui.button { id = Paint Paint.Types.RedoButton, padding = Ui.paddingXY 8 0 } (Ui.text "Redo")
+                    , Ui.button { id = Paint Paint.Types.ClearButton, padding = Ui.paddingXY 8 0 } (Ui.text "Clear")
                     , Ui.button { id = Paint Paint.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×")
                     ]
                 )

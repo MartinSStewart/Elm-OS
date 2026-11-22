@@ -995,6 +995,12 @@ step event model =
                     _ ->
                         ( model, [] )
 
+            else if model.paint.isOpen && model.ctrl && (key == Keyboard.Character "z" || key == Keyboard.Character "Z") then
+                ( { model | paint = Paint.undoOrRedo model.shift model.paint }, [] )
+
+            else if model.paint.isOpen && model.ctrl && (key == Keyboard.Character "y" || key == Keyboard.Character "Y") then
+                ( { model | paint = Paint.redo model.paint }, [] )
+
             else
                 ( model, [] )
 
@@ -1223,6 +1229,12 @@ appButton id =
                     Nothing
 
                 Paint.Types.ClearButton ->
+                    Nothing
+
+                Paint.Types.UndoButton ->
+                    Nothing
+
+                Paint.Types.RedoButton ->
                     Nothing
 
                 Paint.Types.Canvas ->

@@ -78,6 +78,35 @@ suite =
                 in
                 Expect.equal [ Just True, Just False ] [ isRed 100 100 model, isRed 111 100 model ]
             )
+        , Test.test "undo and redo go back and forth, and a new change forgets the redo"
+            (\_ ->
+                let
+                    painted =
+                        fillModel 2
+                            |> Paint.startStroke (Coord.xy 100 100)
+                            |> Paint.endStroke
+
+                    undone =
+                        Paint.undo painted
+
+                    redone =
+                        Paint.redo undone
+
+                    changed =
+                        Paint.startStroke (Coord.xy 300 300) undone |> Paint.endStroke |> Paint.redo
+                in
+                Expect.equal [ Just True, Just False, Just True, Just False ]
+                    [ isRed 100 100 painted, isRed 100 100 undone, isRed 100 100 redone, isRed 100 100 changed ]
+            )
+        , Test.test "only so many changes can be undone"
+            (\_ ->
+                let
+                    many =
+                        List.foldl (\i model -> Paint.startStroke (Coord.xy i 10) model |> Paint.endStroke) (fillModel 0) (List.range 1 30)
+                            |> repeat 40 Paint.undo
+                in
+                Expect.equal [ Just True, Just True, Just False ] [ isRed 1 10 many, isRed 20 10 many, isRed 21 10 many ]
+            )
         , Test.test "dragging only fills the colour the mouse went down on"
             (\_ ->
                 let
@@ -122,3 +151,12 @@ isRed x y model =
 red : Color.Color
 red =
     Color.rgb255 200 30 40
+
+
+repeat : Int -> (a -> a) -> a -> a
+repeat n f value =
+    if n <= 0 then
+        value
+
+    else
+        repeat (n - 1) f (f value)

@@ -16,6 +16,8 @@ type UiId
     = OpenButton
     | CloseButton
     | ClearButton
+    | UndoButton
+    | RedoButton
     | Canvas
       -- A colour of the palette, by its place in Color.paintPalette.
     | ColorButton Int
