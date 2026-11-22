@@ -21,13 +21,14 @@ them with rustls (host/init/src/http.rs).
 
 import App
 import Color
-import Coord
+import Coord exposing (Coord)
 import Effect exposing (HttpError)
 import Json.Decode as D
 import Quantity
 import Sprite
 import Ui
 import UiId exposing (UiId)
+import Units exposing (UiPixels)
 import Weather.Types
 
 
@@ -43,34 +44,26 @@ type WeatherState
 -}
 limits : App.Limits
 limits =
-    App.fixed
-        (Ui.size
-            (view True
-                (GotWeather
-                    { name = "Place", latitude = 0, longitude = 0 }
-                    { temperature = 0, code = 0, wind = 0, humidity = 0, time = "2000-01-01T00:00", days = List.repeat 4 { date = "2000-01-01", code = 0, high = 0, low = 0 }, utcOffsetSeconds = Nothing }
-                )
-            )
-        )
+    App.fixed ( App.em 28, Units.ui 400 )
 
 
 {-| The weather app's App. It offers to get the weather only when `online`.
 -}
-view : Bool -> WeatherState -> Ui.Element UiId
-view online weather =
+view : Bool -> WeatherState -> Coord UiPixels -> Ui.Element UiId
+view online weather size =
     App.smallWindow
-        { title = App.heading "Weather", close = UiId.Weather Weather.Types.CloseButton, width = App.panelWidth }
+        { title = "Weather", close = UiId.Weather Weather.Types.CloseButton, size = size }
         (rows online weather)
 
 
-rows : Bool -> WeatherState -> List (Ui.Element UiId)
-rows online model =
+rows : Bool -> WeatherState -> Coord UiPixels -> Ui.Element UiId
+rows online model size =
     let
         font =
             Sprite.Sans Sprite.Regular
 
         width =
-            App.em 28
+            Coord.x size
 
         small =
             Ui.paddingXY 6 3
@@ -78,77 +71,80 @@ rows online model =
         degrees value =
             String.fromInt (round value) ++ "°"
     in
-    case model of
-        NoWeather ->
-            if online then
-                [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Get the weather") ]
+    Ui.column
+        4
+        (case model of
+            NoWeather ->
+                if online then
+                    [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Get the weather") ]
 
-            else
-                [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
+                else
+                    [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
 
-        FindingPlace ->
-            [ Ui.text "Finding where we are…" ]
+            FindingPlace ->
+                [ Ui.text "Finding where we are…" ]
 
-        LoadingForecast place ->
-            [ Ui.text (Sprite.ellipsis Sprite.Small font width ("Weather in " ++ place.name ++ "…")) ]
+            LoadingForecast place ->
+                [ Ui.text (Sprite.ellipsis Sprite.Small font width ("Weather in " ++ place.name ++ "…")) ]
 
-        WeatherFailed error ->
-            [ Ui.colorText Color.errorColor (Sprite.wrap Sprite.Small font width (Effect.httpErrorToString error))
-            , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Try again")
-            ]
+            WeatherFailed error ->
+                [ Ui.colorText Color.errorColor (Sprite.wrap Sprite.Small font width (Effect.httpErrorToString error))
+                , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Try again")
+                ]
 
-        GotWeather place forecast ->
-            [ Ui.leftAndRight width
-                (Ui.text (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (App.em 6)) ("Weather in " ++ place.name)))
-                (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Refresh"))
-            , Ui.row
-                8
-                [ weatherIcon 3 forecast.code
+            GotWeather place forecast ->
+                [ Ui.leftAndRight width
+                    (Ui.text (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (App.em 6)) ("Weather in " ++ place.name)))
+                    (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Refresh"))
+                , Ui.row
+                    8
+                    [ weatherIcon 3 forecast.code
+                    , Ui.column
+                        3
+                        [ Ui.customText
+                            Sprite.Big
+                            [ { text = fixed 1 forecast.temperature ++ "°C"
+                              , color = Color.textColor
+                              , font = font
+                              , decorations = []
+                              , link = Nothing
+                              }
+                            ]
+                        , Ui.text (describe forecast.code)
+                        , Ui.text
+                            ("Wind "
+                                ++ String.fromInt (round forecast.wind)
+                                ++ " km/h, humidity "
+                                ++ String.fromInt (round forecast.humidity)
+                                ++ "%"
+                            )
+                        ]
+                    ]
                 , Ui.column
                     3
-                    [ Ui.customText
-                        Sprite.Big
-                        [ { text = fixed 1 forecast.temperature ++ "°C"
-                          , color = Color.textColor
-                          , font = font
-                          , decorations = []
-                          , link = Nothing
-                          }
-                        ]
-                    , Ui.text (describe forecast.code)
-                    , Ui.text
-                        ("Wind "
-                            ++ String.fromInt (round forecast.wind)
-                            ++ " km/h, humidity "
-                            ++ String.fromInt (round forecast.humidity)
-                            ++ "%"
-                        )
-                    ]
-                ]
-            , Ui.column
-                3
-                (List.indexedMap
-                    (\i day ->
-                        Ui.row
-                            6
-                            [ weatherIcon 1 day.code
-                            , Ui.left (App.em 6)
-                                (Ui.text
-                                    (if i == 0 then
-                                        "Today"
+                    (List.indexedMap
+                        (\i day ->
+                            Ui.row
+                                6
+                                [ weatherIcon 1 day.code
+                                , Ui.left (App.em 6)
+                                    (Ui.text
+                                        (if i == 0 then
+                                            "Today"
 
-                                     else
-                                        weekday day.date
+                                         else
+                                            weekday day.date
+                                        )
                                     )
-                                )
-                            , Ui.left (App.em 5) (Ui.text (degrees day.high ++ " / " ++ degrees day.low))
-                            , Ui.text (describe day.code)
-                            ]
+                                , Ui.left (App.em 5) (Ui.text (degrees day.high ++ " / " ++ degrees day.low))
+                                , Ui.text (describe day.code)
+                                ]
+                        )
+                        forecast.days
                     )
-                    forecast.days
-                )
-            , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
-            ]
+                , Ui.colorText Color.outlineColor ("Updated " ++ String.replace "T" " " forecast.time ++ ", open-meteo.com")
+                ]
+        )
 
 
 {-| A number with a fixed count of decimals.

@@ -3241,37 +3241,42 @@ appConfig app model =
 
         CodeApp ->
             { name = "Code"
-            , view = \size -> Code.view size (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState) (Code.findText model.uiState) model.code
+            , view =
+                \size ->
+                    Code.view
+                        size
+                        (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState)
+                        (Code.findText model.uiState)
+                        model.code
             , limits = Code.appSize
             }
 
         DebugApp ->
             { name = "Debug"
             , view =
-                \_ ->
-                    DebugInfo.view
-                        { displays = model.displays
-                        , mouse = model.mouse
-                        , renderer = model.renderer
-                        , stats = model.stats
-                        , frameIntervals = model.frameIntervals
-                        , bootInfo = model.bootInfo
-                        , lastSnapshot = model.lastSnapshot
-                        , time = model.time
-                        , utcOffsetMinutes = model.utcOffsetMinutes
-                        }
+                DebugInfo.view
+                    { displays = model.displays
+                    , mouse = model.mouse
+                    , renderer = model.renderer
+                    , stats = model.stats
+                    , frameIntervals = model.frameIntervals
+                    , bootInfo = model.bootInfo
+                    , lastSnapshot = model.lastSnapshot
+                    , time = model.time
+                    , utcOffsetMinutes = model.utcOffsetMinutes
+                    }
             , limits = DebugInfo.limits
             }
 
         NetworkApp ->
             { name = "Network"
-            , view = \_ -> Network.view model.network
+            , view = Network.view model.network
             , limits = Network.limits
             }
 
         WeatherApp ->
             { name = "Weather"
-            , view = \_ -> Weather.view (Network.isOnline model.network) model.weather
+            , view = Weather.view (Network.isOnline model.network) model.weather
             , limits = Weather.limits
             }
 

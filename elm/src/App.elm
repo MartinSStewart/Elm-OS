@@ -302,21 +302,24 @@ panelWidth =
 
 {-| A small app's window: a bordered box with a title and a Close button above its rows.
 -}
-smallWindow : { title : Ui.Element UiId, close : UiId, width : Quantity Int UiPixels } -> List (Ui.Element UiId) -> Ui.Element UiId
-smallWindow { title, close, width } rows =
-    let
-        widest =
-            List.foldl (\row soFar -> Quantity.max (Coord.x (Ui.size row)) soFar) width rows
-    in
-    Ui.el
-        { padding = Ui.paddingXY 6 6, borderAndFill = Ui.windowBorderAndFill }
-        (Ui.column
-            4
-            (Ui.rowFromRight
-                { width = Quantity.unwrap widest, spacing = 0 }
-                [ \rest -> Ui.left (Units.ui rest) title
-                , \_ -> Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close")
+smallWindow : { title : String, close : UiId, size : Coord UiPixels } -> (Coord UiPixels -> Ui.Element UiId) -> Ui.Element UiId
+smallWindow { title, close, size } rows =
+    Ui.elWithSize
+        { padding = { left = 6, right = 6, bottom = 6, top = 2 }, borderAndFill = Ui.windowBorderAndFill, size = size }
+        (\size2 ->
+            Ui.columnFromTop
+                { size = size2, spacing = 4 }
+                [ \_ ->
+                    Ui.rowFromRight
+                        { width = Coord.xRaw size2, spacing = 0 }
+                        [ \rest -> Ui.left (Units.ui rest) (heading title)
+                        , \_ ->
+                            Ui.el
+                                { padding = { left = 0, right = 0, bottom = 0, top = 4 }
+                                , borderAndFill = Ui.NoBorderOrFill
+                                }
+                                (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+                        ]
+                , rows
                 ]
-                :: rows
-            )
         )

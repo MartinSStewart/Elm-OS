@@ -19,6 +19,7 @@ module Ui exposing
     , center
     , colorText
     , column
+    , columnFromTop
     , cursorAt
     , customButton
     , customText
@@ -28,6 +29,7 @@ module Ui exposing
     , dragScrollbar
     , el
     , elWithId
+    , elWithSize
     , elWithWidth
     , elementToScreenshot
     , empty
@@ -1817,11 +1819,45 @@ padded out to it if it comes out narrower.
 elWithWidth : { width : Int, padding : Padding, borderAndFill : BorderAndFill } -> (Int -> Element id) -> Element id
 elWithWidth data child =
     let
-        inner : Int
-        inner =
-            data.width - data.padding.left - data.padding.right
+        padding =
+            data.padding
+
+        child2 =
+            child (data.width - padding.left - padding.right)
+
+        missingPadding =
+            data.width - Coord.xRaw (size child2)
     in
-    el { padding = data.padding, borderAndFill = data.borderAndFill } (padToWidth 0 inner (child inner))
+    el { padding = { padding | right = missingPadding + padding.right }, borderAndFill = data.borderAndFill } child2
+
+
+elWithSize : { size : Coord UiPixels, padding : Padding, borderAndFill : BorderAndFill } -> (Coord UiPixels -> Element id) -> Element id
+elWithSize data child =
+    let
+        padding =
+            data.padding
+
+        size2 =
+            data.size
+                |> Coord.minus (Coord.xy padding.left padding.top)
+                |> Coord.minus (Coord.xy padding.right padding.bottom)
+
+        child2 =
+            child size2
+
+        missingPadding : Coord UiPixels
+        missingPadding =
+            size2 |> Coord.minus (size child2)
+    in
+    el
+        { padding =
+            { padding
+                | right = Coord.xRaw missingPadding + padding.right
+                , bottom = Coord.yRaw missingPadding + padding.bottom
+            }
+        , borderAndFill = data.borderAndFill
+        }
+        child2
 
 
 {-| A row exactly `width` wide. Each child is given the width the children left of it
@@ -1872,6 +1908,28 @@ rowFromRight data children =
         |> Tuple.second
         |> row data.spacing
         |> padToWidth 2 data.width
+
+
+columnFromTop : { size : Coord UiPixels, spacing : Int } -> List (Coord UiPixels -> Element id) -> Element id
+columnFromTop data children =
+    let
+        width =
+            Coord.xRaw data.size
+    in
+    List.foldr
+        (\child ( rest, made ) ->
+            let
+                element : Element id
+                element =
+                    child (Coord.xy width rest)
+            in
+            ( rest - Coord.yRaw (size element) - data.spacing, element :: made )
+        )
+        ( Coord.yRaw data.size, [] )
+        children
+        |> Tuple.second
+        |> column data.spacing
+        |> padToWidth 2 (Coord.yRaw data.size)
 
 
 {-| An element padded out to `width` if it's narrower; `fx` 0 puts it at the left, 2 at the right.
