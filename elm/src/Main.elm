@@ -329,6 +329,7 @@ type alias Model =
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
     , network : Network.Network
     , weather : WeatherState
+    , lastSnapshot : Maybe { bytes : Int, time : Maybe Time.Posix } -- the newest snapshot: its size, and when it was written
     , time : Maybe Time.Posix -- the wall clock, from each Frame and the host's Tick each second
     , utcOffsetMinutes : Maybe Int -- where this computer is, from the forecast; kept when the weather goes
     , geoUrl : String
@@ -414,6 +415,8 @@ saved and sent elsewhere later.
 type Msg
     = GotInput (Result String Input)
     | Tick Time.Posix
+    | -- Persist wrote a snapshot of this many bytes (not logged).
+      SnapshotWritten Int
 
 
 init : Model
@@ -436,6 +439,7 @@ init =
     , selectingText = False
     , network = Network.init
     , weather = NoWeather
+    , lastSnapshot = Nothing
     , time = Nothing
     , utcOffsetMinutes = Nothing
     , geoUrl = Weather.defaultGeoUrl
@@ -496,6 +500,9 @@ update msg model =
             ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab, email = email }
             , bootEffects ++ asciiEffects ++ emailEffects
             )
+
+        SnapshotWritten bytes ->
+            ( { model | lastSnapshot = Just { bytes = bytes, time = model.time } }, [] )
 
         GotInput value ->
             case value of
@@ -3249,6 +3256,9 @@ appConfig app model =
                         , stats = model.stats
                         , frameIntervals = model.frameIntervals
                         , bootInfo = model.bootInfo
+                        , lastSnapshot = model.lastSnapshot
+                        , time = model.time
+                        , utcOffsetMinutes = model.utcOffsetMinutes
                         }
             , limits = DebugInfo.limits
             }
@@ -3291,6 +3301,7 @@ persistConfig =
     , httpInterrupted = \id -> GotInput (Ok (HttpResponse id (Err Effect.Interrupted)))
     , webSocketsOpen = \ids -> GotInput (Ok (WebSocketsOpen ids))
     , draw = draw
+    , snapshotWritten = SnapshotWritten
     }
 
 
@@ -3344,6 +3355,9 @@ draw msg model =
             ( model, [] )
 
         Tick _ ->
+            ( model, [] )
+
+        SnapshotWritten _ ->
             ( model, [] )
 
 
@@ -3492,6 +3506,9 @@ httpAnswered msg =
             Nothing
 
         Tick _ ->
+            Nothing
+
+        SnapshotWritten _ ->
             Nothing
 
 

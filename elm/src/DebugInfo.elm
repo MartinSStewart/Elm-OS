@@ -5,12 +5,14 @@ module DebugInfo exposing (Info, limits, view)
 
 import App
 import BootInfo
+import Clock
 import Color
 import Coord exposing (Coord)
 import DebugInfo.Types exposing (RendererInfo, SystemStats)
 import Display exposing (Display)
 import Quantity exposing (Quantity)
 import Sprite
+import Time
 import Ui
 import UiId exposing (UiId)
 import Units exposing (DevicePixels, UiPixels)
@@ -26,6 +28,9 @@ type alias Info =
     , stats : Maybe SystemStats
     , frameIntervals : List Float -- milliseconds, newest first
     , bootInfo : BootInfo.Model
+    , lastSnapshot : Maybe { bytes : Int, time : Maybe Time.Posix }
+    , time : Maybe Time.Posix -- the wall clock now
+    , utcOffsetMinutes : Maybe Int
     }
 
 
@@ -57,6 +62,9 @@ sample =
             , drawMs = Just 0
             }
     , frameIntervals = [ 16 ]
+    , lastSnapshot = Nothing
+    , time = Nothing
+    , utcOffsetMinutes = Nothing
     , bootInfo =
         let
             bootInfo =
@@ -196,6 +204,7 @@ view model =
                    , rendererLine
                    , cursorLine
                    , line "Frame" (frameText model.frameIntervals)
+                   , line "Snapshot" (snapshotText model)
                    ]
                 ++ statsLines
                 ++ (line "Clock" (BootInfo.clockText model.bootInfo)
@@ -272,3 +281,33 @@ percentOfFrame ms frameIntervals =
 
         intervals ->
             " (" ++ Weather.fixed 0 (100 * ms * toFloat (List.length intervals) / max 0.001 (List.sum intervals)) ++ "%)"
+
+
+{-| The size of the Model's newest snapshot, and when it was written.
+-}
+snapshotText : Info -> String
+snapshotText model =
+    case model.lastSnapshot of
+        Nothing ->
+            "none yet"
+
+        Just snapshot ->
+            let
+                kilobytes =
+                    Weather.fixed 1 (toFloat snapshot.bytes / 1024) ++ " KB"
+            in
+            case snapshot.time of
+                Just time ->
+                    kilobytes
+                        ++ " at "
+                        ++ Clock.timeOnly model.utcOffsetMinutes time
+                        ++ (case model.time of
+                                Just now ->
+                                    ", " ++ String.fromInt (max 0 (Time.posixToMillis now - Time.posixToMillis time) // 1000) ++ " s ago"
+
+                                Nothing ->
+                                    ""
+                           )
+
+                Nothing ->
+                    kilobytes

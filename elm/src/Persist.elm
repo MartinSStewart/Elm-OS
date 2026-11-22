@@ -106,6 +106,10 @@ type alias Config model msg =
     -- change what the Model keeps for drawing (such as last frame's `Ui.lazy`
     -- elements), and isn't saved, as replaying doesn't call it.
     , draw : msg -> model -> ( model, List Effect )
+
+    -- Told after a snapshot is written (not logged: it only tells the Model how big the
+    -- snapshot was, in bytes, for the debug app), so it isn't part of the snapshot itself.
+    , snapshotWritten : Int -> msg
     }
 
 
@@ -420,8 +424,12 @@ resume config codecs disk restored upto arrivals =
         Running app saving pending ->
             case saving of
                 Saving s ->
-                    ( Running app (Saving { s | logBytes = 0 }) pending
-                    , notes ++ kept ++ liveEffects ++ [ snapshotEffect codecs app pending s.seq ]
+                    let
+                        ( noted, snapshotEffects ) =
+                            writeSnapshot config codecs app pending s.seq
+                    in
+                    ( Running noted (Saving { s | logBytes = 0 }) pending
+                    , notes ++ kept ++ liveEffects ++ snapshotEffects
                     )
 
                 NotSaving ->
@@ -492,23 +500,27 @@ live config codecs arrival app saving pending =
                             ( next, ( nextPending, effects ) ) =
                                 apply ()
                         in
-                        saved codecs next { s | seq = seq, logBytes = s.logBytes + arrival.bytes } nextPending effects
+                        saved config codecs next { s | seq = seq, logBytes = s.logBytes + arrival.bytes } nextPending effects
 
                 Nothing ->
                     let
                         ( next, ( nextPending, effects ) ) =
                             apply ()
                     in
-                    saved codecs next s nextPending effects
+                    saved config codecs next s nextPending effects
 
 
 {-| Writes a snapshot when the log has grown long enough, or the program is about to stop.
 -}
-saved : Codecs model -> model -> { dir : String, seq : Int, logBytes : Int } -> List String -> List Effect -> ( Model model msg, List Effect )
-saved codecs app s pending effects =
+saved : Config model msg -> Codecs model -> model -> { dir : String, seq : Int, logBytes : Int } -> List String -> List Effect -> ( Model model msg, List Effect )
+saved config codecs app s pending effects =
     if s.logBytes >= snapshotAfterBytes || List.any endsThisRun effects then
         -- Before the effects, so it's written before the host powers off or switches builds.
-        ( Running app (Saving { s | logBytes = 0 }) pending, snapshotEffect codecs app pending s.seq :: effects )
+        let
+            ( noted, snapshotEffects ) =
+                writeSnapshot config codecs app pending s.seq
+        in
+        ( Running noted (Saving { s | logBytes = 0 }) pending, snapshotEffects ++ effects )
 
     else
         ( Running app (Saving s) pending, effects )
@@ -575,10 +587,13 @@ endsThisRun effect =
             False
 
 
-snapshotEffect : Codecs model -> model -> List String -> Int -> Effect
-snapshotEffect codecs app pending seq =
-    Effect.WriteSnapshot
-        { data =
+{-| Writes the Model, and tells the Model (after encoding it) how many bytes that took.
+-}
+writeSnapshot : Config model msg -> Codecs model -> model -> List String -> Int -> ( model, List Effect )
+writeSnapshot config codecs app pending seq =
+    let
+        data : Bytes
+        data =
             Wire.toBytes
                 (BE.sequence
                     [ Wire.encodeString snapshotFormat
@@ -589,8 +604,11 @@ snapshotEffect codecs app pending seq =
                     , Wire.encodeList Wire.encodeString pending
                     ]
                 )
-        , seq = seq
-        }
+
+        ( noted, noteEffects ) =
+            config.update (config.snapshotWritten (Bytes.width data)) app
+    in
+    ( noted, Effect.WriteSnapshot { data = data, seq = seq } :: noteEffects )
 
 
 {-| Changes whenever this file's format does. Since elmos-persist-6 a snapshot is

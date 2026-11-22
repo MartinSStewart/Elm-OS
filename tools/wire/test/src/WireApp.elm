@@ -122,4 +122,5 @@ config =
     , httpInterrupted = \_ -> NoOp
     , webSocketsOpen = \_ -> NoOp
     , draw = \_ model -> ( model, [] )
+    , snapshotWritten = \_ -> NoOp
     }

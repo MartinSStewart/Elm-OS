@@ -160,7 +160,15 @@ bootWith httpInFlight early later host =
             run upto (Persist.DataDisk (Just "/data") httpInFlight [] :: earlyMsgs) ( Tuple.first Persist.init, logged )
     in
     List.foldl (\message ( state, h ) -> logMessage message h |> (\( m, h2 ) -> run upto [ m ] ( state, h2 ))) started later
-        |> Tuple.mapFirst Persist.appModel
+        |> Tuple.mapFirst appModel
+
+
+{-| The Model, without what it noted about the snapshots written (Main.lastSnapshot), which
+differs between a run with restarts and one without.
+-}
+appModel : Persist.Model Main.Model Main.Msg -> Maybe Main.Model
+appModel state =
+    Persist.appModel state |> Maybe.map (\model -> { model | lastSnapshot = Nothing })
 
 
 boot : Host -> List HostIn -> ( Maybe Main.Model, Host )
@@ -369,8 +377,14 @@ suite =
                 -- The log replayed, then its last five messages again.
                 run host.last (Persist.DataDisk (Just "/data") [] [] :: again) ( Tuple.first Persist.init, { host | snapshot = Nothing } )
                     |> Tuple.first
-                    |> Persist.appModel
+                    |> appModel
                     |> Expect.equal (Just (afterRestart (List.take 15 session)))
+            )
+        , Test.test "the Model notes how big the snapshot it just wrote was"
+            (\_ ->
+                run 0 [ Persist.DataDisk (Just "/data") [] [] ] ( Tuple.first Persist.init, emptyHost )
+                    |> (\( state, host ) -> ( Persist.appModel state |> Maybe.andThen .lastSnapshot |> Maybe.map (\snapshot -> snapshot.bytes > 0), host.snapshot /= Nothing ))
+                    |> Expect.equal ( Just True, True )
             )
         , Test.test "a snapshot whose log wasn't trimmed skips the messages it has"
             (\_ ->
