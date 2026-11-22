@@ -72,9 +72,6 @@ rows online model =
         width =
             App.em 28
 
-        t =
-            Ui.text
-
         small =
             Ui.paddingXY 6 3
 
@@ -84,26 +81,26 @@ rows online model =
     case model of
         NoWeather ->
             if online then
-                [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Get the weather") ]
+                [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Get the weather") ]
 
             else
                 [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
 
         FindingPlace ->
-            [ t "Finding where we are…" ]
+            [ Ui.text "Finding where we are…" ]
 
         LoadingForecast place ->
-            [ t (Sprite.ellipsis Sprite.Small font width ("Weather in " ++ place.name ++ "…")) ]
+            [ Ui.text (Sprite.ellipsis Sprite.Small font width ("Weather in " ++ place.name ++ "…")) ]
 
         WeatherFailed error ->
             [ Ui.colorText Color.errorColor (Sprite.wrap Sprite.Small font width (Effect.httpErrorToString error))
-            , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Try again")
+            , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Try again")
             ]
 
         GotWeather place forecast ->
             [ Ui.leftAndRight width
-                (t (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (App.em 6)) ("Weather in " ++ place.name)))
-                (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (t "Refresh"))
+                (Ui.text (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (App.em 6)) ("Weather in " ++ place.name)))
+                (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Refresh"))
             , Ui.row
                 8
                 [ weatherIcon 3 forecast.code
@@ -118,8 +115,8 @@ rows online model =
                           , link = Nothing
                           }
                         ]
-                    , t (describe forecast.code)
-                    , t
+                    , Ui.text (describe forecast.code)
+                    , Ui.text
                         ("Wind "
                             ++ String.fromInt (round forecast.wind)
                             ++ " km/h, humidity "
@@ -136,7 +133,7 @@ rows online model =
                             6
                             [ weatherIcon 1 day.code
                             , Ui.left (App.em 6)
-                                (t
+                                (Ui.text
                                     (if i == 0 then
                                         "Today"
 
@@ -144,8 +141,8 @@ rows online model =
                                         weekday day.date
                                     )
                                 )
-                            , Ui.left (App.em 5) (t (degrees day.high ++ " / " ++ degrees day.low))
-                            , t (describe day.code)
+                            , Ui.left (App.em 5) (Ui.text (degrees day.high ++ " / " ++ degrees day.low))
+                            , Ui.text (describe day.code)
                             ]
                     )
                     forecast.days

@@ -741,14 +741,11 @@ view windowSize input needle model =
         boxStyle =
             style windowSize model |> (\plain -> { plain | highlights = found })
 
-        t =
-            Ui.text
-
         segment color text =
             { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
 
         button id label =
-            Ui.button { id = UiId.Code id, padding = Ui.paddingXY 6 3 } (t label)
+            Ui.button { id = UiId.Code id, padding = Ui.paddingXY 6 3 } (Ui.text label)
 
         state =
             input.input.current
@@ -932,7 +929,7 @@ view windowSize input needle model =
                                                 Ui.customText Sprite.Small [ segment Color.textColor name, segment Color.successColor "  changed" ]
 
                                              else
-                                                t name
+                                                Ui.text name
                                             )
                                     )
                                     (List.filter shownModule (SeqDict.keys SourceCode.sourceCode))

@@ -565,18 +565,15 @@ wiredRows model =
         width =
             panelWidth
 
-        t =
-            Ui.text
-
         link : WiredLink -> List (Ui.Element id)
         link l =
-            [ t ("Wired (" ++ l.name ++ ")")
+            [ Ui.text ("Wired (" ++ l.name ++ ")")
             , case l.state of
                 WiredNoCable ->
-                    t "No cable plugged in"
+                    Ui.text "No cable plugged in"
 
                 WiredDhcp ->
-                    t "Getting an address…"
+                    Ui.text "Getting an address…"
 
                 WiredConnected ->
                     Ui.colorText

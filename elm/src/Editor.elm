@@ -56,9 +56,6 @@ chrome =
 view : Coord UiPixels -> TextInputMultiline.Model -> Ui.Element UiId
 view windowSize textInput =
     let
-        t =
-            Ui.text
-
         textStyle =
             style windowSize
 
@@ -92,13 +89,13 @@ view windowSize textInput =
             6
             [ Ui.leftAndRight textStyle.width
                 (App.heading "Text editor")
-                (Ui.button { id = UiId.Editor Editor.Types.CloseButton, padding = Ui.paddingXY 6 3 } (t "Close"))
+                (Ui.button { id = UiId.Editor Editor.Types.CloseButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
             , Ui.textInputMultiline
                 { id = UiId.Editor Editor.Types.Input
                 , style = textStyle
                 }
             , Ui.leftAndRight textStyle.width
-                (t status)
+                (Ui.text status)
                 (Ui.customText App.bodySize
                     [ { text = "Ctrl+Z", color = Color.outlineColor, font = Sprite.Sans Sprite.Bold, decorations = [], link = Nothing }
                     , { text = " undo, ", color = Color.outlineColor, font = App.sans, decorations = [], link = Nothing }
