@@ -1,15 +1,21 @@
 module Paint exposing
     ( Model
+    , Stroke
     , appSize
     , endStroke
     , init
     , onClick
+    , pixelAt
     , startStroke
     , strokeBy
     , view
     )
 
-{-| A paint program: pick a colour and a brush, and draw on the canvas with the mouse.
+{-| A paint program: pick a colour, a brush and a tool, and draw on the canvas with the mouse.
+
+The fill tool fills the pixels of the colour under the mouse that are joined to it, but only
+up to the brush's radius from the mouse. Dragging carries on filling around the mouse, in
+the region already being filled.
 
 The canvas is a 640 x 384 pixel Image (one pixel per UI pixel): 32 x 32 pixel chunks.
 A stroke rebuilds the chunks it touches; Sprite.image draws it.
@@ -20,6 +26,7 @@ import App
 import Array
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Dict exposing (Dict)
 import Image exposing (Image)
 import Paint.Types
 import Set exposing (Set)
@@ -34,9 +41,20 @@ type alias Model =
     , canvas : Image
     , color : Color
     , brush : Int -- the brush's radius, in canvas pixels
+    , tool : Paint.Types.Tool
 
-    -- The canvas pixel the mouse was last at, while it draws.
-    , stroke : Maybe ( Int, Int )
+    -- While the mouse is down on the canvas.
+    , stroke : Maybe Stroke
+    }
+
+
+type alias Stroke =
+    { -- The canvas pixel the mouse was last at.
+      at : ( Int, Int )
+
+    -- The pixels filled so far, as y * canvasWidth + x, and the colour they were. Only the fill tool.
+    , filled : Set Int
+    , target : Int
     }
 
 
@@ -46,6 +64,7 @@ init =
     , canvas = blank
     , color = Color.black
     , brush = 3
+    , tool = Paint.Types.Pen
     , stroke = Nothing
     }
 
@@ -98,8 +117,16 @@ startStroke point model =
     let
         at =
             Coord.toTuple point
+
+        stroke =
+            { at = at, filled = Set.empty, target = pixelAt at model.canvas |> Maybe.withDefault 0 }
     in
-    paint [ at ] { model | stroke = Just at }
+    case model.tool of
+        Paint.Types.Pen ->
+            paint [ at ] { model | stroke = Just stroke }
+
+        Paint.Types.Fill ->
+            fill True [ at ] { model | stroke = Just stroke }
 
 
 {-| The mouse moved by this much while drawing: paints along the way.
@@ -107,16 +134,27 @@ startStroke point model =
 strokeBy : Coord UiPixels -> Model -> Model
 strokeBy ( dx, dy ) model =
     case model.stroke of
-        Just ( x, y ) ->
+        Just stroke ->
             let
+                ( x, y ) =
+                    stroke.at
+
                 to =
                     ( x + Units.inUi dx, y + Units.inUi dy )
+
+                moved =
+                    { model | stroke = Just { stroke | at = to } }
             in
             if to == ( x, y ) then
                 model
 
             else
-                paint (line ( x, y ) to model.brush) { model | stroke = Just to }
+                case model.tool of
+                    Paint.Types.Pen ->
+                        paint (line ( x, y ) to model.brush) moved
+
+                    Paint.Types.Fill ->
+                        fill False (line ( x, y ) to model.brush) moved
 
         Nothing ->
             model
@@ -231,6 +269,169 @@ paintChunk index r color dabs chunk =
     List.foldl dab (Image.chunkPixels chunk) dabs |> Image.chunkFromPixels
 
 
+{-| The colour of a canvas pixel (0xRRGGBBAA).
+-}
+pixelAt : ( Int, Int ) -> Image -> Maybe Int
+pixelAt ( x, y ) canvas =
+    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight then
+        Nothing
+
+    else
+        Array.get (chunkIndexOf x y) canvas.chunks
+            |> Maybe.andThen (\chunk -> Array.get (inChunk x y) (Image.chunkPixels chunk))
+
+
+chunkIndexOf : Int -> Int -> Int
+chunkIndexOf x y =
+    y // chunkSize * chunksAcross + x // chunkSize
+
+
+inChunk : Int -> Int -> Int
+inChunk x y =
+    modBy chunkSize y * chunkSize + modBy chunkSize x
+
+
+{-| The chunks being filled, as pixels, and the pixels filled so far.
+-}
+type alias Work =
+    { chunks : Dict Int (Array.Array Int)
+    , changed : Set Int
+    , filled : Set Int
+    }
+
+
+{-| Fill around each point, in the brush's colour: the pixels of the stroke's target colour
+that are inside the brush's circle and joined to where the fill began. With `atStart` (one
+point, on a target coloured pixel) the fill begins there, otherwise it carries on from the
+pixels already filled, so it never jumps to a separate region.
+-}
+fill : Bool -> List ( Int, Int ) -> Model -> Model
+fill atStart points model =
+    case model.stroke of
+        Just stroke ->
+            let
+                color =
+                    Color.toInt model.color
+
+                canvas =
+                    model.canvas
+
+                start : Work
+                start =
+                    { chunks = Dict.empty, changed = Set.empty, filled = stroke.filled }
+
+                work =
+                    List.foldl (fillAround canvas model.brush color stroke.target atStart) start points
+            in
+            if color == stroke.target then
+                model
+
+            else
+                { model
+                    | stroke = Just { stroke | filled = work.filled }
+                    , canvas =
+                        { canvas
+                            | chunks =
+                                Set.foldl
+                                    (\index chunks ->
+                                        case Dict.get index work.chunks of
+                                            Just pixels ->
+                                                Array.set index (Image.chunkFromPixels pixels) chunks
+
+                                            Nothing ->
+                                                chunks
+                                    )
+                                    canvas.chunks
+                                    work.changed
+                        }
+                }
+
+        Nothing ->
+            model
+
+
+fillAround : Image -> Int -> Int -> Int -> Bool -> ( Int, Int ) -> Work -> Work
+fillAround canvas r color target atStart ( cx, cy ) work0 =
+    let
+        inCircle ( x, y ) =
+            (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r + r
+
+        ys =
+            List.range (max 0 (cy - r)) (min (canvasHeight - 1) (cy + r))
+
+        xs =
+            List.range (max 0 (cx - r)) (min (canvasWidth - 1) (cx + r))
+
+        reached =
+            List.concatMap
+                (\chunkY -> List.map (\chunkX -> chunkY * chunksAcross + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth - 1) (cx + r) // chunkSize)))
+                (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight - 1) (cy + r) // chunkSize))
+
+        work =
+            List.foldl
+                (\index w -> { w | chunks = Dict.update index (loadChunk canvas index) w.chunks })
+                work0
+                reached
+
+        isTarget w ( x, y ) =
+            Dict.get (chunkIndexOf x y) w.chunks
+                |> Maybe.andThen (Array.get (inChunk x y))
+                |> (==) (Just target)
+
+        isFilled w ( x, y ) =
+            Set.member (y * canvasWidth + x) w.filled
+
+        joinsFilled w ( x, y ) =
+            List.any (isFilled w) [ ( x - 1, y ), ( x + 1, y ), ( x, y - 1 ), ( x, y + 1 ) ]
+
+        seeds =
+            if atStart then
+                [ ( cx, cy ) ]
+
+            else
+                List.concatMap (\y -> List.map (\x -> ( x, y )) xs) ys
+                    |> List.filter (\point -> inCircle point && isTarget work point && joinsFilled work point)
+
+        spread : List ( Int, Int ) -> Work -> Work
+        spread stack w =
+            case stack of
+                [] ->
+                    w
+
+                ( x, y ) :: rest ->
+                    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight || not (inCircle ( x, y )) || not (isTarget w ( x, y )) then
+                        spread rest w
+
+                    else
+                        spread
+                            (( x - 1, y ) :: ( x + 1, y ) :: ( x, y - 1 ) :: ( x, y + 1 ) :: rest)
+                            (setPixel color ( x, y ) w)
+    in
+    spread seeds work
+
+
+loadChunk : Image -> Int -> Maybe (Array.Array Int) -> Maybe (Array.Array Int)
+loadChunk canvas index loaded =
+    case loaded of
+        Just _ ->
+            loaded
+
+        Nothing ->
+            Array.get index canvas.chunks |> Maybe.map Image.chunkPixels
+
+
+setPixel : Int -> ( Int, Int ) -> Work -> Work
+setPixel color ( x, y ) work =
+    let
+        index =
+            chunkIndexOf x y
+    in
+    { chunks = Dict.update index (Maybe.map (Array.set (inChunk x y) color)) work.chunks
+    , changed = Set.insert index work.changed
+    , filled = Set.insert (y * canvasWidth + x) work.filled
+    }
+
+
 
 -- CLICKS
 
@@ -261,6 +462,9 @@ onClick id model =
         Paint.Types.BrushButton radius ->
             { model | brush = radius }
 
+        Paint.Types.ToolButton tool ->
+            { model | tool = tool }
+
 
 
 -- VIEW
@@ -284,7 +488,7 @@ view model =
         tools =
             Ui.leftAndRight width
                 (Ui.row 4 (List.indexedMap (colorButton model) Color.paintPalette))
-                (Ui.row 4 (List.map (brushButton model) brushes))
+                (Ui.row 4 (List.map (toolButton model) [ ( Paint.Types.Pen, "Pen" ), ( Paint.Types.Fill, "Fill" ) ] ++ List.map (brushButton model) brushes))
 
         canvas =
             Ui.elWithId (Paint Paint.Types.Canvas)
@@ -298,6 +502,13 @@ view model =
     Ui.el
         { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column 6 [ title, tools, canvas ])
+
+
+toolButton : Model -> ( Paint.Types.Tool, String ) -> Element UiId
+toolButton model ( tool, name ) =
+    Ui.selectableButton { id = Paint (Paint.Types.ToolButton tool), padding = Ui.paddingXY 6 3 }
+        (tool == model.tool)
+        (Ui.text name)
 
 
 swatchSize : Int

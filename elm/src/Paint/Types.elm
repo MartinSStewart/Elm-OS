@@ -1,8 +1,15 @@
-module Paint.Types exposing (UiId(..))
+module Paint.Types exposing (Tool(..), UiId(..))
 
 {-| The ids of the paint program's elements. They are here and not in Paint.elm because
 UiId.elm holds them (see its note).
 -}
+
+
+{-| What the mouse does on the canvas.
+-}
+type Tool
+    = Pen
+    | Fill
 
 
 type UiId
@@ -14,3 +21,5 @@ type UiId
     | ColorButton Int
       -- A brush, by its radius.
     | BrushButton Int
+      -- A tool, by which one.
+    | ToolButton Tool
