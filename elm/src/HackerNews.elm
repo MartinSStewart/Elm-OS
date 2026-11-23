@@ -799,7 +799,10 @@ postsView lazyCache data =
         , ( Ui.Fill2
           , Ui.viewport2
                 (HackerNews HackerNews.Types.PostsViewport)
-                (\target -> Ui.column 0 (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView index post target) data))
+                (Ui.column2
+                    0
+                    (List.indexedMap (\index post -> ( Ui.Shrink2, Ui.lazy3 lazyCache postView index post )) data)
+                )
           )
         ]
 
@@ -871,10 +874,10 @@ commentsView lazyCache postId title comments =
 
 
 commentsColumn : Ui.LazyCache UiId -> List Comment -> Ui.TargetSize -> Element UiId
-commentsColumn lazyCache comments target =
-    Ui.column
+commentsColumn lazyCache comments =
+    Ui.column2
         commentSpacing
-        (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache comment target) comments)
+        (List.map (\comment -> ( Ui.Shrink2, Ui.lazy3 lazyCache commentView lazyCache comment )) comments)
 
 
 {-| A comment, and under it its replies if they are shown.
