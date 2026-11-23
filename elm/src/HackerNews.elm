@@ -757,196 +757,175 @@ toggleSpacing =
 -}
 view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
-    Ui.elWithSize
-        { size = windowSize, pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
-        (\size ->
-            case model.page of
-                PostsPage ->
-                    case model.data of
-                        NotLoading ->
-                            Ui.empty
+    Ui.el2
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
+        (case model.page of
+            PostsPage ->
+                case model.data of
+                    NotLoading ->
+                        Ui.fixed2 Ui.empty
 
-                        Loading maybe ->
-                            case maybe of
-                                Just data ->
-                                    postsView lazyCache size data
+                    Loading maybe ->
+                        case maybe of
+                            Just data ->
+                                postsView lazyCache data
 
-                                Nothing ->
-                                    Ui.text "Loading..."
+                            Nothing ->
+                                Ui.text2 "Loading..."
 
-                        Loaded data ->
-                            postsView lazyCache size data
+                    Loaded data ->
+                        postsView lazyCache data
 
-                        LoadFailed httpError ->
-                            Ui.text (Effect.httpErrorToString httpError)
+                    LoadFailed httpError ->
+                        Ui.text2 (Effect.httpErrorToString httpError)
 
-                CommentsPage id title ->
-                    commentsView
-                        lazyCache
-                        size
-                        id
-                        title
-                        (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
+            CommentsPage id title ->
+                commentsView
+                    lazyCache
+                    id
+                    title
+                    (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
+        )
+        { width = Just (Coord.xRaw windowSize), height = Just (Coord.yRaw windowSize) }
+
+
+postsView : Ui.LazyCache UiId -> List Post -> Ui.TargetSize -> Element UiId
+postsView lazyCache data =
+    Ui.column2
+        titleSpacing
+        [ ( Ui.Shrink2
+          , Ui.customText2 Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
+          )
+        , ( Ui.Fill2
+          , Ui.viewport2
+                (HackerNews HackerNews.Types.PostsViewport)
+                (\target -> Ui.column 0 (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView index post target) data))
+          )
+        ]
+
+
+postView : Int -> Post -> Ui.TargetSize -> Element UiId
+postView index { id, title, comments } =
+    Ui.customButton2
+        { id = HackerNews (HackerNews.Types.PostButton id)
+        , pad = Ui.paddingXY 0 postPadding
+        , inFront = []
+        , style = Ui.NoBorderOrFill
+        , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
+        }
+        (Ui.row2
+            8
+            [ ( Ui.Shrink2
+              , Ui.colorText Color.dimTextColor (String.fromInt (index + 1) ++ ".")
+                    |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
+                    |> Ui.fixed2
+              )
+            , ( Ui.Fill2, Ui.ellipsisText2 { color = Color.textColor, font = Sans Regular } title )
+            , ( Ui.Shrink2
+              , Ui.colorText
+                    Color.dimTextColor
+                    (String.fromInt comments
+                        ++ (if comments == 1 then
+                                " comment"
+
+                            else
+                                " comments"
+                           )
+                    )
+                    |> Ui.right { width = Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x }
+                    |> Ui.fixed2
+              )
+            ]
         )
 
 
-postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
-postsView lazyCache size data =
-    Ui.columnFill
-        { height = Coord.yRaw size, gap = titleSpacing }
-        [ Ui.Shrink
-            (Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
-        , Ui.Fill
-            (\listHeight ->
-                Ui.column
-                    0
-                    (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView (Coord.xRaw size) index post) data)
-                    |> Ui.viewport { id = HackerNews HackerNews.Types.PostsViewport, viewportHeight = Units.ui listHeight }
-            )
-        ]
-
-
-postView : Int -> Int -> Post -> Element UiId
-postView width index { id, title, comments } =
-    Ui.rowFill
-        { width = width, gap = 8 }
-        [ Ui.Shrink
-            (Ui.colorText Color.dimTextColor (String.fromInt (index + 1) ++ ".")
-                |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
-            )
-        , Ui.Fill (\titleWidth -> Ui.text (Sprite.ellipsis Small (Sans Regular) (Units.ui titleWidth) title))
-        , Ui.Shrink
-            (Ui.colorText
-                Color.dimTextColor
-                (String.fromInt comments
-                    ++ (if comments == 1 then
-                            " comment"
-
-                        else
-                            " comments"
-                       )
-                )
-                |> Ui.right { width = Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x }
-            )
-        ]
-        |> Ui.customButton
-            { id = HackerNews (HackerNews.Types.PostButton id)
-            , pad = Ui.paddingXY 0 postPadding
-            , inFront = []
-            , style = Ui.NoBorderOrFill
-            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
-            }
-
-
-commentsView : Ui.LazyCache UiId -> Coord UiPixels -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache size postId title comments =
-    let
-        backButton : Element UiId
-        backButton =
-            Ui.button
-                { id = HackerNews HackerNews.Types.BackButton
-                , pad = Ui.paddingXY 6 0
-                }
-                (Ui.text "< Posts")
-
-        headerSpacing : Int
-        headerSpacing =
-            8
-    in
-    Ui.columnFill
-        { height = Coord.yRaw size, gap = titleSpacing }
-        [ Ui.Shrink
-            (Ui.rowFill
-                { width = Coord.xRaw size, gap = headerSpacing }
-                [ Ui.Shrink backButton
-                , Ui.Fill
-                    (\titleWidth ->
-                        Ui.customText
-                            Small
-                            [ { text = Sprite.ellipsis Small (Sans Bold) (Units.ui titleWidth) title
-                              , color = Color.textColor
-                              , font = Sans Bold
-                              , decorations = []
-                              , link = Nothing
-                              }
-                            ]
-                    )
+commentsView : Ui.LazyCache UiId -> PostId -> String -> CommentsState -> Ui.TargetSize -> Element UiId
+commentsView lazyCache postId title comments =
+    Ui.column2
+        titleSpacing
+        [ ( Ui.Shrink2
+          , Ui.row2
+                8
+                [ ( Ui.Shrink2, Ui.button2 { id = HackerNews HackerNews.Types.BackButton, pad = Ui.paddingXY 6 0 } (Ui.text2 "< Posts") )
+                , ( Ui.Fill2, Ui.ellipsisText2 { color = Color.textColor, font = Sans Bold } title )
                 ]
-            )
-        , Ui.Fill
-            (\listHeight ->
+          )
+        , ( Ui.Fill2
+          , Ui.viewport2
+                (HackerNews (HackerNews.Types.CommentsViewport postId))
                 (case comments of
                     CommentsLoading ->
-                        Ui.text "Loading comments..."
+                        Ui.text2 "Loading comments..."
 
                     CommentsLoaded [] ->
-                        Ui.text "No comments yet."
+                        Ui.text2 "No comments yet."
 
                     CommentsLoaded loaded ->
-                        Ui.lazy3 lazyCache commentsColumn lazyCache (Coord.xRaw size) loaded
+                        commentsColumn lazyCache loaded
 
                     CommentsLoadFailed error ->
-                        Ui.text (Effect.httpErrorToString error)
+                        Ui.text2 (Effect.httpErrorToString error)
                 )
-                    |> Ui.left (Coord.x size)
-                    |> Ui.viewport { id = HackerNews (HackerNews.Types.CommentsViewport postId), viewportHeight = Units.ui listHeight }
-            )
+          )
         ]
 
 
-commentsColumn : Ui.LazyCache UiId -> Int -> List Comment -> Element UiId
-commentsColumn lazyCache width comments =
+commentsColumn : Ui.LazyCache UiId -> List Comment -> Ui.TargetSize -> Element UiId
+commentsColumn lazyCache comments target =
     Ui.column
         commentSpacing
-        (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache width comment) comments)
+        (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache comment target) comments)
 
 
-{-| A comment, and under it its replies if they are shown. `width` is how wide it can be.
+{-| A comment, and under it its replies if they are shown.
 -}
-commentView : Ui.LazyCache UiId -> Int -> Comment -> Element UiId
-commentView lazyCache width (Comment comment) =
+commentView : Ui.LazyCache UiId -> Comment -> Ui.TargetSize -> Element UiId
+commentView lazyCache (Comment comment) =
     let
-        repliesButton : Element UiId
+        repliesButton : Ui.TargetSize -> Element UiId
         repliesButton =
-            if comment.isExpanded then
+            (if comment.isExpanded then
                 toggleButton comment.index "[-]"
 
-            else
+             else
                 toggleButton comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
-
-        text : Element UiId
-        text =
-            Ui.rowFill
-                { width = width, gap = toggleSpacing }
-                [ Ui.Shrink (Ui.right { width = Units.ui toggleWidth } repliesButton)
-                , Ui.Fill
-                    (\textWidth ->
-                        Ui.customTextWrapped
-                            Small
-                            (Units.ui textWidth)
-                            (commentHeader comment.author comment.date
-                                ++ List.map (spanSegment (greyColor comment.grey)) comment.content
-                            )
-                            |> Ui.links (HackerNews HackerNews.Types.CommentLink)
-                    )
-                ]
+            )
+                |> Ui.right { width = Units.ui toggleWidth }
+                |> Ui.fixed2
     in
     if comment.isExpanded then
-        Ui.column
+        Ui.column2
             commentSpacing
-            [ text
-            , Ui.rowFill
-                { width = width, gap = 0 }
-                [ Ui.Shrink (Ui.left (Units.ui replyIndent) Ui.empty)
-                , Ui.Fill (\repliesWidth -> commentsColumn lazyCache repliesWidth comment.children)
-                ]
+            [ ( Ui.Shrink2
+              , Ui.row2
+                    toggleSpacing
+                    [ ( Ui.Shrink2, repliesButton )
+                    , ( Ui.Fill2
+                      , \target ->
+                            Ui.customText2
+                                Small
+                                (commentHeader comment.author comment.date
+                                    ++ List.map (spanSegment (greyColor comment.grey)) comment.content
+                                )
+                                target
+                                |> Ui.links (HackerNews HackerNews.Types.CommentLink)
+                      )
+                    ]
+              )
+            , ( Ui.Shrink2
+              , Ui.row2
+                    0
+                    [ ( Ui.Shrink2, Ui.fixed2 (Ui.left (Units.ui replyIndent) Ui.empty) )
+                    , ( Ui.Fill2, commentsColumn lazyCache comment.children )
+                    ]
+              )
             ]
 
     else
-        Ui.rowFill
-            { width = width, gap = toggleSpacing }
-            [ Ui.Shrink (Ui.right { width = Units.ui toggleWidth } repliesButton)
-            , Ui.Fill (\textWidth -> Ui.customTextWrapped Small (Units.ui textWidth) (commentHeader comment.author comment.date))
+        Ui.row2
+            toggleSpacing
+            [ ( Ui.Shrink2, repliesButton )
+            , ( Ui.Fill2, Ui.customText2 Small (commentHeader comment.author comment.date) )
             ]
 
 

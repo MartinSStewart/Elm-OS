@@ -1,4 +1,4 @@
-module App exposing (App, Limits, Range, bodySize, em, fixed, heading, headingSize, layout, panelWidth, sans, smallWindow)
+module App exposing (App, Limits, Range, bodySize, em, fixed, heading, headingSize, layout, panelWidth, sans, smallWindow, smallWindow2)
 
 {-| What the OS needs to know about an app to name it, size its window and draw it: the
 same for every app, so Main has one place that builds this for each.
@@ -298,6 +298,30 @@ heading string =
 panelWidth : Quantity Int UiPixels
 panelWidth =
     em 28
+
+
+{-| `smallWindow` made exactly the target size, with its rows given the room under the title.
+-}
+smallWindow2 : { title : String, close : UiId } -> (Ui.TargetSize -> Ui.Element UiId) -> Ui.TargetSize -> Ui.Element UiId
+smallWindow2 { title, close } rows =
+    Ui.el2
+        { pad = { left = 6, right = 6, bottom = 6, top = 2 }, style = Ui.windowBorderAndFill }
+        (Ui.column2
+            4
+            [ ( Ui.Shrink2
+              , Ui.row2
+                    0
+                    [ ( Ui.Fill2, Ui.fixed2 (heading title) )
+                    , ( Ui.Shrink2
+                      , Ui.el2
+                            { pad = { left = 0, right = 0, bottom = 0, top = 4 }, style = Ui.NoBorderOrFill }
+                            (Ui.button2 { id = close, pad = Ui.paddingXY 6 3 } (Ui.text2 "Close"))
+                      )
+                    ]
+              )
+            , ( Ui.Fill2, rows )
+            ]
+        )
 
 
 {-| A small app's window: a bordered box with a title and a Close button above its rows.

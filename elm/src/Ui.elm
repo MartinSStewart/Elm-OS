@@ -6,36 +6,46 @@ module Ui exposing
     , InputType(..)
     , LazyCache
     , Length(..)
+    , Length2(..)
     , Model
     , Padding
     , Screenshot
     , ScrollBy(..)
     , Source
     , Style(..)
+    , TargetSize
     , ViewportData
     , ViewportModel
     , bottomRight
     , button
+    , button2
     , buttons
     , center
     , colorText
+    , colorText2
     , column
+    , column2
     , columnFill
     , columnFromTop
     , cursorAt
     , customButton
+    , customButton2
     , customText
+    , customText2
     , customTextWrapped
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , dragScrollbar
     , el
+    , el2
     , elWithId
     , elWithSize
     , elWithWidth
     , elementToScreenshot
+    , ellipsisText2
     , empty
     , findInput
+    , fixed2
     , getTextInput
     , getTextInputMultiline
     , hover
@@ -64,6 +74,7 @@ module Ui exposing
     , quads
     , right
     , row
+    , row2
     , rowFill
     , rowFromLeft
     , rowFromRight
@@ -71,17 +82,20 @@ module Ui exposing
     , screenshotView
     , scrolls
     , selectableButton
+    , selectableButton2
     , setFocus
     , size
     , sourced
     , stopMomentum
     , text
+    , text2
     , textInput
     , textInputMultiline
     , topRight
     , updateElement
     , view
     , viewport
+    , viewport2
     , windowBorderAndFill
     )
 
@@ -443,8 +457,8 @@ stopMomentum model =
             SeqDict.map
                 (\_ value ->
                     case value of
-                        ViewportState viewport2 ->
-                            ViewportState { viewport2 | momentum = 0 }
+                        ViewportState viewportModel ->
+                            ViewportState { viewportModel | momentum = 0 }
 
                         TextInputState _ ->
                             value
@@ -468,8 +482,8 @@ onMouseUp model =
             SeqDict.map
                 (\_ value ->
                     case value of
-                        ViewportState viewport2 ->
-                            ViewportState { viewport2 | grab = Nothing }
+                        ViewportState viewportModel ->
+                            ViewportState { viewportModel | grab = Nothing }
 
                         TextInputState _ ->
                             value
@@ -492,8 +506,8 @@ setFocus maybe model =
 getViewport : id -> Model id -> ViewportModel
 getViewport id model =
     case SeqDict.get id model.uiState of
-        Just (ViewportState viewport2) ->
-            viewport2
+        Just (ViewportState viewportModel) ->
+            viewportModel
 
         _ ->
             initViewportModel
@@ -621,12 +635,12 @@ onAnimationFrame timeElapsed mouse hovered model =
                         ButtonState _ ->
                             value
 
-                        ViewportState viewport2 ->
-                            (if viewport2.momentum /= 0 then
-                                glide timeElapsed viewport2
+                        ViewportState viewportModel ->
+                            (if viewportModel.momentum /= 0 then
+                                glide timeElapsed viewportModel
 
                              else
-                                ease timeElapsed viewport2
+                                ease timeElapsed viewportModel
                             )
                                 |> Scrollbar.fade timeElapsed (scrollbarHovered id)
                                 |> ViewportState
@@ -976,7 +990,7 @@ initViewportModel =
 {-| A frame of easing towards where the wheel scrolled to.
 -}
 ease : Duration -> ViewportModel -> ViewportModel
-ease timeElapsed viewport2 =
+ease timeElapsed viewportModel =
     let
         distance : Quantity Float UiPixels
         distance =
@@ -989,25 +1003,25 @@ ease timeElapsed viewport2 =
 
         target : Quantity Float UiPixels
         target =
-            viewport2.target
+            viewportModel.target
 
         diff : Quantity Float UiPixels
         diff =
-            target |> Quantity.minus viewport2.offset |> Quantity.abs
+            target |> Quantity.minus viewportModel.offset |> Quantity.abs
     in
-    { viewport2
+    { viewportModel
         | offset =
             -- Also mends an offset that a negative frame time made
             -- NaN (NaN is never less than anything), which a saved
             -- Model may still hold.
-            if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
+            if isNaN (Quantity.unwrap viewportModel.offset) || (diff |> Quantity.lessThan distance) then
                 target
 
-            else if viewport2.offset |> Quantity.lessThan target then
-                Quantity.plus distance viewport2.offset
+            else if viewportModel.offset |> Quantity.lessThan target then
+                Quantity.plus distance viewportModel.offset
 
             else
-                viewport2.offset |> Quantity.minus distance
+                viewportModel.offset |> Quantity.minus distance
     }
 
 
@@ -1184,8 +1198,8 @@ text =
 {-| `text` in a given colour.
 -}
 colorText : Color -> String -> Element id
-colorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
+colorText color string =
+    customText Sprite.Small [ { text = string, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
 
 
 {-| Black text in the small monospace font. '\\n' starts a new line.
@@ -1198,8 +1212,8 @@ monoText =
 {-| `monoText` in a given colour.
 -}
 monoColorText : Color -> String -> Element id
-monoColorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [], link = Nothing } ]
+monoColorText color string =
+    customText Sprite.Small [ { text = string, color = color, font = Sprite.Mono, decorations = [], link = Nothing } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
@@ -1255,6 +1269,10 @@ linksHelper id element =
         -- What the inspector's code generator wraps an element in.
         Sourced source child ->
             Sourced source (linksHelper id child)
+
+        -- What `fitTo` pads or clips a text with.
+        Single data child ->
+            Single data (linksHelper id child)
 
         _ ->
             element
@@ -2095,6 +2113,272 @@ padToWidth fx width (Element child) =
 
 
 
+-- TARGET SIZES (TRYING OUT: the functions ending in 2)
+
+
+{-| The size an element should be. A `Just` side is exact: the element is padded out to it,
+or clipped to it. A `Nothing` side is as big as the content.
+-}
+type alias TargetSize =
+    { width : Maybe Int, height : Maybe Int }
+
+
+{-| How a child of `row2` or `column2` is sized along the row or column. A `Shrink2` child
+is as big as its content there. The `Fill2` children share what's left evenly.
+-}
+type Length2
+    = Shrink2
+    | Fill2
+
+
+{-| An element made exactly `target` big: padded out to it, or clipped to it, along each
+side that is `Just`.
+-}
+fitTo : TargetSize -> Element id -> Element id
+fitTo target (Element child) =
+    let
+        ( width, height ) =
+            Coord.toTuple (sizeHelper child)
+
+        targetWidth : Int
+        targetWidth =
+            Maybe.withDefault width target.width
+
+        targetHeight : Int
+        targetHeight =
+            Maybe.withDefault height target.height
+    in
+    if targetWidth == width && targetHeight == height then
+        Element child
+
+    else
+        Single
+            { pad = { top = 0, left = 0, right = targetWidth - width, bottom = targetHeight - height }
+            , style = NoBorderOrFill
+            , cachedSize = Coord.xy targetWidth targetHeight
+            , id = Nothing
+            }
+            child
+            |> Element
+
+
+{-| The target inside some padding.
+-}
+insidePadding : Padding -> TargetSize -> TargetSize
+insidePadding pad target =
+    { width = Maybe.map (\width -> width - pad.left - pad.right) target.width
+    , height = Maybe.map (\height -> height - pad.top - pad.bottom) target.height
+    }
+
+
+{-| Any element, padded out or clipped to the target. For ones whose size doesn't depend on
+the room they're given, such as a text input.
+-}
+fixed2 : Element id -> TargetSize -> Element id
+fixed2 element target =
+    fitTo target element
+
+
+{-| `text` that wraps to the target width, if there is one.
+-}
+text2 : String -> TargetSize -> Element id
+text2 =
+    colorText2 Color.textColor
+
+
+{-| `text2` in a given colour.
+-}
+colorText2 : Color -> String -> TargetSize -> Element id
+colorText2 color text3 =
+    customText2 Sprite.Small [ { text = text3, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
+
+
+{-| `customText` that wraps to the target width, if there is one.
+-}
+customText2 : Sprite.FontSize -> List Sprite.Segment -> TargetSize -> Element id
+customText2 fontSize segments target =
+    (case target.width of
+        Just width ->
+            customTextWrapped fontSize (Units.ui width) segments
+
+        Nothing ->
+            customText fontSize segments
+    )
+        |> fitTo target
+
+
+{-| One line of text in the small size, cut short with an ellipsis to fit the target width.
+-}
+ellipsisText2 : { color : Color, font : Sprite.Font } -> String -> TargetSize -> Element id
+ellipsisText2 { color, font } text3 target =
+    customText
+        Sprite.Small
+        [ { text =
+                case target.width of
+                    Just width ->
+                        Sprite.ellipsis Sprite.Small font (Units.ui width) text3
+
+                    Nothing ->
+                        text3
+          , color = color
+          , font = font
+          , decorations = []
+          , link = Nothing
+          }
+        ]
+        |> fitTo target
+
+
+{-| `el` whose child is given the target less the padding.
+-}
+el2 : { pad : Padding, style : Style } -> (TargetSize -> Element id) -> TargetSize -> Element id
+el2 data child target =
+    el data (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| `button` whose child is given the target less the padding.
+-}
+button2 : { id : id, pad : Padding } -> (TargetSize -> Element id) -> TargetSize -> Element id
+button2 data child target =
+    button data (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| `selectableButton` whose child is given the target less the padding.
+-}
+selectableButton2 : { id : id, pad : Padding } -> Bool -> (TargetSize -> Element id) -> TargetSize -> Element id
+selectableButton2 data isSelected child target =
+    selectableButton data isSelected (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| `customButton` whose child is given the target less the padding.
+-}
+customButton2 :
+    { id : id
+    , pad : Padding
+    , inFront : List (Element id)
+    , style : Style
+    , borderAndFillFocus : Style
+    }
+    -> (TargetSize -> Element id)
+    -> TargetSize
+    -> Element id
+customButton2 data child target =
+    customButton data (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| A row. Every child is given the row's target height. A `Shrink2` child is given no
+width and is as wide as it is; the `Fill2` children share the width the others and the
+gaps leave evenly (the first ones a pixel more when it doesn't divide). With no target
+width, `Fill2` children are as wide as they are too.
+-}
+row2 : Int -> List ( Length2, TargetSize -> Element id ) -> TargetSize -> Element id
+row2 gap children target =
+    lineUp2
+        (\made -> row gap made)
+        Coord.xRaw
+        (\along -> { width = along, height = target.height })
+        target.width
+        gap
+        children
+        |> fitTo target
+
+
+{-| `row2` turned on its side: every child is given the column's target width, and the
+`Fill2` children share the height the `Shrink2` ones leave.
+-}
+column2 : Int -> List ( Length2, TargetSize -> Element id ) -> TargetSize -> Element id
+column2 gap children target =
+    lineUp2
+        (\made -> column gap made)
+        Coord.yRaw
+        (\along -> { width = target.width, height = along })
+        target.height
+        gap
+        children
+        |> fitTo target
+
+
+{-| The children of a `row2` or `column2`, made and put in it. `along` reads a size along
+it; `targetFor` makes a child's target from its size along it.
+-}
+lineUp2 :
+    (List (Element id) -> Element id)
+    -> (Coord UiPixels -> Int)
+    -> (Maybe Int -> TargetSize)
+    -> Maybe Int
+    -> Int
+    -> List ( Length2, TargetSize -> Element id )
+    -> Element id
+lineUp2 container along targetFor total gap children =
+    let
+        shrunk : List ( Length2, TargetSize -> Element id, Maybe (Element id) )
+        shrunk =
+            List.map
+                (\( length, child ) ->
+                    case ( length, total ) of
+                        ( Fill2, Just _ ) ->
+                            ( length, child, Nothing )
+
+                        _ ->
+                            ( length, child, Just (child (targetFor Nothing)) )
+                )
+                children
+
+        shares : List Int
+        shares =
+            case total of
+                Just total2 ->
+                    share
+                        (total2
+                            - gap
+                            * (List.length children - 1)
+                            - List.sum (List.filterMap (\( _, _, made ) -> Maybe.map (\element -> along (size element)) made) shrunk)
+                        )
+                        (List.length (List.filter (\( _, _, made ) -> made == Nothing) shrunk))
+
+                Nothing ->
+                    []
+    in
+    List.foldl
+        (\( _, child, made ) ( shares2, acc ) ->
+            case ( made, shares2 ) of
+                ( Just element, _ ) ->
+                    ( shares2, element :: acc )
+
+                ( Nothing, share2 :: rest ) ->
+                    ( rest, child (targetFor (Just share2)) :: acc )
+
+                ( Nothing, [] ) ->
+                    ( [], acc )
+        )
+        ( shares, [] )
+        shrunk
+        |> Tuple.second
+        |> List.reverse
+        |> container
+
+
+{-| A viewport as tall as the target. Its content is given the target width and no height,
+so it can be as tall as it likes. With no target height it's just the content.
+-}
+viewport2 : id -> (TargetSize -> Element id) -> TargetSize -> Element id
+viewport2 id child target =
+    let
+        content : Element id
+        content =
+            child { width = target.width, height = Nothing }
+    in
+    (case target.height of
+        Just height ->
+            viewport { id = id, viewportHeight = Units.ui height } content
+
+        Nothing ->
+            content
+    )
+        |> fitTo target
+
+
+
 -- WHERE ELEMENTS ARE MADE
 
 
@@ -2710,8 +2994,8 @@ view uiState time scale showUiBorder maybeHover screenSize (Element element) =
 
 
 viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
-viewList model time scale showUiBorder maybeHover viewport2 position element =
-    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
+viewList model time scale showUiBorder maybeHover clipBounds position element =
+    case Bounds.intersection clipBounds { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
                 TextInput data ->
@@ -2908,7 +3192,7 @@ buttonCircleGrowSpeed =
 
 
 borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> Style -> Coord UiPixels -> List (Triangle DevicePixels)
-borderAndFillView scale viewport2 position style size2 =
+borderAndFillView scale clipBounds position style size2 =
     case style of
         NoBorderOrFill ->
             []
@@ -2921,17 +3205,17 @@ borderAndFillView scale viewport2 position style size2 =
                 horizontalSize =
                     Coord.xy (Coord.xRaw size2) borderWidth
             in
-            Sprite.rectangle borderColor viewport2 position verticalSize
+            Sprite.rectangle borderColor clipBounds position verticalSize
                 ++ Sprite.rectangle borderColor
-                    viewport2
+                    clipBounds
                     (Coord.plus
                         ( Coord.x size2 |> Quantity.minus (Units.ui borderWidth), Quantity.zero )
                         position
                     )
                     verticalSize
-                ++ Sprite.rectangle borderColor viewport2 position horizontalSize
+                ++ Sprite.rectangle borderColor clipBounds position horizontalSize
                 ++ Sprite.rectangle borderColor
-                    viewport2
+                    clipBounds
                     (Coord.plus
                         ( Quantity.zero, Coord.y size2 |> Quantity.minus (Units.ui borderWidth) )
                         position
@@ -2940,13 +3224,13 @@ borderAndFillView scale viewport2 position style size2 =
                 |> Sprite.toDevice scale
 
         FillOnly fillColor ->
-            Sprite.rectangle fillColor viewport2 position size2 |> Sprite.toDevice scale
+            Sprite.rectangle fillColor clipBounds position size2 |> Sprite.toDevice scale
 
         BorderAndFill { borderWidth, borderColor, fillColor } ->
-            Sprite.rectangle borderColor viewport2 position size2
+            Sprite.rectangle borderColor clipBounds position size2
                 ++ Sprite.rectangle
                     fillColor
-                    viewport2
+                    clipBounds
                     (Coord.plus (Coord.xy borderWidth borderWidth) position)
                     (size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth)))
                 |> Sprite.toDevice scale
@@ -2959,9 +3243,9 @@ borderAndFillView scale viewport2 position style size2 =
                 insideSize =
                     size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth))
             in
-            Sprite.rectangle borderColor viewport2 position size2
-                ++ Sprite.rectangle fillColor viewport2 inside insideSize
-                ++ Sprite.dotGrid dotColor viewport2 inside insideSize
+            Sprite.rectangle borderColor clipBounds position size2
+                ++ Sprite.rectangle fillColor clipBounds inside insideSize
+                ++ Sprite.dotGrid dotColor clipBounds inside insideSize
                 |> Sprite.toDevice scale
 
 
