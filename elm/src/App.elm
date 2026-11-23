@@ -320,6 +320,10 @@ smallWindow { title, close, size } rows =
                                 }
                                 (Ui.button { id = close, pad = Ui.paddingXY 6 3 } (Ui.text "Close"))
                         ]
-                , rows
+
+                -- A lambda, not `rows` itself: eco 0.2.0-rc3 then calls every function in
+                -- this list as if it were the first one, and crashes (SSCCE
+                -- eco-singleton-fast-sscce.tar.gz).
+                , \size3 -> rows size3
                 ]
         )
