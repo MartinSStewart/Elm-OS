@@ -495,7 +495,7 @@ joinRows model width =
                         Ui.row
                             6
                             [ -- lined up with the text in the box, which is inset by its padding
-                              Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.text "Password")
+                              Ui.el { padding = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text "Password")
                             , passwordInput model
                             , Ui.button { id = uiId Network.Types.ShowPasswordButton, padding = small }
                                 (Ui.text
@@ -669,7 +669,7 @@ networkRow model size network =
         , case model.selected of
             Just selected ->
                 if selected.ssid == network.ssid then
-                    joinRows model (Coord.x size) |> Ui.el { padding = Ui.paddingXY 8 4, borderAndFill = Ui.NoBorderOrFill }
+                    joinRows model (Coord.x size) |> Ui.el { padding = Ui.paddingXY 8 4, style = Ui.NoBorderOrFill }
 
                 else
                     Ui.empty

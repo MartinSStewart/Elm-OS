@@ -460,7 +460,7 @@ view windowSize model =
                             wrapped width Color.textColor Mono page.html
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (Ui.column
             gap
             [ header

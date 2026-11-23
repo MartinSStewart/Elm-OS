@@ -42,7 +42,7 @@ type alias RowColumn =
 type alias ButtonData id lazy =
     { id : id
     , padding : Padding
-    , borderAndFill : BorderAndFill
+    , style : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     , borderAndFillHover : BorderAndFill
     , cachedSize : Coord UiPixels
@@ -75,7 +75,7 @@ type ElementFull id lazy
     | Column RowColumn (List (ElementFull id lazy))
     | Single
         { padding : Padding
-        , borderAndFill : BorderAndFill
+        , style : BorderAndFill
         , cachedSize : Coord UiPixels
         , id : Maybe id
         }

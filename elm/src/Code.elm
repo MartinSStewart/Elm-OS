@@ -951,7 +951,7 @@ view windowSize input needle model =
         -- The code shows in whole lines, so what's left of the window's height under them
         -- goes below the status line.
         { padding = { top = 8, bottom = 8 + max 0 (Coord.yRaw windowSize - 16 - Coord.yRaw (Ui.size content)), left = 8, right = 8 }
-        , borderAndFill = Ui.windowBorderAndFill
+        , style = Ui.windowBorderAndFill
         }
         content
 
@@ -1012,7 +1012,7 @@ findBar width =
         label text =
             Ui.left
                 (Coord.x (Ui.size (Ui.text "Replace")))
-                (Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (Ui.text text))
+                (Ui.el { padding = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text text))
 
         inputWidth : Int
         inputWidth =

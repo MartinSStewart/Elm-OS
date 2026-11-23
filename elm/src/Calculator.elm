@@ -646,7 +646,7 @@ view focused model =
         displayBox =
             Ui.el
                 { padding = Ui.paddingXY displayPadding 4
-                , borderAndFill =
+                , style =
                     Ui.BorderAndFill
                         { borderWidth = 2
                         , borderColor =
@@ -667,7 +667,7 @@ view focused model =
     in
     Ui.elWithId (Calculator Calculator.Types.Panel)
         { padding = Ui.paddingXY 8 8
-        , borderAndFill = Ui.windowBorderAndFill
+        , style = Ui.windowBorderAndFill
         }
         (Ui.column gap (title :: displayBox :: List.map (keyRow model) keys))
 

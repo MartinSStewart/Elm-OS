@@ -309,7 +309,7 @@ view scale window screenshots model =
                     , headerButton Types.ActualSizeButton "100%"
                     , headerButton Types.FitButton "Fit"
                     , Ui.el
-                        { padding = Ui.paddingXY 6 3, borderAndFill = Ui.NoBorderOrFill }
+                        { padding = Ui.paddingXY 6 3, style = Ui.NoBorderOrFill }
                         (text
                             (case model.selected of
                                 Just _ ->
@@ -324,7 +324,7 @@ view scale window screenshots model =
                 (headerButton Types.CloseButton "Close")
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (Ui.column
             gap
             [ header
@@ -355,7 +355,7 @@ previewList scale height screenshots model =
             gap
             (if List.isEmpty screenshots then
                 [ Ui.el
-                    { padding = Ui.paddingXY buttonPadding buttonPadding, borderAndFill = Ui.NoBorderOrFill }
+                    { padding = Ui.paddingXY buttonPadding buttonPadding, style = Ui.NoBorderOrFill }
                     (Ui.customTextWrapped Sprite.Small
                         (Units.ui (Coord.xRaw previewSize))
                         [ { text = "No screenshots yet. Press Print Screen, then click what to capture.", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
@@ -403,7 +403,7 @@ imageArea scale area screenshots model =
     in
     Ui.elWithId
         (ScreenshotViewer Types.ImageArea)
-        { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+        { padding = Ui.noPadding, style = Ui.NoBorderOrFill }
         (Ui.quads
             { size = area
             , triangles =

@@ -44,7 +44,7 @@ view info =
     in
     Ui.el
         { padding = Ui.paddingXY 12 10
-        , borderAndFill = Ui.windowBorderAndFill
+        , style = Ui.windowBorderAndFill
         }
         (Ui.column
             4

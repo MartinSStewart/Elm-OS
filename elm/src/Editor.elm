@@ -84,7 +84,7 @@ view windowSize textInput =
     in
     Ui.elWithId
         (UiId.Editor Editor.Types.Window)
-        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight textStyle.width

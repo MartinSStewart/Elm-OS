@@ -655,7 +655,7 @@ view model =
 
         canvas =
             Ui.elWithId (Paint Paint.Types.Canvas)
-                { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+                { padding = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (Ui.quads
                     { size = Coord.xy canvasWidth canvasHeight
                     , triangles = Sprite.image model.canvas
@@ -663,7 +663,7 @@ view model =
                 )
     in
     Ui.el
-        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
         (Ui.column 6 [ title, tools, canvas ])
 
 

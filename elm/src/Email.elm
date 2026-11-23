@@ -630,7 +630,7 @@ view windowSize model =
             Coord.xRaw windowSize - 2 * windowPadding
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (case model.account of
             Nothing ->
                 formView width model
@@ -810,7 +810,7 @@ summaryView width summary2 =
             { id = Email (Email.Types.MessageButton summary2.uid)
             , padding = Ui.paddingXY 0 2
             , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
+            , style = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
             }
 

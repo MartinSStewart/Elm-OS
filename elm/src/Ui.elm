@@ -1,6 +1,5 @@
 module Ui exposing
-    ( BorderAndFill(..)
-    , Clickable
+    ( Clickable
     , Element
     , ElementFull
     , ElementState(..)
@@ -12,6 +11,7 @@ module Ui exposing
     , Screenshot
     , ScrollBy(..)
     , Source
+    , Style(..)
     , ViewportData
     , ViewportModel
     , bottomRight
@@ -129,9 +129,9 @@ type alias RowColumn =
 type alias ButtonData id lazy =
     { id : id
     , padding : Padding
-    , borderAndFill : BorderAndFill
-    , borderAndFillFocus : BorderAndFill
-    , borderAndFillHover : BorderAndFill
+    , style : Style
+    , borderAndFillFocus : Style
+    , borderAndFillHover : Style
     , cachedSize : Coord UiPixels
     , inFront : List (ElementFull id lazy)
     }
@@ -162,7 +162,7 @@ type ElementFull id lazy
     | Column RowColumn (List (ElementFull id lazy))
     | Single
         { padding : Padding
-        , borderAndFill : BorderAndFill
+        , style : Style
         , cachedSize : Coord UiPixels
         , id : Maybe id
         }
@@ -317,7 +317,7 @@ elementToScreenshotHelper model element acc =
             , Button
                 { id = id
                 , padding = data.padding
-                , borderAndFill = data.borderAndFill
+                , style = data.style
                 , borderAndFillFocus = data.borderAndFillFocus
                 , borderAndFillHover = data.borderAndFillHover
                 , cachedSize = data.cachedSize
@@ -348,7 +348,7 @@ elementToScreenshotHelper model element acc =
             ( acc3
             , Single
                 { padding = data.padding
-                , borderAndFill = data.borderAndFill
+                , style = data.style
                 , cachedSize = data.cachedSize
                 , id = maybeId
                 }
@@ -1135,7 +1135,7 @@ scrollBaseSpeed =
     Quantity.rate (Units.ui 1000) Duration.second
 
 
-type BorderAndFill
+type Style
     = NoBorderOrFill
     | BorderOnly { borderWidth : Int, borderColor : Color }
     | FillOnly Color
@@ -1312,33 +1312,33 @@ button data child =
         { id = data.id
         , padding = data.padding
         , inFront = []
-        , borderAndFill = defaultButtonBorderAndFill
+        , style = defaultButtonBorderAndFill
         , borderAndFillFocus = defaultButtonBorderAndFillFocus
         }
         child
 
 
-defaultElBorderAndFill : BorderAndFill
+defaultElBorderAndFill : Style
 defaultElBorderAndFill =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
 
 
-defaultButtonBorderAndFill : BorderAndFill
+defaultButtonBorderAndFill : Style
 defaultButtonBorderAndFill =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor2 }
 
 
-defaultButtonBorderAndFillFocus : BorderAndFill
+defaultButtonBorderAndFillFocus : Style
 defaultButtonBorderAndFillFocus =
     BorderAndFill { borderWidth = 2, borderColor = Color.focusedUiColor, fillColor = Color.fillColor2 }
 
 
-defaultButtonBorderAndFillHover : BorderAndFill
+defaultButtonBorderAndFillHover : Style
 defaultButtonBorderAndFillHover =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor3 }
 
 
-windowBorderAndFill : BorderAndFill
+windowBorderAndFill : Style
 windowBorderAndFill =
     BorderFillAndDots { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor, dotColor = Color.dotGridColor }
 
@@ -1347,8 +1347,8 @@ customButton :
     { id : id
     , padding : Padding
     , inFront : List (Element id)
-    , borderAndFill : BorderAndFill
-    , borderAndFillFocus : BorderAndFill
+    , style : Style
+    , borderAndFillFocus : Style
     }
     -> Element id
     -> Element id
@@ -1357,7 +1357,7 @@ customButton data (Element child) =
         { id = data.id
         , padding = data.padding
         , inFront = List.map (\(Element a) -> a) data.inFront
-        , borderAndFill = data.borderAndFill
+        , style = data.style
         , borderAndFillFocus = data.borderAndFillFocus
         , borderAndFillHover = defaultButtonBorderAndFillHover
         , cachedSize = paddedSize data.padding child
@@ -1380,7 +1380,7 @@ selectableButton data isSelected child =
         { id = data.id
         , padding = data.padding
         , inFront = []
-        , borderAndFill = BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = fill }
+        , style = BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = fill }
         , borderAndFillFocus = BorderAndFill { borderWidth = 2, borderColor = Color.focusedUiColor, fillColor = fill }
         }
         child
@@ -1430,11 +1430,11 @@ column gap children =
         |> Element
 
 
-el : { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
+el : { padding : Padding, style : Style } -> Element id -> Element id
 el data (Element child) =
     Single
         { padding = data.padding
-        , borderAndFill = data.borderAndFill
+        , style = data.style
         , cachedSize = paddedSize data.padding child
         , id = Nothing
         }
@@ -1445,11 +1445,11 @@ el data (Element child) =
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId : id -> { padding : Padding, style : Style } -> Element id -> Element id
 elWithId id data (Element child) =
     Single
         { padding = data.padding
-        , borderAndFill = data.borderAndFill
+        , style = data.style
         , cachedSize = paddedSize data.padding child
         , id = Just id
         }
@@ -1638,7 +1638,7 @@ align fx fy areaSize child =
             , left = left2
             , right = sizeX - childX - left2
             }
-        , borderAndFill = NoBorderOrFill
+        , style = NoBorderOrFill
         , cachedSize = areaSize
         , id = Nothing
         }
@@ -1819,7 +1819,7 @@ childPositions isRow gap position children =
 {-| An `el` exactly `width` wide. `child` is given the width inside the padding, and is
 padded out to it if it comes out narrower.
 -}
-elWithWidth : { width : Int, padding : Padding, borderAndFill : BorderAndFill } -> (Int -> Element id) -> Element id
+elWithWidth : { width : Int, padding : Padding, style : Style } -> (Int -> Element id) -> Element id
 elWithWidth data child =
     let
         padding =
@@ -1831,10 +1831,10 @@ elWithWidth data child =
         missingPadding =
             data.width - Coord.xRaw (size child2)
     in
-    el { padding = { padding | right = missingPadding + padding.right }, borderAndFill = data.borderAndFill } child2
+    el { padding = { padding | right = missingPadding + padding.right }, style = data.style } child2
 
 
-elWithSize : { size : Coord UiPixels, padding : Padding, borderAndFill : BorderAndFill } -> (Coord UiPixels -> Element id) -> Element id
+elWithSize : { size : Coord UiPixels, padding : Padding, style : Style } -> (Coord UiPixels -> Element id) -> Element id
 elWithSize data child =
     let
         padding =
@@ -1858,7 +1858,7 @@ elWithSize data child =
                 | right = Coord.xRaw missingPadding + padding.right
                 , bottom = Coord.yRaw missingPadding + padding.bottom
             }
-        , borderAndFill = data.borderAndFill
+        , style = data.style
         }
         child2
 
@@ -2215,7 +2215,7 @@ inspectHelper model point clip position element found =
                         firstOf [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ]
                 in
                 -- Only a fill can be seen everywhere in it.
-                case data.borderAndFill of
+                case data.style of
                     NoBorderOrFill ->
                         inChild
 
@@ -2761,7 +2761,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             data.borderAndFillFocus
 
                          else
-                            data.borderAndFill
+                            data.style
                         )
                         data.cachedSize
                         ++ (case state.buttonDown of
@@ -2807,7 +2807,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         viewport3
                         position
                         (if showUiBorder then
-                            case data.borderAndFill of
+                            case data.style of
                                 NoBorderOrFill ->
                                     BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor }
 
@@ -2824,7 +2824,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                     BorderFillAndDots { data2 | borderWidth = 1, borderColor = Color.focusedUiColor }
 
                          else
-                            data.borderAndFill
+                            data.style
                         )
                         data.cachedSize
                         ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
@@ -2907,9 +2907,9 @@ buttonCircleGrowSpeed =
     Quantity.rate (Units.ui 250) Duration.second
 
 
-borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
-borderAndFillView scale viewport2 position borderAndFill size2 =
-    case borderAndFill of
+borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> Style -> Coord UiPixels -> List (Triangle DevicePixels)
+borderAndFillView scale viewport2 position style size2 =
+    case style of
         NoBorderOrFill ->
             []
 

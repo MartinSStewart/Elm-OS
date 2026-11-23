@@ -2817,7 +2817,7 @@ inspectorList sources =
             List.map (\source -> String.length source.function) sources |> List.maximum |> Maybe.withDefault 0
     in
     Ui.el
-        { padding = Ui.paddingXY 8 6, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY 8 6, style = Ui.windowBorderAndFill }
         (Ui.column
             4
             [ Ui.text "Clicked element, then the ones it is in:"
@@ -3079,7 +3079,7 @@ warnIfWrongSize windowSize appElement =
             , ( Coord.origin
               , Ui.el
                     { padding = Ui.paddingXY 6 3
-                    , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.errorColor, fillColor = Color.fillColor }
+                    , style = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.errorColor, fillColor = Color.fillColor }
                     }
                     (Ui.colorText
                         Color.errorColor
@@ -3569,7 +3569,7 @@ clock room model =
         Just time ->
             let
                 box string =
-                    Ui.el { padding = Ui.paddingXY 6 3, borderAndFill = Ui.defaultElBorderAndFill } (Ui.text string)
+                    Ui.el { padding = Ui.paddingXY 6 3, style = Ui.defaultElBorderAndFill } (Ui.text string)
 
                 full =
                     box (Clock.toString model.utcOffsetMinutes time)
@@ -3604,7 +3604,7 @@ toolbar model display =
             case model.confirmPower of
                 Just action ->
                     [ Ui.el
-                        { padding = small, borderAndFill = Ui.defaultElBorderAndFill }
+                        { padding = small, style = Ui.defaultElBorderAndFill }
                         (Ui.text
                             (case action of
                                 PowerOff ->
@@ -3620,7 +3620,7 @@ toolbar model display =
                         { id = ConfirmPowerButton
                         , padding = small
                         , inFront = []
-                        , borderAndFill =
+                        , style =
                             Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.dangerColor }
                         , borderAndFillFocus = Ui.defaultButtonBorderAndFillFocus
                         }
@@ -3684,7 +3684,7 @@ toolbar model display =
                     ]
     in
     Ui.elWithWidth
-        { width = Coord.xRaw (Display.uiSize display), padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+        { width = Coord.xRaw (Display.uiSize display), padding = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
         (\width ->
             Ui.rowFill
                 { width = width, gap = 8 }
@@ -3710,10 +3710,10 @@ notice model text =
     let
         element : Ui.Element id
         element =
-            Ui.el { padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
+            Ui.el { padding = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
                 (Ui.el
                     { padding = Ui.paddingXY 10 6
-                    , borderAndFill = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
+                    , style = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                     }
                     (Ui.text text)
                 )

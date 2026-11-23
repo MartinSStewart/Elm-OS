@@ -846,7 +846,7 @@ view screen focused model =
                         "Disconnected (" ++ reason ++ "), trying again…"
     in
     Ui.el
-        { padding = Ui.paddingXY padding padding, borderAndFill = Ui.windowBorderAndFill }
+        { padding = Ui.paddingXY padding padding, style = Ui.windowBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight
@@ -855,7 +855,7 @@ view screen focused model =
                 (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
             , Ui.elWithId
                 (AsciiCollab AsciiCollab.Types.GridArea)
-                { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+                { padding = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (gridView focused cols rows model)
             ]
         )
