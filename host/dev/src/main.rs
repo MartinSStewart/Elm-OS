@@ -686,7 +686,7 @@ impl Runner {
             WindowEvent::PinchGesture { delta, .. } => {
                 // A touchpad pinch (macOS): delta is the change in size, 0.1 for 10% bigger.
                 self.send_mouse();
-                elm::send(&ToElm::Scroll { dx: 0.0, dy: 0.0, pinch: 1.0 + delta });
+                elm::send(&ToElm::Gesture { dx: 0.0, dy: 0.0, pinch: 1.0 + delta });
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // Positive is up (away from you), as Elm OS's.
@@ -695,7 +695,7 @@ impl Runner {
                     MouseScrollDelta::PixelDelta(p) => {
                         // A touchpad: smooth scrolling, as /init sends it.
                         self.send_mouse();
-                        elm::send(&ToElm::Scroll { dx: p.x / self.ui_scale, dy: p.y / self.ui_scale, pinch: 1.0 });
+                        elm::send(&ToElm::Gesture { dx: p.x / self.ui_scale, dy: p.y / self.ui_scale, pinch: 1.0 });
                         return;
                     }
                 };

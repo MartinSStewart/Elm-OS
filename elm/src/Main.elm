@@ -152,7 +152,10 @@ toInput message =
         HostMessage.Wheel dy ->
             Ok (Wheel dy)
 
-        HostMessage.Scroll dx dy pinch ->
+        HostMessage.Scroll dy ->
+            Ok (Scroll 0 dy 1)
+
+        HostMessage.Gesture dx dy pinch ->
             Ok (Scroll dx dy pinch)
 
         HostMessage.ScrollMomentum velocity ->

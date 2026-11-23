@@ -26,7 +26,7 @@
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
 //!   {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
 //!   {"t":"wheel","dy":N}                 scroll wheel clicks, positive away from you (up)
-//!   {"t":"scroll","dx":F,"dy":F,"pinch":F} two-finger scrolling, UI pixels (positive down, right), or a pinch (spread ratio)
+//!   {"t":"gesture","dx":F,"dy":F,"pinch":F} two-finger scrolling, UI pixels (positive down, right), or a pinch (spread ratio)
 //!   {"t":"scrollMomentum","velocity":F}  the fingers lifted: keep going at F UI px/s
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
@@ -578,12 +578,12 @@ impl Inputs {
                 }
                 let dev = &mut self.devices[i];
                 if dev.pinch != 1.0 {
-                    elm::send(&ToElm::Scroll { dx: 0.0, dy: 0.0, pinch: dev.pinch });
+                    elm::send(&ToElm::Gesture { dx: 0.0, dy: 0.0, pinch: dev.pinch });
                     dev.pinch = 1.0;
                 }
                 if dev.scroll != 0.0 || dev.scroll_x != 0.0 {
                     let (dx, dy) = (dev.scroll_x / self.scale, dev.scroll / self.scale);
-                    elm::send(&ToElm::Scroll { dx, dy, pinch: 1.0 });
+                    elm::send(&ToElm::Gesture { dx, dy, pinch: 1.0 });
                     dev.scroll_x = 0.0;
                     dev.scroll = 0.0;
                     dev.scroll_reports.retain(|(t, _)| event_time - t <= MOMENTUM_WINDOW);
@@ -979,7 +979,7 @@ mod tests {
     /// How far the content scrolled, in UI pixels.
     fn scrolled(msgs: &[ToElm]) -> f64 {
         msgs.iter()
-            .map(|m| if let ToElm::Scroll { dy, .. } = m { *dy } else { 0.0 })
+            .map(|m| if let ToElm::Gesture { dy, .. } = m { *dy } else { 0.0 })
             .sum()
     }
 
@@ -1001,7 +1001,7 @@ mod tests {
     /// The (across, down, pinch) of the scroll messages sent.
     fn gesture(msgs: &[ToElm]) -> (f64, f64, f64) {
         msgs.iter().fold((0.0, 0.0, 1.0), |(x, y, p), m| match m {
-            ToElm::Scroll { dx, dy, pinch } => (x + dx, y + dy, p * pinch),
+            ToElm::Gesture { dx, dy, pinch } => (x + dx, y + dy, p * pinch),
             _ => (x, y, p),
         })
     }
