@@ -687,8 +687,8 @@ lineHeight =
     Quantity.unwrap (Sprite.lineHeight Sprite.Small)
 
 
-{-| The window's height besides its lines of code: the padding, the title, the status
-line, the gap between them and the text box's own padding.
+{-| The window's height besides its lines of code: the pad, the title, the status
+line, the gap between them and the text box's own pad.
 -}
 chrome : Int
 chrome =
@@ -745,7 +745,7 @@ view windowSize input needle model =
             { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
 
         button id label =
-            Ui.button { id = UiId.Code id, padding = Ui.paddingXY 6 3 } (Ui.text label)
+            Ui.button { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text label)
 
         state =
             input.input.current
@@ -924,7 +924,7 @@ view windowSize input needle model =
                                 (List.map
                                     (\name ->
                                         Ui.button
-                                            { id = UiId.Code (ModuleButton name), padding = Ui.paddingXY 6 3 }
+                                            { id = UiId.Code (ModuleButton name), pad = Ui.paddingXY 6 3 }
                                             (if isEdited name model then
                                                 Ui.customText Sprite.Small [ segment Color.textColor name, segment Color.successColor "  changed" ]
 
@@ -950,7 +950,7 @@ view windowSize input needle model =
         (UiId.Code Window)
         -- The code shows in whole lines, so what's left of the window's height under them
         -- goes below the status line.
-        { padding = { top = 8, bottom = 8 + max 0 (Coord.yRaw windowSize - 16 - Coord.yRaw (Ui.size content)), left = 8, right = 8 }
+        { pad = { top = 8, bottom = 8 + max 0 (Coord.yRaw windowSize - 16 - Coord.yRaw (Ui.size content)), left = 8, right = 8 }
         , style = Ui.windowBorderAndFill
         }
         content
@@ -998,7 +998,7 @@ findBar : Quantity Int UiPixels -> Element UiId.UiId
 findBar width =
     let
         button id caption =
-            Ui.button { id = UiId.Code id, padding = Ui.paddingXY 6 3 } (Ui.text caption)
+            Ui.button { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text caption)
 
         findButtons : Element UiId.UiId
         findButtons =
@@ -1012,7 +1012,7 @@ findBar width =
         label text =
             Ui.left
                 (Coord.x (Ui.size (Ui.text "Replace")))
-                (Ui.el { padding = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text text))
+                (Ui.el { pad = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text text))
 
         inputWidth : Int
         inputWidth =

@@ -89,13 +89,13 @@ module Ui exposing
 drawing textured triangles for the render port instead of WebGL meshes.
 
 Elements know their size when they are made, so laying out is one pass: a row puts
-its children side by side, a column stacks them, `el` adds padding, a border and a
+its children side by side, a column stacks them, `el` adds pad, a border and a
 fill, and the alignment helpers (`center`, `topRight`, ...) pad a child out to a
 given size. `view` turns the tree into triangles, and `hover` finds the elements
 with ids under a point.
 
 Everything here is in UI pixels (Units.elm); only `view` turns them into device pixels,
-with the screen's UI scale. Spacing, padding and border widths are plain Ints of UI
+with the screen's UI scale. Spacing, pad and border widths are plain Ints of UI
 pixels; sizes and widths are Quantities.
 
 Text inputs come from town-collab's TextInput (TextInput.elm, with a US layout in
@@ -128,7 +128,7 @@ type alias RowColumn =
 
 type alias ButtonData id lazy =
     { id : id
-    , padding : Padding
+    , pad : Padding
     , style : Style
     , borderAndFillFocus : Style
     , borderAndFillHover : Style
@@ -161,7 +161,7 @@ type ElementFull id lazy
     | Row RowColumn (List (ElementFull id lazy))
     | Column RowColumn (List (ElementFull id lazy))
     | Single
-        { padding : Padding
+        { pad : Padding
         , style : Style
         , cachedSize : Coord UiPixels
         , id : Maybe id
@@ -316,7 +316,7 @@ elementToScreenshotHelper model element acc =
             ( acc4
             , Button
                 { id = id
-                , padding = data.padding
+                , pad = data.pad
                 , style = data.style
                 , borderAndFillFocus = data.borderAndFillFocus
                 , borderAndFillHover = data.borderAndFillHover
@@ -347,7 +347,7 @@ elementToScreenshotHelper model element acc =
             in
             ( acc3
             , Single
-                { padding = data.padding
+                { pad = data.pad
                 , style = data.style
                 , cachedSize = data.cachedSize
                 , id = maybeId
@@ -1165,8 +1165,8 @@ paddingXY x y =
 {-| Where the child goes, from the element's top left.
 -}
 paddingTopLeft : Padding -> Coord UiPixels
-paddingTopLeft padding =
-    Coord.xy padding.left padding.top
+paddingTopLeft pad =
+    Coord.xy pad.left pad.top
 
 
 
@@ -1306,11 +1306,11 @@ empty =
     Element Empty
 
 
-button : { id : id, padding : Padding } -> Element id -> Element id
+button : { id : id, pad : Padding } -> Element id -> Element id
 button data child =
     customButton
         { id = data.id
-        , padding = data.padding
+        , pad = data.pad
         , inFront = []
         , style = defaultButtonBorderAndFill
         , borderAndFillFocus = defaultButtonBorderAndFillFocus
@@ -1345,7 +1345,7 @@ windowBorderAndFill =
 
 customButton :
     { id : id
-    , padding : Padding
+    , pad : Padding
     , inFront : List (Element id)
     , style : Style
     , borderAndFillFocus : Style
@@ -1355,18 +1355,18 @@ customButton :
 customButton data (Element child) =
     Button
         { id = data.id
-        , padding = data.padding
+        , pad = data.pad
         , inFront = List.map (\(Element a) -> a) data.inFront
         , style = data.style
         , borderAndFillFocus = data.borderAndFillFocus
         , borderAndFillHover = defaultButtonBorderAndFillHover
-        , cachedSize = paddedSize data.padding child
+        , cachedSize = paddedSize data.pad child
         }
         child
         |> Element
 
 
-selectableButton : { id : id, padding : Padding } -> Bool -> Element id -> Element id
+selectableButton : { id : id, pad : Padding } -> Bool -> Element id -> Element id
 selectableButton data isSelected child =
     let
         fill =
@@ -1378,7 +1378,7 @@ selectableButton data isSelected child =
     in
     customButton
         { id = data.id
-        , padding = data.padding
+        , pad = data.pad
         , inFront = []
         , style = BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = fill }
         , borderAndFillFocus = BorderAndFill { borderWidth = 2, borderColor = Color.focusedUiColor, fillColor = fill }
@@ -1391,8 +1391,8 @@ selectableButton data isSelected child =
 
 
 paddedSize : Padding -> ElementFull id lazy -> Coord UiPixels
-paddedSize padding child =
-    Coord.plus (Coord.xy (padding.left + padding.right) (padding.top + padding.bottom)) (sizeHelper child)
+paddedSize pad child =
+    Coord.plus (Coord.xy (pad.left + pad.right) (pad.top + pad.bottom)) (sizeHelper child)
 
 
 row : Int -> List (Element id) -> Element id
@@ -1430,12 +1430,12 @@ column gap children =
         |> Element
 
 
-el : { padding : Padding, style : Style } -> Element id -> Element id
+el : { pad : Padding, style : Style } -> Element id -> Element id
 el data (Element child) =
     Single
-        { padding = data.padding
+        { pad = data.pad
         , style = data.style
-        , cachedSize = paddedSize data.padding child
+        , cachedSize = paddedSize data.pad child
         , id = Nothing
         }
         child
@@ -1445,12 +1445,12 @@ el data (Element child) =
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Padding, style : Style } -> Element id -> Element id
+elWithId : id -> { pad : Padding, style : Style } -> Element id -> Element id
 elWithId id data (Element child) =
     Single
-        { padding = data.padding
+        { pad = data.pad
         , style = data.style
-        , cachedSize = paddedSize data.padding child
+        , cachedSize = paddedSize data.pad child
         , id = Just id
         }
         child
@@ -1632,7 +1632,7 @@ align fx fy areaSize child =
             (sizeY - childY) * fy // 2
     in
     Single
-        { padding =
+        { pad =
             { top = top
             , bottom = sizeY - childY - top
             , left = left2
@@ -1816,34 +1816,34 @@ childPositions isRow gap position children =
 -- WIDTH HELPERS
 
 
-{-| An `el` exactly `width` wide. `child` is given the width inside the padding, and is
+{-| An `el` exactly `width` wide. `child` is given the width inside the pad, and is
 padded out to it if it comes out narrower.
 -}
-elWithWidth : { width : Int, padding : Padding, style : Style } -> (Int -> Element id) -> Element id
+elWithWidth : { width : Int, pad : Padding, style : Style } -> (Int -> Element id) -> Element id
 elWithWidth data child =
     let
-        padding =
-            data.padding
+        pad =
+            data.pad
 
         child2 =
-            child (data.width - padding.left - padding.right)
+            child (data.width - pad.left - pad.right)
 
         missingPadding =
             data.width - Coord.xRaw (size child2)
     in
-    el { padding = { padding | right = missingPadding + padding.right }, style = data.style } child2
+    el { pad = { pad | right = missingPadding + pad.right }, style = data.style } child2
 
 
-elWithSize : { size : Coord UiPixels, padding : Padding, style : Style } -> (Coord UiPixels -> Element id) -> Element id
+elWithSize : { size : Coord UiPixels, pad : Padding, style : Style } -> (Coord UiPixels -> Element id) -> Element id
 elWithSize data child =
     let
-        padding =
-            data.padding
+        pad =
+            data.pad
 
         size2 =
             data.size
-                |> Coord.minus (Coord.xy padding.left padding.top)
-                |> Coord.minus (Coord.xy padding.right padding.bottom)
+                |> Coord.minus (Coord.xy pad.left pad.top)
+                |> Coord.minus (Coord.xy pad.right pad.bottom)
 
         child2 =
             child size2
@@ -1853,10 +1853,10 @@ elWithSize data child =
             size2 |> Coord.minus (size child2)
     in
     el
-        { padding =
-            { padding
-                | right = Coord.xRaw missingPadding + padding.right
-                , bottom = Coord.yRaw missingPadding + padding.bottom
+        { pad =
+            { pad
+                | right = Coord.xRaw missingPadding + pad.right
+                , bottom = Coord.yRaw missingPadding + pad.bottom
             }
         , style = data.style
         }
@@ -2200,7 +2200,7 @@ inspectHelper model point clip position element found =
 
             Button data child ->
                 -- The ones in front first.
-                firstOf (List.reverse (List.map (Tuple.pair position) data.inFront) ++ [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ])
+                firstOf (List.reverse (List.map (Tuple.pair position) data.inFront) ++ [ ( Coord.plus (paddingTopLeft data.pad) position, child ) ])
                     |> orItself
 
             Row data children ->
@@ -2212,7 +2212,7 @@ inspectHelper model point clip position element found =
             Single data child ->
                 let
                     inChild =
-                        firstOf [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ]
+                        firstOf [ ( Coord.plus (paddingTopLeft data.pad) position, child ) ]
                 in
                 -- Only a fill can be seen everywhere in it.
                 case data.style of
@@ -2311,7 +2311,7 @@ buttonsHelper model clip position element found =
             in
             List.foldl
                 (\child2 found2 -> buttonsHelper model clip position child2 found2)
-                (buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child withThis)
+                (buttonsHelper model clip (Coord.plus (paddingTopLeft data.pad) position) child withThis)
                 data.inFront
 
         Row data children ->
@@ -2327,7 +2327,7 @@ buttonsHelper model clip position element found =
                 (childPositions False data.gap position children)
 
         Single data child ->
-            buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child found
+            buttonsHelper model clip (Coord.plus (paddingTopLeft data.pad) position) child found
 
         InFront _ children ->
             List.foldl
@@ -2542,7 +2542,7 @@ hoverHelper model hovers point position element =
                     model
                     (( data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
                     point
-                    (Coord.plus (paddingTopLeft data.padding) position)
+                    (Coord.plus (paddingTopLeft data.pad) position)
                     child
 
             InFront _ children ->
@@ -2645,7 +2645,7 @@ findInputHelper model id position element =
             findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.gap position children)
 
         Single data child ->
-            findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
+            findInputHelper model id (Coord.plus (paddingTopLeft data.pad) position) child
 
         InFront _ children ->
             findFirst (\( coord, child ) -> findInputHelper model id (Coord.plus coord position) child) (List.reverse children)
@@ -2790,7 +2790,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                                 Nothing ->
                                     []
                            )
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.pad) position) child
                         ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
@@ -2827,7 +2827,7 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                             data.style
                         )
                         data.cachedSize
-                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.pad) position) child
 
                 InFront _ children ->
                     List.concatMap

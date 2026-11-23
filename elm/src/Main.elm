@@ -2817,7 +2817,7 @@ inspectorList sources =
             List.map (\source -> String.length source.function) sources |> List.maximum |> Maybe.withDefault 0
     in
     Ui.el
-        { padding = Ui.paddingXY 8 6, style = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY 8 6, style = Ui.windowBorderAndFill }
         (Ui.column
             4
             [ Ui.text "Clicked element, then the ones it is in:"
@@ -3078,7 +3078,7 @@ warnIfWrongSize windowSize appElement =
             [ ( Coord.origin, appElement )
             , ( Coord.origin
               , Ui.el
-                    { padding = Ui.paddingXY 6 3
+                    { pad = Ui.paddingXY 6 3
                     , style = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.errorColor, fillColor = Color.fillColor }
                     }
                     (Ui.colorText
@@ -3569,7 +3569,7 @@ clock room model =
         Just time ->
             let
                 box string =
-                    Ui.el { padding = Ui.paddingXY 6 3, style = Ui.defaultElBorderAndFill } (Ui.text string)
+                    Ui.el { pad = Ui.paddingXY 6 3, style = Ui.defaultElBorderAndFill } (Ui.text string)
 
                 full =
                     box (Clock.toString model.utcOffsetMinutes time)
@@ -3604,7 +3604,7 @@ toolbar model display =
             case model.confirmPower of
                 Just action ->
                     [ Ui.el
-                        { padding = small, style = Ui.defaultElBorderAndFill }
+                        { pad = small, style = Ui.defaultElBorderAndFill }
                         (Ui.text
                             (case action of
                                 PowerOff ->
@@ -3615,10 +3615,10 @@ toolbar model display =
                             )
                         )
                     , -- Cancel first, where the button that asked was, so a double click is harmless.
-                      Ui.button { id = CancelPowerButton, padding = small } (Ui.text "Cancel")
+                      Ui.button { id = CancelPowerButton, pad = small } (Ui.text "Cancel")
                     , Ui.customButton
                         { id = ConfirmPowerButton
-                        , padding = small
+                        , pad = small
                         , inFront = []
                         , style =
                             Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.dangerColor }
@@ -3628,63 +3628,63 @@ toolbar model display =
                     ]
 
                 Nothing ->
-                    [ Ui.selectableButton { id = About About.Types.OpenButton, padding = small } (openHere AboutApp) (Ui.text "About")
-                    , Ui.selectableButton { id = NewsButton, padding = small } (openHere NewsApp) (Ui.text "Wikipedia")
+                    [ Ui.selectableButton { id = About About.Types.OpenButton, pad = small } (openHere AboutApp) (Ui.text "About")
+                    , Ui.selectableButton { id = NewsButton, pad = small } (openHere NewsApp) (Ui.text "Wikipedia")
                     , Ui.selectableButton
-                        { id = HackerNews HackerNews.Types.OpenButton, padding = small }
+                        { id = HackerNews HackerNews.Types.OpenButton, pad = small }
                         (openHere HackerNewsApp)
                         (Ui.text "Hacker news")
                     , Ui.selectableButton
-                        { id = Email Email.Types.OpenButton, padding = small }
+                        { id = Email Email.Types.OpenButton, pad = small }
                         (openHere EmailApp)
                         (Ui.text "Email")
                     , Ui.selectableButton
-                        { id = WebViewer WebViewer.Types.OpenButton, padding = small }
+                        { id = WebViewer WebViewer.Types.OpenButton, pad = small }
                         (openHere WebViewerApp)
                         (Ui.text "Web viewer")
                     , Ui.selectableButton
-                        { id = AsciiCollab AsciiCollab.Types.OpenButton, padding = small }
+                        { id = AsciiCollab AsciiCollab.Types.OpenButton, pad = small }
                         (openHere AsciiCollabApp)
                         (Ui.text "ASCII collab")
                     , Ui.selectableButton
-                        { id = CalculatorButton, padding = small }
+                        { id = CalculatorButton, pad = small }
                         (openHere CalculatorApp)
                         (Ui.text "Calculator")
                     , Ui.selectableButton
-                        { id = TicTacToeButton, padding = small }
+                        { id = TicTacToeButton, pad = small }
                         (openHere TicTacToeApp)
                         (Ui.text "Tic Tac Toe")
                     , Ui.selectableButton
-                        { id = Paint Paint.Types.OpenButton, padding = small }
+                        { id = Paint Paint.Types.OpenButton, pad = small }
                         (openHere PaintApp)
                         (Ui.text "Paint")
                     , Ui.selectableButton
-                        { id = Editor Editor.Types.OpenButton, padding = small }
+                        { id = Editor Editor.Types.OpenButton, pad = small }
                         (openHere EditorApp)
                         (Ui.text "Text editor")
                     , Ui.selectableButton
-                        { id = Code Code.Types.OpenButton, padding = small }
+                        { id = Code Code.Types.OpenButton, pad = small }
                         (openHere CodeApp)
                         (Ui.text "Code")
                     , Ui.selectableButton
-                        { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, padding = small }
+                        { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, pad = small }
                         (openHere ScreenshotViewerApp)
                         (Ui.text "Screenshots")
                     , Ui.selectableButton
-                        { id = Network Network.Types.OpenButton, padding = small }
+                        { id = Network Network.Types.OpenButton, pad = small }
                         (openHere NetworkApp)
                         (Ui.text "Network")
                     , Ui.selectableButton
-                        { id = Weather Weather.Types.OpenButton, padding = small }
+                        { id = Weather Weather.Types.OpenButton, pad = small }
                         (openHere WeatherApp)
                         (Ui.text "Weather")
-                    , Ui.selectableButton { id = DebugInfo DebugInfo.Types.OpenButton, padding = small } (openHere DebugApp) (Ui.text "Debug")
-                    , Ui.button { id = RestartButton, padding = small } (Ui.text "Restart")
-                    , Ui.button { id = PowerOffButton, padding = small } (Ui.text "Power off")
+                    , Ui.selectableButton { id = DebugInfo DebugInfo.Types.OpenButton, pad = small } (openHere DebugApp) (Ui.text "Debug")
+                    , Ui.button { id = RestartButton, pad = small } (Ui.text "Restart")
+                    , Ui.button { id = PowerOffButton, pad = small } (Ui.text "Power off")
                     ]
     in
     Ui.elWithWidth
-        { width = Coord.xRaw (Display.uiSize display), padding = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
+        { width = Coord.xRaw (Display.uiSize display), pad = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
         (\width ->
             Ui.rowFill
                 { width = width, gap = 8 }
@@ -3710,9 +3710,9 @@ notice model text =
     let
         element : Ui.Element id
         element =
-            Ui.el { padding = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
+            Ui.el { pad = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
                 (Ui.el
-                    { padding = Ui.paddingXY 10 6
+                    { pad = Ui.paddingXY 10 6
                     , style = Ui.BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
                     }
                     (Ui.text text)

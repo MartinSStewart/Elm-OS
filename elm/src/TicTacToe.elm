@@ -182,17 +182,17 @@ view model =
         title =
             Ui.leftAndRight (Units.ui width)
                 (Ui.text "Tic Tac Toe")
-                (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
+                (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "×"))
 
         board =
             Ui.column gap (List.map (boardRow model) [ [ 0, 1, 2 ], [ 3, 4, 5 ], [ 6, 7, 8 ] ])
 
         newGame =
-            Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, padding = Ui.paddingXY 8 3 } (Ui.text "New game")
+            Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, pad = Ui.paddingXY 8 3 } (Ui.text "New game")
     in
     Ui.elWithId
         (TicTacToe TicTacToe.Types.Panel)
-        { padding = Ui.paddingXY 8 8
+        { pad = Ui.paddingXY 8 8
         , style = Ui.windowBorderAndFill
         }
         (Ui.column gap [ title, Ui.text (message model), board, newGame ])
@@ -249,7 +249,7 @@ squareView model i =
                 Draw ->
                     False
     in
-    Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), padding = Ui.noPadding }
+    Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), pad = Ui.noPadding }
         isWinning
         (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]))
 

@@ -43,7 +43,7 @@ view info =
             Maybe.withDefault "?"
     in
     Ui.el
-        { padding = Ui.paddingXY 12 10
+        { pad = Ui.paddingXY 12 10
         , style = Ui.windowBorderAndFill
         }
         (Ui.column
@@ -76,6 +76,6 @@ view info =
                     )
                 )
             , Ui.text ""
-            , Ui.button { id = UiId.About About.Types.CloseButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close")
+            , Ui.button { id = UiId.About About.Types.CloseButton, pad = Ui.paddingXY 6 3 } (Ui.text "Close")
             ]
         )

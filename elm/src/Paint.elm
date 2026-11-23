@@ -641,10 +641,10 @@ view model =
             Ui.leftAndRight width
                 (Ui.text "Paint")
                 (Ui.row 4
-                    [ Ui.button { id = Paint Paint.Types.UndoButton, padding = Ui.paddingXY 8 0 } (Ui.text "Undo")
-                    , Ui.button { id = Paint Paint.Types.RedoButton, padding = Ui.paddingXY 8 0 } (Ui.text "Redo")
-                    , Ui.button { id = Paint Paint.Types.ClearButton, padding = Ui.paddingXY 8 0 } (Ui.text "Clear")
-                    , Ui.button { id = Paint Paint.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×")
+                    [ Ui.button { id = Paint Paint.Types.UndoButton, pad = Ui.paddingXY 8 0 } (Ui.text "Undo")
+                    , Ui.button { id = Paint Paint.Types.RedoButton, pad = Ui.paddingXY 8 0 } (Ui.text "Redo")
+                    , Ui.button { id = Paint Paint.Types.ClearButton, pad = Ui.paddingXY 8 0 } (Ui.text "Clear")
+                    , Ui.button { id = Paint Paint.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "×")
                     ]
                 )
 
@@ -655,7 +655,7 @@ view model =
 
         canvas =
             Ui.elWithId (Paint Paint.Types.Canvas)
-                { padding = Ui.noPadding, style = Ui.NoBorderOrFill }
+                { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (Ui.quads
                     { size = Coord.xy canvasWidth canvasHeight
                     , triangles = Sprite.image model.canvas
@@ -663,13 +663,13 @@ view model =
                 )
     in
     Ui.el
-        { padding = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
         (Ui.column 6 [ title, tools, canvas ])
 
 
 toolButton : Model -> ( Paint.Types.Tool, String ) -> Element UiId
 toolButton model ( tool, name ) =
-    Ui.selectableButton { id = Paint (Paint.Types.ToolButton tool), padding = Ui.paddingXY 6 3 }
+    Ui.selectableButton { id = Paint (Paint.Types.ToolButton tool), pad = Ui.paddingXY 6 3 }
         (tool == model.tool)
         (Ui.text name)
 
@@ -685,7 +685,7 @@ colorButton model index color =
         s =
             toFloat swatchSize
     in
-    Ui.selectableButton { id = Paint (Paint.Types.ColorButton index), padding = Ui.paddingXY 3 3 }
+    Ui.selectableButton { id = Paint (Paint.Types.ColorButton index), pad = Ui.paddingXY 3 3 }
         (color == model.color)
         (Ui.quads
             { size = Coord.xy swatchSize swatchSize
@@ -705,7 +705,7 @@ brushButton model radius =
         s =
             toFloat swatchSize
     in
-    Ui.selectableButton { id = Paint (Paint.Types.BrushButton radius), padding = Ui.paddingXY 3 3 }
+    Ui.selectableButton { id = Paint (Paint.Types.BrushButton radius), pad = Ui.paddingXY 3 3 }
         (radius == model.brush)
         (Ui.quads
             { size = Coord.xy swatchSize swatchSize

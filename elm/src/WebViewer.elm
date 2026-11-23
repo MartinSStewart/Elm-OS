@@ -409,12 +409,12 @@ view windowSize model =
 
         close : Element UiId
         close =
-            Ui.button { id = WebViewer Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "Close")
+            Ui.button { id = WebViewer Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "Close")
 
         modeButton : Types.UiId -> Mode -> String -> Element UiId
         modeButton id mode label =
             Ui.selectableButton
-                { id = WebViewer id, padding = Ui.paddingXY 6 0 }
+                { id = WebViewer id, pad = Ui.paddingXY 6 0 }
                 (model.mode == mode)
                 (Ui.text label)
 
@@ -429,7 +429,7 @@ view windowSize model =
                 , Ui.row
                     gap
                     [ Ui.textInput { id = WebViewer Types.UrlInput, style = urlStyle windowSize, isValid = True }
-                    , Ui.button { id = WebViewer Types.GoButton, padding = Ui.paddingXY 6 0 } (Ui.text "Go")
+                    , Ui.button { id = WebViewer Types.GoButton, pad = Ui.paddingXY 6 0 } (Ui.text "Go")
                     ]
                 , Ui.row
                     gap
@@ -460,7 +460,7 @@ view windowSize model =
                             wrapped width Color.textColor Mono page.html
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (Ui.column
             gap
             [ header

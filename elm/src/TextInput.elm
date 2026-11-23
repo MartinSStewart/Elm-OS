@@ -618,7 +618,7 @@ cursorPosition : Style -> Coord UiPixels -> Coord UiPixels -> State -> Int
 cursorPosition style mousePosition position state =
     let
         x =
-            Coord.xRaw mousePosition - (Coord.xRaw position + padding + caretWidth style) + scroll style state
+            Coord.xRaw mousePosition - (Coord.xRaw position + pad + caretWidth style) + scroll style state
     in
     carets style state
         |> List.indexedMap Tuple.pair
@@ -650,21 +650,21 @@ mouseDownMove style mousePosition position model =
 
 {-| Between the border and the text, on every side, in UI pixels.
 -}
-padding : Int
-padding =
+pad : Int
+pad =
     3
 
 
 size : Style -> Coord UiPixels
 size style =
-    Coord.xy (width style) (lineHeight style + padding * 2)
+    Coord.xy (width style) (lineHeight style + pad * 2)
 
 
-{-| The pixels between the box's padding that text shows in.
+{-| The pixels between the box's pad that text shows in.
 -}
 innerWidth : Style -> Int
 innerWidth style =
-    width style - 2 * padding - 2 * caretWidth style
+    width style - 2 * pad - 2 * caretWidth style
 
 
 {-| How far the text is scrolled left, in UI pixels: 0 unless the cursor would be past
@@ -686,10 +686,10 @@ view scale viewport style offset hasFocus isValid current =
             Coord.toTuple offset
 
         textLeft =
-            x + padding + caretWidth style - scroll style current
+            x + pad + caretWidth style - scroll style current
 
         clip =
-            { left = x + padding, right = x + width style - padding }
+            { left = x + pad, right = x + width style - pad }
 
         height =
             lineHeight style
@@ -725,8 +725,8 @@ view scale viewport style offset hasFocus isValid current =
                         Color.fillColor3
                     )
                     viewport
-                    (Coord.xy (x + padding) (y + padding))
-                    (Coord.xy (boxWidth - 2 * padding) (boxHeight - 2 * padding))
+                    (Coord.xy (x + pad) (y + pad))
+                    (Coord.xy (boxWidth - 2 * pad) (boxHeight - 2 * pad))
                 ++ (if current.cursorSize == 0 || not hasFocus then
                         []
 
@@ -734,7 +734,7 @@ view scale viewport style offset hasFocus isValid current =
                         Sprite.rectangle
                             Color.selectionColor
                             viewport
-                            (Coord.xy (max clip.left selectionStart) (y + padding))
+                            (Coord.xy (max clip.left selectionStart) (y + pad))
                             (Coord.xy (min clip.right selectionEnd - max clip.left selectionStart) height)
                    )
 
@@ -743,7 +743,7 @@ view scale viewport style offset hasFocus isValid current =
                 Sprite.rectangle
                     Color.textColor
                     viewport
-                    (Coord.xy (textLeft + caretX positions current.cursorPosition - caretWidth style) (y + padding))
+                    (Coord.xy (textLeft + caretX positions current.cursorPosition - caretWidth style) (y + pad))
                     (Coord.xy (caretWidth style) height)
 
             else
@@ -757,5 +757,5 @@ view scale viewport style offset hasFocus isValid current =
             style.font
             { topLeft = ( Units.ui clip.left, Quantity.zero ), bottomRight = ( Units.ui clip.right, Units.ui 99999 ) }
             (shownText style current.text)
-            (Coord.xy textLeft (y + padding))
+            (Coord.xy textLeft (y + pad))
         ++ Sprite.toDevice scale caret

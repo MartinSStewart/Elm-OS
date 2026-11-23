@@ -630,7 +630,7 @@ view windowSize model =
             Coord.xRaw windowSize - 2 * windowPadding
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (case model.account of
             Nothing ->
                 formView width model
@@ -676,7 +676,7 @@ formView width model =
         , field "Email address" AddressField inputStyle
         , field "App password" PasswordField passwordStyle
         , field "IMAP server (leave empty to guess from the address)" ServerField inputStyle
-        , Ui.button { id = Email Email.Types.LinkButton, padding = Ui.paddingXY 6 0 } (Ui.text "Link account")
+        , Ui.button { id = Email Email.Types.LinkButton, pad = Ui.paddingXY 6 0 } (Ui.text "Link account")
         , case model.session of
             Just _ ->
                 Ui.colorText Color.dimTextColor "Connecting..."
@@ -702,7 +702,7 @@ closeRow width title extra =
     let
         close : Element UiId
         close =
-            Ui.button { id = Email Email.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "Close")
+            Ui.button { id = Email Email.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "Close")
     in
     Ui.leftAndRight
         (Units.ui width)
@@ -715,11 +715,11 @@ inboxView windowSize width account model =
     let
         refresh : Element UiId
         refresh =
-            Ui.button { id = Email Email.Types.RefreshButton, padding = Ui.paddingXY 6 0 } (Ui.text "Refresh")
+            Ui.button { id = Email Email.Types.RefreshButton, pad = Ui.paddingXY 6 0 } (Ui.text "Refresh")
 
         signOut : Element UiId
         signOut =
-            Ui.button { id = Email Email.Types.SignOutButton, padding = Ui.paddingXY 6 0 } (Ui.text "Unlink")
+            Ui.button { id = Email Email.Types.SignOutButton, pad = Ui.paddingXY 6 0 } (Ui.text "Unlink")
 
         header : Element UiId
         header =
@@ -808,7 +808,7 @@ summaryView width summary2 =
         (Ui.right { width = dateWidth } (Ui.colorText Color.dimTextColor summary2.date))
         |> Ui.customButton
             { id = Email (Email.Types.MessageButton summary2.uid)
-            , padding = Ui.paddingXY 0 2
+            , pad = Ui.paddingXY 0 2
             , inFront = []
             , style = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
@@ -824,7 +824,7 @@ messageView windowSize width model page =
 
         back : Element UiId
         back =
-            Ui.button { id = Email Email.Types.BackButton, padding = Ui.paddingXY 6 0 } (Ui.text "< Inbox")
+            Ui.button { id = Email Email.Types.BackButton, pad = Ui.paddingXY 6 0 } (Ui.text "< Inbox")
 
         header : Element UiId
         header =

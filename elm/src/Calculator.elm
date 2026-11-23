@@ -645,7 +645,7 @@ view focused model =
 
         displayBox =
             Ui.el
-                { padding = Ui.paddingXY displayPadding 4
+                { pad = Ui.paddingXY displayPadding 4
                 , style =
                     Ui.BorderAndFill
                         { borderWidth = 2
@@ -663,10 +663,10 @@ view focused model =
         title =
             Ui.leftAndRight (Units.ui width)
                 (Ui.text "Calculator")
-                (Ui.button { id = Calculator Calculator.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
+                (Ui.button { id = Calculator Calculator.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "×"))
     in
     Ui.elWithId (Calculator Calculator.Types.Panel)
-        { padding = Ui.paddingXY 8 8
+        { pad = Ui.paddingXY 8 8
         , style = Ui.windowBorderAndFill
         }
         (Ui.column gap (title :: displayBox :: List.map (keyRow model) keys))
@@ -704,7 +704,7 @@ keyRow model row =
                             Big
                 in
                 Ui.selectableButton
-                    { id = Calculator (Calculator.Types.KeyButton key), padding = Ui.noPadding }
+                    { id = Calculator (Calculator.Types.KeyButton key), pad = Ui.noPadding }
                     (isPendingOperator model key)
                     (Ui.center { size = size } (Ui.customText fontSize [ { text = label, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]))
             )

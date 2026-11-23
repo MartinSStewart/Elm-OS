@@ -68,7 +68,7 @@ plus ( dx, dy ) ( px, py ) =
     ( Quantity.plus dx px, Quantity.plus dy py )
 
 
-{-| `minus a b` is `b - a`, so it reads well in a pipeline: `size |> minus padding`.
+{-| `minus a b` is `b - a`, so it reads well in a pipeline: `size |> minus pad`.
 -}
 minus : Coord units -> Coord units -> Coord units
 minus ( dx, dy ) ( px, py ) =

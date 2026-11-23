@@ -305,7 +305,7 @@ panelWidth =
 smallWindow : { title : String, close : UiId, size : Coord UiPixels } -> (Coord UiPixels -> Ui.Element UiId) -> Ui.Element UiId
 smallWindow { title, close, size } rows =
     Ui.elWithSize
-        { padding = { left = 6, right = 6, bottom = 6, top = 2 }, style = Ui.windowBorderAndFill, size = size }
+        { pad = { left = 6, right = 6, bottom = 6, top = 2 }, style = Ui.windowBorderAndFill, size = size }
         (\size2 ->
             Ui.columnFromTop
                 { size = size2, gap = 4 }
@@ -315,10 +315,10 @@ smallWindow { title, close, size } rows =
                         [ \rest -> Ui.left (Units.ui rest) (heading title)
                         , \_ ->
                             Ui.el
-                                { padding = { left = 0, right = 0, bottom = 0, top = 4 }
+                                { pad = { left = 0, right = 0, bottom = 0, top = 4 }
                                 , style = Ui.NoBorderOrFill
                                 }
-                                (Ui.button { id = close, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+                                (Ui.button { id = close, pad = Ui.paddingXY 6 3 } (Ui.text "Close"))
                         ]
                 , rows
                 ]

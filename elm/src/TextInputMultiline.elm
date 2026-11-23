@@ -674,7 +674,7 @@ indexAt style mousePosition position model =
             Coord.toTuple (Coord.minus position mousePosition)
 
         relativeY =
-            my - padding
+            my - pad
 
         line =
             -- rounded down, so above the box is the line before the first in view
@@ -687,7 +687,7 @@ indexAt style mousePosition position model =
         String.length state.text
 
     else
-        indexAtX style ls line (mx - padding - caretWidth style + scrollX style state)
+        indexAtX style ls line (mx - pad - caretWidth style + scrollX style state)
 
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
@@ -753,7 +753,7 @@ mouseDownMove style mousePosition position model =
                 (Scrollbar.drag
                     (scrollbarGeometry style model.input.current)
                     grab
-                    (Coord.yRaw mousePosition - Coord.yRaw position - padding)
+                    (Coord.yRaw mousePosition - Coord.yRaw position - pad)
                 )
                 model
 
@@ -793,7 +793,7 @@ area, over the text.
 -}
 scrollbarPosition : Style -> Coord UiPixels
 scrollbarPosition style =
-    Coord.xy (width style - padding - Scrollbar.width) padding
+    Coord.xy (width style - pad - Scrollbar.width) pad
 
 
 {-| How far the text is scrolled down, in UI pixels.
@@ -830,8 +830,8 @@ scrollToPixels style pixels model =
 
 {-| Between the border and the text, on every side, in UI pixels.
 -}
-padding : Int
-padding =
+pad : Int
+pad =
     4
 
 
@@ -852,14 +852,14 @@ width style =
 
 size : Style -> Coord UiPixels
 size style =
-    Coord.xy (width style) (lineHeight style * style.lines + padding * 2)
+    Coord.xy (width style) (lineHeight style * style.lines + pad * 2)
 
 
-{-| The pixels between the box's padding that text shows in (the scroll bar lies over it).
+{-| The pixels between the box's pad that text shows in (the scroll bar lies over it).
 -}
 innerWidth : Style -> Int
 innerWidth style =
-    width style - 2 * padding - 2 * caretWidth style
+    width style - 2 * pad - 2 * caretWidth style
 
 
 {-| How far every line is scrolled left, in UI pixels: just enough to show the cursor.
@@ -888,17 +888,17 @@ view scale viewport style offset hasFocus model =
             lineHeight style
 
         textLeft =
-            x + padding + caretWidth style - scrollX style state
+            x + pad + caretWidth style - scrollX style state
 
         clip =
-            { left = x + padding, right = x + width style - padding }
+            { left = x + pad, right = x + width style - pad }
 
         -- The text area, where lines partly scrolled out of it are cut off.
         textArea : Bounds UiPixels
         textArea =
             Bounds.fromTopLeftAndSize
-                (Coord.xy (x + padding) (y + padding))
-                (Coord.xy (width style - 2 * padding) (height * style.lines))
+                (Coord.xy (x + pad) (y + pad))
+                (Coord.xy (width style - 2 * pad) (height * style.lines))
                 |> Bounds.intersection viewport
                 |> Maybe.withDefault (Bounds.fromTopLeftAndSize offset Coord.origin)
 
@@ -915,7 +915,7 @@ view scale viewport style offset hasFocus model =
                 |> List.take (style.lines + 1)
 
         top n =
-            y + padding + n * height - shownPixels style model
+            y + pad + n * height - shownPixels style model
 
         ( boxWidth, boxHeight ) =
             Coord.toTuple (size style)
@@ -939,8 +939,8 @@ view scale viewport style offset hasFocus model =
                         Color.fillColor3
                     )
                     viewport
-                    (Coord.xy (x + padding) (y + padding))
-                    (Coord.xy (boxWidth - 2 * padding) (boxHeight - 2 * padding))
+                    (Coord.xy (x + pad) (y + pad))
+                    (Coord.xy (boxWidth - 2 * pad) (boxHeight - 2 * pad))
 
         -- Each line's part of the selection, with a bit more past its end when the
         -- selection goes on to the next line, so a selected empty line shows.

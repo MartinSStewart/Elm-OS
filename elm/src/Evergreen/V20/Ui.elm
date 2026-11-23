@@ -4,13 +4,13 @@ module Evergreen.V20.Ui exposing (..)
 drawing textured triangles for the render port instead of WebGL meshes.
 
 Elements know their size when they are made, so laying out is one pass: a row puts
-its children side by side, a column stacks them, `el` adds padding, a border and a
+its children side by side, a column stacks them, `el` adds pad, a border and a
 fill, and the alignment helpers (`center`, `topRight`, ...) pad a child out to a
 given size. `view` turns the tree into triangles, and `hover` finds the elements
 with ids under a point.
 
 Everything here is in UI pixels (Units.elm); only `view` turns them into device pixels,
-with the screen's UI scale. Spacing, padding and border widths are plain Ints of UI
+with the screen's UI scale. Spacing, pad and border widths are plain Ints of UI
 pixels; sizes and widths are Quantities.
 
 Text inputs come from town-collab's TextInput (TextInput.elm, with a US layout in
@@ -41,7 +41,7 @@ type alias RowColumn =
 
 type alias ButtonData id lazy =
     { id : id
-    , padding : Padding
+    , pad : Padding
     , style : BorderAndFill
     , borderAndFillFocus : BorderAndFill
     , borderAndFillHover : BorderAndFill
@@ -74,7 +74,7 @@ type ElementFull id lazy
     | Row RowColumn (List (ElementFull id lazy))
     | Column RowColumn (List (ElementFull id lazy))
     | Single
-        { padding : Padding
+        { pad : Padding
         , style : BorderAndFill
         , cachedSize : Coord UiPixels
         , id : Maybe id

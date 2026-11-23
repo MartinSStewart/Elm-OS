@@ -2,7 +2,7 @@ module Evergreen.V20.Units exposing (..)
 
 {-| The two kinds of pixel, like CSS pixels and device pixels on the web.
 
-  - `UiPixels` are what the UI is laid out in: padding, borders, text sizes, icons.
+  - `UiPixels` are what the UI is laid out in: pad, borders, text sizes, icons.
   - `DevicePixels` are the screen's own pixels: the screen size, the mouse, and the
     triangles sent to the host.
 

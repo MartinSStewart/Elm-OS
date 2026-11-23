@@ -76,7 +76,7 @@ rows online model size =
         (case model of
             NoWeather ->
                 if online then
-                    [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Get the weather") ]
+                    [ Ui.button { id = UiId.Weather Weather.Types.RefreshButton, pad = small } (Ui.text "Get the weather") ]
 
                 else
                     [ Ui.colorText Color.outlineColor "Waiting for a network connection" ]
@@ -89,13 +89,13 @@ rows online model size =
 
             WeatherFailed error ->
                 [ Ui.colorText Color.errorColor (Sprite.wrap Sprite.Small font width (Effect.httpErrorToString error))
-                , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Try again")
+                , Ui.button { id = UiId.Weather Weather.Types.RefreshButton, pad = small } (Ui.text "Try again")
                 ]
 
             GotWeather place forecast ->
                 [ Ui.leftAndRight width
                     (Ui.text (Sprite.ellipsis Sprite.Small font (width |> Quantity.minus (App.em 6)) ("Weather in " ++ place.name)))
-                    (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, padding = small } (Ui.text "Refresh"))
+                    (Ui.button { id = UiId.Weather Weather.Types.RefreshButton, pad = small } (Ui.text "Refresh"))
                 , Ui.row
                     8
                     [ weatherIcon 3 forecast.code

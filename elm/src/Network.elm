@@ -369,7 +369,7 @@ rows model size =
                 Card _ ->
                     Ui.leftAndRight width
                         (Ui.text title)
-                        (Ui.button { id = uiId Network.Types.RefreshButton, padding = small }
+                        (Ui.button { id = uiId Network.Types.RefreshButton, pad = small }
                             (Ui.text
                                 (if model.scanning then
                                     "Scanning"
@@ -434,7 +434,7 @@ rows model size =
                                     )
                                 )
                                 (if model.wifiStatus.state /= Idle && model.wifiStatus.state /= Failed then
-                                    Ui.button { id = uiId Network.Types.DisconnectButton, padding = small } (Ui.text "Disconnect")
+                                    Ui.button { id = uiId Network.Types.DisconnectButton, pad = small } (Ui.text "Disconnect")
 
                                  else
                                     Ui.empty
@@ -494,10 +494,10 @@ joinRows model width =
                     [ if needsPassword selected then
                         Ui.row
                             6
-                            [ -- lined up with the text in the box, which is inset by its padding
-                              Ui.el { padding = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text "Password")
+                            [ -- lined up with the text in the box, which is inset by its pad
+                              Ui.el { pad = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text "Password")
                             , passwordInput model
-                            , Ui.button { id = uiId Network.Types.ShowPasswordButton, padding = small }
+                            , Ui.button { id = uiId Network.Types.ShowPasswordButton, pad = small }
                                 (Ui.text
                                     (if model.showPassword then
                                         "Hide"
@@ -511,7 +511,7 @@ joinRows model width =
                       else
                         Ui.empty
                     , Ui.button
-                        { id = uiId Network.Types.ConnectButton, padding = small }
+                        { id = uiId Network.Types.ConnectButton, pad = small }
                         (Ui.text
                             (Sprite.ellipsis
                                 bodySize
@@ -645,7 +645,7 @@ networkRow model size network =
                     Wpa3 ->
                         "WPA3"
 
-        -- The row fills the panel: its button's padding is 4 UI pixels each side.
+        -- The row fills the panel: its button's pad is 4 UI pixels each side.
         width =
             Coord.x size |> Quantity.minus (Units.ui 8)
 
@@ -660,7 +660,7 @@ networkRow model size network =
     in
     Ui.column
         0
-        [ Ui.selectableButton { id = uiId (Network.Types.NetworkButton network.ssid), padding = Ui.paddingXY 4 2 }
+        [ Ui.selectableButton { id = uiId (Network.Types.NetworkButton network.ssid), pad = Ui.paddingXY 4 2 }
             (Maybe.map .ssid model.selected == Just network.ssid)
             (Ui.leftAndRight width
                 (Ui.row 6 [ bars, Ui.text (Sprite.ellipsis bodySize font nameWidth (Network.Types.ssidToString network.ssid)) ])
@@ -669,7 +669,7 @@ networkRow model size network =
         , case model.selected of
             Just selected ->
                 if selected.ssid == network.ssid then
-                    joinRows model (Coord.x size) |> Ui.el { padding = Ui.paddingXY 8 4, style = Ui.NoBorderOrFill }
+                    joinRows model (Coord.x size) |> Ui.el { pad = Ui.paddingXY 8 4, style = Ui.NoBorderOrFill }
 
                 else
                     Ui.empty

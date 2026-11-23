@@ -758,7 +758,7 @@ toggleSpacing =
 view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
     Ui.elWithSize
-        { size = windowSize, padding = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
+        { size = windowSize, pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (\size ->
             case model.page of
                 PostsPage ->
@@ -831,7 +831,7 @@ postView width index { id, title, comments } =
         ]
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.PostButton id)
-            , padding = Ui.paddingXY 0 postPadding
+            , pad = Ui.paddingXY 0 postPadding
             , inFront = []
             , style = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
@@ -845,7 +845,7 @@ commentsView lazyCache size postId title comments =
         backButton =
             Ui.button
                 { id = HackerNews HackerNews.Types.BackButton
-                , padding = Ui.paddingXY 6 0
+                , pad = Ui.paddingXY 6 0
                 }
                 (Ui.text "< Posts")
 
@@ -1027,7 +1027,7 @@ toggleButton index label =
     Ui.monoColorText Color.dimTextColor label
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.CommentToggle index)
-            , padding = Ui.noPadding
+            , pad = Ui.noPadding
             , inFront = []
             , style = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.NoBorderOrFill

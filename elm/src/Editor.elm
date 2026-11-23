@@ -43,8 +43,8 @@ style windowSize =
     }
 
 
-{-| The editor window's height besides its lines of text: the padding, the title, the
-status line, the gap between them and the text box's own padding.
+{-| The editor window's height besides its lines of text: the pad, the title, the
+status line, the gap between them and the text box's own pad.
 -}
 chrome : Int
 chrome =
@@ -84,12 +84,12 @@ view windowSize textInput =
     in
     Ui.elWithId
         (UiId.Editor Editor.Types.Window)
-        { padding = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight textStyle.width
                 (App.heading "Text editor")
-                (Ui.button { id = UiId.Editor Editor.Types.CloseButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+                (Ui.button { id = UiId.Editor Editor.Types.CloseButton, pad = Ui.paddingXY 6 3 } (Ui.text "Close"))
             , Ui.textInputMultiline
                 { id = UiId.Editor Editor.Types.Input
                 , style = textStyle
