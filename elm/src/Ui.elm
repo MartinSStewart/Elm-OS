@@ -6,6 +6,7 @@ module Ui exposing
     , ElementState(..)
     , InputType(..)
     , LazyCache
+    , Length(..)
     , Model
     , Padding
     , Screenshot
@@ -19,6 +20,7 @@ module Ui exposing
     , center
     , colorText
     , column
+    , columnFill
     , columnFromTop
     , cursorAt
     , customButton
@@ -62,6 +64,7 @@ module Ui exposing
     , quads
     , right
     , row
+    , rowFill
     , rowFromLeft
     , rowFromRight
     , screenshotSize
@@ -1888,14 +1891,176 @@ rowFromLeft data children =
         |> padToWidth 0 data.width
 
 
+{-| How a child of `rowFill` or `columnFill` is sized. `Shrink` keeps its own size. The
+`Fill` ones share the room the `Shrink` ones leave, evenly.
+-}
 type Length
     = Shrink
     | Fill
 
 
+{-| A row exactly `width` wide. The `Shrink` children are made first, each given the
+whole width less the spacing, and keep their own width. The `Fill` children then share
+what's left evenly (the first ones a pixel more when it doesn't divide), and each is
+padded out to its share, so whatever is right of it lines up. A `Fill` child can be
+anywhere in the row:
+
+    Ui.rowFill { width = 600, spacing = 8 }
+        [ ( Ui.Shrink, \_ -> number )
+        , ( Ui.Fill, \titleWidth -> title titleWidth )
+        , ( Ui.Shrink, \_ -> commentCount )
+        ]
+
+-}
 rowFill : { width : Int, spacing : Int } -> List ( Length, Int -> Element id ) -> Element id
-rowFill data list =
-    Debug.todo ""
+rowFill data children =
+    let
+        available : Int
+        available =
+            data.width - data.spacing * (List.length children - 1)
+
+        made : List ( Length, Int -> Element id, Maybe (Element id) )
+        made =
+            List.map
+                (\( length, child ) ->
+                    case length of
+                        Shrink ->
+                            ( length, child, Just (child available) )
+
+                        Fill ->
+                            ( length, child, Nothing )
+                )
+                children
+
+        shares : List Int
+        shares =
+            share
+                (available - List.sum (List.filterMap (\( _, _, element ) -> Maybe.map (\e -> Coord.xRaw (size e)) element) made))
+                (List.length (List.filter (\( length, _ ) -> length == Fill) children))
+    in
+    List.foldl
+        (\( _, child, element ) ( shares2, acc ) ->
+            case ( element, shares2 ) of
+                ( Just element2, _ ) ->
+                    ( shares2, element2 :: acc )
+
+                ( Nothing, width :: rest ) ->
+                    ( rest, padTo (Coord.xy width 0) (child width) :: acc )
+
+                ( Nothing, [] ) ->
+                    ( [], acc )
+        )
+        ( shares, [] )
+        made
+        |> Tuple.second
+        |> List.reverse
+        |> row data.spacing
+        |> padToWidth 0 data.width
+
+
+{-| `rowFill` turned on its side: a column exactly `size` big. Each child is given the
+whole width, and the `Shrink` children the whole height less the spacing; they keep their
+own height. The `Fill` children share the height that's left evenly, and each is padded
+out to its share.
+
+    Ui.columnFill { size = windowSize, spacing = 8 }
+        [ ( Ui.Shrink, \_ -> title )
+        , ( Ui.Fill, \size -> Ui.viewport { id = id, viewportHeight = Coord.y size } content )
+        ]
+
+-}
+columnFill : { size : Coord UiPixels, spacing : Int } -> List ( Length, Coord UiPixels -> Element id ) -> Element id
+columnFill data children =
+    let
+        width : Int
+        width =
+            Coord.xRaw data.size
+
+        available : Int
+        available =
+            Coord.yRaw data.size - data.spacing * (List.length children - 1)
+
+        made : List ( Length, Coord UiPixels -> Element id, Maybe (Element id) )
+        made =
+            List.map
+                (\( length, child ) ->
+                    case length of
+                        Shrink ->
+                            ( length, child, Just (child (Coord.xy width available)) )
+
+                        Fill ->
+                            ( length, child, Nothing )
+                )
+                children
+
+        shares : List Int
+        shares =
+            share
+                (available - List.sum (List.filterMap (\( _, _, element ) -> Maybe.map (\e -> Coord.yRaw (size e)) element) made))
+                (List.length (List.filter (\( length, _ ) -> length == Fill) children))
+    in
+    List.foldl
+        (\( _, child, element ) ( shares2, acc ) ->
+            case ( element, shares2 ) of
+                ( Just element2, _ ) ->
+                    ( shares2, element2 :: acc )
+
+                ( Nothing, height :: rest ) ->
+                    ( rest, padTo (Coord.xy 0 height) (child (Coord.xy width height)) :: acc )
+
+                ( Nothing, [] ) ->
+                    ( [], acc )
+        )
+        ( shares, [] )
+        made
+        |> Tuple.second
+        |> List.reverse
+        |> column data.spacing
+        |> padTo data.size
+
+
+{-| `total` split into `count` whole shares as even as can be (the first ones a pixel
+bigger), none below zero.
+-}
+share : Int -> Int -> List Int
+share total count =
+    let
+        total2 : Int
+        total2 =
+            max 0 total
+    in
+    List.range 0 (count - 1)
+        |> List.map
+            (\index ->
+                total2
+                    // count
+                    + (if index < modBy (max 1 count) total2 then
+                        1
+
+                       else
+                        0
+                      )
+            )
+
+
+{-| An element padded at the right and bottom out to `minimum`, along each side it's smaller.
+-}
+padTo : Coord UiPixels -> Element id -> Element id
+padTo minimum (Element child) =
+    let
+        childSize : Coord UiPixels
+        childSize =
+            sizeHelper child
+
+        padded : Coord UiPixels
+        padded =
+            Coord.componentMax minimum childSize
+    in
+    if padded == childSize then
+        Element child
+
+    else
+        align 0 0 padded child |> Element
 
 
 {-| `rowFromLeft` starting from the right: the last child is given all of `width`, and
