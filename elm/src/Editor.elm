@@ -44,7 +44,7 @@ style windowSize =
 
 
 {-| The editor window's height besides its lines of text: the padding, the title, the
-status line, the spacing between them and the text box's own padding.
+status line, the gap between them and the text box's own padding.
 -}
 chrome : Int
 chrome =

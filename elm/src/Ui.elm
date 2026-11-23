@@ -121,7 +121,7 @@ import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
 type alias RowColumn =
-    { spacing : Int
+    { gap : Int
     , cachedSize : Coord UiPixels
     }
 
@@ -1409,11 +1409,11 @@ row data children =
                 )
                 children
     in
-    Row { spacing = data, cachedSize = rowSize data children2 } children2 |> Element
+    Row { gap = data, cachedSize = rowSize data children2 } children2 |> Element
 
 
 column : Int -> List (Element id) -> Element id
-column spacing children =
+column gap children =
     let
         children2 =
             List.filterMap
@@ -1426,7 +1426,7 @@ column spacing children =
                 )
                 children
     in
-    Column { spacing = spacing, cachedSize = columnSize spacing children2 } children2
+    Column { gap = gap, cachedSize = columnSize gap children2 } children2
         |> Element
 
 
@@ -1758,26 +1758,26 @@ viewportInside position data child =
 
 
 rowSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
-rowSize spacing children =
+rowSize gap children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + spacing + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + gap + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
     in
     Coord.xy
         (if List.isEmpty children then
             w
 
          else
-            w - spacing
+            w - gap
         )
         h
 
 
 columnSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
-columnSize spacing children =
+columnSize gap children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + spacing + y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + gap + y )) ( 0, 0 ) children
     in
     Coord.xy
         w
@@ -1785,22 +1785,22 @@ columnSize spacing children =
             h
 
          else
-            h - spacing
+            h - gap
         )
 
 
 {-| Where each child of a row or column goes.
 -}
 childPositions : Bool -> Int -> Coord UiPixels -> List (ElementFull id lazy) -> List ( Coord UiPixels, ElementFull id lazy )
-childPositions isRow spacing position children =
+childPositions isRow gap position children =
     List.foldl
         (\child ( at, acc ) ->
             ( Coord.plus
                 (if isRow then
-                    Coord.xy (Coord.xRaw (sizeHelper child) + spacing) 0
+                    Coord.xy (Coord.xRaw (sizeHelper child) + gap) 0
 
                  else
-                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + spacing)
+                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + gap)
                 )
                 at
             , ( at, child ) :: acc
@@ -1864,15 +1864,15 @@ elWithSize data child =
 
 
 {-| A row exactly `width` wide. Each child is given the width the children left of it
-leave (less the spacing), so the first is given all of it. A child that doesn't care
+leave (less the gap), so the first is given all of it. A child that doesn't care
 ignores its Int:
 
-    Ui.rowFromLeft { width = 600, spacing = 8 } [ \_ -> backButton, \rest -> title rest ]
+    Ui.rowFromLeft { width = 600, gap = 8 } [ \_ -> backButton, \rest -> title rest ]
 
 If it comes out narrower than `width`, the row is padded on the right.
 
 -}
-rowFromLeft : { width : Int, spacing : Int } -> List (Int -> Element id) -> Element id
+rowFromLeft : { width : Int, gap : Int } -> List (Int -> Element id) -> Element id
 rowFromLeft data children =
     List.foldl
         (\child ( rest, made ) ->
@@ -1881,13 +1881,13 @@ rowFromLeft data children =
                 element =
                     child rest
             in
-            ( rest - Coord.xRaw (size element) - data.spacing, element :: made )
+            ( rest - Coord.xRaw (size element) - data.gap, element :: made )
         )
         ( data.width, [] )
         children
         |> Tuple.second
         |> List.reverse
-        |> row data.spacing
+        |> row data.gap
         |> padToWidth 0 data.width
 
 
@@ -1901,37 +1901,37 @@ type Length id
 
 
 {-| A row exactly `width` wide. The `Fill` children share the width the `Shrink` children
-and the spacing leave evenly (the first ones a pixel more when it doesn't divide), and
+and the gap leave evenly (the first ones a pixel more when it doesn't divide), and
 each is padded out to its share, so whatever is right of it lines up. A `Fill` child can
 be anywhere in the row:
 
-    Ui.rowFill { width = 600, spacing = 8 }
+    Ui.rowFill { width = 600, gap = 8 }
         [ Ui.Shrink number
         , Ui.Fill (\titleWidth -> title titleWidth)
         , Ui.Shrink commentCount
         ]
 
 -}
-rowFill : { width : Int, spacing : Int } -> List (Length id) -> Element id
+rowFill : { width : Int, gap : Int } -> List (Length id) -> Element id
 rowFill data children =
-    fillChildren Coord.xRaw (\width -> Coord.xy width 0) data.width data.spacing children
-        |> row data.spacing
+    fillChildren Coord.xRaw (\width -> Coord.xy width 0) data.width data.gap children
+        |> row data.gap
         |> padToWidth 0 data.width
 
 
 {-| `rowFill` turned on its side: a column exactly `height` tall, whose `Fill` children
 share the height the `Shrink` ones leave.
 
-    Ui.columnFill { height = 600, spacing = 8 }
+    Ui.columnFill { height = 600, gap = 8 }
         [ Ui.Shrink title
         , Ui.Fill (\height -> Ui.viewport { id = id, viewportHeight = Units.ui height } content)
         ]
 
 -}
-columnFill : { height : Int, spacing : Int } -> List (Length id) -> Element id
+columnFill : { height : Int, gap : Int } -> List (Length id) -> Element id
 columnFill data children =
-    fillChildren Coord.yRaw (\height -> Coord.xy 0 height) data.height data.spacing children
-        |> column data.spacing
+    fillChildren Coord.yRaw (\height -> Coord.xy 0 height) data.height data.gap children
+        |> column data.gap
         |> padTo (Coord.xy 0 data.height)
 
 
@@ -1939,7 +1939,7 @@ columnFill data children =
 padded out to its share of `total`. `along` reads a size along the row or column.
 -}
 fillChildren : (Coord UiPixels -> Int) -> (Int -> Coord UiPixels) -> Int -> Int -> List (Length id) -> List (Element id)
-fillChildren along toCoord total spacing children =
+fillChildren along toCoord total gap children =
     let
         shrinkSizes : Int
         shrinkSizes =
@@ -1973,7 +1973,7 @@ fillChildren along toCoord total spacing children =
                         [] ->
                             ( [], made )
         )
-        ( share (total - spacing * (List.length children - 1) - shrinkSizes) fillCount, [] )
+        ( share (total - gap * (List.length children - 1) - shrinkSizes) fillCount, [] )
         children
         |> Tuple.second
         |> List.reverse
@@ -2037,7 +2037,7 @@ padTo minimum (Element child) =
 each one before it what the ones right of it leave. If it comes out narrower than `width`,
 the row is padded on the left, so the right end stays put.
 -}
-rowFromRight : { width : Int, spacing : Int } -> List (Int -> Element id) -> Element id
+rowFromRight : { width : Int, gap : Int } -> List (Int -> Element id) -> Element id
 rowFromRight data children =
     List.foldr
         (\child ( rest, made ) ->
@@ -2046,16 +2046,16 @@ rowFromRight data children =
                 element =
                     child rest
             in
-            ( rest - Coord.xRaw (size element) - data.spacing, element :: made )
+            ( rest - Coord.xRaw (size element) - data.gap, element :: made )
         )
         ( data.width, [] )
         children
         |> Tuple.second
-        |> row data.spacing
+        |> row data.gap
         |> padToWidth 2 data.width
 
 
-columnFromTop : { size : Coord UiPixels, spacing : Int } -> List (Coord UiPixels -> Element id) -> Element id
+columnFromTop : { size : Coord UiPixels, gap : Int } -> List (Coord UiPixels -> Element id) -> Element id
 columnFromTop data children =
     let
         width =
@@ -2068,13 +2068,13 @@ columnFromTop data children =
                 element =
                     child (Coord.xy width rest)
             in
-            ( rest - Coord.yRaw (size element) - data.spacing, element :: made )
+            ( rest - Coord.yRaw (size element) - data.gap, element :: made )
         )
         ( Coord.yRaw data.size, [] )
         children
         |> Tuple.second
         |> List.reverse
-        |> column data.spacing
+        |> column data.gap
         |> padToWidth 2 (Coord.yRaw data.size)
 
 
@@ -2204,10 +2204,10 @@ inspectHelper model point clip position element found =
                     |> orItself
 
             Row data children ->
-                firstOf (childPositions True data.spacing position children)
+                firstOf (childPositions True data.gap position children)
 
             Column data children ->
-                firstOf (childPositions False data.spacing position children)
+                firstOf (childPositions False data.gap position children)
 
             Single data child ->
                 let
@@ -2318,13 +2318,13 @@ buttonsHelper model clip position element found =
             List.foldl
                 (\( at, child ) found2 -> buttonsHelper model clip at child found2)
                 found
-                (childPositions True data.spacing position children)
+                (childPositions True data.gap position children)
 
         Column data children ->
             List.foldl
                 (\( at, child ) found2 -> buttonsHelper model clip at child found2)
                 found
-                (childPositions False data.spacing position children)
+                (childPositions False data.gap position children)
 
         Single data child ->
             buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child found
@@ -2530,11 +2530,11 @@ hoverHelper model hovers point position element =
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             Row data children ->
-                childPositions True data.spacing position children
+                childPositions True data.gap position children
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Column data children ->
-                childPositions False data.spacing position children
+                childPositions False data.gap position children
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Single data child ->
@@ -2639,10 +2639,10 @@ findInputHelper model id position element =
                 Nothing
 
         Row data children ->
-            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data.spacing position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data.gap position children)
 
         Column data children ->
-            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.spacing position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.gap position children)
 
         Single data child ->
             findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
@@ -2794,11 +2794,11 @@ viewList model time scale showUiBorder maybeHover viewport2 position element =
                         ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
-                    childPositions True data.spacing position children
+                    childPositions True data.gap position children
                         |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Column data children ->
-                    childPositions False data.spacing position children
+                    childPositions False data.gap position children
                         |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Single data child ->

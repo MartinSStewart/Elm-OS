@@ -652,7 +652,7 @@ mouseDownMove style mousePosition position model =
 -}
 padding : Int
 padding =
-    4
+    3
 
 
 size : Style -> Coord UiPixels

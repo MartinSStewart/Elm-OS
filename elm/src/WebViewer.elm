@@ -378,8 +378,8 @@ windowPadding =
     4
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     8
 
 
@@ -395,7 +395,7 @@ urlStyle : Coord UiPixels -> TextInput.Style
 urlStyle windowSize =
     { font = Sans Regular
     , fontSize = Small
-    , width = Units.ui (max 100 (Coord.xRaw windowSize - 2 * windowPadding - goButtonWidth - spacing - 8))
+    , width = Units.ui (max 100 (Coord.xRaw windowSize - 2 * windowPadding - goButtonWidth - gap - 8))
     , masked = False
     }
 
@@ -421,18 +421,18 @@ view windowSize model =
         header : Element UiId
         header =
             Ui.column
-                spacing
+                gap
                 [ Ui.leftAndRight
                     (Units.ui width)
                     (Ui.customText Small [ { text = "Web viewer", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
                     (Ui.right { width = Coord.x (Ui.size close) } close)
                 , Ui.row
-                    spacing
+                    gap
                     [ Ui.textInput { id = WebViewer Types.UrlInput, style = urlStyle windowSize, isValid = True }
                     , Ui.button { id = WebViewer Types.GoButton, padding = Ui.paddingXY 6 0 } (Ui.text "Go")
                     ]
                 , Ui.row
-                    spacing
+                    gap
                     [ modeButton Types.TextModeButton TextMode "Text"
                     , modeButton Types.HtmlModeButton HtmlMode "HTML"
                     , statusText model
@@ -462,7 +462,7 @@ view windowSize model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
-            spacing
+            gap
             [ header
             , Ui.left (Units.ui width) content
                 |> Ui.viewport
@@ -477,7 +477,7 @@ view windowSize model =
                             )
                     , viewportHeight =
                         Units.ui
-                            (Coord.yRaw windowSize - 2 * windowPadding - Coord.yRaw (Ui.size header) - spacing)
+                            (Coord.yRaw windowSize - 2 * windowPadding - Coord.yRaw (Ui.size header) - gap)
                     }
             ]
         )

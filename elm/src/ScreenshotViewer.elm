@@ -81,8 +81,8 @@ windowPadding =
     8
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     6
 
 
@@ -116,8 +116,8 @@ headerHeight =
 areaSize : Coord UiPixels -> Coord UiPixels
 areaSize window =
     Coord.xy
-        (max 1 (Coord.xRaw window - 2 * windowPadding - listWidth - spacing))
-        (max 1 (Coord.yRaw window - 2 * windowPadding - headerHeight - spacing))
+        (max 1 (Coord.xRaw window - 2 * windowPadding - listWidth - gap))
+        (max 1 (Coord.yRaw window - 2 * windowPadding - headerHeight - gap))
 
 
 
@@ -301,9 +301,9 @@ view scale window screenshots model =
 
         header =
             Ui.leftAndRight
-                (Units.ui (Coord.xRaw area + listWidth + spacing))
+                (Units.ui (Coord.xRaw area + listWidth + gap))
                 (Ui.row
-                    spacing
+                    gap
                     [ headerButton Types.ZoomOutButton "-"
                     , headerButton Types.ZoomInButton "+"
                     , headerButton Types.ActualSizeButton "100%"
@@ -326,10 +326,10 @@ view scale window screenshots model =
     Ui.el
         { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
         (Ui.column
-            spacing
+            gap
             [ header
             , Ui.row
-                spacing
+                gap
                 [ previewList scale (Coord.yRaw area) screenshots model, imageArea scale area screenshots model ]
             ]
         )
@@ -352,7 +352,7 @@ previewList scale height screenshots model =
         , viewportHeight = Units.ui height
         }
         (Ui.column
-            spacing
+            gap
             (if List.isEmpty screenshots then
                 [ Ui.el
                     { padding = Ui.paddingXY buttonPadding buttonPadding, borderAndFill = Ui.NoBorderOrFill }

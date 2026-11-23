@@ -308,10 +308,10 @@ smallWindow { title, close, size } rows =
         { padding = { left = 6, right = 6, bottom = 6, top = 2 }, borderAndFill = Ui.windowBorderAndFill, size = size }
         (\size2 ->
             Ui.columnFromTop
-                { size = size2, spacing = 4 }
+                { size = size2, gap = 4 }
                 [ \_ ->
                     Ui.rowFromRight
-                        { width = Coord.xRaw size2, spacing = 0 }
+                        { width = Coord.xRaw size2, gap = 0 }
                         [ \rest -> Ui.left (Units.ui rest) (heading title)
                         , \_ ->
                             Ui.el

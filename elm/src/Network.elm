@@ -448,7 +448,7 @@ rows model size =
 
     else
         Ui.columnFromTop
-            { spacing = 4, size = size }
+            { gap = 4, size = size }
             [ \_ -> Ui.column 4 (wiredRows model size)
             , \_ -> header
             , \_ -> statusLine

@@ -688,7 +688,7 @@ lineHeight =
 
 
 {-| The window's height besides its lines of code: the padding, the title, the status
-line, the spacing between them and the text box's own padding.
+line, the gap between them and the text box's own padding.
 -}
 chrome : Int
 chrome =

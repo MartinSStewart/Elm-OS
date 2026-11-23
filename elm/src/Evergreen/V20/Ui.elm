@@ -34,7 +34,7 @@ import Time
 
 
 type alias RowColumn =
-    { spacing : Int
+    { gap : Int
     , cachedSize : Coord UiPixels
     }
 

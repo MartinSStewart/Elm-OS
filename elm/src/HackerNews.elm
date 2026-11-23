@@ -793,7 +793,7 @@ view lazyCache windowSize model =
 postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
 postsView lazyCache size data =
     Ui.columnFill
-        { height = Coord.yRaw size, spacing = titleSpacing }
+        { height = Coord.yRaw size, gap = titleSpacing }
         [ Ui.Shrink
             (Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
         , Ui.Fill
@@ -809,7 +809,7 @@ postsView lazyCache size data =
 postView : Int -> Int -> Post -> Element UiId
 postView width index { id, title, comments } =
     Ui.rowFill
-        { width = width, spacing = 8 }
+        { width = width, gap = 8 }
         [ Ui.Shrink
             (Ui.colorText Color.dimTextColor (String.fromInt (index + 1) ++ ".")
                 |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
@@ -854,10 +854,10 @@ commentsView lazyCache size postId title comments =
             8
     in
     Ui.columnFill
-        { height = Coord.yRaw size, spacing = titleSpacing }
+        { height = Coord.yRaw size, gap = titleSpacing }
         [ Ui.Shrink
             (Ui.rowFill
-                { width = Coord.xRaw size, spacing = headerSpacing }
+                { width = Coord.xRaw size, gap = headerSpacing }
                 [ Ui.Shrink backButton
                 , Ui.Fill
                     (\titleWidth ->
@@ -917,7 +917,7 @@ commentView lazyCache width (Comment comment) =
         text : Element UiId
         text =
             Ui.rowFill
-                { width = width, spacing = toggleSpacing }
+                { width = width, gap = toggleSpacing }
                 [ Ui.Shrink (Ui.right { width = Units.ui toggleWidth } repliesButton)
                 , Ui.Fill
                     (\textWidth ->
@@ -936,7 +936,7 @@ commentView lazyCache width (Comment comment) =
             commentSpacing
             [ text
             , Ui.rowFill
-                { width = width, spacing = 0 }
+                { width = width, gap = 0 }
                 [ Ui.Shrink (Ui.left (Units.ui replyIndent) Ui.empty)
                 , Ui.Fill (\repliesWidth -> commentsColumn lazyCache repliesWidth comment.children)
                 ]
@@ -944,7 +944,7 @@ commentView lazyCache width (Comment comment) =
 
     else
         Ui.rowFill
-            { width = width, spacing = toggleSpacing }
+            { width = width, gap = toggleSpacing }
             [ Ui.Shrink (Ui.right { width = Units.ui toggleWidth } repliesButton)
             , Ui.Fill (\textWidth -> Ui.customTextWrapped Small (Units.ui textWidth) (commentHeader comment.author comment.date))
             ]

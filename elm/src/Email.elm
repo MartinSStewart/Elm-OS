@@ -603,8 +603,8 @@ windowPadding =
     4
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     8
 
 
@@ -670,7 +670,7 @@ formView width model =
                 ]
     in
     Ui.column
-        spacing
+        gap
         [ closeRow width "Email" Nothing
         , wrapped width Color.textColor "Link an email account to read its messages. This app only reads: it can't send, delete or change anything."
         , field "Email address" AddressField inputStyle
@@ -706,7 +706,7 @@ closeRow width title extra =
     in
     Ui.leftAndRight
         (Units.ui width)
-        (Ui.row spacing [ heading title, Maybe.withDefault Ui.empty extra ])
+        (Ui.row gap [ heading title, Maybe.withDefault Ui.empty extra ])
         (Ui.right { width = Coord.x (Ui.size close) } close)
 
 
@@ -724,13 +724,13 @@ inboxView windowSize width account model =
         header : Element UiId
         header =
             Ui.column
-                spacing
+                gap
                 [ closeRow width "Email" (Just (Ui.colorText Color.dimTextColor account.address))
-                , Ui.row spacing [ refresh, signOut, status model ]
+                , Ui.row gap [ refresh, signOut, status model ]
                 ]
     in
     Ui.column
-        spacing
+        gap
         [ header
         , (if List.isEmpty model.inbox && model.session == Nothing && model.error == Nothing then
             Ui.text "The inbox is empty."
@@ -779,12 +779,12 @@ summaryView width summary2 =
 
         subjectWidth : Int
         subjectWidth =
-            width - fromWidth - Quantity.unwrap dateWidth - 3 * spacing
+            width - fromWidth - Quantity.unwrap dateWidth - 3 * gap
     in
     Ui.leftAndRight
         (Units.ui width)
         (Ui.row
-            spacing
+            gap
             [ Ui.left (Units.ui fromWidth)
                 (Ui.customText Small
                     [ { text = Sprite.ellipsis Small font (Units.ui fromWidth) summary2.from
@@ -829,15 +829,15 @@ messageView windowSize width model page =
         header : Element UiId
         header =
             Ui.column
-                spacing
+                gap
                 [ Ui.row
-                    spacing
+                    gap
                     [ back
                     , heading
                         (Sprite.ellipsis
                             Small
                             (Sans Bold)
-                            (Units.ui (width - Coord.xRaw (Ui.size back) - spacing))
+                            (Units.ui (width - Coord.xRaw (Ui.size back) - gap))
                             (Maybe.map .subject summary2 |> Maybe.withDefault "")
                         )
                     ]
@@ -850,7 +850,7 @@ messageView windowSize width model page =
                 ]
     in
     Ui.column
-        spacing
+        gap
         [ header
         , (case page.state of
             MessageLoading ->
@@ -874,6 +874,6 @@ scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
 scrolling viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
-        , viewportHeight = Units.ui (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - spacing)
+        , viewportHeight = Units.ui (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - gap)
         }
         content

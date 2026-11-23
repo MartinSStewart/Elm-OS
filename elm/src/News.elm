@@ -179,7 +179,7 @@ itemView width (Item item) =
         indentation =
             12
 
-        spacing =
+        gap =
             6
 
         bullet : Element id
@@ -189,11 +189,11 @@ itemView width (Item item) =
     Ui.column
         itemSpacing
         [ Ui.row
-            spacing
+            gap
             [ bullet
             , Ui.customTextWrapped
                 Sprite.Small
-                (width |> Quantity.minus (Quantity.plus (Units.ui spacing) (Coord.x (Ui.size bullet))))
+                (width |> Quantity.minus (Quantity.plus (Units.ui gap) (Coord.x (Ui.size bullet))))
                 (inlineSegments item.content)
             ]
         , Ui.column

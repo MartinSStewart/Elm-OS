@@ -67,7 +67,7 @@ import TextInputMultiline
 import TicTacToe
 import TicTacToe.Types
 import Time
-import Ui exposing (ElementState(..))
+import Ui exposing (ElementState(..), Length(..))
 import UiId exposing (UiId(..))
 import Units exposing (DevicePixels, UiPixels, UiScale)
 import Weather exposing (WeatherState(..))
@@ -3686,10 +3686,10 @@ toolbar model display =
     Ui.elWithWidth
         { width = Coord.xRaw (Display.uiSize display), padding = Ui.paddingXY 8 8, borderAndFill = Ui.NoBorderOrFill }
         (\width ->
-            Ui.rowFromLeft
-                { width = width, spacing = 8 }
-                [ \_ -> Ui.row 4 buttons
-                , \room -> Ui.right { width = Units.ui room } (clock (Units.ui room) model)
+            Ui.rowFill
+                { width = width, gap = 8 }
+                [ Shrink (Ui.row 4 buttons)
+                , Fill (\room -> Ui.right { width = Units.ui room } (clock (Units.ui room) model))
                 ]
         )
 

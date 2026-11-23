@@ -590,8 +590,8 @@ fromKeyboard key =
 -- VIEW
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     4
 
 
@@ -609,7 +609,7 @@ sans =
 -}
 width : Int
 width =
-    4 * Coord.xRaw buttonSize + 3 * spacing
+    4 * Coord.xRaw buttonSize + 3 * gap
 
 
 appSize : App.Limits
@@ -669,7 +669,7 @@ view focused model =
         { padding = Ui.paddingXY 8 8
         , borderAndFill = Ui.windowBorderAndFill
         }
-        (Ui.column spacing (title :: displayBox :: List.map (keyRow model) keys))
+        (Ui.column gap (title :: displayBox :: List.map (keyRow model) keys))
 
 
 keys : List (List ( Key, String, Int ))
@@ -687,13 +687,13 @@ keys =
 keyRow : Model -> List ( Key, String, Int ) -> Element UiId
 keyRow model row =
     Ui.row
-        spacing
+        gap
         (List.map
             (\( key, label, columns ) ->
                 let
                     size =
                         Coord.xy
-                            (columns * Coord.xRaw buttonSize + (columns - 1) * spacing)
+                            (columns * Coord.xRaw buttonSize + (columns - 1) * gap)
                             (Coord.yRaw buttonSize)
 
                     fontSize =
