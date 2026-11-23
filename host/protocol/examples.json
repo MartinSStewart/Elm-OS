@@ -38,7 +38,7 @@
     {"mouse": {"x": 300, "y": 20}},
     {"button": {"b": 0, "down": true}},
     {"wheel": {"dy": -1}},
-    {"scroll": {"dy": -12.75}},
+    {"scroll": {"dx": 3.5, "dy": -12.75, "pinch": 1.25}},
     {"scrollMomentum": {"velocity": 1834.5}},
     {"key": {"code": 30, "down": true, "repeat": false}},
     {"key": {"code": 30, "down": true, "repeat": true}},

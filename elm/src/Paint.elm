@@ -2,16 +2,22 @@ module Paint exposing
     ( Model
     , Stroke
     , appSize
+    , endPan
     , endStroke
     , init
     , onClick
+    , panBy
     , pixelAt
     , redo
+    , scrolledBy
+    , startPan
     , startStroke
     , strokeBy
     , undo
     , undoOrRedo
     , view
+    , wheel
+    , zoomBy
     )
 
 {-| A paint program: pick a colour, a brush and a tool, and draw on the canvas with the mouse.
@@ -21,8 +27,10 @@ those within `fillRadiusFactor` times the brush's radius from the mouse by walki
 wherever the mouse is, but only the colour that was under the mouse when it went down, and the
 pixels the stroke has already filled count as that colour.
 
-The canvas is a 640 x 384 pixel Image (one pixel per UI pixel): 32 x 32 pixel chunks.
-A stroke rebuilds the chunks it touches; Sprite.image draws it.
+The canvas is a 640 x 384 pixel Image (one pixel per UI pixel at a zoom of 1): 32 x 32 pixel
+chunks. A stroke rebuilds the chunks it touches; Sprite.image draws it. The window shows
+the canvas through a box the size of the canvas, zoomed by `zoom` with its top left corner
+at `offset` in the box (UI pixels). The mouse positions that come in are in the box.
 
 -}
 
@@ -53,12 +61,24 @@ type alias Model =
 
     -- While the mouse is down on the canvas.
     , stroke : Maybe Stroke
+
+    -- Pixels of the box for each pixel of the canvas.
+    , zoom : Float
+
+    -- Where the canvas' top left corner is in the box, in UI pixels.
+    , offset : ( Float, Float )
+
+    -- The middle button is down, and moving the mouse moves the canvas.
+    , panning : Bool
     }
 
 
 type alias Stroke =
     { -- The canvas pixel the mouse was last at.
       at : ( Int, Int )
+
+    -- Exactly where, as a pixel is more than one mouse step when zoomed out.
+    , exact : ( Float, Float )
 
     -- The colour under the mouse when it went down (0xRRGGBBAA), which the fill tool replaces.
     , target : Int
@@ -79,6 +99,9 @@ init =
     , undoable = []
     , redoable = []
     , stroke = Nothing
+    , zoom = 1
+    , offset = ( 0, 0 )
+    , panning = False
     }
 
 
@@ -131,11 +154,14 @@ startStroke point model0 =
         model =
             remember model0
 
+        exact =
+            canvasPoint model0 (Coord.toTuple point |> Tuple.mapBoth toFloat toFloat)
+
         at =
-            Coord.toTuple point
+            ( floor (Tuple.first exact), floor (Tuple.second exact) )
 
         stroke =
-            { at = at, filled = Set.empty, target = pixelAt at model.canvas |> Maybe.withDefault 0 }
+            { at = at, exact = exact, filled = Set.empty, target = pixelAt at model.canvas |> Maybe.withDefault 0 }
     in
     case model.tool of
         Paint.Types.Pen ->
@@ -200,11 +226,16 @@ strokeBy ( dx, dy ) model =
                 ( x, y ) =
                     stroke.at
 
+                exact =
+                    ( Tuple.first stroke.exact + toFloat (Units.inUi dx) / model.zoom
+                    , Tuple.second stroke.exact + toFloat (Units.inUi dy) / model.zoom
+                    )
+
                 to =
-                    ( x + Units.inUi dx, y + Units.inUi dy )
+                    ( floor (Tuple.first exact), floor (Tuple.second exact) )
 
                 moved =
-                    { model | stroke = Just { stroke | at = to } }
+                    { model | stroke = Just { stroke | at = to, exact = exact } }
             in
             if to == ( x, y ) then
                 model
@@ -224,6 +255,115 @@ strokeBy ( dx, dy ) model =
 endStroke : Model -> Model
 endStroke model =
     { model | stroke = Nothing }
+
+
+
+-- ZOOM AND PAN
+
+
+minZoom : Float
+minZoom =
+    1 / 4
+
+
+maxZoom : Float
+maxZoom =
+    32
+
+
+{-| How much each wheel click zooms.
+-}
+zoomStep : Float
+zoomStep =
+    1.25
+
+
+{-| How far each wheel click moves the canvas, in UI pixels.
+-}
+wheelPan : Float
+wheelPan =
+    40
+
+
+{-| The point of the canvas under a point of the box.
+-}
+canvasPoint : Model -> ( Float, Float ) -> ( Float, Float )
+canvasPoint model ( x, y ) =
+    ( (x - Tuple.first model.offset) / model.zoom, (y - Tuple.second model.offset) / model.zoom )
+
+
+{-| Moves the canvas by this much (UI pixels), keeping some of it in the box.
+-}
+panBy : ( Float, Float ) -> Model -> Model
+panBy ( dx, dy ) model =
+    let
+        ( x, y ) =
+            model.offset
+
+        keep =
+            32
+
+        limit size =
+            clamp (keep - size * model.zoom) (size - keep)
+    in
+    { model | offset = ( limit (toFloat canvasWidth) (x + dx), limit (toFloat canvasHeight) (y + dy) ) }
+
+
+startPan : Model -> Model
+startPan model =
+    { model | panning = True, stroke = Nothing }
+
+
+endPan : Model -> Model
+endPan model =
+    { model | panning = False }
+
+
+{-| Zooms by this factor, keeping the point of the box under the mouse where it is.
+-}
+zoomBy : Coord UiPixels -> Float -> Model -> Model
+zoomBy mouse factor model =
+    let
+        ( mx, my ) =
+            Coord.toTuple mouse |> Tuple.mapBoth toFloat toFloat
+
+        ( cx, cy ) =
+            canvasPoint model ( mx, my )
+
+        zoom =
+            clamp minZoom maxZoom (model.zoom * factor)
+    in
+    panBy ( 0, 0 ) { model | zoom = zoom, offset = ( mx - cx * zoom, my - cy * zoom ) }
+
+
+{-| The wheel turned over the canvas: zooms (up is in) with Ctrl, else moves it down for
+clicks up (across with shift).
+-}
+wheel : Coord UiPixels -> Bool -> Bool -> Int -> Model -> Model
+wheel mouse ctrl across clicks model =
+    if ctrl then
+        zoomBy mouse (zoomStep ^ toFloat clicks) model
+
+    else if across then
+        panBy ( toFloat clicks * wheelPan, 0 ) model
+
+    else
+        panBy ( 0, toFloat clicks * wheelPan ) model
+
+
+{-| Two fingers on the touchpad moved over the canvas (see HostMessage.Scroll): it follows
+them, or with Ctrl, they zoom (down is in), or they pinched by this factor.
+-}
+scrolledBy : Coord UiPixels -> Bool -> ( Float, Float ) -> Float -> Model -> Model
+scrolledBy mouse ctrl ( dx, dy ) pinch model =
+    if pinch /= 1 then
+        zoomBy mouse pinch model
+
+    else if ctrl then
+        zoomBy mouse (e ^ (dy / 100)) model
+
+    else
+        panBy ( dx, dy ) model
 
 
 {-| The points from one to the other (leaving out the first), close enough together
@@ -591,10 +731,10 @@ onClick : Paint.Types.UiId -> Model -> Model
 onClick id model =
     case id of
         Paint.Types.OpenButton ->
-            { model | isOpen = not model.isOpen, stroke = Nothing }
+            { model | isOpen = not model.isOpen, stroke = Nothing, panning = False }
 
         Paint.Types.CloseButton ->
-            { model | isOpen = False, stroke = Nothing }
+            { model | isOpen = False, stroke = Nothing, panning = False }
 
         Paint.Types.UndoButton ->
             undo model
@@ -658,7 +798,19 @@ view model =
                 { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (Ui.quads
                     { size = Coord.xy canvasWidth canvasHeight
-                    , triangles = Sprite.image model.canvas
+                    , triangles =
+                        Sprite.rectangle Color.fillColor3 { topLeft = Coord.origin, bottomRight = Coord.xy canvasWidth canvasHeight } Coord.origin (Coord.xy canvasWidth canvasHeight)
+                            ++ (Sprite.image model.canvas
+                                    |> Sprite.scaleAndMove model.zoom model.offset
+                                    |> Sprite.clipTo { left = 0, top = 0, right = toFloat canvasWidth, bottom = toFloat canvasHeight }
+                                    |> Sprite.sampled
+                                        (if model.zoom >= 2 then
+                                            Sprite.Nearest
+
+                                         else
+                                            Sprite.Linear
+                                        )
+                               )
                     }
                 )
     in

@@ -92,7 +92,7 @@ type Input
     | Mouse Int Int
     | Button Int Bool
     | Wheel Int -- clicks, positive is up
-    | Scroll Float -- touchpad scrolling, UI pixels, positive is down
+    | Scroll Float Float Float -- touchpad scrolling: UI pixels across and down (positive is right and down), and the pinch ratio
     | ScrollMomentum Float -- the fingers lifted: keep going at this many UI pixels a second, 0 stops
     | Key Int Bool Bool -- code, down, autorepeat
     | Renderer DebugInfo.Types.RendererInfo
@@ -152,8 +152,8 @@ toInput message =
         HostMessage.Wheel dy ->
             Ok (Wheel dy)
 
-        HostMessage.Scroll dy ->
-            Ok (Scroll dy)
+        HostMessage.Scroll dx dy pinch ->
+            Ok (Scroll dx dy pinch)
 
         HostMessage.ScrollMomentum velocity ->
             Ok (ScrollMomentum velocity)
@@ -877,6 +877,18 @@ step event model =
             , []
             )
 
+        Button 2 True ->
+            -- The middle button over the paint canvas moves it with the mouse.
+            case paintCanvasUnderMouse model of
+                Just _ ->
+                    ( { model | paint = Paint.startPan model.paint }, [] )
+
+                Nothing ->
+                    ( model, [] )
+
+        Button 2 False ->
+            ( { model | paint = Paint.endPan model.paint }, [] )
+
         Button _ down ->
             ( { model | pressed = down }, [] )
 
@@ -886,10 +898,20 @@ step event model =
                     updateScreenshotPreview { data | depth = data.depth + clicks } model
 
                 Nothing ->
-                    scrollUnderMouse (Ui.WheelClicks clicks) model
+                    case paintCanvasUnderMouse model of
+                        Just mouse ->
+                            ( { model | paint = Paint.wheel mouse model.ctrl model.shift clicks model.paint }, [] )
 
-        Scroll pixels ->
-            scrollUnderMouse (Ui.ScrollPixels (Units.ui pixels)) model
+                        Nothing ->
+                            scrollUnderMouse (Ui.WheelClicks clicks) model
+
+        Scroll across pixels pinch ->
+            case paintCanvasUnderMouse model of
+                Just mouse ->
+                    ( { model | paint = Paint.scrolledBy mouse model.ctrl ( across, pixels ) pinch model.paint }, [] )
+
+                Nothing ->
+                    scrollUnderMouse (Ui.ScrollPixels (Units.ui pixels)) model
 
         ScrollMomentum velocity ->
             if velocity == 0 then
@@ -2938,22 +2960,36 @@ way if a stroke is being drawn.
 -}
 paintStroke : Model -> Model -> Model
 paintStroke before after =
+    let
+        display : Display
+        display =
+            displayOf PaintApp after
+
+        by =
+            Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse)
+    in
     case after.paint.stroke of
         Just _ ->
-            let
-                display : Display
-                display =
-                    displayOf PaintApp after
-            in
-            { after
-                | paint =
-                    Paint.strokeBy
-                        (Coord.minus (uiMouseOn display before.mouse) (uiMouseOn display after.mouse))
-                        after.paint
-            }
+            { after | paint = Paint.strokeBy by after.paint }
 
         Nothing ->
-            after
+            if after.paint.panning then
+                { after | paint = Paint.panBy (Coord.toTuple by |> Tuple.mapBoth toFloat toFloat) after.paint }
+
+            else
+                after
+
+
+{-| Where the mouse is on the paint canvas, if it is over it.
+-}
+paintCanvasUnderMouse : Model -> Maybe (Coord UiPixels)
+paintCanvasUnderMouse model =
+    case List.filter (\( id, _ ) -> id == Paint Paint.Types.Canvas) (hover model) of
+        ( _, { relativePositionToUi } ) :: _ ->
+            Just (Coord.minus relativePositionToUi (uiMouse model))
+
+        [] ->
+            Nothing
 
 
 {-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under

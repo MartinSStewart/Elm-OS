@@ -156,7 +156,11 @@ fn coalesce(queue: &mut VecDeque<Queued>, msg: &ToElm) -> bool {
         .find(|q| !matches!(q.msg, ToElm::Tick { .. } | ToElm::Stats { .. }));
     let Some(q) = waiting else { return false };
     match (&mut q.msg, msg) {
-        (ToElm::Scroll { dy }, ToElm::Scroll { dy: more }) => *dy += more,
+        (ToElm::Scroll { dx, dy, pinch }, ToElm::Scroll { dx: more_x, dy: more_y, pinch: more_pinch }) => {
+            *dx += more_x;
+            *dy += more_y;
+            *pinch *= more_pinch;
+        }
         (ToElm::Mouse { x, y }, ToElm::Mouse { x: x2, y: y2 }) => (*x, *y) = (*x2, *y2),
         _ => return false,
     }
@@ -972,10 +976,10 @@ mod tests {
 
     #[test]
     fn scrolling_adds_up_while_it_waits() {
-        let mut q = queue(&[ToElm::Scroll { dy: 2.0 }, ToElm::tick_now()]);
-        let msgs = joined(&mut q, ToElm::Scroll { dy: 3.5 });
+        let mut q = queue(&[ToElm::Scroll { dx: 1.0, dy: 2.0, pinch: 2.0 }, ToElm::tick_now()]);
+        let msgs = joined(&mut q, ToElm::Scroll { dx: 0.5, dy: 3.5, pinch: 1.5 });
         assert_eq!(msgs.len(), 2);
-        assert!(matches!(msgs[0], ToElm::Scroll { dy } if dy == 5.5));
+        assert!(matches!(msgs[0], ToElm::Scroll { dx, dy, pinch } if dx == 1.5 && dy == 5.5 && pinch == 3.0));
     }
 
     #[test]
@@ -991,8 +995,8 @@ mod tests {
         let mut q = queue(&[ToElm::Mouse { x: 1, y: 2 }, ToElm::Button { b: 0, down: true }]);
         let msgs = joined(&mut q, ToElm::Mouse { x: 5, y: 6 });
         assert_eq!(msgs.len(), 3);
-        let mut q = queue(&[ToElm::Scroll { dy: 1.0 }, ToElm::Mouse { x: 0, y: 0 }]);
-        assert_eq!(joined(&mut q, ToElm::Scroll { dy: 1.0 }).len(), 3);
+        let mut q = queue(&[ToElm::Scroll { dx: 0.0, dy: 1.0, pinch: 1.0 }, ToElm::Mouse { x: 0, y: 0 }]);
+        assert_eq!(joined(&mut q, ToElm::Scroll { dx: 0.0, dy: 1.0, pinch: 1.0 }).len(), 3);
     }
 
     /// A program whose frames take 20 ms (50 a second) and which spends 10 ms on each
@@ -1016,7 +1020,7 @@ mod tests {
                 let (_, payload) = link::read_message(&mut stream).unwrap();
                 let (_, message) = protocol::read_from_host_payload(&payload).unwrap();
                 match ToElm::from_bytes(message).unwrap() {
-                    ToElm::Scroll { dy } => {
+                    ToElm::Scroll { dy, .. } => {
                         std::thread::sleep(Duration::from_millis(10));
                         scrolled += dy;
                         scrolls += 1;
@@ -1040,7 +1044,7 @@ mod tests {
             }
         });
         for _ in 0..250 {
-            send(&ToElm::Scroll { dy: 1.0 });
+            send(&ToElm::Scroll { dx: 0.0, dy: 1.0, pinch: 1.0 });
             std::thread::sleep(Duration::from_millis(8));
         }
         let lifted = Instant::now();
@@ -1055,8 +1059,8 @@ mod tests {
 
     #[test]
     fn what_has_been_logged_is_left_alone() {
-        let mut q = queue(&[ToElm::Scroll { dy: 1.0 }]);
+        let mut q = queue(&[ToElm::Scroll { dx: 0.0, dy: 1.0, pinch: 1.0 }]);
         q[0].fresh = false;
-        assert_eq!(joined(&mut q, ToElm::Scroll { dy: 1.0 }).len(), 2);
+        assert_eq!(joined(&mut q, ToElm::Scroll { dx: 0.0, dy: 1.0, pinch: 1.0 }).len(), 2);
     }
 }

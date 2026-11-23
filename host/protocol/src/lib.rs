@@ -352,9 +352,12 @@ pub enum ToElm {
     /// displays now, as in `Displays`. Unlike `Displays`, not the start of a program.
     DisplaysChanged { displays: Vec<Display> },
     /// Smooth scrolling (two fingers on a touchpad), in UI pixels: how far the content
-    /// under the pointer follows the fingers. Positive is down, the way the content
-    /// goes for a `Wheel` click up. A mouse wheel still sends `Wheel`.
-    Scroll { dy: f64 },
+    /// under the pointer follows the fingers. `dy` positive is down, the way the content
+    /// goes for a `Wheel` click up; `dx` positive is right. `pinch` is how much the
+    /// fingers spread: the distance between them now over what it was (1 when they
+    /// kept their distance, above 1 zooms in). A report is either a scroll or a pinch,
+    /// whichever the fingers did most. A mouse wheel still sends `Wheel`.
+    Scroll { dx: f64, dy: f64, pinch: f64 },
     /// The fingers left the touchpad (or all but one did) while scrolling: the content
     /// they were scrolling should keep going at `velocity` UI pixels a second (positive
     /// is down, as for `Scroll`), slowing down. 0 when the fingers had stopped. Also

@@ -99,9 +99,11 @@ type ToElm
       -- A display was plugged in or out: the displays now. Unlike Displays, not the
       -- start of a program.
     | DisplaysChanged (List Display)
-      -- Two fingers on a touchpad moved: UI pixels the content under the pointer
-      -- follows them, positive is down (as for a Wheel click up).
-    | Scroll Float
+      -- Two fingers on a touchpad moved: UI pixels across and down the content under
+      -- the pointer follows them (down is positive, as for a Wheel click up), and
+      -- how much they spread (the distance between them over what it was: above 1
+      -- zooms in). A report is either a scroll or a pinch.
+    | Scroll Float Float Float
       -- The fingers lifted while scrolling: the content keeps going at this many UI
       -- pixels a second (positive is down), slowing down. 0 stops any glide.
     | ScrollMomentum Float
@@ -265,7 +267,7 @@ decoder =
                         BD.map DisplaysChanged (P.decodeList Display.decoder)
 
                     31 ->
-                        BD.map Scroll P.decodeFloat64
+                        BD.map3 Scroll P.decodeFloat64 P.decodeFloat64 P.decodeFloat64
 
                     32 ->
                         BD.map ScrollMomentum P.decodeFloat64
