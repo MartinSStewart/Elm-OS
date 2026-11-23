@@ -793,17 +793,16 @@ view lazyCache windowSize model =
 postsView : Ui.LazyCache UiId -> Coord UiPixels -> List Post -> Element UiId
 postsView lazyCache size data =
     Ui.columnFill
-        { size = size, spacing = titleSpacing }
-        [ ( Ui.Shrink
-          , \_ -> Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
-          )
-        , ( Ui.Fill
-          , \listSize ->
+        { height = Coord.yRaw size, spacing = titleSpacing }
+        [ Ui.Shrink
+            (Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
+        , Ui.Fill
+            (\listHeight ->
                 Ui.column
                     0
-                    (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView (Coord.xRaw listSize) index post) data)
-                    |> Ui.viewport { id = HackerNews HackerNews.Types.PostsViewport, viewportHeight = Coord.y listSize }
-          )
+                    (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView (Coord.xRaw size) index post) data)
+                    |> Ui.viewport { id = HackerNews HackerNews.Types.PostsViewport, viewportHeight = Units.ui listHeight }
+            )
         ]
 
 
@@ -811,26 +810,24 @@ postView : Int -> Int -> Post -> Element UiId
 postView width index { id, title, comments } =
     Ui.rowFill
         { width = width, spacing = 8 }
-        [ ( Ui.Shrink
-          , \_ ->
-                Ui.colorText Color.dimTextColor (String.fromInt (index + 1) ++ ".")
-                    |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
-          )
-        , ( Ui.Fill, \titleWidth -> Ui.text (Sprite.ellipsis Small (Sans Regular) (Units.ui titleWidth) title) )
-        , ( Ui.Shrink
-          , \_ ->
-                Ui.colorText
-                    Color.dimTextColor
-                    (String.fromInt comments
-                        ++ (if comments == 1 then
-                                " comment"
+        [ Ui.Shrink
+            (Ui.colorText Color.dimTextColor (String.fromInt (index + 1) ++ ".")
+                |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
+            )
+        , Ui.Fill (\titleWidth -> Ui.text (Sprite.ellipsis Small (Sans Regular) (Units.ui titleWidth) title))
+        , Ui.Shrink
+            (Ui.colorText
+                Color.dimTextColor
+                (String.fromInt comments
+                    ++ (if comments == 1 then
+                            " comment"
 
-                            else
-                                " comments"
-                           )
-                    )
-                    |> Ui.right { width = Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x }
-          )
+                        else
+                            " comments"
+                       )
+                )
+                |> Ui.right { width = Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x }
+            )
         ]
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.PostButton id)
@@ -857,28 +854,27 @@ commentsView lazyCache size postId title comments =
             8
     in
     Ui.columnFill
-        { size = size, spacing = titleSpacing }
-        [ ( Ui.Shrink
-          , \_ ->
-                Ui.rowFill
-                    { width = Coord.xRaw size, spacing = headerSpacing }
-                    [ ( Ui.Shrink, \_ -> backButton )
-                    , ( Ui.Fill
-                      , \titleWidth ->
-                            Ui.customText
-                                Small
-                                [ { text = Sprite.ellipsis Small (Sans Bold) (Units.ui titleWidth) title
-                                  , color = Color.textColor
-                                  , font = Sans Bold
-                                  , decorations = []
-                                  , link = Nothing
-                                  }
-                                ]
-                      )
-                    ]
-          )
-        , ( Ui.Fill
-          , \listSize ->
+        { height = Coord.yRaw size, spacing = titleSpacing }
+        [ Ui.Shrink
+            (Ui.rowFill
+                { width = Coord.xRaw size, spacing = headerSpacing }
+                [ Ui.Shrink backButton
+                , Ui.Fill
+                    (\titleWidth ->
+                        Ui.customText
+                            Small
+                            [ { text = Sprite.ellipsis Small (Sans Bold) (Units.ui titleWidth) title
+                              , color = Color.textColor
+                              , font = Sans Bold
+                              , decorations = []
+                              , link = Nothing
+                              }
+                            ]
+                    )
+                ]
+            )
+        , Ui.Fill
+            (\listHeight ->
                 (case comments of
                     CommentsLoading ->
                         Ui.text "Loading comments..."
@@ -887,14 +883,14 @@ commentsView lazyCache size postId title comments =
                         Ui.text "No comments yet."
 
                     CommentsLoaded loaded ->
-                        Ui.lazy3 lazyCache commentsColumn lazyCache (Coord.xRaw listSize) loaded
+                        Ui.lazy3 lazyCache commentsColumn lazyCache (Coord.xRaw size) loaded
 
                     CommentsLoadFailed error ->
                         Ui.text (Effect.httpErrorToString error)
                 )
-                    |> Ui.left (Coord.x listSize)
-                    |> Ui.viewport { id = HackerNews (HackerNews.Types.CommentsViewport postId), viewportHeight = Coord.y listSize }
-          )
+                    |> Ui.left (Coord.x size)
+                    |> Ui.viewport { id = HackerNews (HackerNews.Types.CommentsViewport postId), viewportHeight = Units.ui listHeight }
+            )
         ]
 
 
@@ -922,9 +918,9 @@ commentView lazyCache width (Comment comment) =
         text =
             Ui.rowFill
                 { width = width, spacing = toggleSpacing }
-                [ ( Ui.Shrink, \_ -> Ui.right { width = Units.ui toggleWidth } repliesButton )
-                , ( Ui.Fill
-                  , \textWidth ->
+                [ Ui.Shrink (Ui.right { width = Units.ui toggleWidth } repliesButton)
+                , Ui.Fill
+                    (\textWidth ->
                         Ui.customTextWrapped
                             Small
                             (Units.ui textWidth)
@@ -932,7 +928,7 @@ commentView lazyCache width (Comment comment) =
                                 ++ List.map (spanSegment (greyColor comment.grey)) comment.content
                             )
                             |> Ui.links (HackerNews HackerNews.Types.CommentLink)
-                  )
+                    )
                 ]
     in
     if comment.isExpanded then
@@ -941,16 +937,16 @@ commentView lazyCache width (Comment comment) =
             [ text
             , Ui.rowFill
                 { width = width, spacing = 0 }
-                [ ( Ui.Shrink, \_ -> Ui.left (Units.ui replyIndent) Ui.empty )
-                , ( Ui.Fill, \repliesWidth -> commentsColumn lazyCache repliesWidth comment.children )
+                [ Ui.Shrink (Ui.left (Units.ui replyIndent) Ui.empty)
+                , Ui.Fill (\repliesWidth -> commentsColumn lazyCache repliesWidth comment.children)
                 ]
             ]
 
     else
         Ui.rowFill
             { width = width, spacing = toggleSpacing }
-            [ ( Ui.Shrink, \_ -> Ui.right { width = Units.ui toggleWidth } repliesButton )
-            , ( Ui.Fill, \textWidth -> Ui.customTextWrapped Small (Units.ui textWidth) (commentHeader comment.author comment.date) )
+            [ Ui.Shrink (Ui.right { width = Units.ui toggleWidth } repliesButton)
+            , Ui.Fill (\textWidth -> Ui.customTextWrapped Small (Units.ui textWidth) (commentHeader comment.author comment.date))
             ]
 
 
