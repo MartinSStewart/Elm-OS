@@ -1888,6 +1888,16 @@ rowFromLeft data children =
         |> padToWidth 0 data.width
 
 
+type Length
+    = Shrink
+    | Fill
+
+
+rowFill : { width : Int, spacing : Int } -> List ( Length, Int -> Element id ) -> Element id
+rowFill data list =
+    Debug.todo ""
+
+
 {-| `rowFromLeft` starting from the right: the last child is given all of `width`, and
 each one before it what the ones right of it leave. If it comes out narrower than `width`,
 the row is padded on the left, so the right end stays put.
