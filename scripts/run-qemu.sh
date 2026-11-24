@@ -34,6 +34,11 @@
 # firmware (OVMF), the image as a USB disk, USB keyboard and mouse, only the
 # firmware's framebuffer for a display, and like a desktop, wired Ethernet (an Intel
 # e1000e card on QEMU's user-mode network) and no wifi. The image is opened read-only.
+#
+# --install (make run-install) boots build/elmos-usb-draft.img the same way, next to an
+# NVMe disk to install on, build/install-disk.img (16 GB, empty at first, kept). The
+# firmware's variables are kept too (build/install-vars.fd), so the boot entry the
+# installer adds is there next time. STICK=0 leaves the stick out, to boot that disk.
 set -e
 cd "$(dirname "$0")/.."
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
@@ -42,6 +47,26 @@ ACCEL="-cpu max"
 # QEMU's control socket, which `make paste` (scripts/qemu-paste.py) types through.
 QMP="-qmp unix:build/qemu-qmp.sock,server=on,wait=off"
 
+if [ "$1" = --install ]; then
+  shift
+  CODE=""
+  for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2/x64/OVMF_CODE.fd; do
+    [ -f "$f" ] && CODE=$f && break
+  done
+  [ -n "$CODE" ] || { echo "No UEFI firmware (OVMF_CODE) for QEMU found. Install it with: sudo apt install ovmf"; exit 1; }
+  VARS=$(echo "$CODE" | sed 's/CODE/VARS/')
+  [ -f build/install-vars.fd ] || cp "$VARS" build/install-vars.fd
+  [ -f build/install-disk.img ] || truncate -s 16G build/install-disk.img
+  STICK_OPTS=""
+  [ "${STICK:-1}" = 1 ] && STICK_OPTS="-drive if=none,id=stick,format=raw,file=build/elmos-usb-draft.img,snapshot=on -device usb-storage,bus=xhci.0,drive=stick,bootindex=0"
+  # No bootindex on the disk: OVMF would put QEMU's order ahead of the installer's boot entry.
+  exec qemu-system-x86_64 $ACCEL -machine q35 -m 4G -smp 4 \
+    -drive if=pflash,format=raw,readonly=on,file="$CODE" -drive if=pflash,format=raw,file=build/install-vars.fd \
+    -device qemu-xhci,id=xhci $STICK_OPTS \
+    -drive if=none,id=disk,format=raw,file=build/install-disk.img -device nvme,serial=elmos-disk,drive=disk \
+    -device usb-kbd -device usb-tablet -vga std -nic user,model=e1000e \
+    -display "${QEMU_DISPLAY:-gtk}" -serial mon:stdio -no-reboot $QMP "$@"
+fi
 if [ "$1" = --usb ]; then
   shift
   OVMF=""

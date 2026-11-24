@@ -572,7 +572,8 @@ struct Source {
 }
 
 fn source() -> Result<Source, String> {
-    let boot = disks::boot_disk().ok_or("Elm OS didn't start from a disk with its partitions on it (in QEMU, use make run-usb).")?;
+    const FROM_STICK: &str = "Elm OS can only be installed when it started from its USB stick (or an installed disk): that is where it copies itself from. In QEMU, make run-install boots the USB image next to an empty disk.";
+    let boot = disks::boot_disk().ok_or(FROM_STICK)?;
     let (_, sector) = geometry(boot);
     let gpt = disks::read_gpt(boot)?;
     let find = |pred: &dyn Fn(&GptPartition) -> bool, what: &str| {
@@ -582,7 +583,8 @@ fn source() -> Result<Source, String> {
             .map(|p| (p.first_lba * sector, (p.last_lba + 1 - p.first_lba) * sector))
             .ok_or(format!("The disk Elm OS started from has no {what}."))
     };
-    let esp = find(&|p| disks::guid_text(&p.type_guid) == ESP_TYPE, "EFI system partition")?;
+    // No EFI partition: started without UEFI (make run boots the kernel directly).
+    let esp = find(&|p| disks::guid_text(&p.type_guid) == ESP_TYPE, "EFI system partition").map_err(|_| FROM_STICK.to_owned())?;
     let tools = find(&|p| p.name == disks::TOOLS, "tools partition")?;
     let data = find(&|p| p.name == disks::DATA, "data partition")?;
     let disk = File::open(format!("/dev/{boot}")).map_err(|e| format!("Can't read /dev/{boot}: {e}"))?;
