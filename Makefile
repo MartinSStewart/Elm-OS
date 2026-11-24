@@ -79,6 +79,13 @@ ECO        := $(ECO_DIR)/elmos-bin/eco
 export PATH := $(ECO_DIR)/elmos-bin:$(PATH)
 # Not for the goals that don't need eco.
 ifneq ($(filter-out clean refresh check-fresh check-run-deps usb-write docker,$(or $(MAKECMDGOALS),all)),)
+# Docker problems are explained up front, before the 20 minute build (tools/check-docker.sh).
+ifeq ($(wildcard $(ECO_DIR)/elmos-bin/eco),)
+$(shell tools/check-docker.sh)
+ifneq ($(.SHELLSTATUS),0)
+$(error Can't build eco without a working Docker; see above)
+endif
+endif
 $(shell tools/build-patched-eco.sh $(ECO_DIR) $(if $(filter 1,$(ECO_PATCHED)),,--unpatched))
 ifneq ($(.SHELLSTATUS),0)
 $(error Couldn't build eco into $(ECO_DIR); see above)

@@ -14,7 +14,7 @@ _The remaining text in this readme is AI generated. So is 99% of the code in thi
 
 You need Linux on x86_64 with:
 
-- Docker, for eco, the Elm compiler: `make` builds the eco commit `versions.mk` pins, with the
+- Docker with buildx (see [Set up Docker](#set-up-docker)), for eco, the Elm compiler: `make` builds the eco commit `versions.mk` pins, with the
   patches in `tools/eco-patched`, as eco's static release bundle (`tools/build-patched-eco.sh`,
   about 20 minutes the first time) into `~/.cache/elm-os/eco-<version>-patched`, and uses
   only that copy, so an eco you already have (another version, for other projects) is
@@ -56,6 +56,22 @@ renamed it), rather than leaving a driver out without saying so.
 Set `KERNEL_SRC=/path/to/linux` to use an existing kernel tree. In QEMU there is a simulated
 wifi network to join: **Elm OS test network**, password `password`. `make run` keeps what Elm
 OS saves in `build/data-qemu.img`; delete it to start afresh.
+
+### Set up Docker
+
+Building eco (the first `make`, about 20 minutes) uses Docker with BuildKit. On Debian, Ubuntu and
+Linux Mint:
+
+```sh
+sudo apt install docker.io docker-buildx
+sudo usermod -aG docker $USER   # then log out and back in, so docker works without sudo
+docker buildx version           # must print a version
+```
+
+Without `docker-buildx`, the build stops with "BuildKit is enabled but the buildx component is
+missing". `make` checks all of this (`tools/check-docker.sh`) before it starts building and says
+what to install. If apt has no `docker-buildx` (older releases), install Docker from
+[Docker's own repository](https://docs.docker.com/engine/install/ubuntu/), which includes it.
 
 ## Work on the Elm code without booting the OS
 
