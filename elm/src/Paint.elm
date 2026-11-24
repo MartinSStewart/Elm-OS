@@ -17,7 +17,6 @@ module Paint exposing
     , undoOrRedo
     , view
     , wheel
-    , zoomBy
     )
 
 {-| A paint program: pick a colour, a brush and a tool, and draw on the canvas with the mouse.
