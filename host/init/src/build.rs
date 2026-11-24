@@ -40,7 +40,7 @@ use protocol::{BuildStatus, ToElm};
 use crate::{elm, persist, programs};
 
 const TOOLS: &str = "/tools";
-const TOOLS_PARTITION: &str = "Elm OS tools";
+const TOOLS_PARTITION: &str = crate::disks::TOOLS;
 const WORK: &str = "/run/elmos-build";
 
 /// The stub that SourceCode.elm is in the repository; tools/wire fills it in.
@@ -302,7 +302,7 @@ fn mount_tools() -> Result<(), String> {
     if Path::new(TOOLS).join("eco/bin/eco").is_file() {
         return Ok(());
     }
-    let dev = find_partition(TOOLS_PARTITION).ok_or_else(|| {
+    let dev = crate::disks::find_partition(TOOLS_PARTITION).ok_or_else(|| {
         format!("There's no \"{TOOLS_PARTITION}\" partition, which has the compiler on it. Flash the USB stick with a newer image (make usb), or give QEMU build/tools-qemu.img.")
     })?;
     let _ = std::fs::create_dir_all(TOOLS);
@@ -318,16 +318,3 @@ fn mount_tools() -> Result<(), String> {
     Ok(())
 }
 
-/// The block device of the partition with this name, e.g. /dev/sda3.
-fn find_partition(name: &str) -> Option<String> {
-    let mut names: Vec<String> = std::fs::read_dir("/sys/class/block")
-        .ok()?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names.into_iter().find_map(|dev| {
-        let uevent = std::fs::read_to_string(format!("/sys/class/block/{dev}/uevent")).ok()?;
-        uevent.lines().any(|l| l.strip_prefix("PARTNAME=") == Some(name)).then(|| format!("/dev/{dev}"))
-    })
-}

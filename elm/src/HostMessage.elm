@@ -14,6 +14,7 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as BD
 import Code.Types
 import Display exposing (Display)
+import Install.Types
 import Network
 import Network.Ipv4 as Ipv4 exposing (Ipv4)
 import Network.Types
@@ -112,6 +113,10 @@ type ToElm
     | ScrollMomentum Float
       -- How a build asked for with Effect.Build is going.
     | Build Code.Types.BuildStatus
+      -- The computer's disks (Effect.ListDisks).
+    | Disks (List Install.Types.Disk)
+      -- How an install (Effect.Install or UpdateInstall) is going.
+    | Install Install.Types.Status
 
 
 type HttpFailure
@@ -289,6 +294,134 @@ decoder =
 
                     37 ->
                         BD.map3 Gesture P.decodeFloat64 P.decodeFloat64 P.decodeFloat64
+
+                    38 ->
+                        BD.map Disks (P.decodeList disk)
+
+                    39 ->
+                        BD.map Install installStatus
+
+                    _ ->
+                        BD.fail
+            )
+
+
+disk : BD.Decoder Install.Types.Disk
+disk =
+    BD.map5
+        (\name model bytes usb booted ->
+            BD.map5
+                (\busy installed layout table regions ->
+                    { name = name
+                    , model = model
+                    , bytes = bytes
+                    , usb = usb
+                    , booted = booted
+                    , busy = busy
+                    , installed = installed
+                    , layout = layout
+                    , table = table
+                    , regions = regions
+                    }
+                )
+                P.decodeBool
+                P.decodeBool
+                P.decodeString
+                diskTable
+                (P.decodeList region)
+        )
+        P.decodeString
+        P.decodeString
+        P.decodeUnsigned
+        P.decodeBool
+        P.decodeBool
+        |> BD.andThen identity
+
+
+diskTable : BD.Decoder Install.Types.Table
+diskTable =
+    P.decodeUnsigned
+        |> BD.andThen
+            (\index ->
+                case index of
+                    0 ->
+                        BD.succeed Install.Types.Gpt
+
+                    1 ->
+                        BD.succeed Install.Types.Mbr
+
+                    2 ->
+                        BD.succeed Install.Types.NoTable
+
+                    _ ->
+                        BD.fail
+            )
+
+
+region : BD.Decoder Install.Types.Region
+region =
+    BD.map3 (\start bytes partition -> { start = start, bytes = bytes, partition = partition })
+        P.decodeUnsigned
+        P.decodeUnsigned
+        (P.decodeMaybe
+            (BD.map3 (\number name contents -> { number = number, name = name, contents = contents })
+                P.decodeUnsigned
+                P.decodeString
+                partitionContents
+            )
+        )
+
+
+{-| In the order of host/protocol's `Contents`.
+-}
+partitionContents : BD.Decoder Install.Types.Contents
+partitionContents =
+    P.decodeUnsigned
+        |> BD.andThen
+            (\index ->
+                case
+                    List.drop index
+                        [ Install.Types.EfiSystem
+                        , Install.Types.Ntfs
+                        , Install.Types.BitLocker
+                        , Install.Types.Ext4
+                        , Install.Types.Btrfs
+                        , Install.Types.Fat
+                        , Install.Types.Swap
+                        , Install.Types.Luks
+                        , Install.Types.MicrosoftReserved
+                        , Install.Types.WindowsRecovery
+                        , Install.Types.ElmOsData
+                        , Install.Types.ElmOsTools
+                        , Install.Types.Empty
+                        , Install.Types.Other
+                        ]
+                of
+                    contents :: _ ->
+                        BD.succeed contents
+
+                    [] ->
+                        BD.fail
+            )
+
+
+installStatus : BD.Decoder Install.Types.Status
+installStatus =
+    P.decodeUnsigned
+        |> BD.andThen
+            (\index ->
+                case index of
+                    0 ->
+                        BD.map2 (\step done -> Install.Types.Running { step = step, done = done }) P.decodeString P.decodeFloat64
+
+                    1 ->
+                        BD.map3 (\step message wrote -> Install.Types.Failed { step = step, message = message, wrote = wrote })
+                            P.decodeString
+                            P.decodeString
+                            P.decodeBool
+
+                    2 ->
+                        BD.map (\grub -> Install.Types.Installed { grub = grub }) P.decodeString
 
                     _ ->
                         BD.fail

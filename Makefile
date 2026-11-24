@@ -20,6 +20,8 @@
 #   make usb        build/elmos-usb.img, a UEFI-bootable USB stick image for real PCs
 #   make usb-write DEV=/dev/sdX   write it to a USB stick (checks and asks first)
 #   make run-usb / make test-usb  boot the USB image in QEMU on UEFI firmware
+#   make test-install  install Elm OS from the USB image onto a disk with Linux Mint on it, in
+#                   QEMU, and boot that disk without the stick (scripts/test-install.py)
 #   make atlas      build/atlas.png, the texture atlas (pixel font, cursor, Noto Sans) to look at
 #   make format     run elm-format on every Elm source; make format-check fails if one isn't formatted
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
@@ -120,7 +122,7 @@ PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_L
                         $(wildcard $(RT)/project/*.a))
 
 .PHONY: format format-check FORCE eco atlas migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
-        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update release measure-frames \
+        usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update test-install release measure-frames \
         dev dev-native dev-check bench
 
 all: $(BUILD)/bzImage $(BUILD)/initramfs.cpio $(BUILD)/initramfs-qemu.cpio | check-fresh
@@ -737,6 +739,15 @@ paste:
 test-usb: usb | check-run-deps
 	python3 scripts/test-qemu.py --usb
 
+# The USB image with the test facts on (ELMOS_TEST=1) and the log on the serial port (the
+# last console=), without the updater. It builds BOOTX64.EFI with this command line, so the
+# next make usb builds it again with the real one.
+USB_TEST_CMDLINE = $(filter-out console=% ELMOS_UPDATES=%,$(USB_CMDLINE)) console=tty0 console=ttyS0 ELMOS_TEST=1
+test-install: | check-run-deps check-usb-deps
+	+$(MAKE) $(BUILD)/BOOTX64.EFI $(BUILD)/tools.fs USB_CMDLINE='$(USB_TEST_CMDLINE)'
+	scripts/make-usb-image.sh $(BUILD)/BOOTX64.EFI $(BUILD)/tools.fs $(BUILD)/elmos-usb-test.img
+	python3 -I scripts/test-install.py $(BUILD)/elmos-usb-test.img
+
 # ---- running
 
 # The data disk for QEMU. Made once: it holds what Elm OS saved, so it isn't rebuilt
@@ -959,5 +970,5 @@ MAKEFLAGS += -s --no-print-directory
 SAY = >>"$$ELMOS_SAY"
 SHELL := $(CURDIR)/tools/quiet-sh
 eco migration refresh docker run run-cpu run-usb test test-gpu test-usb test-displays test-persist \
-test-switch test-build test-errors test-update measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
+test-switch test-build test-errors test-update test-install measure-frames usb-write dev dev-native bench: private SHELL := /bin/sh
 endif

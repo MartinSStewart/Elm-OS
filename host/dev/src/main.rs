@@ -505,6 +505,15 @@ impl Runner {
                     output: "The desktop runner doesn't build from the Code app: edit elm/src instead, and it rebuilds by itself.".into(),
                 },
             }),
+            // Installing writes the computer's disks: only on Elm OS itself (host/init/src/install.rs).
+            Effect::ListDisks => elm::send(&ToElm::Disks { disks: Vec::new() }),
+            Effect::Install { .. } | Effect::UpdateInstall { .. } => elm::send(&ToElm::Install {
+                status: protocol::InstallStatus::Failed {
+                    step: "Starting".into(),
+                    message: "The desktop runner doesn't install Elm OS: boot the USB stick.".into(),
+                    wrote: false,
+                },
+            }),
         }
     }
 

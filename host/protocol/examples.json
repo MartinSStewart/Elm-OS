@@ -30,6 +30,11 @@
     {"tlsClose": {"id": "email"}},
     {"writeImage": {"left": 3, "top": 300, "width": 2, "pixels": [255, 0, 0, 255, 0, 0, 255, 128]}},
     {"build": {"modules": [["Main.elm", "module Main exposing (main)\n"], ["Code/Types.elm", ""]]}},
+    "listDisks",
+    {"install": {"disk": "nvme0n1", "layout": "3f2a", "target": {"free": {"start": 1048576}}, "keepData": true}},
+    {"install": {"disk": "sda", "layout": "", "target": {"partition": {"number": 4}}, "keepData": false}},
+    {"install": {"disk": "vdb", "layout": "x", "target": "wholeDisk", "keepData": true}},
+    {"updateInstall": {"disk": "nvme0n1", "layout": "3f2a"}},
     {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 64, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 96, 65, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 32, 65, 0, 0, 96, 65, 0, 224, 96, 69, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 64, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 32, 65, 0, 0, 96, 65, 0, 224, 96, 69, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 128, 64, 0, 224, 96, 69, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0]}, {"display": 34, "triangles": []}]}
   ],
   "fromHost": [
@@ -81,6 +86,10 @@
     {"files": {"id": "persist", "files": [["/data/snapshot", "x"], ["/data/log", null]]}},
     {"files": {"id": "other", "files": [["/sys/class/power_supply/BAT0/status", "Discharging\n"]]}},
     {"bytes": {"path": "/dev/sda", "offset": 512, "hex": "4546492050415254"}},
-    {"sha256": {"path": "/sys/firmware/initrd", "hex": null}}
+    {"sha256": {"path": "/sys/firmware/initrd", "hex": null}},
+    {"disks": {"disks": [{"name": "nvme0n1", "model": "Samsung SSD 970 EVO 1TB", "bytes": 1000204886016, "usb": false, "booted": false, "busy": false, "installed": true, "layout": "3f2a", "table": "gpt", "regions": [{"start": 1048576, "bytes": 536870912, "partition": {"number": 1, "name": "EFI system partition", "contents": "efiSystem"}}, {"start": 537919488, "bytes": 400000000000, "partition": {"number": 2, "name": "", "contents": "ext4"}}, {"start": 400537919488, "bytes": 2147483648, "partition": null}, {"start": 402685403136, "bytes": 1000000, "partition": {"number": 3, "name": "x", "contents": "ntfs"}}, {"start": 402686403136, "bytes": 1000000, "partition": {"number": 4, "name": "x", "contents": "bitLocker"}}, {"start": 402687403136, "bytes": 1000000, "partition": {"number": 5, "name": "x", "contents": "btrfs"}}, {"start": 402688403136, "bytes": 1000000, "partition": {"number": 6, "name": "x", "contents": "fat"}}, {"start": 402689403136, "bytes": 1000000, "partition": {"number": 7, "name": "x", "contents": "swap"}}, {"start": 402690403136, "bytes": 1000000, "partition": {"number": 8, "name": "x", "contents": "luks"}}, {"start": 402691403136, "bytes": 1000000, "partition": {"number": 9, "name": "x", "contents": "microsoftReserved"}}, {"start": 402692403136, "bytes": 1000000, "partition": {"number": 10, "name": "x", "contents": "windowsRecovery"}}, {"start": 402693403136, "bytes": 1000000, "partition": {"number": 11, "name": "Elm OS data", "contents": "elmOsData"}}, {"start": 402694403136, "bytes": 1000000, "partition": {"number": 12, "name": "Elm OS tools", "contents": "elmOsTools"}}, {"start": 402695403136, "bytes": 1000000, "partition": {"number": 13, "name": "x", "contents": "empty"}}, {"start": 402696403136, "bytes": 1000000, "partition": {"number": 14, "name": "x", "contents": "other"}}]}, {"name": "sda", "model": "", "bytes": 8000000000, "usb": true, "booted": true, "busy": true, "installed": false, "layout": "", "table": "mbr", "regions": []}, {"name": "vdb", "model": "", "bytes": 0, "usb": false, "booted": false, "busy": false, "installed": false, "layout": "", "table": "empty", "regions": []}]}},
+    {"install": {"status": {"running": {"step": "Copying the tools", "done": 0.5}}}},
+    {"install": {"status": {"failed": {"step": "Checking the disk", "message": "It changed", "wrote": false}}}},
+    {"install": {"status": {"installed": {"grub": "menuentry \"Elm OS\" {\n}\n"}}}}
   ]
 }

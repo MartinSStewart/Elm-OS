@@ -38,6 +38,7 @@ import Bytes.Encode as BE
 import Color exposing (Color)
 import Cursor
 import Duration exposing (Duration)
+import Install.Types
 import Network.Types exposing (Ssid)
 import Network.Wpa2Password exposing (Wpa2Password)
 import Postcard
@@ -124,6 +125,14 @@ type Effect
       -- the Model over. Refused unless the Model's types stay the same. Answered on
       -- `fromHost` with build messages as it goes, then switching.
     | Build (List ( String, String ))
+      -- Lists the computer's disks (host/init/src/install.rs). Answered with disks.
+    | ListDisks
+      -- Installs Elm OS on a disk, in the target (Install.elm). `layout` is the disk's
+      -- as listed: the host refuses if the disk changed since. Answered with install
+      -- messages as it goes.
+    | Install { disk : String, layout : String, target : Install.Types.Target, keepData : Bool }
+      -- Replaces the Elm OS installed on a disk with this one, keeping its data.
+    | UpdateInstall { disk : String, layout : String }
 
 
 type PowerAction
@@ -358,3 +367,31 @@ encode effect =
 
         Build modules ->
             Postcard.variant 26 [ Postcard.list (\( path, text ) -> BE.sequence [ Postcard.string path, Postcard.string text ]) modules ]
+
+        ListDisks ->
+            Postcard.variant 27 []
+
+        Install { disk, layout, target, keepData } ->
+            Postcard.variant 28
+                [ Postcard.string disk
+                , Postcard.string layout
+                , case target of
+                    Install.Types.FreeSpace start ->
+                        Postcard.variant 0 [ Postcard.unsigned start ]
+
+                    Install.Types.InPartition number ->
+                        Postcard.variant 1 [ Postcard.unsigned number ]
+
+                    Install.Types.WholeDisk ->
+                        Postcard.variant 2 []
+                , BE.unsignedInt8
+                    (if keepData then
+                        1
+
+                     else
+                        0
+                    )
+                ]
+
+        UpdateInstall { disk, layout } ->
+            Postcard.variant 29 [ Postcard.string disk, Postcard.string layout ]

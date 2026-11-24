@@ -19,6 +19,7 @@ import DebugInfo.Types
 import Editor.Types
 import Email.Types
 import HackerNews.Types
+import Install.Types
 import Network.Types
 import News.Types
 import Paint.Types
@@ -51,6 +52,7 @@ type UiId
     | Email Email.Types.UiId
     | WebViewer WebViewer.Types.UiId
     | ScreenshotViewer ScreenshotViewer.Types.UiId
+    | Install Install.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
 

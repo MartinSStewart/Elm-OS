@@ -15,6 +15,7 @@ import Duration
 import Effect exposing (Effect)
 import Expect
 import HostMessage
+import Install.Types
 import Main
 import Network.Types
 import Persist
@@ -73,6 +74,11 @@ effects =
     , Effect.TlsClose "email"
     , Effect.WriteImage { left = 3, top = 300, width = 2, pixels = byteList [ 255, 0, 0, 255, 0, 0, 255, 128 ] }
     , Effect.Build [ ( "Main.elm", "module Main exposing (main)\n" ), ( "Code/Types.elm", "" ) ]
+    , Effect.ListDisks
+    , Effect.Install { disk = "nvme0n1", layout = "3f2a", target = Install.Types.FreeSpace 1048576, keepData = True }
+    , Effect.Install { disk = "sda", layout = "", target = Install.Types.InPartition 4, keepData = False }
+    , Effect.Install { disk = "vdb", layout = "x", target = Install.Types.WholeDisk, keepData = True }
+    , Effect.UpdateInstall { disk = "nvme0n1", layout = "3f2a" }
     , Effect.Render
         (\() ->
             [ { display = 33, triangles = Sprite.atlasRectangle Color.white (Coord.xy 0 0) (Coord.xy 10 10) ( 4, 3588 ) }

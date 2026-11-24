@@ -26,3 +26,6 @@ ring = "0.17"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "1"
+# FAT32 for the EFI system partition the installer makes (install.rs). No chrono: files
+# get a fixed time, which UEFI doesn't look at.
+fatfs = { version = "0.3", default-features = false, features = ["std", "alloc"] }

@@ -1,8 +1,9 @@
 //! The data disk, where Elm keeps its Model across restarts (elm/src/Persist.elm
 //! decides what goes in the files; this only finds the disk and reads and writes them).
 //!
-//! At start a thread looks for a partition named "Elm OS data" (its GPT name), on the
-//! USB stick or, in QEMU, a virtual disk (scripts/make-data-image.sh). It waits up to
+//! At start a thread looks for a partition named "Elm OS data" (its GPT name) on the
+//! disk Elm OS booted from (disks.rs): the USB stick, a disk it was installed on, or,
+//! in QEMU, a virtual disk (scripts/make-data-image.sh). It waits up to
 //! ELMOS_DATA_WAIT seconds (5 by default) for it, because a USB stick shows up a
 //! second or two after the kernel starts. It mounts it (ext4) at /data and tells Elm:
 //!
@@ -49,7 +50,7 @@ use std::time::{Duration, Instant};
 
 use crate::elm;
 
-const PARTITION_NAME: &str = "Elm OS data";
+const PARTITION_NAME: &str = crate::disks::DATA;
 const MOUNT_POINT: &str = "/data";
 const SYNC_DELAY: Duration = Duration::from_secs(1);
 
@@ -269,6 +270,14 @@ pub fn write_file(path: String, data: Vec<u8>) {
     }
 }
 
+/// Waits (up to 5 seconds) for the writes asked for so far to reach the disk.
+pub fn flush() {
+    let (tx, rx) = mpsc::channel();
+    if send(Op::Flush(tx)) && rx.recv_timeout(Duration::from_secs(5)).is_err() {
+        log!("persist", "the data disk didn't finish writing in time");
+    }
+}
+
 /// Before powering off or restarting: waits (up to 5 seconds) for the writes Elm has
 /// asked for to reach the disk, then unmounts it.
 pub fn shutdown() {
@@ -302,36 +311,14 @@ fn checked(path: &str) -> Option<PathBuf> {
     ok.then(|| p.to_path_buf())
 }
 
-/// The block device of the partition named "Elm OS data", e.g. /dev/sda2.
+/// The block device of the partition named "Elm OS data" on the disk Elm OS booted
+/// from, e.g. /dev/sda2 (disks.rs waits for it to show up).
 fn find_partition() -> Option<String> {
-    let wait = std::env::var("ELMOS_DATA_WAIT").ok().and_then(|s| s.parse::<f64>().ok()).unwrap_or(5.0);
-    let give_up = Instant::now() + Duration::from_secs_f64(wait.max(0.0));
-    loop {
-        if let Some(dev) = scan_partitions() {
-            return Some(dev);
-        }
-        if Instant::now() >= give_up {
-            log!("persist", "no \"{PARTITION_NAME}\" partition: nothing will be saved");
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    let dev = crate::disks::find_partition(PARTITION_NAME);
+    if dev.is_none() {
+        log!("persist", "no \"{PARTITION_NAME}\" partition: nothing will be saved");
     }
-}
-
-fn scan_partitions() -> Option<String> {
-    let mut names: Vec<String> = std::fs::read_dir("/sys/class/block")
-        .ok()?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names.into_iter().find_map(|name| {
-        let uevent = std::fs::read_to_string(format!("/sys/class/block/{name}/uevent")).ok()?;
-        uevent
-            .lines()
-            .any(|l| l.strip_prefix("PARTNAME=") == Some(PARTITION_NAME))
-            .then(|| format!("/dev/{name}"))
-    })
+    dev
 }
 
 fn mount(dev: &str) -> bool {

@@ -45,6 +45,8 @@ import HackerNews
 import HackerNews.Types
 import HostMessage
 import ImageCache exposing (ImageCache)
+import Install
+import Install.Types
 import Json.Decode as D
 import Json.Encode as E
 import Keyboard exposing (Key(..))
@@ -122,6 +124,9 @@ type Input
     | TlsClosed String String
       -- How a build of Elm OS made here is going (the Code app's Build button).
     | BuildUpdate Code.Types.BuildStatus
+      -- The computer's disks, and how an install is going (the Install app).
+    | DisksListed (List Install.Types.Disk)
+    | InstallUpdate Install.Types.Status
       -- Random bytes in hex, for AsciiCollab's client id.
     | RandomBytes (Maybe String)
       -- The kernel's command line (/proc/cmdline), read at start: ELMOS_TEST=1 turns on
@@ -292,6 +297,12 @@ toInput message =
         HostMessage.Build status ->
             Ok (BuildUpdate status)
 
+        HostMessage.Disks disks ->
+            Ok (DisksListed disks)
+
+        HostMessage.Install status ->
+            Ok (InstallUpdate status)
+
 
 {-| The host sends -1 for a time it doesn't know.
 -}
@@ -366,6 +377,7 @@ type alias Model =
     -- listed in the corner of the display it is on.
     , inspected : Maybe { display : Int, sources : List Ui.Source }
     , screenshotViewer : ScreenshotViewer.Model
+    , install : Install.Model
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
 
@@ -400,6 +412,7 @@ type App
     | EditorApp
     | CodeApp
     | ScreenshotViewerApp
+    | InstallApp
     | DebugApp
     | NetworkApp
     | WeatherApp
@@ -409,7 +422,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp, InstallApp ]
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -473,6 +486,7 @@ init =
     , showUiBorders = False
     , inspected = Nothing
     , screenshotViewer = ScreenshotViewer.init
+    , install = Install.init
     , takingScreenshot = Nothing
     , screenshots = []
     , testFacts = Nothing
@@ -1056,7 +1070,7 @@ step event model =
 
         System info ->
             -- The host says this as a program starts.
-            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code }, [] )
+            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code, install = Install.programStarted model.install }, [] )
 
         BootInfo bootInput ->
             BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })
@@ -1092,6 +1106,12 @@ step event model =
 
         BuildUpdate status ->
             ( { model | code = Code.buildUpdate status model.code }, [] )
+
+        DisksListed disks ->
+            ( { model | install = Install.disksListed disks model.install }, [] )
+
+        InstallUpdate status ->
+            ( { model | install = Install.statusUpdate status model.install }, [] )
 
         RandomBytes hex ->
             AsciiCollab.gotRandomBytes hex model.asciiCollab |> Tuple.mapFirst (\a -> { model | asciiCollab = a })
@@ -1401,6 +1421,13 @@ appButton id =
                 ScreenshotViewer.Types.FitButton ->
                     Nothing
 
+        Install id2 ->
+            if id2 == Install.Types.OpenButton then
+                Just InstallApp
+
+            else
+                Nothing
+
         DebugInfo debugId ->
             case debugId of
                 DebugInfo.Types.OpenButton ->
@@ -1547,6 +1574,9 @@ appIsOpen app model =
 
         ScreenshotViewerApp ->
             model.screenshotViewer.isOpen
+
+        InstallApp ->
+            model.install.isOpen
 
         DebugApp ->
             model.debugOpen
@@ -1766,6 +1796,9 @@ clickElement model id =
 
         Paint uiId2 ->
             ( { model | paint = Paint.onClick uiId2 model.paint }, [] )
+
+        Install uiId2 ->
+            Install.onClick uiId2 model.install |> Tuple.mapFirst (\install -> { model | install = install })
 
         ScreenshotViewer uiId2 ->
             ( { model
@@ -2584,6 +2617,9 @@ dragSelect focus mouse position model =
         Paint _ ->
             model
 
+        Install _ ->
+            model
+
         Lazy _ ->
             model
 
@@ -3319,6 +3355,12 @@ appConfig app model =
             , limits = Weather.limits
             }
 
+        InstallApp ->
+            { name = "Install"
+            , view = Install.view model.install
+            , limits = Install.appSize
+            }
+
         ScreenshotViewerApp ->
             { name = "ScreenshotViewer"
             , view =
@@ -3472,6 +3514,7 @@ testFacts model uis =
     , json "editor" (E.string (Ui.getTextInputMultiline (Editor Editor.Types.Input) model.uiState).input.current.text)
     , json "calculator" (E.string (Calculator.display model.calculator))
     , json "code" (Code.testFact model.code)
+    , json "install" (Install.testFact model.install)
     , json "wifi"
         (E.object
             [ ( "state"
@@ -3709,6 +3752,10 @@ toolbar model display =
                         { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, pad = small }
                         (openHere ScreenshotViewerApp)
                         (Ui.text "Screenshots")
+                    , Ui.selectableButton
+                        { id = Install Install.Types.OpenButton, pad = small }
+                        (openHere InstallApp)
+                        (Ui.text "Install")
                     , Ui.selectableButton
                         { id = Network Network.Types.OpenButton, pad = small }
                         (openHere NetworkApp)

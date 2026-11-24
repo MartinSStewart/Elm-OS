@@ -126,7 +126,9 @@ fn latest_slot(msg: &ToElm) -> Option<usize> {
         | ToElm::TlsOpened { .. }
         | ToElm::TlsData { .. }
         | ToElm::TlsClosed { .. }
-        | ToElm::Build { .. } => return None,
+        | ToElm::Build { .. }
+        | ToElm::Disks { .. }
+        | ToElm::Install { .. } => return None,
     })
 }
 
