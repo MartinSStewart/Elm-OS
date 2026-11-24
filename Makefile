@@ -35,13 +35,11 @@
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
 #   make host-tests  /init's unit tests (host/init: touchpad scrolling, error screen text)
 #   make check      the tests that don't boot anything: check-migration, format-check, review, review-tests,
-#                   elm-tests, test-wire, protocol-tests, host-tests, dev-check, test-containers (CI runs these, then test
+#                   elm-tests, test-wire, protocol-tests, host-tests, dev-check (CI runs these, then test
 #                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
-#   make eco        install the eco versions.mk pins (any make does) and print where it is
-#   make ECO_PATCHED=0 ...  use the stock eco release instead of the one patched for
-#                   eco/containers (which the Elm program needs: see eco-containers/README.md)
-#   make test-containers  test eco/containers natively and in Node
+#   make eco        build the eco versions.mk pins (any make does; needs Docker) and print where it is
+#   make ECO_PATCHED=0 ...  use that eco commit without the patches in tools/eco-patched
 #   make docker     build the USB image in a pinned Docker environment, into build-docker/:
 #                   the same commit gives the same bytes on any machine (make docker TARGET=all)
 #
@@ -56,47 +54,32 @@
 # qemu-system-x86_64, and a Linux source tree in $(KERNEL_SRC). eco is installed by make.
 
 include versions.mk
-# eco, the Elm compiler: the version versions.mk pins, installed (on the first `make`, or
-# after ECO_VER changes) into ECO_DIR by tools/install-eco.sh. Your own eco, if you have
-# one, isn't replaced or used: other projects may need another version. Every rule here
-# runs this copy, and it goes first on PATH for the tools they start (elm-review,
-# elm-test). `make ECO=/path/to/eco` uses another eco instead and installs nothing.
-#
-# By default that release is then patched for eco/containers (tools/eco-patched,
-# eco-containers/README.md), which elm/elm.json depends on: tools/build-patched-eco.sh builds it
-# from source into ECO_PATCHED_DIR (about 10 minutes the first time; it needs LLVM/MLIR 21 from
-# apt.llvm.org: sudo tools/build-patched-eco.sh --install-deps). Where /mnt/project-files exists
-# (Claude's cloud threads) a finished build is shared through /mnt/project-files/eco-cache, so only
-# the first checkout of a given set of patches builds it (ECO_PATCHED_CACHE, see that script).
-# `make ECO_PATCHED=0` skips all that and uses the release as it is, until eco has eco/containers itself.
+# eco, the Elm compiler: built from the eco commit versions.mk pins, with tools/eco-patched/*.patch
+# applied, by tools/build-patched-eco.sh into ECO_DIR (on the first `make`, or after versions.mk's
+# eco lines or the patches change). It builds eco's own static musl release bundle in Docker,
+# against the prebuilt LLVM/MLIR image eco pins, so it needs Docker and about 20 minutes the first
+# time. Where /mnt/project-files exists (Claude's cloud threads) a finished build is shared through
+# /mnt/project-files/eco-cache, so only the first checkout of a given set of patches builds it
+# (ECO_PATCHED_CACHE, see that script). Your own eco, if you have one, isn't replaced or used:
+# other projects may need another version. Every rule here runs this copy, and it goes first on
+# PATH for the tools they start (elm-review, elm-test). `make ECO=/path/to/eco` uses another eco
+# instead and builds nothing; `make ECO_PATCHED=0` builds and uses that eco commit unpatched.
 ECO_PATCHED ?= 1
-ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)
-ECO_PATCHED_DIR ?= $(ECO_DIR)-patched
+ECO_DIR    ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/elm-os/eco-$(ECO_VER)$(if $(filter 1,$(ECO_PATCHED)),-patched)
 ifeq ($(origin ECO),undefined)
-# elmos-bin/eco runs bin/eco with a package cache of its own (ECO_DIR/home/.eco), not
-# ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
-# The patched eco compiles an object in this many pieces at once (tools/eco-patched/0005). Its
+# The patched eco compiles an object in this many pieces at once (tools/eco-patched/0002). Its
 # default is one per core, but the bytes depend on the count, so it's fixed: builds on computers
 # with other numbers of cores stay the same. host/init/src/build.rs uses the same number.
 export ECO_SPLIT_CODEGEN := 4
-ifeq ($(ECO_PATCHED),1)
-ECO        := $(ECO_PATCHED_DIR)/elmos-bin/eco
-export PATH := $(ECO_PATCHED_DIR)/elmos-bin:$(PATH)
-else
+# elmos-bin/eco runs bin/eco with a package cache of its own (ECO_DIR/home/.eco), not
+# ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
 ECO        := $(ECO_DIR)/elmos-bin/eco
 export PATH := $(ECO_DIR)/elmos-bin:$(PATH)
-endif
 # Not for the goals that don't need eco.
 ifneq ($(filter-out clean refresh check-fresh check-run-deps usb-write docker,$(or $(MAKECMDGOALS),all)),)
-$(shell tools/install-eco.sh $(ECO_VER) $(ECO_SHA256) $(ECO_DIR))
+$(shell tools/build-patched-eco.sh $(ECO_DIR) $(if $(filter 1,$(ECO_PATCHED)),,--unpatched))
 ifneq ($(.SHELLSTATUS),0)
-$(error Couldn't install eco $(ECO_VER) into $(ECO_DIR); see above)
-endif
-ifeq ($(ECO_PATCHED),1)
-$(shell tools/build-patched-eco.sh $(ECO_DIR) $(ECO_PATCHED_DIR))
-ifneq ($(.SHELLSTATUS),0)
-$(error Couldn't build the patched eco into $(ECO_PATCHED_DIR); see above)
-endif
+$(error Couldn't build eco into $(ECO_DIR); see above)
 endif
 endif
 endif
@@ -136,7 +119,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: format format-check FORCE eco atlas test-containers migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+.PHONY: format format-check FORCE eco atlas migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update release measure-frames \
         dev dev-native dev-check bench
 
@@ -155,11 +138,15 @@ check-fresh:
 # timestamps and IDs, pinned downloads). Across machines the compilers must match too,
 # so this builds inside tools/build-env/Dockerfile, with the checkout at /elmos and
 # the output in build-docker/. Pass extra `docker build` flags in DOCKER_BUILD_FLAGS.
+# eco is built first, out here (its build runs Docker itself), into the eco cache the
+# container's make finds (its HOME is build-docker/home); it's a static program.
 DOCKER ?= docker
 TARGET ?= usb
 docker:
 	$(DOCKER) build $(DOCKER_BUILD_FLAGS) -t elmos-build tools/build-env
 	mkdir -p build-docker/home
+	DOCKER=$(DOCKER) tools/build-patched-eco.sh $(CURDIR)/build-docker/home/.cache/elm-os/$(notdir $(ECO_DIR)) \
+	  $(if $(filter 1,$(ECO_PATCHED)),,--unpatched)
 	$(DOCKER) run --rm --network host --user $$(id -u):$$(id -g) \
 	  -e HTTPS_PROXY -e HTTP_PROXY -e https_proxy -e http_proxy -e NO_PROXY -e GUIDA_REGISTRY \
 	  -e HOME=/elmos/build-docker/home -e CARGO_HOME=/elmos/build-docker/home/.cargo \
@@ -168,7 +155,7 @@ docker:
 	@[ ! -f build-docker/elmos-usb.img ] || { sha256sum build-docker/elmos-usb.img; \
 	  echo "$$(cat build-docker/elmos-usb.img.sha256)  up to the data partition (the debug overlay's hash)"; }
 
-# Installs the pinned eco (done above, as make starts) and prints its bin directory.
+# Builds the pinned eco (done above, as make starts) and prints its bin directory.
 eco:
 	@echo $(dir $(ECO_BIN))
 
@@ -535,7 +522,7 @@ $(BUILD)/elm: $(BUILD)/libelmos_link.a $(BUILD)/elm.o
 # ---- the tools partition: eco and what else building the Elm program again on the
 # computer takes (scripts/make-tools-fs.sh, host/init/src/build.rs). On the USB stick,
 # and for QEMU as a disk of its own, build/tools-qemu.img.
-TOOLS_ECO_ROOT := $(if $(filter 1,$(ECO_PATCHED)),$(ECO_PATCHED_DIR),$(ECO_DIR))
+TOOLS_ECO_ROOT := $(ECO_DIR)
 
 $(BUILD)/link-args: $(BUILD)/eco-setting Makefile
 	@mkdir -p $(BUILD)
@@ -879,21 +866,6 @@ bench: $(BUILD)/wire/.done
 	$(call LINK_ECO_EXE,$(BUILD)/bench/bench,$(BUILD)/bench/bench.o)
 	$(BUILD)/bench/bench
 
-# ---- eco/containers (eco-containers/README.md): its tests, natively and in Node, with the
-# patched eco, which has its kernel and its `==`.
-test-containers: | check-deps
-	@[ "$(ECO_PATCHED)" = 1 ] || { echo "eco/containers needs the patched eco (ECO_PATCHED=1)" >&2; exit 1; }
-	@mkdir -p $(BUILD)/containers
-	cd eco-containers/tests && $(ECO) make src/Main.elm \
-	  --output=$(abspath $(BUILD)/containers/tests.o)
-	$(call LINK_ECO_EXE,$(BUILD)/containers/tests,$(BUILD)/containers/tests.o)
-	$(BUILD)/containers/tests 2>&1 | tee $(BUILD)/containers/native.txt; grep -q PASS $(BUILD)/containers/native.txt
-	cd eco-containers/tests && $(ECO) make src/MainJs.elm --optimize \
-	  --output=$(abspath $(BUILD)/containers/tests.js)
-	node -e "require('$(abspath $(BUILD)/containers/tests.js)').Elm.MainJs.init().ports.result.subscribe(e => \
-	  { console.log(e.length ? 'eco/containers in JS FAIL: ' + e.join('; ') : 'eco/containers in JS: PASS'); process.exitCode = e.length ? 1 : 0 })"
-	@echo "passed: test-containers" $(SAY)
-
 # ---- elm-format (every Elm source is formatted; `make migration` formats what it writes)
 
 ELM_FORMAT := elm-format@0.8.8
@@ -948,7 +920,7 @@ dev-check:
 	@echo "passed: dev-check" $(SAY)
 
 check:
-	+$(MAKE) -j1 check-migration format-check review review-tests elm-tests test-wire protocol-tests host-tests dev-check test-containers
+	+$(MAKE) -j1 check-migration format-check review review-tests elm-tests test-wire protocol-tests host-tests dev-check
 	@echo "make check: all passed" $(SAY)
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),

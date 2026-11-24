@@ -1,0 +1,1295 @@
+From e4bf7cc8d2b9bd4157a786b9e4a285099687c60a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 10:48:16 +0000
+Subject: [PATCH 1/4] Search String units in place in indexes, split, contains
+ and affixes
+
+String.indexes copied both its needle and its haystack into std::u16strings on every call, and
+String.split did the same whenever its operands were not both UTF-8, so searching a short ASCII
+needle such as "<" or "\"" in a UTF-16 String or slice paid two heap copies and a UTF-16 widening
+each time. Html parsers call these millions of times on slices of one page. contains, startsWith
+and endsWith took a byte path only when both operands were UTF-8 and fell back to charAt per unit
+for a UTF-8 needle against a UTF-16 haystack, the common mixed case.
+
+A UnitRun now reads any form whose units lie contiguously in memory without copying: a UTF-16 leaf,
+a large String or a slice as UTF-16 units, a UTF-8 leaf or view as ASCII bytes. forEachUnitMatch
+searches one run in another for all four pairings of unit widths, comparing units by value (an ASCII
+byte equals its UTF-16 unit): Boyer-Moore-Horspool for needles of 4 or more units as before, and a
+first-unit scan with memchr over bytes for shorter ones. indexes keeps up to 16 results on the stack;
+split builds its pieces with slice() for every non-rope pairing, as the all-UTF-8 path already did,
+so long pieces share the source and short ASCII ones become UTF-8 leaves. Ropes keep the copying
+paths.
+
+contains, startsWith and endsWith move out of line into StringOps.cpp. Besides keeping the header
+small, a strong definition there replaces the inline copies in objects built from the old header,
+which matters to builds that relink a prebuilt runtime with this file rebuilt.
+
+On the Elm OS Hacker News bench (callgrind) String.indexes falls from 10.3% to 5.6% of instructions
+and loading a comments page from 293 ms to about 220 ms.
+---
+ runtime/src/allocator/StringOps.cpp | 232 +++++++++++++++-------------
+ runtime/src/allocator/StringOps.hpp | 192 ++++++++++++-----------
+ 2 files changed, 234 insertions(+), 190 deletions(-)
+
+diff --git a/runtime/src/allocator/StringOps.cpp b/runtime/src/allocator/StringOps.cpp
+index 4cfcf6a6..66684e75 100644
+--- a/runtime/src/allocator/StringOps.cpp
++++ b/runtime/src/allocator/StringOps.cpp
+@@ -698,57 +698,130 @@ HPointer join(void* sep, HPointer stringList) {
+     return buildBalancedRope(parts);
+ }
+ 
++bool contains(void* needle, void* haystack) {
++    if (!needle) return true;
++    if (!haystack) return false;
++
++    size_t needle_len = rawLen(needle);
++    size_t haystack_len = rawLen(haystack);
++    if (needle_len == 0) return true;
++    if (needle_len > haystack_len) return false;
++
++    // Any pairing of flat, slice and UTF-8 forms: search the units where they lie.
++    UnitRun h = unitRun(haystack);
++    UnitRun n = unitRun(needle);
++    if (h.ok() && n.ok()) {
++        bool found = false;
++        withUnitRuns(h, n, [&](auto hp, auto np) {
++            forEachUnitMatch(hp, h.n, np, n.n, true, [&](size_t) { found = true; return false; });
++        });
++        return found;
++    }
++
++    // A rope: compare unit by unit through charAt.
++    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
++        bool match = true;
++        for (size_t j = 0; j < needle_len && match; ++j) {
++            if (charAt(haystack, static_cast<i64>(i + j)) !=
++                charAt(needle, static_cast<i64>(j))) match = false;
++        }
++        if (match) return true;
++    }
++    return false;
++}
++
++bool startsWith(void* prefix, void* str) {
++    if (!prefix) return true;
++    if (!str) return false;
++
++    size_t prefix_len = rawLen(prefix);
++    size_t str_len = rawLen(str);
++    if (prefix_len > str_len) return false;
++    if (prefix_len == 0) return true;
++
++    UnitRun s = unitRun(str);
++    UnitRun p = unitRun(prefix);
++    if (s.ok() && p.ok()) {
++        return withUnitRuns(s, p, [&](auto sp, auto pp) { return unitsEqual(sp, pp, prefix_len); });
++    }
++
++    for (size_t i = 0; i < prefix_len; ++i) {
++        if (charAt(str, static_cast<i64>(i)) != charAt(prefix, static_cast<i64>(i))) return false;
++    }
++    return true;
++}
++
++bool endsWith(void* suffix, void* str) {
++    if (!suffix) return true;
++    if (!str) return false;
++
++    size_t suffix_len = rawLen(suffix);
++    size_t str_len = rawLen(str);
++    if (suffix_len > str_len) return false;
++    if (suffix_len == 0) return true;
++
++    size_t offset = str_len - suffix_len;
++
++    UnitRun s = unitRun(str);
++    UnitRun x = unitRun(suffix);
++    if (s.ok() && x.ok()) {
++        return withUnitRuns(s, x, [&](auto sp, auto xp) { return unitsEqual(sp + offset, xp, suffix_len); });
++    }
++
++    for (size_t i = 0; i < suffix_len; ++i) {
++        if (charAt(str, static_cast<i64>(offset + i)) !=
++            charAt(suffix, static_cast<i64>(i))) return false;
++    }
++    return true;
++}
++
+ HPointer indexes(void* needle, void* haystack) {
+     // An empty needle has no index, as elm/core's `_String_indexes` returns [] when the needle's length is
+     // below 1. A null pointer is the empty string.
+-    if (!haystack || !needle) return alloc::listFromInts({});
++    if (!haystack || !needle) return alloc::listNil();
++
++    // Any pairing of flat, slice and UTF-8 forms is searched where its units lie, without copying
++    // either String. Most calls find a few indexes, which are kept on the stack.
++    UnitRun h = unitRun(haystack);
++    UnitRun n = unitRun(needle);
++    if (h.ok() && n.ok()) {
++        constexpr size_t kInline = 16;
++        i64 inlineIdx[kInline];
++        std::vector<i64> moreIdx;
++        size_t count = 0;
++        withUnitRuns(h, n, [&](auto hp, auto np) {
++            forEachUnitMatch(hp, h.n, np, n.n, true, [&](size_t i) {
++                if (count < kInline) {
++                    inlineIdx[count] = static_cast<i64>(i);
++                } else {
++                    if (count == kInline) moreIdx.assign(inlineIdx, inlineIdx + kInline);
++                    moreIdx.push_back(static_cast<i64>(i));
++                }
++                ++count;
++                return true;
++            });
++        });
++        if (count > kInline) return alloc::listFromInts(moreIdx);
++        // As listFromInts builds a list too short for a chunk chain, or a longer one.
++        if (count >= 4) return alloc::listFromInts(std::vector<i64>(inlineIdx, inlineIdx + count));
++        HPointer result = alloc::listNil();
++        for (size_t k = count; k > 0; --k) {
++            result = alloc::cons(alloc::unboxedInt(inlineIdx[k - 1]), result, static_cast<u8>(1));
++        }
++        return result;
++    }
+ 
++    // A rope: copy both into C++ memory and search the copies.
+     if (isUtf8(needle))
+         GC_STATS_UTF8_WIDEN_SITE(UTF8_WIDEN_INDEXES, static_cast<Header*>(needle)->size);
+     if (isUtf8(haystack))
+         GC_STATS_UTF8_WIDEN_SITE(UTF8_WIDEN_INDEXES, static_cast<Header*>(haystack)->size);
+     auto needleBuf = toStdU16String(needle);
+     auto haystackBuf = toStdU16String(haystack);
+-    const u16* nPtr = reinterpret_cast<const u16*>(needleBuf.data());
+-    const u16* hPtr = reinterpret_cast<const u16*>(haystackBuf.data());
+-    size_t needle_len = needleBuf.size();
+-    size_t haystack_len = haystackBuf.size();
+-
+     std::vector<i64> indices;
+-    if (needle_len == 0) {
+-        // No index, as above.
+-    } else if (needle_len <= haystack_len) {
+-        // Boyer-Moore-Horspool for a needle of 4 or more units, and a direct scan otherwise. The skip
+-        // table is indexed by a unit's low byte, so units that share it share an entry.
+-        if (needle_len >= 4) {
+-            u32 skip[256];
+-            for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(needle_len);
+-            for (size_t i = 0; i + 1 < needle_len; ++i) {
+-                skip[nPtr[i] & 0xFF] = static_cast<u32>(needle_len - 1 - i);
+-            }
+-            size_t i = 0;
+-            while (i + needle_len <= haystack_len) {
+-                size_t j = needle_len;
+-                while (j > 0 && hPtr[i + j - 1] == nPtr[j - 1]) --j;
+-                if (j == 0) {
+-                    indices.push_back(static_cast<i64>(i));
+-                    ++i;  // By one, so that overlapping occurrences are found too.
+-                } else {
+-                    i += skip[hPtr[i + needle_len - 1] & 0xFF];
+-                }
+-            }
+-        } else {
+-            for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
+-                bool match = true;
+-                for (size_t j = 0; j < needle_len && match; ++j) {
+-                    if (hPtr[i + j] != nPtr[j]) match = false;
+-                }
+-                if (match) {
+-                    indices.push_back(static_cast<i64>(i));
+-                }
+-            }
+-        }
+-    }
++    forEachUnitMatch(reinterpret_cast<const u16*>(haystackBuf.data()), haystackBuf.size(),
++                     reinterpret_cast<const u16*>(needleBuf.data()), needleBuf.size(), true,
++                     [&](size_t i) { indices.push_back(static_cast<i64>(i)); return true; });
+     return alloc::listFromInts(indices);
+ }
+ 
+@@ -768,39 +841,21 @@ HPointer split(void* sep, void* str) {
+         return toList(str);
+     }
+ 
+-    // Both UTF-8: search the bytes, and make each piece with slice(), so pieces stay UTF-8 and
+-    // long ones share the source. Mixed forms fall through to the UTF-16 copy below.
+-    if (isUtf8(str) && isUtf8(sep) &&
+-        Allocator::instance().getConfig().utf8_strings_enabled) {
++    // Any pairing of flat, slice and UTF-8 forms: search the units where they lie, and make each
++    // piece with slice(), so long pieces share the source and short ASCII ones are UTF-8 leaves.
++    // A rope falls through to the UTF-16 copy below.
++    UnitRun strRun = unitRun(str);
++    UnitRun sepRun = unitRun(sep);
++    if (strRun.ok() && sepRun.ok()) {
+         auto& allocator = Allocator::instance();
+-        // Phase 1: search over raw bytes. No Elm allocation here, so the
+-        // in-place payload pointers stay valid for the whole scan.
+-        auto sp = utf8Bytes(str);
+-        auto np = utf8Bytes(sep);
+-        const u8* strB = sp.first;
+-        const u8* sepB = np.first;
++        // Phase 1: search the units in place. No Elm allocation here, so the
++        // payload pointers stay valid for the whole scan.
+         std::vector<size_t> splitPositions;
+-        if (sep_len >= 4) {
+-            u32 skip[256];
+-            for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(sep_len);
+-            for (size_t i = 0; i + 1 < sep_len; ++i)
+-                skip[sepB[i]] = static_cast<u32>(sep_len - 1 - i);
+-            size_t i = 0;
+-            while (i + sep_len <= str_len) {
+-                size_t j = sep_len;
+-                while (j > 0 && strB[i + j - 1] == sepB[j - 1]) --j;
+-                if (j == 0) { splitPositions.push_back(i); i += sep_len; }
+-                else { i += skip[strB[i + sep_len - 1]]; }
+-            }
+-        } else {
+-            for (size_t i = 0; i + sep_len <= str_len; ++i) {
+-                bool match = true;
+-                for (size_t j = 0; j < sep_len && match; ++j)
+-                    if (strB[i + j] != sepB[j]) match = false;
+-                if (match) { splitPositions.push_back(i); i += sep_len - 1; }
+-            }
+-        }
+-        // Phase 2: build parts via slice() (UTF-8 sub-forms). slice allocates,
++        withUnitRuns(strRun, sepRun, [&](auto hp, auto np) {
++            forEachUnitMatch(hp, strRun.n, np, sepRun.n, false,
++                             [&](size_t i) { splitPositions.push_back(i); return true; });
++        });
++        // Phase 2: build parts via slice(). slice allocates,
+         // so root the source + parts and re-resolve the source each iteration.
+         size_t numParts = splitPositions.size() + 1;
+         std::vector<HPointer> parts(numParts, alloc::listNil());
+@@ -835,40 +890,9 @@ HPointer split(void* sep, void* str) {
+     const u16* strData = reinterpret_cast<const u16*>(strU16.data());
+     const u16* sepData = reinterpret_cast<const u16*>(sepU16.data());
+ 
+-    // Boyer-Moore-Horspool for a separator of 4 or more units, and a direct scan otherwise.
+     std::vector<size_t> splitPositions;
+-    if (sep_len >= 4) {
+-        // Indexed by a unit's low byte, so units that share it share an entry.
+-        u32 skip[256];
+-        for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(sep_len);
+-        for (size_t i = 0; i + 1 < sep_len; ++i) {
+-            skip[sepData[i] & 0xFF] = static_cast<u32>(sep_len - 1 - i);
+-        }
+-        size_t i = 0;
+-        while (i + sep_len <= str_len) {
+-            size_t j = sep_len;
+-            while (j > 0 && strData[i + j - 1] == sepData[j - 1]) --j;
+-            if (j == 0) {
+-                splitPositions.push_back(i);
+-                i += sep_len;
+-            } else {
+-                i += skip[strData[i + sep_len - 1] & 0xFF];
+-            }
+-        }
+-    } else {
+-        // `i + sep_len <= str_len`, not `i <= str_len - sep_len`: size_t
+-        // underflows when the separator is longer than the input.
+-        for (size_t i = 0; i + sep_len <= str_len; ++i) {
+-            bool match = true;
+-            for (size_t j = 0; j < sep_len && match; ++j) {
+-                if (strData[i + j] != sepData[j]) match = false;
+-            }
+-            if (match) {
+-                splitPositions.push_back(i);
+-                i += sep_len - 1;
+-            }
+-        }
+-    }
++    forEachUnitMatch(strData, strU16.size(), sepData, sepU16.size(), false,
++                     [&](size_t i) { splitPositions.push_back(i); return true; });
+ 
+     size_t numParts = splitPositions.size() + 1;
+     std::vector<HPointer> parts(numParts, alloc::listNil());
+diff --git a/runtime/src/allocator/StringOps.hpp b/runtime/src/allocator/StringOps.hpp
+index 376c96b3..c44fd4af 100644
+--- a/runtime/src/allocator/StringOps.hpp
++++ b/runtime/src/allocator/StringOps.hpp
+@@ -641,103 +641,123 @@ inline std::pair<const u16*, u32> singleSegmentView(void* str) {
+     return {nullptr, 0};
+ }
+ 
+-// Returns whether the units of `needle` occur in `haystack`. A null `needle` occurs in anything, and
+-// a non-null one in no null `haystack`. Does not allocate on the Elm heap.
+-inline bool contains(void* needle, void* haystack) {
+-    if (!needle) return true;
+-    if (!haystack) return false;
+-
+-    size_t needle_len = rawLen(needle);
+-    size_t haystack_len = rawLen(haystack);
+-    if (needle_len == 0) return true;
+-    if (needle_len > haystack_len) return false;
+-
+-    // Both UTF-8: each byte is one unit, so a byte match is a unit match.
+-    if (isUtf8(needle) && isUtf8(haystack)) {
+-        auto n = utf8Bytes(needle);
+-        auto h = utf8Bytes(haystack);
+-        return std::search(h.first, h.first + h.second, n.first,
+-                           n.first + n.second) != h.first + h.second;
+-    }
+-
+-    auto [nPtr, nLen] = singleSegmentView(needle);
+-    auto [hPtr, hLen] = singleSegmentView(haystack);
+-    if (nPtr && hPtr) {
+-        return std::search(hPtr, hPtr + hLen, nPtr, nPtr + nLen) != hPtr + hLen;
+-    }
+-
+-    // A rope, or a UTF-8 form against a UTF-16 one: compare unit by unit through charAt.
+-    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
+-        bool match = true;
+-        for (size_t j = 0; j < needle_len && match; ++j) {
+-            if (charAt(haystack, static_cast<i64>(i + j)) !=
+-                charAt(needle, static_cast<i64>(j))) match = false;
+-        }
+-        if (match) return true;
+-    }
+-    return false;
+-}
+-
+-// Returns whether the units of `str` begin with those of `prefix`. A null `prefix` begins anything,
+-// and a non-null one no null `str`. Does not allocate on the Elm heap.
+-inline bool startsWith(void* prefix, void* str) {
+-    if (!prefix) return true;
+-    if (!str) return false;
++// The units of a String that lie contiguously in memory, read without copying: UTF-16 units
++// (`wide`) for a UTF-16 leaf, a large String or a slice, or bytes (`bytes`) for a UTF-8 form, whose
++// bytes are ASCII and so each one UTF-16 unit. Both are null for null, a rope, or a view whose base
++// is the null word. The pointers are valid as `singleSegmentView`'s and `utf8Bytes`'s are.
++struct UnitRun {
++    const u16* wide = nullptr;
++    const u8* bytes = nullptr;
++    u32 n = 0;
++    bool ok() const { return wide || bytes; }
++};
+ 
+-    size_t prefix_len = rawLen(prefix);
+-    size_t str_len = rawLen(str);
+-    if (prefix_len > str_len) return false;
+-    if (prefix_len == 0) return true;
++inline UnitRun unitRun(void* str) {
++    UnitRun r;
++    if (!str) return r;
++    if (isUtf8(str)) {
++        auto pr = utf8Bytes(str);
++        r.bytes = pr.first;
++        r.n = pr.first ? pr.second : 0;
++        return r;
++    }
++    auto [p, n] = singleSegmentView(str);
++    r.wide = p;
++    r.n = p ? n : 0;
++    return r;
++}
+ 
+-    if (isUtf8(prefix) && isUtf8(str)) {
+-        auto p = utf8Bytes(prefix);
+-        auto s = utf8Bytes(str);
+-        return std::memcmp(s.first, p.first, prefix_len) == 0;
++// Calls `f(h, n)` with the haystack's and the needle's runs as typed pointers (`const u8*` or
++// `const u16*`), so that one search template serves the four pairings of forms. Both runs must be
++// `ok()`.
++template <class F>
++inline decltype(auto) withUnitRuns(const UnitRun& h, const UnitRun& n, F&& f) {
++    if (h.bytes) {
++        if (n.bytes) return f(h.bytes, n.bytes);
++        return f(h.bytes, n.wide);
+     }
++    if (n.bytes) return f(h.wide, n.bytes);
++    return f(h.wide, n.wide);
++}
+ 
+-    auto [pPtr, pLen] = singleSegmentView(prefix);
+-    auto [sPtr, sLen] = singleSegmentView(str);
+-    if (pPtr && sPtr) {
+-        return std::memcmp(sPtr, pPtr, prefix_len * sizeof(u16)) == 0;
++// Calls `onMatch(i)` for each index `i` at which the `nn` units of `nd` occur in the `hn` units of
++// `h`, in increasing order, and stops early when it returns false. Units compare by value, so an
++// ASCII byte matches the UTF-16 unit of the same value. With `overlapping` the search resumes one
++// unit after a match, otherwise after its end. `nn` must be positive.
++//
++// A needle of 4 or more units is found with Boyer-Moore-Horspool, its skip table indexed by a unit's
++// low byte; a shorter one by scanning for its first unit, with memchr over bytes. Neither allocates.
++template <class H, class N, class F>
++inline void forEachUnitMatch(const H* h, size_t hn, const N* nd, size_t nn, bool overlapping,
++                             F&& onMatch) {
++    if (nn == 0 || nn > hn) return;
++    const size_t step = overlapping ? 1 : nn;
++    if (nn >= 4) {
++        u32 skip[256];
++        for (u32 i = 0; i < 256; ++i) skip[i] = static_cast<u32>(nn);
++        for (size_t i = 0; i + 1 < nn; ++i) skip[nd[i] & 0xFF] = static_cast<u32>(nn - 1 - i);
++        size_t i = 0;
++        while (i + nn <= hn) {
++            size_t j = nn;
++            while (j > 0 && static_cast<u16>(h[i + j - 1]) == static_cast<u16>(nd[j - 1])) --j;
++            if (j == 0) {
++                if (!onMatch(i)) return;
++                i += step;
++            } else {
++                i += skip[h[i + nn - 1] & 0xFF];
++            }
++        }
++        return;
+     }
+-
+-    for (size_t i = 0; i < prefix_len; ++i) {
+-        if (charAt(str, static_cast<i64>(i)) != charAt(prefix, static_cast<i64>(i))) return false;
++    const u16 first = static_cast<u16>(nd[0]);
++    const size_t last = hn - nn;
++    size_t i = 0;
++    while (i <= last) {
++        if constexpr (sizeof(H) == 1) {
++            if (first >= 0x80) return;  // An ASCII haystack has no such unit.
++            const void* hit = std::memchr(h + i, first, last - i + 1);
++            if (!hit) return;
++            i = static_cast<size_t>(static_cast<const H*>(hit) - h);
++        } else {
++            while (i <= last && h[i] != first) ++i;
++            if (i > last) return;
++        }
++        size_t j = 1;
++        while (j < nn && static_cast<u16>(h[i + j]) == static_cast<u16>(nd[j])) ++j;
++        if (j == nn) {
++            if (!onMatch(i)) return;
++            i += step;
++        } else {
++            ++i;
++        }
+     }
+-    return true;
+ }
+ 
+-// Returns whether the units of `str` end with those of `suffix`. A null `suffix` ends anything, and
+-// a non-null one no null `str`. Does not allocate on the Elm heap.
+-inline bool endsWith(void* suffix, void* str) {
+-    if (!suffix) return true;
+-    if (!str) return false;
+-
+-    size_t suffix_len = rawLen(suffix);
+-    size_t str_len = rawLen(str);
+-    if (suffix_len > str_len) return false;
+-    if (suffix_len == 0) return true;
+-
+-    size_t offset = str_len - suffix_len;
+-
+-    if (isUtf8(suffix) && isUtf8(str)) {
+-        auto suf = utf8Bytes(suffix);
+-        auto s = utf8Bytes(str);
+-        return std::memcmp(s.first + offset, suf.first, suffix_len) == 0;
++// Returns whether the `n` units at `a` equal those at `b`, units compared by value.
++template <class A, class B>
++inline bool unitsEqual(const A* a, const B* b, size_t n) {
++    if constexpr (sizeof(A) == sizeof(B)) {
++        return std::memcmp(a, b, n * sizeof(A)) == 0;
++    } else {
++        for (size_t i = 0; i < n; ++i)
++            if (static_cast<u16>(a[i]) != static_cast<u16>(b[i])) return false;
++        return true;
+     }
++}
+ 
+-    auto [sufPtr, sufLen] = singleSegmentView(suffix);
+-    auto [sPtr, sLen]     = singleSegmentView(str);
+-    if (sufPtr && sPtr) {
+-        return std::memcmp(sPtr + offset, sufPtr, suffix_len * sizeof(u16)) == 0;
+-    }
++// Returns whether the units of `needle` occur in `haystack`. A null `needle` occurs in anything, and
++// a non-null one in no null `haystack`. Does not allocate on the Elm heap.
++//
++// Defined out of line in StringOps.cpp, as are startsWith and endsWith.
++bool contains(void* needle, void* haystack);
+ 
+-    for (size_t i = 0; i < suffix_len; ++i) {
+-        if (charAt(str, static_cast<i64>(offset + i)) !=
+-            charAt(suffix, static_cast<i64>(i))) return false;
+-    }
+-    return true;
+-}
++// Returns whether the units of `str` begin with those of `prefix`. A null `prefix` begins anything,
++// and a non-null one no null `str`. Does not allocate on the Elm heap.
++bool startsWith(void* prefix, void* str);
++
++// Returns whether the units of `str` end with those of `suffix`. A null `suffix` ends anything, and
++// a non-null one no null `str`. Does not allocate on the Elm heap.
++bool endsWith(void* suffix, void* str);
+ 
+ // Returns an Elm list of every unit index at which `needle` occurs in `haystack`, in increasing
+ // order, overlapping occurrences included.
+-- 
+2.43.0
+
+
+From 5b0d3c2c6be5171b61331efc6c6e8a990b545cac Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 10:48:27 +0000
+Subject: [PATCH 2/4] Return non-overlapping matches from String.indexes, as
+ elm/core does
+
+elm/core's _String_indexes resumes each search at the end of the previous match (i = i + subLen),
+so String.indexes "aa" "aaaa" is [0,2]. eco resumed one unit later and returned [0,1,2], so native
+programs disagreed with the same program compiled to JavaScript whenever a needle can overlap
+itself. The search now resumes after the match on every path, and the header comment no longer
+claims that an empty needle gives every index (it gives [], as in elm/core).
+
+StringIndexesTest checks the non-overlapping case and a needle found at UTF-16 unit positions in a
+String with a non-ASCII character.
+---
+ runtime/src/allocator/StringOps.cpp     | 9 ++++++---
+ runtime/src/allocator/StringOps.hpp     | 7 +++----
+ test/elm-core/src/StringIndexesTest.elm | 9 +++++++--
+ 3 files changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/runtime/src/allocator/StringOps.cpp b/runtime/src/allocator/StringOps.cpp
+index 66684e75..a8cfcb80 100644
+--- a/runtime/src/allocator/StringOps.cpp
++++ b/runtime/src/allocator/StringOps.cpp
+@@ -713,7 +713,7 @@ bool contains(void* needle, void* haystack) {
+     if (h.ok() && n.ok()) {
+         bool found = false;
+         withUnitRuns(h, n, [&](auto hp, auto np) {
+-            forEachUnitMatch(hp, h.n, np, n.n, true, [&](size_t) { found = true; return false; });
++            forEachUnitMatch(hp, h.n, np, n.n, false, [&](size_t) { found = true; return false; });
+         });
+         return found;
+     }
+@@ -780,6 +780,9 @@ HPointer indexes(void* needle, void* haystack) {
+     // below 1. A null pointer is the empty string.
+     if (!haystack || !needle) return alloc::listNil();
+ 
++    // Occurrences do not overlap: as elm/core's `_String_indexes`, the search resumes after the end
++    // of each match, so `indexes "aa" "aaaa"` is [0,2].
++    //
+     // Any pairing of flat, slice and UTF-8 forms is searched where its units lie, without copying
+     // either String. Most calls find a few indexes, which are kept on the stack.
+     UnitRun h = unitRun(haystack);
+@@ -790,7 +793,7 @@ HPointer indexes(void* needle, void* haystack) {
+         std::vector<i64> moreIdx;
+         size_t count = 0;
+         withUnitRuns(h, n, [&](auto hp, auto np) {
+-            forEachUnitMatch(hp, h.n, np, n.n, true, [&](size_t i) {
++            forEachUnitMatch(hp, h.n, np, n.n, false, [&](size_t i) {
+                 if (count < kInline) {
+                     inlineIdx[count] = static_cast<i64>(i);
+                 } else {
+@@ -820,7 +823,7 @@ HPointer indexes(void* needle, void* haystack) {
+     auto haystackBuf = toStdU16String(haystack);
+     std::vector<i64> indices;
+     forEachUnitMatch(reinterpret_cast<const u16*>(haystackBuf.data()), haystackBuf.size(),
+-                     reinterpret_cast<const u16*>(needleBuf.data()), needleBuf.size(), true,
++                     reinterpret_cast<const u16*>(needleBuf.data()), needleBuf.size(), false,
+                      [&](size_t i) { indices.push_back(static_cast<i64>(i)); return true; });
+     return alloc::listFromInts(indices);
+ }
+diff --git a/runtime/src/allocator/StringOps.hpp b/runtime/src/allocator/StringOps.hpp
+index c44fd4af..f8365a1f 100644
+--- a/runtime/src/allocator/StringOps.hpp
++++ b/runtime/src/allocator/StringOps.hpp
+@@ -759,11 +759,10 @@ bool startsWith(void* prefix, void* str);
+ // a non-null one no null `str`. Does not allocate on the Elm heap.
+ bool endsWith(void* suffix, void* str);
+ 
+-// Returns an Elm list of every unit index at which `needle` occurs in `haystack`, in increasing
+-// order, overlapping occurrences included.
++// Returns an Elm list of the unit indexes at which `needle` occurs in `haystack`, in increasing
++// order. Occurrences do not overlap, as in elm/core: each search resumes after the previous match.
+ //
+-// A null `haystack` gives the empty list. An empty or null `needle` gives every index from 0 to
+-// the length of `haystack` inclusive. A GC point.
++// A null `haystack`, or an empty or null `needle`, gives the empty list. A GC point.
+ HPointer indexes(void* needle, void* haystack);
+ 
+ // ============================================================================
+diff --git a/test/elm-core/src/StringIndexesTest.elm b/test/elm-core/src/StringIndexesTest.elm
+index 73636e65..b78132f8 100644
+--- a/test/elm-core/src/StringIndexesTest.elm
++++ b/test/elm-core/src/StringIndexesTest.elm
+@@ -1,14 +1,17 @@
+ module StringIndexesTest exposing (main)
+ 
+-{-| Checks that `String.indexes` returns every position where a substring occurs, and an empty list when it never does.
++{-| Checks that `String.indexes` returns every position where a substring occurs, without overlaps as in elm/core, and an empty list when it never does.
+ 
+ `"he"` occurs in `"he says hello"` at positions 0 and 8; `"xyz"` does not occur
+-in `"hello"`.
++in `"hello"`. `"aa"` occurs in `"aaaa"` at 0 and 2 only, and `"<"` is found at UTF-16
++unit positions in a String with a non-ASCII character.
+ 
+ -}
+ 
+ -- CHECK: indexes1: [0,8]
+ -- CHECK: indexes_none: []
++-- CHECK: indexes_no_overlap: [0,2]
++-- CHECK: indexes_utf16: [1,4]
+ 
+ import Html exposing (text)
+ 
+@@ -16,5 +19,7 @@ main =
+     let
+         _ = Debug.log "indexes1" (String.indexes "he" "he says hello")
+         _ = Debug.log "indexes_none" (String.indexes "xyz" "hello")
++        _ = Debug.log "indexes_no_overlap" (String.indexes "aa" "aaaa")
++        _ = Debug.log "indexes_utf16" (String.indexes "<" "é<ab<")
+     in
+     text "done"
+-- 
+2.43.0
+
+
+From aafc2756ce7e7366d8a6725d5ec217b620a541ab Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 10:48:27 +0000
+Subject: [PATCH 3/4] Call fold steps through DirectCall in String and Array
+ folds
+
+String.foldl, String.foldr and JsArray.foldl/foldr call the same closure once per element through
+eco_apply_closure_eval, which on every call re-derives what does not change between calls: whether
+the arguments fill the closure, every slot's kind, the result kind, the pointer mask, and the root
+range for the argument array. A step whose accumulator slot is an unboxed Int, Float or Char also
+missed tryInvokeSaturatedDirect, because the kernels pass the accumulator boxed, so such folds took
+the general path and boxed a new accumulator after every element.
+
+DirectCall (elm-kernel-cpp/src/DirectCall.hpp) does that work once per kernel call and roots the
+argument array once. Each call goes to the descriptor's sat[] entry with the arguments in registers
+when the compiler made one and no argument is a Float, and otherwise to the generic entry. It
+reports the kind each slot takes, so the folds pass the Char, or an unboxed array's element, raw
+and carry the accumulator in the step's own kind, boxing it once at the end. Validating builds, and
+closures it does not fit (more than 16 slots, not saturated by the call, or a step whose accumulator
+slot and result kinds differ), keep the old path.
+
+Natively, String.foldl with an Int accumulator over 1M Chars goes from 31 ms to 4 ms, and
+Array.foldl with an Int or tuple accumulator over 1M elements from 35-40 ms to 6-9 ms.
+---
+ elm-kernel-cpp/src/DirectCall.hpp          | 192 +++++++++++++++++++++
+ elm-kernel-cpp/src/core/JsArrayExports.cpp |  33 ++++
+ elm-kernel-cpp/src/core/StringExports.cpp  |  40 +++++
+ 3 files changed, 265 insertions(+)
+ create mode 100644 elm-kernel-cpp/src/DirectCall.hpp
+
+diff --git a/elm-kernel-cpp/src/DirectCall.hpp b/elm-kernel-cpp/src/DirectCall.hpp
+new file mode 100644
+index 00000000..43779790
+--- /dev/null
++++ b/elm-kernel-cpp/src/DirectCall.hpp
+@@ -0,0 +1,192 @@
++// DirectCall: one closure, called many times by a kernel that calls it once per element.
++//
++// Kernels such as String.foldl, List.map and List.foldl call the same closure for every element.
++// `eco_apply_closure_eval` works out on each call what `DirectCall` works out once: whether the
++// arguments exactly fill the closure, the kind of every slot, the result kind, which slots hold
++// pointers, and the root range for the argument array. Each call then calls the descriptor's
++// `sat[]` entry with the arguments in registers when the compiler made one (the fast edge compiled
++// code takes, closures-and-calls.md), and otherwise copies the captures and the arguments into the
++// array and calls the evaluator's generic entry.
++//
++// It also tells the kernel the kind each argument slot wants, so a kernel can pass a value in the
++// closure's own kind. A fold whose accumulator slot and result are both an unboxed Int, Float or
++// Char can then carry its accumulator unboxed from one call to the next, where the general path
++// boxes the accumulator after every call and unboxes it before the next.
++//
++// When the fast path does not apply (`ok()` is false) the kernel uses `eco_apply_closure_eval` as
++// before. Validating builds always take that path, which checks each argument for staleness.
++
++#ifndef ECO_DIRECT_CALL_HPP
++#define ECO_DIRECT_CALL_HPP
++
++#include "ExportHelpers.hpp"
++#include "allocator/Allocator.hpp"
++#include "allocator/Heap.hpp"
++#include "allocator/HeapHelpers.hpp"
++#include "allocator/RootSet.hpp"
++#include "allocator/RuntimeExports.h"
++#include <cstdint>
++#include <cstring>
++
++namespace Elm {
++
++class DirectCall {
++public:
++    // The most slots (captures plus arguments) a closure may have for the fast path.
++    static constexpr uint32_t kMaxSlots = 16;
++
++    // Sets up calls of the closure `*closure` with `nargs` arguments. `closure` must point at a
++    // rooted HPointer that stays rooted, and current, for the life of this object: each call reads
++    // the captures through it, so a collection between calls is harmless. Pushes a root range for
++    // the argument array, popped by the destructor, so a DirectCall must be destroyed before any
++    // root pushed after it is popped (scope it as an RAII guard).
++    DirectCall(const HPointer* closure, uint32_t nargs) : closure_(closure), nargs_(nargs) {
++#if ECO_HEAP_VALIDATE
++        return;
++#endif
++        const Closure* c = static_cast<const Closure*>(Allocator::resolveFast(*closure));
++        if (!c) return;
++        const uint32_t maxv = c->max_values;
++        nvals_ = c->n_values;
++        if (maxv > kMaxSlots || maxv < nvals_ || maxv - nvals_ != nargs) return;
++        uint64_t mask = 0;
++        const uint64_t empty = Kernel::Export::encode(alloc::listNil());
++        for (uint32_t i = 0; i < maxv; ++i) {
++            kinds_[i] = static_cast<uint8_t>(closureSlotKind(c, i));
++            if (kinds_[i] == 0) mask |= uint64_t{1} << i;
++            // Until the first call fills it, a pointer slot holds the Empty constant, which a
++            // collection skips.
++            args_[i] = (i < nvals_) ? static_cast<uint64_t>(c->values[i].i) : (kinds_[i] == 0 ? empty : 0);
++        }
++        K_ = static_cast<uint8_t>(c->result_kind);
++        eval_ = reinterpret_cast<void*>(c->evaluator->generic);
++        // The descriptor's `sat[nargs]` entry, when the compiler made one, takes the closure's
++        // address and the arguments in registers and loads the captures itself, so a call skips
++        // the argument array. Its parameters have the closure's own slot types, which is what
++        // `call` passes; only integer-register kinds are used here (no Float argument).
++        if (maxv <= SAT_MAX_ARITY && nargs >= 1 && nargs <= 3 && c->evaluator->stage_arity == maxv) {
++            bool intRegs = true;
++            for (uint32_t i = nvals_; i < maxv; ++i) intRegs = intRegs && kinds_[i] != 2;
++            if (intRegs) sat_ = c->evaluator->sat[nargs];
++        }
++        maxv_ = maxv;
++        mark_ = ecoRootMark();
++        if (mask) eco_gc_push_stack_range(args_, maxv, mask);
++        ok_ = true;
++    }
++
++    DirectCall(const DirectCall&) = delete;
++    DirectCall& operator=(const DirectCall&) = delete;
++
++    ~DirectCall() {
++        if (ok_) ecoRootRelease(mark_);
++    }
++
++    // Whether the fast path applies; when false, nothing below may be called.
++    bool ok() const { return ok_; }
++
++    // The kind (0 boxed, 1 Int, 2 Float, 3 Char) the closure wants for argument `i` (0-based).
++    uint32_t argKind(uint32_t i) const { return kinds_[nvals_ + i]; }
++
++    // The kind the closure returns.
++    uint32_t resultKind() const { return K_; }
++
++    // Calls the closure with the `nargs` argument words in `args`, each already in the kind
++    // `argKind` gives it (an encoded HPointer for kind 0, the raw value otherwise), and returns the
++    // result word in the kind `resultKind` gives it: an encoded HPointer, an int64_t, the bits of a
++    // double, or a code point. May collect: the caller must root every HPointer it holds except
++    // those it passes here, which this call roots.
++    uint64_t call(const uint64_t* args) {
++        const Closure* c = static_cast<const Closure*>(Allocator::resolveFast(*closure_));
++        if (sat_) return callSat(c, args);
++        for (uint32_t i = 0; i < nvals_; ++i) args_[i] = static_cast<uint64_t>(c->values[i].i);
++        for (uint32_t i = 0; i < nargs_; ++i) args_[nvals_ + i] = args[i];
++        void** argv = reinterpret_cast<void**>(args_);
++        switch (K_) {
++            case 0: {
++                using FnT = void* (*)(void**);
++                return reinterpret_cast<uint64_t>(reinterpret_cast<FnT>(eval_)(argv));
++            }
++            case 1: {
++                using FnT = int64_t (*)(void**);
++                return static_cast<uint64_t>(reinterpret_cast<FnT>(eval_)(argv));
++            }
++            case 2: {
++                using FnT = double (*)(void**);
++                double r = reinterpret_cast<FnT>(eval_)(argv);
++                uint64_t bits;
++                std::memcpy(&bits, &r, sizeof(bits));
++                return bits;
++            }
++            default: {
++                using FnT = uint32_t (*)(void**);
++                return static_cast<uint64_t>(reinterpret_cast<FnT>(eval_)(argv));
++            }
++        }
++    }
++
++    // Returns the value of the boxed Int, Float or Char `word` as a raw word of kind `kind` (1 to
++    // 3), or `word` itself for kind 0.
++    static uint64_t unbox(uint64_t word, uint32_t kind) {
++        if (kind == 0) return word;
++        const char* base = static_cast<const char*>(Kernel::Export::toPtr(word)) + sizeof(Header);
++        switch (kind) {
++            case 1: { int64_t v; std::memcpy(&v, base, sizeof(v)); return static_cast<uint64_t>(v); }
++            case 2: { uint64_t v; std::memcpy(&v, base, sizeof(v)); return v; }
++            default: { uint32_t v; std::memcpy(&v, base, sizeof(v)); return v; }
++        }
++    }
++
++    // Returns the raw word `raw` of kind `kind` boxed, as an encoded HPointer; `raw` itself for kind
++    // 0. Boxing allocates and may collect.
++    static uint64_t box(uint64_t raw, uint32_t kind) {
++        switch (kind) {
++            case 0: return raw;
++            case 1: return eco_alloc_int(static_cast<int64_t>(raw)).toBits();
++            case 2: { double f; std::memcpy(&f, &raw, sizeof(f)); return eco_alloc_float(f).toBits(); }
++            default: return eco_alloc_char(static_cast<uint32_t>(raw)).toBits();
++        }
++    }
++
++private:
++    // Calls `sat_` for the closure at `c`, its arguments in registers.
++    uint64_t callSat(const Closure* c, const uint64_t* a) {
++        void* cp = const_cast<Closure*>(c);
++        switch (K_) {
++            case 0: return reinterpret_cast<uint64_t>(satCall<void*>(cp, a));
++            case 1: return static_cast<uint64_t>(satCall<int64_t>(cp, a));
++            case 2: {
++                double r = satCall<double>(cp, a);
++                uint64_t bits;
++                std::memcpy(&bits, &r, sizeof(bits));
++                return bits;
++            }
++            default: return static_cast<uint64_t>(satCall<uint32_t>(cp, a));
++        }
++    }
++
++    template <class R>
++    R satCall(void* cp, const uint64_t* a) {
++        switch (nargs_) {
++            case 1: return reinterpret_cast<R (*)(void*, uint64_t)>(sat_)(cp, a[0]);
++            case 2: return reinterpret_cast<R (*)(void*, uint64_t, uint64_t)>(sat_)(cp, a[0], a[1]);
++            default: return reinterpret_cast<R (*)(void*, uint64_t, uint64_t, uint64_t)>(sat_)(cp, a[0], a[1], a[2]);
++        }
++    }
++
++    const HPointer* closure_;
++    void* sat_ = nullptr;
++    uint32_t nargs_;
++    uint32_t nvals_ = 0;
++    uint32_t maxv_ = 0;
++    uint8_t K_ = 0;
++    bool ok_ = false;
++    void* eval_ = nullptr;
++    EcoRootMark mark_{};
++    uint8_t kinds_[kMaxSlots] = {};
++    uint64_t args_[kMaxSlots];
++};
++
++} // namespace Elm
++
++#endif
+diff --git a/elm-kernel-cpp/src/core/JsArrayExports.cpp b/elm-kernel-cpp/src/core/JsArrayExports.cpp
+index 2c5f7712..ac58e006 100644
+--- a/elm-kernel-cpp/src/core/JsArrayExports.cpp
++++ b/elm-kernel-cpp/src/core/JsArrayExports.cpp
+@@ -27,6 +27,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "../KernelExports.h"
++#include "../DirectCall.hpp"
+ #include "../ExportHelpers.hpp"
+ #include "JsArray.hpp"
+ #include "allocator/Heap.hpp"
+@@ -588,6 +589,38 @@ static HPtr foldImpl(HPtr closure, HPtr acc, HPtr array, bool forward) {
+         srcKind = src0->header.unboxed & 0x3;
+     }
+ 
++    // The fast path: a step whose element slot takes the array's own kind, or boxed, and whose
++    // accumulator slot takes the kind it returns. Elements of an unboxed array are then passed raw
++    // when the step takes them raw, and the accumulator stays in the step's kind throughout.
++    {
++        StackRootGuard dcRoots(&srcHP, &accHP, &closureHP);
++        Elm::DirectCall dc(&closureHP, 2);
++        const uint32_t ek = dc.ok() ? dc.argKind(0) : 0;
++        if (dc.ok() && dc.argKind(1) == dc.resultKind() && (ek == srcKind || ek == 0)) {
++            const uint32_t ak = dc.resultKind();
++            uint64_t a = Elm::DirectCall::unbox(Export::encode(accHP), ak);
++            for (uint32_t step = 0; step < len; ++step) {
++                uint32_t idx = forward ? step : (len - 1 - step);
++                uint64_t elem;
++                if (srcKind == 0) {
++                    elem = Export::encode(static_cast<ElmArray*>(allocator.resolve(srcHP))->elements[idx].p);
++                } else if (ek == srcKind) {
++                    Unboxable u = static_cast<ElmArray*>(allocator.resolve(srcHP))->elements[idx];
++                    elem = (srcKind == 3) ? (static_cast<uint64_t>(u.i) & 0xFFFFFFFFu) : static_cast<uint64_t>(u.i);
++                } else {
++                    // Boxing allocates; a boxed accumulator is kept current in the rooted accHP.
++                    Unboxable u = static_cast<ElmArray*>(allocator.resolve(srcHP))->elements[idx];
++                    elem = Export::encode(alloc::boxElement(u, srcKind));
++                }
++                uint64_t args[2] = { elem, ak == 0 ? Export::encode(accHP) : a };
++                a = dc.call(args);
++                if (ak == 0) accHP = Export::decode(a);
++            }
++            if (ak == 0) return HPtr::fromBits(Export::encode(accHP));
++            return HPtr::fromBits(Elm::DirectCall::box(a, ak));
++        }
++    }
++
+     // accBits + accKind track the current accumulator's representation.
+     // Starts boxed (HPtr from the caller); after the first call the
+     // closure's `result_kind` may flip it to a primitive kind, in which
+diff --git a/elm-kernel-cpp/src/core/StringExports.cpp b/elm-kernel-cpp/src/core/StringExports.cpp
+index aa4fdede..55ec2149 100644
+--- a/elm-kernel-cpp/src/core/StringExports.cpp
++++ b/elm-kernel-cpp/src/core/StringExports.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "../KernelExports.h"
+ #include "../ExportHelpers.hpp"
++#include "../DirectCall.hpp"
+ #include "String.hpp"
+ #include "allocator/Heap.hpp"
+ #include "allocator/HeapHelpers.hpp"
+@@ -214,6 +215,15 @@ static uint64_t callFoldClosure(HPtr closure_hptr, uint32_t c, uint64_t acc) {
+     return eco_apply_closure_typed(closure_hptr, args, 2, layout).toBits();
+ }
+ 
++// Whether a fold step can be called through `dc` with the Char unboxed and the accumulator in
++// one kind, `accKind`, that its slot takes and the step returns: then the fold carries the
++// accumulator in that kind, unboxed for an Int, Float or Char, from one call to the next.
++static bool foldCallFits(const Elm::DirectCall& dc, uint32_t& accKind) {
++    if (!dc.ok() || dc.argKind(0) != 3 || dc.argKind(1) != dc.resultKind()) return false;
++    accKind = dc.resultKind();
++    return true;
++}
++
+ // A copy of the UTF-16 units of the String `str`, of any form, empty for null. The copy is C++
+ // memory, outside the collected heap, so closures called while it is walked may allocate without
+ // invalidating it. A UTF-8 form's bytes are ASCII, so each is copied as one unit.
+@@ -369,6 +379,21 @@ HPtr Elm_Kernel_String_foldl(HPtr closure, HPtr acc, HPtr str) {
+     Elm::StackRootGuard loopRoots(&closureHP, &accHP);
+ 
+     const size_t n = chars.size();
++    {
++        Elm::DirectCall dc(&closureHP, 2);
++        uint32_t ak;
++        if (foldCallFits(dc, ak)) {
++            uint64_t a = Elm::DirectCall::unbox(Export::encode(accHP), ak);
++            for (size_t i = 0; i < n;) {
++                uint32_t c = Elm::StringOps::nextCodePoint(chars.data(), n, i);
++                uint64_t args[2] = { c, ak == 0 ? Export::encode(accHP) : a };
++                a = dc.call(args);
++                if (ak == 0) accHP = Export::decode(a);
++            }
++            if (ak != 0) return HPtr::fromBits(Elm::DirectCall::box(a, ak));
++            return HPtr::fromBits(Export::encode(accHP));
++        }
++    }
+     for (size_t i = 0; i < n;) {
+         uint32_t c = Elm::StringOps::nextCodePoint(chars.data(), n, i);
+         HPtr cl = HPtr::fromBits(Export::encode(closureHP));
+@@ -388,6 +413,21 @@ HPtr Elm_Kernel_String_foldr(HPtr closure, HPtr acc, HPtr str) {
+ 
+     // Walk back by code point: a low surrogate combines only with a
+     // preceding high one (StringOps::prevCodePoint).
++    {
++        Elm::DirectCall dc(&closureHP, 2);
++        uint32_t ak;
++        if (foldCallFits(dc, ak)) {
++            uint64_t a = Elm::DirectCall::unbox(Export::encode(accHP), ak);
++            for (size_t i = chars.size(); i > 0;) {
++                uint32_t c = Elm::StringOps::prevCodePoint(chars.data(), i);
++                uint64_t args[2] = { c, ak == 0 ? Export::encode(accHP) : a };
++                a = dc.call(args);
++                if (ak == 0) accHP = Export::decode(a);
++            }
++            if (ak != 0) return HPtr::fromBits(Elm::DirectCall::box(a, ak));
++            return HPtr::fromBits(Export::encode(accHP));
++        }
++    }
+     for (size_t i = chars.size(); i > 0;) {
+         uint32_t c = Elm::StringOps::prevCodePoint(chars.data(), i);
+         HPtr cl = HPtr::fromBits(Export::encode(closureHP));
+-- 
+2.43.0
+
+
+From 6a2209c2d7fba7c0e116f8ec72a1cc6fdd35b643 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 23 Nov 2026 22:53:06 +0000
+Subject: [PATCH 4/4] Re-audit the 43 kernel licenses on StringExports.cpp and
+ JsArrayExports.cpp
+
+aafc2756 changed both files, so check-kernel-license-manifest.sh stopped the package build. Each
+licensed kernel on them gets a re-audit line in kernel-license-audit.csv, and --update re-pins
+the two hashes; no license changes.
+
+String.foldl, String.foldr, JsArray.foldl and JsArray.foldr first try Elm::DirectCall, which
+calls the step's evaluator directly in the saturated case eco_apply_closure_eval would take, and
+falls back to the unchanged helpers otherwise. The callback is still only applied, the
+accumulator still flows from one callback result to the next and out, and nothing is stored
+outside the call or allocated but boxed Ints, Floats and Chars. The other 39 kernels' code is
+unchanged.
+---
+ .../Solver/kernel-license-audit.csv           |  43 +++++
+ .../Solver/kernel-license-files.csv           | 164 +++++++++---------
+ 2 files changed, 125 insertions(+), 82 deletions(-)
+
+diff --git a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv
+index de5378d3..2de970a8 100644
+--- a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv
++++ b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv
+@@ -1868,3 +1868,46 @@ Elm.Basics.tan,2026-11-20T23:13:33,plans/constructor-representation-followups.md
+ Elm.Basics.toFloat,2026-11-20T23:13:33,plans/constructor-representation-followups.md,"plans/constructor-representation-followups.md F1.4: BasicsExports.cpp's file-local helpers (tagOfBoxed, intOfBoxed, floatOfBoxed, boxInt, boxFloat) are now static, so none becomes an out-of-line unmangled C symbol when not inlined (check-kernel-c-symbols); no behaviour change. Flow as in its previous audit"
+ Elm.Basics.truncate,2026-11-20T23:13:33,plans/constructor-representation-followups.md,"plans/constructor-representation-followups.md F1.4: BasicsExports.cpp's file-local helpers (tagOfBoxed, intOfBoxed, floatOfBoxed, boxInt, boxFloat) are now static, so none becomes an out-of-line unmangled C symbol when not inlined (check-kernel-c-symbols); no behaviour change. Flow as in its previous audit"
+ Elm.Basics.xor,2026-11-20T23:13:33,plans/constructor-representation-followups.md,"plans/constructor-representation-followups.md F1.4: BasicsExports.cpp's file-local helpers (tagOfBoxed, intOfBoxed, floatOfBoxed, boxInt, boxFloat) are now static, so none becomes an out-of-line unmangled C symbol when not inlined (check-kernel-c-symbols); no behaviour change. Flow as in its previous audit"
++Elm.JsArray.appendN,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.empty,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.foldl,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: the new header DirectCall.hpp (class Elm::DirectCall) reads the closure's evaluator, captured values and slot kinds once and then calls the evaluator directly with the captures plus the per-call arguments: it is a kernel-local wrapper doing exactly the saturated call eco_apply_closure_eval makes for a closure whose captures plus arguments fill its arity (ok() is false otherwise, and in ECO_HEAP_VALIDATE builds, and the kernel falls back to its unchanged helper path); its only state is a stack object for the call (argument words, kinds, the evaluator pointer) whose argument array is a root range popped by its destructor, and its only allocations are eco_alloc_int/float/char when boxing a primitive result (DirectCall::box) . foldImpl (JsArrayExports.cpp:577), which this kernel calls (:679-681), tries it first (:595-622) when the step's element slot takes the array's own kind or boxed and its accumulator slot the kind it returns: elements are read from the rooted srcHP (raw for a matching unboxed kind, else Export::encode of the boxed element or alloc::boxElement of an unboxed one), the callback is applied only through dc.call, and the accumulator passes from one call's result to the next and out as the result (C1). Array elements of type a are passed to the callback only (B1a), as before; no static/global/task write, no closure alloc; no retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.foldr,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: the new header DirectCall.hpp (class Elm::DirectCall) reads the closure's evaluator, captured values and slot kinds once and then calls the evaluator directly with the captures plus the per-call arguments: it is a kernel-local wrapper doing exactly the saturated call eco_apply_closure_eval makes for a closure whose captures plus arguments fill its arity (ok() is false otherwise, and in ECO_HEAP_VALIDATE builds, and the kernel falls back to its unchanged helper path); its only state is a stack object for the call (argument words, kinds, the evaluator pointer) whose argument array is a root range popped by its destructor, and its only allocations are eco_alloc_int/float/char when boxing a primitive result (DirectCall::box) . foldImpl (JsArrayExports.cpp:577), which this kernel calls (:683-685), tries it first (:595-622) when the step's element slot takes the array's own kind or boxed and its accumulator slot the kind it returns: elements are read from the rooted srcHP (raw for a matching unboxed kind, else Export::encode of the boxed element or alloc::boxElement of an unboxed one), the callback is applied only through dc.call, and the accumulator passes from one call's result to the next and out as the result (C1). Array elements of type a are passed to the callback only (B1a), as before; no static/global/task write, no closure alloc; no retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.indexedMap,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.initialize,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.initializeFromList,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.length,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.map,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.push,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.singleton,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.slice,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.unsafeGet,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.JsArray.unsafeSet,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.all,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.any,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.append,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.cons,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.contains,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.endsWith,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.filter,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.foldl,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: the new header DirectCall.hpp (class Elm::DirectCall) reads the closure's evaluator, captured values and slot kinds once and then calls the evaluator directly with the captures plus the per-call arguments: it is a kernel-local wrapper doing exactly the saturated call eco_apply_closure_eval makes for a closure whose captures plus arguments fill its arity (ok() is false otherwise, and in ECO_HEAP_VALIDATE builds, and the kernel falls back to its unchanged helper path); its only state is a stack object for the call (argument words, kinds, the evaluator pointer) whose argument array is a root range popped by its destructor, and its only allocations are eco_alloc_int/float/char when boxing a primitive result (DirectCall::box) . This kernel (StringExports.cpp:Elm_Kernel_String_foldl:373) tries it first (:382-396) when foldCallFits (:221-226) finds the step takes the Char unboxed and its accumulator slot in the kind it returns: the callback is applied only through dc.call, each Char is a code point, and the accumulator passes from one call's result to the next call's argument and out as the result (C1: a callback return, or the initial acc), boxed again by DirectCall::box only for an Int/Float/Char kind. The callback is never stored anywhere but the rooted closureHP; no static/global/task write, no closure alloc; no retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.foldr,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: the new header DirectCall.hpp (class Elm::DirectCall) reads the closure's evaluator, captured values and slot kinds once and then calls the evaluator directly with the captures plus the per-call arguments: it is a kernel-local wrapper doing exactly the saturated call eco_apply_closure_eval makes for a closure whose captures plus arguments fill its arity (ok() is false otherwise, and in ECO_HEAP_VALIDATE builds, and the kernel falls back to its unchanged helper path); its only state is a stack object for the call (argument words, kinds, the evaluator pointer) whose argument array is a root range popped by its destructor, and its only allocations are eco_alloc_int/float/char when boxing a primitive result (DirectCall::box) . This kernel (StringExports.cpp:Elm_Kernel_String_foldr:406) tries it first (:416-430), walking back with StringOps::prevCodePoint, under the same foldCallFits test (:221-226): the callback is applied only through dc.call and the accumulator passes from one call's result to the next and out as the result (C1). No static/global/task write, no closure alloc; no retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.fromList,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.fromNumber,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.indexes,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.join,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.length,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.lines,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.map,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.reverse,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.slice,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.split,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.startsWith,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.toFloat,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.toInt,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.toLower,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.toUpper,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.trim,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.trimLeft,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.trimRight,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.uncons,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
++Elm.String.words,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
+diff --git a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv
+index 91861df6..1795b70a 100644
+--- a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv
++++ b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv
+@@ -95,9 +95,9 @@ Elm.Basics.acos,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c
+ Elm.Basics.acos,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.add,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.add,runtime/src/allocator/IntArith.hpp,a276e9d8b29c53570799c9500543b70da54ebb5d286d229f9b929b1d548bc92e,2026-11-20T23:13:33
++Elm.Basics.and,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.and,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.and,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+-Elm.Basics.and,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.asin,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.asin,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.atan,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+@@ -116,24 +116,24 @@ Elm.Basics.floor,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731
+ Elm.Basics.floor,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.idiv,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.idiv,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
++Elm.Basics.isInfinite,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.isInfinite,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.isInfinite,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+-Elm.Basics.isInfinite,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
++Elm.Basics.isNaN,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.isNaN,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.isNaN,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+-Elm.Basics.isNaN,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.log,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.log,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.modBy,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.modBy,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.mul,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.mul,runtime/src/allocator/IntArith.hpp,a276e9d8b29c53570799c9500543b70da54ebb5d286d229f9b929b1d548bc92e,2026-11-20T23:13:33
++Elm.Basics.not,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.not,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.not,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+-Elm.Basics.not,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
++Elm.Basics.or,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.or,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.or,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+-Elm.Basics.or,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.pi,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.pi,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.pow,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+@@ -154,9 +154,9 @@ Elm.Basics.toFloat,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d97
+ Elm.Basics.toFloat,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+ Elm.Basics.truncate,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.truncate,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
++Elm.Basics.xor,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Basics.xor,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c981521546b45107380905d302954c16d4e7,2026-11-20T23:13:33
+ Elm.Basics.xor,elm-kernel-cpp/src/core/BasicsExports.cpp,6fd0a744c78035915c1d345dcd763e36e0358544d8cd9cd7a342a3a8698b13ae,2026-11-20T23:13:33
+-Elm.Basics.xor,elm-kernel-cpp/src/ExportHelpers.hpp,617af5a68960cb3b80c31d23ad28d030f4b03f318c37362ab7e06ee05e164504,2026-11-20T23:13:33
+ Elm.Bitwise.and,elm-kernel-cpp/src/core/Bitwise.cpp,2780f5dfd17a495f3018bcf596ea9823fbde1cb3cdabbe1ee57406b41a45c00b,2026-11-04T12:50:08
+ Elm.Bitwise.and,elm-kernel-cpp/src/core/BitwiseExports.cpp,d3afe39f0f5cbb31e3dcbf52d0c5a1570293e9f10060bf6208482c6397341d12,2026-11-04T12:50:08
+ Elm.Bitwise.complement,elm-kernel-cpp/src/core/Bitwise.cpp,2780f5dfd17a495f3018bcf596ea9823fbde1cb3cdabbe1ee57406b41a45c00b,2026-11-04T12:50:08
+@@ -206,36 +206,36 @@ Elm.Char.toLower,elm-kernel-cpp/src/core/Char.cpp,5cf22aa841aba9f492c9f3a05ec76c
+ Elm.Char.toLower,elm-kernel-cpp/src/core/CharExports.cpp,00fd39f709e3c096ae5c53f99b91e904e98ab31b0c3a66c430d6985d25e4cc86,2026-11-04T16:53:40
+ Elm.Char.toUpper,elm-kernel-cpp/src/core/Char.cpp,5cf22aa841aba9f492c9f3a05ec76cf865f4c61de2a39e02429d2761082373d9,2026-11-04T16:53:40
+ Elm.Char.toUpper,elm-kernel-cpp/src/core/CharExports.cpp,00fd39f709e3c096ae5c53f99b91e904e98ab31b0c3a66c430d6985d25e4cc86,2026-11-04T16:53:40
+-Elm.File.mime,elm-kernel-cpp/src/file/FileExports.cpp,5d76e6bd23e82d6b7499f0c7f9780f2d9eea23ad5ea450e35b338b94afb92ef6,2026-11-04T16:53:40
+ Elm.File.mime,elm-kernel-cpp/src/NotSupportedNatively.hpp,0581cd48f403c7efdfc723dfed72a7140e68f01712e267a2c2ffa2873ba61f03,2026-11-04T16:53:40
+-Elm.File.name,elm-kernel-cpp/src/file/FileExports.cpp,5d76e6bd23e82d6b7499f0c7f9780f2d9eea23ad5ea450e35b338b94afb92ef6,2026-11-04T16:53:40
++Elm.File.mime,elm-kernel-cpp/src/file/FileExports.cpp,5d76e6bd23e82d6b7499f0c7f9780f2d9eea23ad5ea450e35b338b94afb92ef6,2026-11-04T16:53:40
+ Elm.File.name,elm-kernel-cpp/src/NotSupportedNatively.hpp,0581cd48f403c7efdfc723dfed72a7140e68f01712e267a2c2ffa2873ba61f03,2026-11-04T16:53:40
+-Elm.File.size,elm-kernel-cpp/src/file/FileExports.cpp,5d76e6bd23e82d6b7499f0c7f9780f2d9eea23ad5ea450e35b338b94afb92ef6,2026-11-04T16:53:40
++Elm.File.name,elm-kernel-cpp/src/file/FileExports.cpp,5d76e6bd23e82d6b7499f0c7f9780f2d9eea23ad5ea450e35b338b94afb92ef6,2026-11-04T16:53:40
+ Elm.File.size,elm-kernel-cpp/src/NotSupportedNatively.hpp,0581cd48f403c7efdfc723dfed72a7140e68f01712e267a2c2ffa2873ba61f03,2026-11-04T16:53:40
++Elm.File.size,elm-kernel-cpp/src/file/FileExports.cpp,5d76e6bd23e82d6b7499f0c7f9780f2d9eea23ad5ea450e35b338b94afb92ef6,2026-11-04T16:53:40
+ Elm.Http.emptyBody,elm-kernel-cpp/src/http/HttpExports.cpp,7d0590c9edb5ea9c28f78eb694e45741f5175590664da89ae774c13b09b19b67,2026-11-04T16:53:40
+ Elm.Http.pair,elm-kernel-cpp/src/http/HttpExports.cpp,7d0590c9edb5ea9c28f78eb694e45741f5175590664da89ae774c13b09b19b67,2026-11-04T16:53:40
+ Elm.Http.toFormData,elm-kernel-cpp/src/http/HttpExports.cpp,7d0590c9edb5ea9c28f78eb694e45741f5175590664da89ae774c13b09b19b67,2026-11-04T16:53:40
+-Elm.JsArray.appendN,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.empty,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.foldl,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.foldr,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.indexedMap,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.indexedMap,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-20T16:05:32
+-Elm.JsArray.initialize,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.initialize,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-20T16:05:32
+-Elm.JsArray.initializeFromList,elm-kernel-cpp/src/core/JsArray.cpp,6c861fd2d8d28e968d06d1eefd72c02ff77f72d9936a7b935033188907e27bdd,2026-11-20T16:05:32
+-Elm.JsArray.initializeFromList,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.initializeFromList,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-20T16:05:32
+-Elm.JsArray.length,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.map,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.map,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-20T16:05:32
+-Elm.JsArray.push,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.push,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-20T16:05:32
+-Elm.JsArray.singleton,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.slice,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.unsafeGet,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.unsafeSet,elm-kernel-cpp/src/core/JsArrayExports.cpp,089a58f1ea0aca59c7521b0ac53a60cb214ce932303ba29b435cec64ae1898ad,2026-11-20T16:05:32
+-Elm.JsArray.unsafeSet,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-20T16:05:32
++Elm.JsArray.appendN,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.empty,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.foldl,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.foldr,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.indexedMap,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-23T22:52:50
++Elm.JsArray.indexedMap,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.initialize,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-23T22:52:50
++Elm.JsArray.initialize,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.initializeFromList,elm-kernel-cpp/src/core/JsArray.cpp,6c861fd2d8d28e968d06d1eefd72c02ff77f72d9936a7b935033188907e27bdd,2026-11-23T22:52:50
++Elm.JsArray.initializeFromList,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-23T22:52:50
++Elm.JsArray.initializeFromList,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.length,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.map,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-23T22:52:50
++Elm.JsArray.map,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.push,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-23T22:52:50
++Elm.JsArray.push,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.singleton,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.slice,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.unsafeGet,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
++Elm.JsArray.unsafeSet,elm-kernel-cpp/src/core/JsArray.hpp,7ec47c7d94f9421779e22c8066fa63da435d34aa8b6042b5c75113d4f4b34fe8,2026-11-23T22:52:50
++Elm.JsArray.unsafeSet,elm-kernel-cpp/src/core/JsArrayExports.cpp,a65f2061bf28a68391e8ed0f52aaff06507f55605394450c6ebbacaf1a1d9a57,2026-11-23T22:52:50
+ Elm.Json.addEntry,elm-kernel-cpp/src/json/JsonExports.cpp,06e4805d83abda29fe8787dfbc0363f251b18d40afd671dfc9468ed81a6e7549,2026-11-06T14:37:47
+ Elm.Json.addField,elm-kernel-cpp/src/json/JsonExports.cpp,06e4805d83abda29fe8787dfbc0363f251b18d40afd671dfc9468ed81a6e7549,2026-11-06T14:37:47
+ Elm.Json.andThen,elm-kernel-cpp/src/json/JsonExports.cpp,06e4805d83abda29fe8787dfbc0363f251b18d40afd671dfc9468ed81a6e7549,2026-11-06T14:37:47
+@@ -310,58 +310,58 @@ Elm.Scheduler.spawn,elm-kernel-cpp/src/core/SchedulerExports.cpp,569c4873ea89940
+ Elm.Scheduler.spawn,runtime/src/platform/Scheduler.cpp,66fc56c246caca47ec5241c479a9e6e62ba10f227952bdd312d9f05963b59565,2026-11-04T16:53:40
+ Elm.Scheduler.succeed,elm-kernel-cpp/src/core/SchedulerExports.cpp,569c4873ea89940e200be306bdf39acec4b39de0adb732fef17d2dcc03aeb656,2026-11-04T16:53:40
+ Elm.Scheduler.succeed,runtime/src/platform/Scheduler.cpp,66fc56c246caca47ec5241c479a9e6e62ba10f227952bdd312d9f05963b59565,2026-11-04T16:53:40
+-Elm.String.all,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.any,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.append,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.append,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.cons,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.cons,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.contains,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.contains,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.endsWith,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.endsWith,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.filter,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.foldl,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.foldr,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.fromList,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.fromList,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.fromNumber,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.fromNumber,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.indexes,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.indexes,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.join,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.join,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.length,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.length,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.lines,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.lines,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.map,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.reverse,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.reverse,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.slice,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.slice,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.split,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.split,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.startsWith,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.startsWith,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.toFloat,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.toFloat,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.toInt,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.toInt,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.toLower,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.toLower,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.toUpper,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.toUpper,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.trim,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.trim,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.trimLeft,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.trimLeft,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.trimRight,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.trimRight,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.uncons,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.uncons,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
+-Elm.String.words,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-18T20:38:22
+-Elm.String.words,elm-kernel-cpp/src/core/StringExports.cpp,ff31b8caeb224a7bc96cd5995212c3c5b5e59238deaa45e64d6e0f6f836575da,2026-11-18T20:38:22
++Elm.String.all,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.any,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.append,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.append,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.cons,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.cons,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.contains,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.contains,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.endsWith,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.endsWith,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.filter,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.foldl,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.foldr,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.fromList,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.fromList,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.fromNumber,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.fromNumber,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.indexes,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.indexes,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.join,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.join,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.length,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.length,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.lines,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.lines,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.map,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.reverse,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.reverse,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.slice,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.slice,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.split,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.split,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.startsWith,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.startsWith,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.toFloat,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.toFloat,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.toInt,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.toInt,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.toLower,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.toLower,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.toUpper,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.toUpper,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.trim,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.trim,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.trimLeft,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.trimLeft,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.trimRight,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.trimRight,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.uncons,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.uncons,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
++Elm.String.words,elm-kernel-cpp/src/core/String.cpp,7ceca48edc855faaec0138d8fbe0a1c22e022895b59ede2c666fab9995c4a117,2026-11-23T22:52:50
++Elm.String.words,elm-kernel-cpp/src/core/StringExports.cpp,26ed96fa4762b7853b4a013d382860e80693e850090abe89e7e46954c08229cd,2026-11-23T22:52:50
+ Elm.Time.getZoneName,elm-kernel-cpp/src/time/TimeExports.cpp,174b88b5eb446757eb7ebb8cad6afa52b0734e4e38133bf4dd7e20aa663439e5,2026-11-04T16:53:40
+ Elm.Time.here,elm-kernel-cpp/src/time/TimeExports.cpp,174b88b5eb446757eb7ebb8cad6afa52b0734e4e38133bf4dd7e20aa663439e5,2026-11-04T16:53:40
+ Elm.Url.percentDecode,elm-kernel-cpp/src/url/UrlExports.cpp,98a43225865ce163483ae596d054b47955d0b20ebf57b8e021e57ed499583429,2026-11-04T16:53:40
+-- 
+2.43.0
+

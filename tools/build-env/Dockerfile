@@ -36,9 +36,5 @@ RUN curl -fsSL https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu
       --default-toolchain "$RUST_VERSION" --target x86_64-unknown-linux-musl && \
     rm /tmp/rustup-init && chmod -R a+rX /opt/rustup /opt/cargo
 
-# eco, the Elm compiler: make installs the release versions.mk pins and builds it patched for
-# eco/containers (tools/build-patched-eco.sh) into build-docker/home/.cache, kept between runs.
-# The patched build needs LLVM/MLIR 21 from apt.llvm.org, which keeps only its latest builds, so
-# unlike the rest of this image these packages aren't pinned by the Ubuntu snapshot.
-COPY build-patched-eco-deps.sh /tmp/
-RUN sh /tmp/build-patched-eco-deps.sh && rm -rf /var/lib/apt/lists/* /tmp/build-patched-eco-deps.sh
+# eco, the Elm compiler, isn't built here: `make docker` builds it first, outside (its build runs
+# Docker itself), into build-docker/home/.cache, where make finds it. It's a static program.

@@ -14,11 +14,12 @@ _The remaining text in this readme is AI generated. So is 99% of the code in thi
 
 You need Linux on x86_64 with:
 
-- nothing for eco, the Elm compiler: `make` downloads the release `versions.mk` pins
-  (`ECO_VER`, checked against `ECO_SHA256`) into `~/.cache/elm-os/eco-<version>` and uses
+- Docker, for eco, the Elm compiler: `make` builds the eco commit `versions.mk` pins, with the
+  patches in `tools/eco-patched`, as eco's static release bundle (`tools/build-patched-eco.sh`,
+  about 20 minutes the first time) into `~/.cache/elm-os/eco-<version>-patched`, and uses
   only that copy, so an eco you already have (another version, for other projects) is
   neither used nor replaced. It keeps its own package cache too
-  (`~/.cache/elm-os/eco-<version>/home/.eco`, not `~/.eco`). `make ECO=/path/to/eco` uses another eco instead
+  (`~/.cache/elm-os/eco-<version>-patched/home/.eco`, not `~/.eco`). `make ECO=/path/to/eco` uses another eco instead
 - Rust (via [rustup](https://rustup.rs)) with the musl target: `rustup target add x86_64-unknown-linux-musl`
 - `musl-gcc`, the kernel build tools, `curl`, `sha256sum`, `cpio`, `python3`, `readelf` and `qemu-system-x86_64`
   (plus `qemu-system-modules-opengl` for the GPU in QEMU)

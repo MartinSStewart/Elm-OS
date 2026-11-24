@@ -4,9 +4,9 @@
 # read-only at /tools). An ext4 filesystem, made without root:
 #
 #   eco/bin/eco, eco/lib/eco-runtime, eco/share   eco as `make` uses it
-#   sysroot/   the shared libraries eco loads (the patched eco is a glibc program
-#              linked against LLVM 21's libraries): it finds them there itself, by
-#              its interpreter and RUNPATH (patchelf). Empty for a static eco.
+#   sysroot/   the shared libraries eco loads, if it isn't static (tools/build-patched-eco.sh
+#              builds a static one): it finds them there itself, by its interpreter and
+#              RUNPATH (patchelf). Empty for a static eco.
 #   home/.eco/0.2.0/packages   the Elm packages elm/elm.json names, already compiled,
 #              and eco's registry, so a build never goes to the network
 #   wire-tool, elm.json (with no test dependencies), libelmos_link.a, link-args
@@ -56,7 +56,7 @@ for group in deps.values():
     mkdir -p "$root/home/.eco/0.2.0/packages/$p"
     (cd "$pkgs/$p" && tar --exclude=.git -cf - .) | (cd "$root/home/.eco/0.2.0/packages/$p" && tar -xf -)
 done
-# eco's own packages (eco/kernel, eco/containers...) are in eco/share.
+# eco's own packages (eco/kernel, eco/system) are in eco/share.
 
 # Without its test dependencies, which eco would otherwise look for too.
 python3 -I -c '
@@ -66,13 +66,13 @@ project["test-dependencies"] = {"direct": {}, "indirect": {}}
 json.dump(project, open(sys.argv[2], "w"), indent=4)
 ' "$elm_json" "$root/elm.json"
 
-# eco keeps a copy of each package it bundles (eco/containers...) in its package cache, and
+# eco keeps a copy of each package it bundles (eco/system...) in its package cache, and
 # copies it afresh, deleting the old one, when the bundled one's fingerprint changes: a hash
 # of its files' sizes and modification times, to the millisecond. ext4's `mkfs -d` keeps
 # only whole seconds, so on the read-only partition the fingerprint would change and eco
 # would fail to delete the copy. So: whole seconds everywhere, then the copies made again
-# from the files as they are here, by an eco that finds them here (an unpatched copy of
-# eco/bin/eco, which looks for them beside itself), compiling a program that does nothing.
+# from the files as they are here, by an eco that finds them here (a copy of eco/bin/eco,
+# which looks for them beside itself), compiling a program that does nothing.
 python3 -I -c '
 import os, sys
 for d, dirs, files in os.walk(sys.argv[1]):
