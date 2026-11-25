@@ -2,6 +2,7 @@ module WrapTest exposing (suite)
 
 import Color
 import Expect
+import Fuzz
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Segment, Style(..))
 import Test exposing (Test)
@@ -48,6 +49,32 @@ suite =
                     |> Expect.equal "aaaa bbbb\ncccc"
             )
         , Test.test "no line is wider than the width, in Noto Sans" (\() -> fitsWidth)
+        , Test.fuzz3
+            (Fuzz.intRange 1 400)
+            (Fuzz.intRange 0 60)
+            (Fuzz.list (Fuzz.oneOf [ Fuzz.constant " ", Fuzz.constant "\n", Fuzz.constant "a", Fuzz.constant "bc", Fuzz.constant "defghijklmnopqrstuvwxyz0123456789" ]))
+            "one pixel-font segment wraps as the same text in two segments does"
+            (\width cut parts ->
+                let
+                    text =
+                        String.concat parts
+
+                    -- Two segments that look different, so the general word wrap is used.
+                    split =
+                        [ mono (String.left cut text), { text = String.dropLeft cut text, color = Color.white, font = Mono, decorations = [], link = Nothing } ]
+
+                    sizes segments =
+                        Sprite.wrapWithSize Small (Units.ui width) segments |> Tuple.second
+                in
+                ( wrapMono width [ mono text ], sizes [ mono text ] )
+                    |> Expect.equal ( wrapMono width split, sizes split )
+            )
+        , Test.test "wrapSegments keeps a long text in one look as one segment"
+            (\() ->
+                Sprite.wrapSegments Small (Units.ui 100) [ mono "aaaa bbbb cccc dddd" ]
+                    |> List.map .text
+                    |> Expect.equal [ "aaaa bbbb\ncccc dddd" ]
+            )
         ]
 
 
