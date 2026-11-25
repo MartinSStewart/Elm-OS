@@ -429,8 +429,8 @@ screenshotView { time, uiState, uiScale, screenshot } =
 
 
 {-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
-UI pixels two fingers moved on a touchpad (positive is down, the content following
-them), which move the content at once, or the speed the fingers lifted at, in UI
+UI pixels two fingers moved on a touchpad (positive is down, the content moving
+the other way, as in the text editor), which move the content at once, or the speed the fingers lifted at, in UI
 pixels a second (positive is down), at which the content keeps going, slowing down.
 -}
 type ScrollBy
@@ -1091,9 +1091,10 @@ scroll scrollBy size2 data model =
             }
 
         ScrollPixels pixels ->
-            -- No easing: the content stays under the fingers.
-            { offset = Quantity.plus pixels model.offset |> clampOffset
-            , target = Quantity.plus pixels model.target |> clampOffset
+            -- No easing: the content follows the fingers, reversed like the text editor's
+            -- (fingers moving down move the content up).
+            { offset = Quantity.minus pixels model.offset |> clampOffset
+            , target = Quantity.minus pixels model.target |> clampOffset
             , momentum = 0
             , bottom = model.bottom
             , grab = model.grab
@@ -1102,7 +1103,11 @@ scroll scrollBy size2 data model =
             }
 
         Momentum velocity ->
+<<<<<<< Updated upstream
             { model | momentum = velocity, bottom = clampOffset (Units.ui -1.0e9) }
+=======
+            { model | momentum = negate velocity, bottom = clampOffset (Units.uiPixels -1.0e9) }
+>>>>>>> Stashed changes
 
 
 {-| Keep an offset between the top of the content and its bottom. Content no taller than
