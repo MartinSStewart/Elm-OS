@@ -201,12 +201,15 @@ disksListed disks model =
 
 {-| A program starts: an install that was going on is no more (the computer restarted, or
 this is the disk it was installed on, whose data was copied part way through), and the
-disks may have changed: choose again.
+disks may have changed: choose again. The disks listed before may be another computer's
+(the stick's data goes wherever the stick goes), so they are forgotten too; `Main` lists
+them again if the app is open.
 -}
 programStarted : Model -> Model
 programStarted model =
     { model
-        | status =
+        | disks = Nothing
+        , status =
             case model.status of
                 Just (Running _) ->
                     Nothing

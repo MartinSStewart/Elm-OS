@@ -1070,7 +1070,13 @@ step event model =
 
         System info ->
             -- The host says this as a program starts.
-            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code, install = Install.programStarted model.install }, [] )
+            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code, install = Install.programStarted model.install }
+            , if model.install.isOpen then
+                [ Effect.ListDisks ]
+
+              else
+                []
+            )
 
         BootInfo bootInput ->
             BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })

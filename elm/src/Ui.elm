@@ -513,6 +513,23 @@ getViewport id model =
             initViewportModel
 
 
+{-| A viewport's state, its offset kept inside its content as it is now: content that got
+shorter (a list that lost items) would otherwise show blank, scrolled past its end.
+-}
+shownViewport : { a | id : id, viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Model id -> ViewportModel
+shownViewport data child model =
+    let
+        state : ViewportModel
+        state =
+            getViewport data.id model
+
+        clamp : Quantity Float UiPixels -> Quantity Float UiPixels
+        clamp =
+            clampScroll data.viewportHeight (sizeHelper child)
+    in
+    { state | offset = clamp state.offset, target = clamp state.target }
+
+
 getTextInput : id -> Model id -> TextInput.Model
 getTextInput id model =
     case SeqDict.get id model.uiState of
@@ -765,7 +782,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
                     Coord.minus relativePositionToUi cursor
 
                 viewportModel =
-                    getViewport data.id model
+                    shownViewport data child model
             in
             if overScrollbar local data.viewportHeight child then
                 case Scrollbar.press (viewportGeometry data.viewportHeight childSize) (scrolled viewportModel.offset) (Coord.yRaw local) of
@@ -2526,7 +2543,7 @@ inspectHelper model point clip position element found =
 
                     viewportModel : ViewportModel
                     viewportModel =
-                        getViewport data.id model
+                        shownViewport data child model
                 in
                 case Bounds.intersection clip inside of
                     Just clip2 ->
@@ -2622,7 +2639,7 @@ buttonsHelper model clip position element found =
         Viewport data child ->
             case Bounds.intersection clip (viewportInside position data child) of
                 Just inside ->
-                    buttonsHelper model inside (Coord.plus (contentPosition (getViewport data.id model)) position) child found
+                    buttonsHelper model inside (Coord.plus (contentPosition (shownViewport data child model)) position) child found
 
                 Nothing ->
                     found
@@ -2860,7 +2877,7 @@ hoverHelper model hovers point position element =
                         ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
                     viewportModel =
-                        getViewport data.id model
+                        shownViewport data child model
                 in
                 -- Content scrolled out of sight, or under the scroll bar, can't be hovered.
                 if
@@ -2948,7 +2965,7 @@ findInputHelper model id position element =
                 Just (ViewportType { position = position, viewportHeight = data.viewportHeight, contentSize = sizeHelper child })
 
             else
-                findInputHelper model id (Coord.plus (contentPosition (getViewport data.id model)) position) child
+                findInputHelper model id (Coord.plus (contentPosition (shownViewport data child model)) position) child
 
         Lazy _ _ child ->
             findInputHelper model id position child
@@ -3143,7 +3160,7 @@ viewList model time scale showUiBorder maybeHover clipBounds position element =
                             sizeHelper child
 
                         viewportModel =
-                            getViewport data.id model
+                            shownViewport data child model
                     in
                     borderAndFillView
                         scale
