@@ -25,7 +25,6 @@ module Ui exposing
     , colorText2
     , column
     , column2
-    , columnFill
     , columnFromTop
     , cursorAt
     , customButton
@@ -76,7 +75,6 @@ module Ui exposing
     , row
     , row2
     , rowFill
-    , rowFromLeft
     , rowFromRight
     , screenshotSize
     , screenshotView
@@ -1876,17 +1874,17 @@ elWithSize data child =
         pad =
             data.pad
 
-        size2 =
+        innerSize =
             data.size
                 |> Coord.minus (Coord.xy pad.left pad.top)
                 |> Coord.minus (Coord.xy pad.right pad.bottom)
 
         child2 =
-            child size2
+            child innerSize
 
         missingPadding : Coord UiPixels
         missingPadding =
-            size2 |> Coord.minus (size child2)
+            innerSize |> Coord.minus (size child2)
     in
     el
         { pad =
@@ -1899,37 +1897,8 @@ elWithSize data child =
         child2
 
 
-{-| A row exactly `width` wide. Each child is given the width the children left of it
-leave (less the gap), so the first is given all of it. A child that doesn't care
-ignores its Int:
-
-    Ui.rowFromLeft { width = 600, gap = 8 } [ \_ -> backButton, \rest -> title rest ]
-
-If it comes out narrower than `width`, the row is padded on the right.
-
--}
-rowFromLeft : { width : Int, gap : Int } -> List (Int -> Element id) -> Element id
-rowFromLeft data children =
-    List.foldl
-        (\child ( rest, made ) ->
-            let
-                element : Element id
-                element =
-                    child rest
-            in
-            ( rest - Coord.xRaw (size element) - data.gap, element :: made )
-        )
-        ( data.width, [] )
-        children
-        |> Tuple.second
-        |> List.reverse
-        |> row data.gap
-        |> padToWidth 0 data.width
-
-
-{-| A child of `rowFill` or `columnFill`. A `Shrink` element keeps its own size. The
-`Fill` ones share the room the `Shrink` ones leave, evenly: each is given its share (a
-width in a row, a height in a column).
+{-| A child of `rowFill`. A `Shrink` element keeps its own size. The `Fill` ones share
+the room the `Shrink` ones leave, evenly: each is given its share of the width.
 -}
 type Length id
     = Shrink (Element id)
@@ -1955,23 +1924,7 @@ rowFill data children =
         |> padToWidth 0 data.width
 
 
-{-| `rowFill` turned on its side: a column exactly `height` tall, whose `Fill` children
-share the height the `Shrink` ones leave.
-
-    Ui.columnFill { height = 600, gap = 8 }
-        [ Ui.Shrink title
-        , Ui.Fill (\height -> Ui.viewport { id = id, viewportHeight = Units.ui height } content)
-        ]
-
--}
-columnFill : { height : Int, gap : Int } -> List (Length id) -> Element id
-columnFill data children =
-    fillChildren Coord.yRaw (\height -> Coord.xy 0 height) data.height data.gap children
-        |> column data.gap
-        |> padTo (Coord.xy 0 data.height)
-
-
-{-| The children of a `rowFill` or `columnFill`, made, with each `Fill` one given and
+{-| The children of a `rowFill`, made, with each `Fill` one given and
 padded out to its share of `total`. `along` reads a size along the row or column.
 -}
 fillChildren : (Coord UiPixels -> Int) -> (Int -> Coord UiPixels) -> Int -> Int -> List (Length id) -> List (Element id)
@@ -2069,8 +2022,9 @@ padTo minimum (Element child) =
         align 0 0 padded child |> Element
 
 
-{-| `rowFromLeft` starting from the right: the last child is given all of `width`, and
-each one before it what the ones right of it leave. If it comes out narrower than `width`,
+{-| A row exactly `width` wide, made from the right: the last child is given all of
+`width`, and each one before it what the ones right of it leave (less the gap). A child
+that doesn't care ignores its Int. If it comes out narrower than `width`,
 the row is padded on the left, so the right end stays put.
 -}
 rowFromRight : { width : Int, gap : Int } -> List (Int -> Element id) -> Element id

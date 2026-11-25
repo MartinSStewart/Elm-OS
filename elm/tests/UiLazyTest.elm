@@ -40,7 +40,7 @@ window lazyCache texts title =
         4
         [ Ui.lazyKeyed lazyCache (Lazy (Label title)) (\() -> label title)
         , Ui.lazyKeyed lazyCache (Lazy (Labels 2 texts)) (\() -> labels 2 texts)
-        , Ui.button { id = OkButton, padding = Ui.paddingXY 2 2 } (Ui.lazyKeyed lazyCache (Lazy (Label "OK")) (\() -> label "OK"))
+        , Ui.button { id = OkButton, pad = Ui.paddingXY 2 2 } (Ui.lazyKeyed lazyCache (Lazy (Label "OK")) (\() -> label "OK"))
         ]
 
 

@@ -697,6 +697,7 @@ openModule name text uiState model =
         load name uiState { saved | module_ = Just name, committing = False }
 
 
+
 -- CURSOR HISTORY
 
 
@@ -760,7 +761,7 @@ afterEvent uiState model =
                     Nothing ->
                         model
 
-        ( _, _ ) ->
+        _ ->
             { model | lastPlace = currentPlace uiState model }
 
 
@@ -777,7 +778,7 @@ cursorBack boxStyle uiState model =
         ( target :: older, Just now ) ->
             goTo boxStyle target uiState { model | back = older, forward = now :: model.forward }
 
-        ( _, _ ) ->
+        _ ->
             ( model, uiState )
 
 
@@ -789,7 +790,7 @@ cursorForward boxStyle uiState model =
         ( target :: later, Just now ) ->
             goTo boxStyle target uiState { model | forward = later, back = remember now model.back }
 
-        ( _, _ ) ->
+        _ ->
             ( model, uiState )
 
 

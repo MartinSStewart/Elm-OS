@@ -1,4 +1,4 @@
-module App exposing (App, Limits, Range, bodySize, em, fixed, heading, headingSize, layout, panelWidth, sans, smallWindow, smallWindow2)
+module App exposing (App, Limits, Range, bodySize, em, fixed, heading, headingSize, layout, sans, smallWindow, smallWindow2)
 
 {-| What the OS needs to know about an app to name it, size its window and draw it: the
 same for every app, so Main has one place that builds this for each.
@@ -291,13 +291,6 @@ headingSize =
 heading : String -> Ui.Element id
 heading string =
     Ui.customText headingSize [ { text = string, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]
-
-
-{-| How wide the network and weather apps' contents are, in UI pixels.
--}
-panelWidth : Quantity Int UiPixels
-panelWidth =
-    em 28
 
 
 {-| `smallWindow` made exactly the target size, with its rows given the room under the title.
