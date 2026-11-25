@@ -4,6 +4,7 @@ module Scrollbar exposing
     , drag
     , fade
     , isOver
+    , marks
     , press
     , view
     , width
@@ -235,3 +236,53 @@ view clip trackPosition geometry scrolled state =
 
         Nothing ->
             []
+
+
+{-| Short bars across the track at the places of the content (each a distance down it, in
+UI pixels) that are marked, such as the matches of a search: the way to see where they are
+without scrolling. They are always shown (never faded) as long as the content scrolls, and
+lie over the thumb. Marks that land on the same pixels are drawn once.
+-}
+marks : Bounds UiPixels -> Coord UiPixels -> Geometry -> List Int -> List (Triangle UiPixels)
+marks clip trackPosition geometry places =
+    if scrollable geometry <= 0 || geometry.track <= 0 then
+        []
+
+    else
+        places
+            |> List.map (\place -> round (toFloat place * toFloat geometry.track / toFloat geometry.content))
+            |> dedupe
+            |> List.concatMap
+                (\top ->
+                    Sprite.rectangle
+                        Color.scrollbarMarkColor
+                        clip
+                        (Coord.plus (Coord.xy (width - markWidth) (min top (geometry.track - markHeight))) trackPosition)
+                        (Coord.xy markWidth markHeight)
+                )
+
+
+markWidth : Int
+markWidth =
+    10
+
+
+markHeight : Int
+markHeight =
+    3
+
+
+{-| The same list without a number repeating the one before it (the places come in order).
+-}
+dedupe : List Int -> List Int
+dedupe list =
+    case list of
+        a :: b :: rest ->
+            if a == b then
+                dedupe (b :: rest)
+
+            else
+                a :: dedupe (b :: rest)
+
+        _ ->
+            list

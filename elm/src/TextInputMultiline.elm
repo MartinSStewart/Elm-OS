@@ -1262,6 +1262,11 @@ view scale viewport style offset hasFocus model =
                 (scrollbarGeometry style state)
                 (scrolledPixels style model)
                 model
+                ++ Scrollbar.marks
+                    viewport
+                    (Coord.plus (scrollbarPosition style) offset)
+                    (scrollbarGeometry style state)
+                    (List.map (\row -> row * height) (highlightRows style.highlights rs))
     in
     Sprite.toDevice scale (box ++ marks ++ selection)
         ++ List.concatMap
@@ -1275,6 +1280,28 @@ view scale viewport style offset hasFocus model =
             )
             visible
         ++ Sprite.toDevice scale (caret ++ scrollBar)
+
+
+{-| The rows (from 0, in order, maybe repeating) the highlighted ranges (in order) start on:
+one pass over both.
+-}
+highlightRows : List ( Int, Int ) -> List Row -> List Int
+highlightRows highlights rs =
+    highlightRowsHelper highlights 0 rs
+
+
+highlightRowsHelper : List ( Int, Int ) -> Int -> List Row -> List Int
+highlightRowsHelper highlights n rs =
+    case ( highlights, rs ) of
+        ( ( start, _ ) :: restHighlights, row :: restRows ) ->
+            if start < rowEnd row || (row.last && start == rowEnd row) || List.isEmpty restRows then
+                n :: highlightRowsHelper restHighlights n rs
+
+            else
+                highlightRowsHelper highlights (n + 1) restRows
+
+        _ ->
+            []
 
 
 {-| The parts of `segments` (one line, one after another) from character `from` to `to`.

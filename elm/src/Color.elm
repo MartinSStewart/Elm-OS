@@ -26,6 +26,7 @@ module Color exposing
     , rgb255
     , rgba255
     , scrollbarColor
+    , scrollbarMarkColor
     , selectionColor
     , successColor
     , textColor
@@ -203,6 +204,13 @@ dangerColor =
 scrollbarColor : Int -> Color
 scrollbarColor alpha =
     rgba255 232 226 220 alpha
+
+
+{-| The bars on a scroll bar's track that show where the matches of a search are.
+-}
+scrollbarMarkColor : Color
+scrollbarMarkColor =
+    rgb255 255 214 60
 
 
 {-| The ripple a pressed button draws, with this alpha.
