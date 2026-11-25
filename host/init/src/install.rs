@@ -569,6 +569,8 @@ struct Source {
     esp: (u64, u64),
     tools: (u64, u64),
     data: (u64, u64),
+    /// The data partition's own device, e.g. /dev/sda2: the one /data is mounted from.
+    data_dev: String,
 }
 
 fn source() -> Result<Source, String> {
@@ -587,6 +589,7 @@ fn source() -> Result<Source, String> {
     let esp = find(&|p| disks::guid_text(&p.type_guid) == ESP_TYPE, "EFI system partition").map_err(|_| FROM_STICK.to_owned())?;
     let tools = find(&|p| p.name == disks::TOOLS, "tools partition")?;
     let data = find(&|p| p.name == disks::DATA, "data partition")?;
+    let data_number = gpt.partitions.iter().find(|p| p.name == disks::DATA).map_or(0, |p| p.number);
     let disk = File::open(format!("/dev/{boot}")).map_err(|e| format!("Can't read /dev/{boot}: {e}"))?;
     // The tools file system's own size (ext4: blocks count x block size), not its partition's.
     let mut sb = [0u8; 1024];
@@ -599,7 +602,7 @@ fn source() -> Result<Source, String> {
     } else {
         tools.1
     };
-    Ok(Source { disk, esp, tools: (tools.0, tools_fs), data })
+    Ok(Source { disk, esp, tools: (tools.0, tools_fs), data, data_dev: disks::partition_device(boot, data_number) })
 }
 
 /// The kernel (BOOTX64.EFI) from the boot disk's EFI partition.
@@ -690,14 +693,29 @@ fn reread_partitions(f: &File, disk: &str, numbers: &[u32]) -> Result<(), String
     Err("The new partitions didn't show up.".into())
 }
 
+/// Forgets what the kernel has cached of this device, so reads come from the disk.
+/// Every block device has a cache of its own: a disk's (/dev/sda) and its partition's
+/// (/dev/sda2) can hold different bytes for the same place.
+fn drop_cache(f: &File) {
+    // SAFETY: an fd we own. Only clean pages are dropped; failing just keeps them.
+    unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
+}
+
 /// Copies the data partition while /data is frozen (nothing written to it meanwhile),
-/// so the copy is a clean file system.
+/// so the copy is a clean file system. It reads the partition's own device, the one
+/// /data is mounted from, not the whole disk: the whole disk's cache can hold old
+/// copies of the file system's blocks (read ahead while reading the EFI partition just
+/// before it, say), and a copy mixing old and new blocks is a broken file system
+/// ("Bad message" from ext4's checksums when the new disk mounts it).
 fn copy_data(p: &mut Progress, src: &Source, to: &File, dst: u64, done0: f64, done1: f64) -> Result<(), String> {
     crate::persist::flush();
+    let part = File::open(&src.data_dev).map_err(|e| format!("Can't read {}: {e}", src.data_dev))?;
     let data = File::open("/data").map_err(|e| format!("Can't open /data: {e}"))?;
     // SAFETY: an fd we own; FIFREEZE/FITHAW take an int argument that is ignored.
     ioctl_ok(unsafe { libc::ioctl(data.as_raw_fd(), FIFREEZE as _, 0) }, "Freezing /data")?;
-    let copied = copy(p, &src.disk, src.data.0, to, dst, src.data.1, "Copying your data", done0, done1);
+    // Frozen means written out, so the disk itself now has the whole file system.
+    drop_cache(&part);
+    let copied = copy(p, &part, 0, to, dst, src.data.1, "Copying your data", done0, done1);
     // SAFETY: as above.
     let thawed = ioctl_ok(unsafe { libc::ioctl(data.as_raw_fd(), FITHAW as _, 0) }, "Unfreezing /data");
     copied.and(thawed)
@@ -834,7 +852,12 @@ fn do_install(p: &mut Progress, disk: &str, layout_was: &str, target: &InstallTa
     drop(f);
 
     p.step(if keep_data { "Making room for your data" } else { "Making the data partition" }, 0.92);
-    mount_ext4(&disks::partition_device(disk, numbers[2]))?;
+    let data_dev = disks::partition_device(disk, numbers[2]);
+    // It was written through the whole disk: nothing older of it may be read instead.
+    if let Ok(part) = File::open(&data_dev) {
+        drop_cache(&part);
+    }
+    mount_ext4(&data_dev)?;
     let grown = (if keep_data { Ok(()) } else { empty_mounted() }).and_then(|_| grow_mounted(plan.data.1));
     let unmounted = unmount();
     grown?;
