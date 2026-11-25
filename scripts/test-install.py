@@ -14,6 +14,9 @@ checks:
   - UEFI has an "Elm OS" boot entry (the firmware's variables are kept in a file)
   - with the stick gone, the firmware starts Elm OS from the disk, which uses the disk's
     data partition and says it booted from the disk's EFI partition
+  - from the stick again, "Update the Elm OS on it" rewrites the disk's kernel and tools
+    (the test spoils both first), keeps its data, and drops its own builds of the Elm
+    program; the disk then starts without the stick again
 
     usage: scripts/test-install.py USB-IMAGE   (a USB image whose kernel command line
            has ELMOS_TEST=1 and console=ttyS0 last, which make test-install builds)
@@ -251,6 +254,95 @@ booted = [ln for ln in text.splitlines() if "[disks] booted from" in ln]
 if not booted or "booted from partition" not in booted[0] or "using nvme0n1" not in booted[0]:
     fail(f"it didn't say it booted from the disk's EFI partition: {booted}")
 print("started from the disk:", booted[0].split("] ", 1)[1])
+power_off(cmd)
+
+# ---- 3: spoil the installed kernel and tools, mark the data, and update from the stick
+
+
+def partition(name):
+    table = json.loads(run("sfdisk", "--json", disk))["partitiontable"]
+    p = next(p for p in table["partitions"] if p.get("name") == name)
+    return p["start"] * 512, p["size"] * 512
+
+
+def extract(name):
+    start, size = partition(name)
+    path = os.path.join(tmp, name.replace(" ", "-") + ".img")
+    run("dd", f"if={disk}", f"of={path}", "bs=1M", f"skip={start // MIB}", f"count={size // MIB}", "status=none")
+    return path, start
+
+
+def put_back(path, start):
+    run("dd", f"if={path}", f"of={disk}", "bs=1M", f"seek={start // MIB}", "conv=notrunc", "status=none")
+    os.remove(path)
+
+
+esp, start = extract("Elm OS")
+junk = os.path.join(tmp, "junk.efi")
+open(junk, "wb").write(b"not a kernel")
+run("mcopy", "-o", "-i", esp, junk, "::/EFI/BOOT/BOOTX64.EFI")
+put_back(esp, start)
+tools_start, tools_size = partition("Elm OS tools")
+with open(disk, "r+b") as f:
+    f.seek(tools_start)
+    f.write(b"\0" * (4 * MIB))
+data_img, data_start = extract("Elm OS data")
+marker = os.path.join(tmp, "marker")
+open(marker, "w").write("the laptop's own data\n")
+# Elm OS powers off without unmounting /data, so its journal still has to be replayed:
+# debugfs writes around the journal, and the replay at the next mount would undo them.
+if subprocess.run(["e2fsck", "-fy", data_img], capture_output=True).returncode > 1:
+    fail("e2fsck couldn't replay the data partition's journal")
+run("debugfs", "-w", "-R", "mkdir programs", data_img)
+run("debugfs", "-w", "-R", f"write {marker} marker", data_img)
+run("debugfs", "-w", "-R", f"write {marker} programs/current", data_img)
+if not re.search(r"\scurrent\s*$", run("debugfs", "-R", "ls -l /programs", data_img), re.M):
+    fail("couldn't put a build of the Elm program on the disk's data")
+put_back(data_img, data_start)
+before["Elm OS data size"] = partition("Elm OS data")
+print("spoiled the disk's kernel and tools, and marked its data")
+
+cmd, facts = boot(True, "update")
+click = clicker(cmd, facts)
+click("Install")
+facts.wait("install", lambda v: "nvme0n1" in v["disks"], "the Install app to list the NVMe disk", timeout=60)
+click("Update the Elm OS on it")
+time.sleep(2)
+click("Update…")
+time.sleep(2)
+shot(cmd, "install-update-confirm")
+click("Yes, update")
+facts.wait("install", lambda v: v["status"] != "running" and v["status"] != "none", "the update to finish", timeout=1200)
+result = facts.get("install")["status"]
+if result != "installed":
+    fail(f"the update didn't work: {result}")
+print("updated from the stick")
+power_off(cmd)
+
+after = {"EFI": digest(*ESP), "Mint": digest(*MINT)}
+for name in ["EFI", "Mint"]:
+    if before[name] != after[name]:
+        fail(f"the update changed the {name} partition")
+if partition("Elm OS data") != before["Elm OS data size"]:
+    fail("the update moved the data partition")
+data_img, _ = extract("Elm OS data")
+if "the laptop's own data" not in run("debugfs", "-R", "cat marker", data_img):
+    fail("the update lost the disk's data")
+listing = run("debugfs", "-R", "ls -l /programs", data_img)
+if re.search(r"\scurrent\s*$", listing, re.M):
+    fail(f"the update kept the disk's own build of the Elm program:\n{listing}")
+run("e2fsck", "-fn", data_img)
+os.remove(data_img)
+print("the update kept the data and the EFI and Mint partitions")
+
+# ---- 4: without the stick again
+
+cmd, facts = boot(False, "disk-updated")
+facts.wait("install", lambda v: True, "Elm OS to start from the updated disk", timeout=600)
+booted = [ln for ln in log().splitlines() if "[disks] booted from" in ln]
+if not booted or "booted from partition" not in booted[0] or "using nvme0n1" not in booted[0]:
+    fail(f"the updated disk didn't start Elm OS: {booted}")
+print("started from the updated disk")
 power_off(cmd)
 shutil.rmtree(tmp)
 print("PASS")
