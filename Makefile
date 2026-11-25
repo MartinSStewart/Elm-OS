@@ -81,8 +81,8 @@ export ECO_SPLIT_CODEGEN := 4
 # ~/.eco, which every other 0.2.0 eco shares and fills with files this one can't read.
 ECO        := $(ECO_DIR)/elmos-bin/eco
 export PATH := $(ECO_DIR)/elmos-bin:$(PATH)
-# Not for the goals that don't need eco.
-ifneq ($(filter-out clean refresh check-fresh check-run-deps usb-write docker,$(or $(MAKECMDGOALS),all)),)
+# Not for the goals that don't need eco (usb-write does: it builds the image first).
+ifneq ($(filter-out clean refresh check-fresh check-run-deps docker,$(or $(MAKECMDGOALS),all)),)
 # Docker problems are explained up front, before the 20 minute build (tools/check-docker.sh).
 ifeq ($(wildcard $(ECO_DIR)/elmos-bin/eco),)
 $(shell tools/check-docker.sh)
