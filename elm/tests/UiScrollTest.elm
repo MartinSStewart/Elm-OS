@@ -52,24 +52,15 @@ suite =
     Test.describe "Ui scrolling"
         [ Test.test "touchpad pixels move the content at once"
             (\_ ->
-<<<<<<< Updated upstream
-                Ui.init |> scroll (Ui.ScrollPixels (Units.ui -12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
-=======
-                Ui.init |> scroll (Ui.ScrollPixels (Units.uiPixels 12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
->>>>>>> Stashed changes
+                Ui.init |> scroll (Ui.ScrollPixels (Units.ui 12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
             )
         , Test.test "momentum glides on, slowing down, and stops"
             (\_ ->
                 let
                     start =
                         Ui.init
-<<<<<<< Updated upstream
-                            |> scroll (Ui.ScrollPixels (Units.ui -100))
-                            |> scroll (Ui.Momentum -500)
-=======
-                            |> scroll (Ui.ScrollPixels (Units.uiPixels 100))
+                            |> scroll (Ui.ScrollPixels (Units.ui 100))
                             |> scroll (Ui.Momentum 500)
->>>>>>> Stashed changes
 
                     a =
                         frames 10 start
@@ -97,13 +88,8 @@ suite =
                 let
                     short : Ui.Model () -> Ui.Model ()
                     short model =
-<<<<<<< Updated upstream
-                        Ui.onWheel () (Ui.ScrollPixels (Units.ui -40)) (viewportOnto 50) model
-                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.ui 40)) (viewportOnto 50) m)
-=======
-                        Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels 40)) (viewportOnto 50) model
-                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.uiPixels -40)) (viewportOnto 50) m)
->>>>>>> Stashed changes
+                        Ui.onWheel () (Ui.ScrollPixels (Units.ui 40)) (viewportOnto 50) model
+                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.ui -40)) (viewportOnto 50) m)
                             |> (\m -> Ui.onWheel () (Ui.WheelClicks -3) (viewportOnto 50) m)
                             |> (\m -> Ui.onWheel () (Ui.Momentum 500) (viewportOnto 50) m)
                             |> frames 100
@@ -196,11 +182,7 @@ suite =
                 let
                     scrolled : Ui.Model ()
                     scrolled =
-<<<<<<< Updated upstream
-                        Ui.init |> scroll (Ui.ScrollPixels (Units.ui -300))
-=======
-                        Ui.init |> scroll (Ui.ScrollPixels (Units.uiPixels 300))
->>>>>>> Stashed changes
+                        Ui.init |> scroll (Ui.ScrollPixels (Units.ui 300))
 
                     screenshot : Ui.Screenshot
                     screenshot =

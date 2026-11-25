@@ -1103,11 +1103,7 @@ scroll scrollBy size2 data model =
             }
 
         Momentum velocity ->
-<<<<<<< Updated upstream
-            { model | momentum = velocity, bottom = clampOffset (Units.ui -1.0e9) }
-=======
-            { model | momentum = negate velocity, bottom = clampOffset (Units.uiPixels -1.0e9) }
->>>>>>> Stashed changes
+            { model | momentum = negate velocity, bottom = clampOffset (Units.ui -1.0e9) }
 
 
 {-| Keep an offset between the top of the content and its bottom. Content no taller than
