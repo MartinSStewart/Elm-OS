@@ -1,4 +1,4 @@
-module Code.Types exposing (BuildStatus(..), Git, GitStatus(..), GitStep(..), GitWork, UiId(..))
+module Code.Types exposing (BuildStatus(..), Git, GitStatus(..), GitStep(..), GitWork, Place, UiId(..))
 
 import SeqDict exposing (SeqDict)
 
@@ -35,6 +35,16 @@ type UiId
     | ReplaceButton
     | ReplaceAllButton
     | FindCloseButton
+
+
+{-| Where the cursor was: in a module, at a position in its text (and on which line, from
+0, so a jump can be told from a step).
+-}
+type alias Place =
+    { module_ : String
+    , position : Int
+    , line : Int
+    }
 
 
 {-| How a build of Elm OS made on this computer is going (host/init/src/build.rs,

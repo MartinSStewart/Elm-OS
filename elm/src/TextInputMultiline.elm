@@ -16,6 +16,7 @@ module TextInputMultiline exposing
     , replaceRanges
     , scrollPixels
     , select
+    , selectCentered
     , size
     , stopGlide
     , view
@@ -612,6 +613,30 @@ select style start end model =
         , goalX = Nothing
     }
         |> scrollToCursor style
+
+
+{-| Like `select`, but when the cursor's row is out of view it goes in the middle of the box
+rather than at its edge, as it does after a jump.
+-}
+selectCentered : Style -> Int -> Int -> Model -> Model
+selectCentered style start end model =
+    let
+        selected : Model
+        selected =
+            select style start end model
+
+        state : TextInput.State
+        state =
+            selected.input.current
+
+        ( row, _ ) =
+            rowOf (rows style state.text) state.cursorPosition
+    in
+    if row >= model.scroll && row < model.scroll + style.lines then
+        selected
+
+    else
+        jumpTo (clampScroll style state (row - style.lines // 2)) selected
 
 
 {-| Replaces each of the ranges (start, end; in order, not overlapping) of the text with

@@ -1,7 +1,10 @@
 module Code exposing
     ( Model
+    , afterEvent
     , appSize
     , buildUpdate
+    , cursorBack
+    , cursorForward
     , findChanged
     , findKeyDown
     , findShown
@@ -35,7 +38,7 @@ import App
 import BuildInfo
 import Code.Find
 import Code.GitHub
-import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), UiId(..))
+import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), Place, UiId(..))
 import Color
 import Coord exposing (Coord)
 import Effect exposing (Effect)
@@ -74,6 +77,13 @@ type alias Model =
     -- The find and replace bar shows over the code (what is typed in it is in the UI's
     -- state, under FindInput and ReplaceInput).
     , finding : Bool
+
+    -- Where the cursor jumped from, newest first, and where it was before going back
+    -- through them (Alt+Shift+Left and Right). `lastPlace` is where it was after the last
+    -- event, to tell when it moves far.
+    , back : List Place
+    , forward : List Place
+    , lastPlace : Maybe Place
     }
 
 
@@ -87,6 +97,9 @@ init =
     , committing = False
     , git = Code.GitHub.init
     , finding = False
+    , back = []
+    , forward = []
+    , lastPlace = Nothing
     }
 
 
@@ -682,6 +695,133 @@ openModule name text uiState model =
                     save text model
         in
         load name uiState { saved | module_ = Just name, committing = False }
+
+
+-- CURSOR HISTORY
+
+
+{-| How many places the cursor can go back through.
+-}
+historyLimit : Int
+historyLimit =
+    200
+
+
+{-| How many lines the cursor moves in one go for it to count as a jump (a click, Page
+Up, a search match, a change of module) and not a step (an arrow key, Enter).
+-}
+jumpLines : Int
+jumpLines =
+    3
+
+
+{-| The module's name and the cursor's position in the text box, with its line.
+-}
+currentPlace : Ui.Model UiId.UiId -> Model -> Maybe Place
+currentPlace uiState model =
+    case model.module_ of
+        Just name ->
+            let
+                state : TextInput.State
+                state =
+                    (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current
+            in
+            Just
+                { module_ = name
+                , position = state.cursorPosition
+                , line = List.length (String.indexes "\n" (String.left state.cursorPosition state.text))
+                }
+
+        Nothing ->
+            Nothing
+
+
+{-| After every event Main handles: notes where the cursor is, and if it jumped (to another
+module, or `jumpLines` lines or more) from where it was after the last event, keeps that
+place to go back to. A jump forgets the places to go forward to.
+-}
+afterEvent : Ui.Model UiId.UiId -> Model -> Model
+afterEvent uiState model =
+    case ( model.module_, model.lastPlace ) of
+        ( Just name, Just last ) ->
+            if last.module_ == name && last.position == (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.cursorPosition then
+                -- Not moved (most events): nothing to work out.
+                model
+
+            else
+                case currentPlace uiState model of
+                    Just now ->
+                        if last.module_ /= now.module_ || abs (last.line - now.line) >= jumpLines then
+                            { model | back = remember last model.back, forward = [], lastPlace = Just now }
+
+                        else
+                            { model | lastPlace = Just now }
+
+                    Nothing ->
+                        model
+
+        ( _, _ ) ->
+            { model | lastPlace = currentPlace uiState model }
+
+
+remember : Place -> List Place -> List Place
+remember place places =
+    place :: List.take (historyLimit - 1) places
+
+
+{-| Alt+Shift+Left: puts the cursor where it was before it last jumped, in that module.
+-}
+cursorBack : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+cursorBack boxStyle uiState model =
+    case ( model.back, currentPlace uiState model ) of
+        ( target :: older, Just now ) ->
+            goTo boxStyle target uiState { model | back = older, forward = now :: model.forward }
+
+        ( _, _ ) ->
+            ( model, uiState )
+
+
+{-| Alt+Shift+Right: goes on again to where the cursor was when it went back.
+-}
+cursorForward : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+cursorForward boxStyle uiState model =
+    case ( model.forward, currentPlace uiState model ) of
+        ( target :: later, Just now ) ->
+            goTo boxStyle target uiState { model | forward = later, back = remember now model.back }
+
+        ( _, _ ) ->
+            ( model, uiState )
+
+
+{-| Puts the cursor at a place, in whichever module, and shows it. That is not a jump to
+remember (the caller keeps the history).
+-}
+goTo : TextInputMultiline.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+goTo boxStyle target uiState model =
+    let
+        text : String
+        text =
+            (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+
+        ( opened, uiState2, _ ) =
+            openModule target.module_ text uiState model
+
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState2
+
+        position : Int
+        position =
+            min target.position (String.length editor.input.current.text)
+
+        uiState3 : Ui.Model UiId.UiId
+        uiState3 =
+            Ui.insertElement
+                (UiId.Code Input)
+                (Ui.TextInputMultilineState (TextInputMultiline.selectCentered boxStyle position position editor))
+                uiState2
+    in
+    ( { opened | lastPlace = currentPlace uiState3 opened }, Ui.setFocus (Just (UiId.Code Input)) uiState3 )
 
 
 {-| Puts the module's text in the text box.
