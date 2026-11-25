@@ -11,9 +11,8 @@ type UiId
     | Window
     | Input
     | CloseButton
-    | ModulesButton
     | ModulesViewport
-      -- A module in the list of modules, by its name.
+      -- A module in the list beside the code, by its name.
     | ModuleButton String
     | SaveButton
     | RevertButton

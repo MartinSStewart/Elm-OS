@@ -30,12 +30,12 @@ suite =
             Just (BuildFailed "Compiling" (String.repeat 30 "a long line of compiler output that is wider than the window, much wider\n"))
     in
     Test.describe "Code app size"
-        [ Test.test "editing" (\_ -> sizeOf { model | picking = False, module_ = Just "Code" } |> Expect.equal window)
-        , Test.test "editing with a failed build" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", build = failed } |> Expect.equal window)
-        , Test.test "editing with the find bar" (\_ -> sizeOf { model | picking = False, module_ = Just "Code", finding = True } |> Expect.equal window)
+        [ Test.test "editing" (\_ -> sizeOf { model | module_ = Just "Code" } |> Expect.equal window)
+        , Test.test "editing with a failed build" (\_ -> sizeOf { model | module_ = Just "Code", build = failed } |> Expect.equal window)
+        , Test.test "editing with the find bar" (\_ -> sizeOf { model | module_ = Just "Code", finding = True } |> Expect.equal window)
         , Test.test "list of modules" (\_ -> sizeOf model |> Expect.equal window)
-        , Test.test "errors" (\_ -> sizeOf { model | showErrors = True, picking = False, build = failed } |> Expect.equal window)
-        , Test.test "commit" (\_ -> sizeOf { model | committing = True, picking = False, saved = SeqDict.fromList [ ( "Code", "module Code" ) ] } |> Expect.equal window)
+        , Test.test "errors" (\_ -> sizeOf { model | showErrors = True, build = failed } |> Expect.equal window)
+        , Test.test "commit" (\_ -> sizeOf { model | committing = True, saved = SeqDict.fromList [ ( "Code", "module Code" ) ] } |> Expect.equal window)
         ]
 
 

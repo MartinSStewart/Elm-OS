@@ -1335,9 +1335,6 @@ appButton id =
                 Code.Types.CloseButton ->
                     Nothing
 
-                Code.Types.ModulesButton ->
-                    Nothing
-
                 Code.Types.ModulesViewport ->
                     Nothing
 
