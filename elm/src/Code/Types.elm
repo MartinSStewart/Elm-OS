@@ -1,5 +1,6 @@
-module Code.Types exposing (BuildStatus(..), Git, GitStatus(..), GitStep(..), GitWork, Place, UiId(..))
+module Code.Types exposing (BuildStatus(..), Git, GitStatus(..), GitStep(..), GitWork, Place, UiId(..), UsageList)
 
+import Code.Index
 import SeqDict exposing (SeqDict)
 
 
@@ -35,6 +36,20 @@ type UiId
     | ReplaceButton
     | ReplaceAllButton
     | FindCloseButton
+      -- The usages of a definition shown under the code (after Ctrl+click on it), their
+      -- list, one of them (by its place in the list) and the button that hides them.
+    | UsagesViewport
+    | UsageButton Int
+    | UsagesCloseButton
+
+
+{-| Where a definition (the module it is in and its name) is used.
+-}
+type alias UsageList =
+    { module_ : String
+    , name : String
+    , found : List Code.Index.Usage
+    }
 
 
 {-| Where the cursor was: in a module, at a position in its text (and on which line, from

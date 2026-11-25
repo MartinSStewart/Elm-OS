@@ -1,4 +1,4 @@
-module CodeTest exposing (forgetting, history, suite)
+module CodeTest exposing (forgetting, history, navigation, suite)
 
 import Code
 import Code.Types exposing (BuildStatus(..), UiId(..))
@@ -37,6 +37,20 @@ suite =
         , Test.test "list of modules" (\_ -> sizeOf model |> Expect.equal window)
         , Test.test "errors" (\_ -> sizeOf { model | showErrors = True, build = failed } |> Expect.equal window)
         , Test.test "commit" (\_ -> sizeOf { model | committing = True, saved = SeqDict.fromList [ ( "Code", "module Code" ) ] } |> Expect.equal window)
+        , Test.test "editing with the usages of a definition"
+            (\_ ->
+                sizeOf
+                    { model
+                        | module_ = Just "Code"
+                        , usages =
+                            Just
+                                { module_ = "Code"
+                                , name = "view"
+                                , found = List.repeat 12 { module_ = "Main", position = 5, line = 3, text = String.repeat 40 "a long line of code, " }
+                                }
+                    }
+                    |> Expect.equal window
+            )
         ]
 
 
@@ -173,5 +187,101 @@ history =
                     |> click "B"
                     |> (\( model, _ ) -> model.forward)
                     |> Expect.equal []
+            )
+        ]
+
+
+{-| Ctrl+click: on a use goes to the definition, on a definition lists the uses.
+-}
+navigation : Test
+navigation =
+    let
+        window =
+            Coord.xy 832 1035
+
+        scrollbar =
+            "module Scrollbar exposing (marks)\n\nmarks =\n    1\n"
+
+        editor =
+            "module TextInputMultiline exposing (x)\n\nimport Scrollbar\n\nx =\n    Scrollbar.marks\n"
+
+        start =
+            Code.init |> (\init -> { init | saved = SeqDict.fromList [ ( "Scrollbar", scrollbar ), ( "TextInputMultiline", editor ) ] })
+
+        boxStyle model =
+            Code.style window model
+
+        open name ( model, uiState ) =
+            let
+                ( model2, uiState2, _ ) =
+                    Code.onClick (ModuleButton name) (boxStyle model) (typed uiState) uiState model
+            in
+            ( Code.afterEvent uiState2 model2, uiState2 )
+
+        typed uiState =
+            (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+
+        -- The cursor in the middle of the first `needle` in the open module, then Ctrl+click.
+        clickOn needle ( model, uiState ) =
+            let
+                position =
+                    (String.indexes needle (typed uiState) |> List.head |> Maybe.withDefault 0) + 2
+
+                uiState2 =
+                    Ui.insertElement
+                        (UiId.Code Input)
+                        (Ui.TextInputMultilineState
+                            (TextInputMultiline.select (boxStyle model) position position (Ui.getTextInputMultiline (UiId.Code Input) uiState))
+                        )
+                        uiState
+            in
+            case Code.ctrlClick window uiState2 model of
+                Just ( model3, uiState3 ) ->
+                    ( Code.afterEvent uiState3 model3, uiState3 )
+
+                Nothing ->
+                    ( model, uiState2 )
+
+        place ( model, uiState ) =
+            ( model.module_, (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.cursorPosition )
+
+        usedFrom =
+            ( start, Ui.init ) |> open "Scrollbar" |> clickOn "marks ="
+    in
+    Test.describe "Code Ctrl+click"
+        [ Test.test "on a definition: the places it is used"
+            (\_ ->
+                usedFrom
+                    |> (\( model, _ ) ->
+                            Maybe.map (\list -> List.map (\usage -> ( usage.module_, usage.line, usage.text )) list.found) model.usages
+                       )
+                    |> Expect.equal (Just [ ( "TextInputMultiline", 5, "Scrollbar.marks" ) ])
+            )
+        , Test.test "on a use: the definition, in its module, and back again"
+            (\_ ->
+                let
+                    onUse =
+                        ( start, Ui.init ) |> open "TextInputMultiline" |> clickOn "marks"
+                in
+                [ place onUse
+                , onUse |> (\( model, uiState ) -> Code.cursorBack (boxStyle model) uiState model) |> (\( model, uiState ) -> place ( model, uiState ))
+                ]
+                    |> Expect.equal [ ( Just "Scrollbar", 35 ), ( Just "TextInputMultiline", 78 ) ]
+            )
+        , Test.test "on a module's name: the module"
+            (\_ ->
+                ( start, Ui.init )
+                    |> open "TextInputMultiline"
+                    |> clickOn "Scrollbar.marks"
+                    |> place
+                    |> Expect.equal ( Just "Scrollbar", 0 )
+            )
+        , Test.test "on a name from a package: nothing"
+            (\_ ->
+                ( start, Ui.init )
+                    |> open "TextInputMultiline"
+                    |> clickOn "exposing"
+                    |> (\( model, _ ) -> ( model.module_, model.usages ))
+                    |> Expect.equal ( Just "TextInputMultiline", Nothing )
             )
         ]

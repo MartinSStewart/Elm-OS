@@ -881,7 +881,19 @@ step event model =
                                     ( model3, effects ) =
                                         click model2 id
                                 in
-                                ( { model3 | selectingText = True }, effects )
+                                case ( id, model3.ctrl ) of
+                                    ( Code Code.Types.Input, True ) ->
+                                        -- Ctrl+click on a name goes to its definition (or from
+                                        -- its definition to where it is used).
+                                        case Code.ctrlClick (appUiSize CodeApp model3) model3.uiState model3.code of
+                                            Just ( code, uiState ) ->
+                                                ( { model3 | code = code, uiState = uiState }, effects )
+
+                                            Nothing ->
+                                                ( { model3 | selectingText = True }, effects )
+
+                                    _ ->
+                                        ( { model3 | selectingText = True }, effects )
 
                             [] ->
                                 ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
@@ -1406,6 +1418,15 @@ appButton id =
                     Nothing
 
                 Code.Types.FindCloseButton ->
+                    Nothing
+
+                Code.Types.UsagesViewport ->
+                    Nothing
+
+                Code.Types.UsageButton _ ->
+                    Nothing
+
+                Code.Types.UsagesCloseButton ->
                     Nothing
 
         ScreenshotViewer id2 ->
