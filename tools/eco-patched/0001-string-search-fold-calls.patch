@@ -1,4 +1,4 @@
-From e4bf7cc8d2b9bd4157a786b9e4a285099687c60a Mon Sep 17 00:00:00 2001
+From e99e735140d9d1d0d4b7fa1b7caab614b5e982ea Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 19 Nov 2026 10:48:16 +0000
 Subject: [PATCH 1/4] Search String units in place in indexes, split, contains
@@ -520,7 +520,7 @@ index 376c96b3..c44fd4af 100644
 2.43.0
 
 
-From 5b0d3c2c6be5171b61331efc6c6e8a990b545cac Mon Sep 17 00:00:00 2001
+From 5fe7585144f5447deafdd29b5ff1d3890a927648 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 19 Nov 2026 10:48:27 +0000
 Subject: [PATCH 2/4] Return non-overlapping matches from String.indexes, as
@@ -636,7 +636,7 @@ index 73636e65..b78132f8 100644
 2.43.0
 
 
-From aafc2756ce7e7366d8a6725d5ec217b620a541ab Mon Sep 17 00:00:00 2001
+From 0ae3ed43fe29c3e94e6c732ed09d9fc90d13a14e Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 19 Nov 2026 10:48:27 +0000
 Subject: [PATCH 3/4] Call fold steps through DirectCall in String and Array
@@ -991,7 +991,7 @@ index aa4fdede..55ec2149 100644
 2.43.0
 
 
-From 6a2209c2d7fba7c0e116f8ec72a1cc6fdd35b643 Mon Sep 17 00:00:00 2001
+From 07aadcaca6a4846b07eb1645aedcb76393c83094 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Mon, 23 Nov 2026 22:53:06 +0000
 Subject: [PATCH 4/4] Re-audit the 43 kernel licenses on StringExports.cpp and
@@ -1013,13 +1013,13 @@ unchanged.
  2 files changed, 125 insertions(+), 82 deletions(-)
 
 diff --git a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv
-index de5378d3..2de970a8 100644
+index a7b54007..82b0822d 100644
 --- a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv
 +++ b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-audit.csv
-@@ -1868,3 +1868,46 @@ Elm.Basics.tan,2026-11-20T23:13:33,plans/constructor-representation-followups.md
- Elm.Basics.toFloat,2026-11-20T23:13:33,plans/constructor-representation-followups.md,"plans/constructor-representation-followups.md F1.4: BasicsExports.cpp's file-local helpers (tagOfBoxed, intOfBoxed, floatOfBoxed, boxInt, boxFloat) are now static, so none becomes an out-of-line unmangled C symbol when not inlined (check-kernel-c-symbols); no behaviour change. Flow as in its previous audit"
- Elm.Basics.truncate,2026-11-20T23:13:33,plans/constructor-representation-followups.md,"plans/constructor-representation-followups.md F1.4: BasicsExports.cpp's file-local helpers (tagOfBoxed, intOfBoxed, floatOfBoxed, boxInt, boxFloat) are now static, so none becomes an out-of-line unmangled C symbol when not inlined (check-kernel-c-symbols); no behaviour change. Flow as in its previous audit"
- Elm.Basics.xor,2026-11-20T23:13:33,plans/constructor-representation-followups.md,"plans/constructor-representation-followups.md F1.4: BasicsExports.cpp's file-local helpers (tagOfBoxed, intOfBoxed, floatOfBoxed, boxInt, boxFloat) are now static, so none becomes an out-of-line unmangled C symbol when not inlined (check-kernel-c-symbols); no behaviour change. Flow as in its previous audit"
+@@ -1877,3 +1877,46 @@ Elm.Utils.gt,2026-11-23T15:35:55,plans/seq-data-structures-performance.md,"P4: U
+ Elm.Utils.le,2026-11-23T15:35:55,plans/seq-data-structures-performance.md,"P4: Utils.cpp seqDictEq gains an optional structural check of both SeqDict operands (validateSeqDict in core/SeqDict.hpp, only when ECO_SEQDICT_VALIDATE=1): it reads the SeqDicts and aborts on a malformed one; it does not touch this kernel's code, applies nothing, retains nothing, fabricates nothing; flow as in its previous audit"
+ Elm.Utils.lt,2026-11-23T15:35:55,plans/seq-data-structures-performance.md,"P4: Utils.cpp seqDictEq gains an optional structural check of both SeqDict operands (validateSeqDict in core/SeqDict.hpp, only when ECO_SEQDICT_VALIDATE=1): it reads the SeqDicts and aborts on a malformed one; it does not touch this kernel's code, applies nothing, retains nothing, fabricates nothing; flow as in its previous audit"
+ Elm.Utils.notEqual,2026-11-23T15:35:55,plans/seq-data-structures-performance.md,"P4: Utils.cpp seqDictEq gains an optional structural check of both SeqDict operands (validateSeqDict in core/SeqDict.hpp, only when ECO_SEQDICT_VALIDATE=1): it reads the SeqDicts and aborts on a malformed one; it does not touch this kernel's code, applies nothing, retains nothing, fabricates nothing; flow as in its previous audit"
 +Elm.JsArray.appendN,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
 +Elm.JsArray.empty,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldImpl (JsArray.foldl/foldr); this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
 +Elm.JsArray.foldl,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - JsArrayExports.cpp: the new header DirectCall.hpp (class Elm::DirectCall) reads the closure's evaluator, captured values and slot kinds once and then calls the evaluator directly with the captures plus the per-call arguments: it is a kernel-local wrapper doing exactly the saturated call eco_apply_closure_eval makes for a closure whose captures plus arguments fill its arity (ok() is false otherwise, and in ECO_HEAP_VALIDATE builds, and the kernel falls back to its unchanged helper path); its only state is a stack object for the call (argument words, kinds, the evaluator pointer) whose argument array is a root range popped by its destructor, and its only allocations are eco_alloc_int/float/char when boxing a primitive result (DirectCall::box) . foldImpl (JsArrayExports.cpp:577), which this kernel calls (:679-681), tries it first (:595-622) when the step's element slot takes the array's own kind or boxed and its accumulator slot the kind it returns: elements are read from the rooted srcHP (raw for a matching unboxed kind, else Export::encode of the boxed element or alloc::boxElement of an unboxed one), the callback is applied only through dc.call, and the accumulator passes from one call's result to the next and out as the result (C1). Array elements of type a are passed to the callback only (B1a), as before; no static/global/task write, no closure alloc; no retention, fabrication or type change; B1-B3 unchanged; line cites updated"
@@ -1064,7 +1064,7 @@ index de5378d3..2de970a8 100644
 +Elm.String.uncons,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
 +Elm.String.words,2026-11-23T22:52:50,,"aafc2756 (Call fold steps through DirectCall in String and Array folds) - StringExports.cpp: includes DirectCall.hpp and gains the DirectCall fast path in foldCallFits and String.foldl/foldr; this kernel's entry and helpers are unchanged (lines move down); no application, retention, fabrication or type change; B1-B3 unchanged; line cites updated"
 diff --git a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv
-index 91861df6..1795b70a 100644
+index e9097bb8..10688c11 100644
 --- a/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv
 +++ b/compiler/src/Compiler/Monomorphize/Solver/kernel-license-files.csv
 @@ -95,9 +95,9 @@ Elm.Basics.acos,elm-kernel-cpp/src/core/Basics.cpp,89c753470e80777837d8b28d9731c

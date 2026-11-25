@@ -13,9 +13,9 @@ HOSTAPD_SHA256 := f43502561c28ba47ab77e18e1a973d07361c68cc8b14178e619bd5796b70ea
 # bundle, in Docker, against the prebuilt LLVM/MLIR image eco's master pins (eco's
 # scripts/deps.sh artifact alpine). No eco release has eco/system's SeqDict yet. ECO_VER is the
 # version the bundle says it is. `make refresh` doesn't move these: change them by hand, together.
-ECO_COMMIT := 832b3c0bf13c577d67028144d901eca5c9c8b58e
+ECO_COMMIT := dcab1dba02f612a02db00309d29e5c90ee3565d4
 ECO_LLVM_IMAGE := ghcr.io/eco-lang/eco-llvm-alpine:8d4fc8f1d17e64e1826346a0230a87b50ec371e4-e73f3c2e9447
-ECO_VER := 0.2.0-elmos.832b3c0
+ECO_VER := 0.2.0-elmos.dcab1db
 
 # When `make refresh` last ran (seconds since 1970). `make` warns when it's 30 days old.
 REFRESHED := 1793970461
