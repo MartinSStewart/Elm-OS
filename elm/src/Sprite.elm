@@ -1002,10 +1002,23 @@ customText uiScale fontSize clip segments position =
 
         ascent =
             (lineMetrics fontSize).ascent
+
+        -- The lines that can reach into the clip, found without splitting the rest of
+        -- the text into lines: a long text drawn in a small viewport is mostly outside.
+        firstLine : Int
+        firstLine =
+            max 0 ((Quantity.unwrap (Coord.y clip.topLeft) - y) // height - 2)
+
+        lastLine : Int
+        lastLine =
+            (Quantity.unwrap (Coord.y clip.bottomRight) - y) // height + 2
     in
     List.indexedMap
-        (\lineIndex line ->
+        (\index line ->
             let
+                lineIndex =
+                    firstLine + index
+
                 top =
                     y + lineIndex * height
             in
@@ -1054,8 +1067,66 @@ customText uiScale fontSize clip segments position =
                     ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
                     ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
         )
-        (segmentLines segments)
+        (segmentLines (linesBetween firstLine lastLine segments))
         |> List.concat
+
+
+{-| The part of the segments from the start of line `first` to the end of line `last`
+(counting from 0, lines ending at each '\\n'). The segments after it aren't looked at.
+-}
+linesBetween : Int -> Int -> List Segment -> List Segment
+linesBetween first last segments =
+    if last < first then
+        []
+
+    else
+        linesBetweenHelper first last 0 segments []
+
+
+linesBetweenHelper : Int -> Int -> Int -> List Segment -> List Segment -> List Segment
+linesBetweenHelper first last line segments acc =
+    case segments of
+        segment :: rest ->
+            if line > last then
+                List.reverse acc
+
+            else
+                let
+                    -- Where the segment's '\\n's are: it starts on `line` and ends on
+                    -- `line + List.length newlines`.
+                    newlines : List Int
+                    newlines =
+                        String.indexes "\n" segment.text
+
+                    endLine : Int
+                    endLine =
+                        line + List.length newlines
+                in
+                if endLine < first then
+                    linesBetweenHelper first last endLine rest acc
+
+                else
+                    let
+                        start : Int
+                        start =
+                            if line >= first then
+                                0
+
+                            else
+                                List.drop (first - line - 1) newlines |> List.head |> Maybe.map ((+) 1) |> Maybe.withDefault 0
+
+                        end : Int
+                        end =
+                            if endLine <= last then
+                                String.length segment.text
+
+                            else
+                                List.drop (last - line) newlines |> List.head |> Maybe.withDefault (String.length segment.text)
+                    in
+                    linesBetweenHelper first last endLine rest ({ segment | text = String.slice start end segment.text } :: acc)
+
+        [] ->
+            List.reverse acc
 
 
 {-| One kind of line across one line of text: a rectangle for each run of segments next to
@@ -1481,29 +1552,88 @@ wrapSegments fontSize maxWidth segments =
     joinLines (wrapLines fontSize maxWidth segments)
 
 
-{-| Lines of segments joined into one list, with a '\\n' between each two.
+{-| Lines of segments joined into one list, with a '\\n' between each two. Segments next
+to each other that look the same are joined into one, across lines too, so a long text
+in one colour and font stays one segment (`customText` finds the lines it draws in it).
+The '\\n' looks like the segment before it.
 -}
 joinLines : List (List Segment) -> List Segment
 joinLines lines =
     let
-        newline : Segment -> Segment
-        newline segment =
-            { segment | text = "\n" }
-
         style : Segment
         style =
             List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [], link = Nothing }
+
+        -- The segments in order, each '\\n' a segment of its own.
+        withNewlines : List Segment
+        withNewlines =
+            case lines of
+                first :: rest ->
+                    List.foldl
+                        (\line ( acc, last ) ->
+                            ( List.reverse line ++ ({ last | text = "\n" } :: acc)
+                            , List.foldl (\segment _ -> segment) last line
+                            )
+                        )
+                        ( List.reverse first, List.foldl (\segment _ -> segment) style first )
+                        rest
+                        |> Tuple.first
+                        |> List.reverse
+
+                [] ->
+                    []
     in
-    case lines of
+    -- Texts of a run of segments that look the same are kept (last first) and joined
+    -- once at the end of the run, rather than added one by one. A run is cut every
+    -- `joinedLength` characters: eco makes a longer String.concat a rope as deep as the
+    -- list is long, which String.slice then overflows the stack on
+    -- (/mnt/project-files/elm-os/eco-concat-deep-rope-sscce.tar.gz).
+    case withNewlines of
         first :: rest ->
-            List.foldl
-                (\line acc -> List.reverse line ++ (newline (List.head acc |> Maybe.withDefault style) :: acc))
-                (List.reverse first)
-                rest
-                |> List.reverse
+            let
+                run : { look : Segment, texts : List String, length : Int }
+                run =
+                    { look = first, texts = [ first.text ], length = String.length first.text }
+
+                finish : { look : Segment, texts : List String, length : Int } -> Segment
+                finish done =
+                    let
+                        look : Segment
+                        look =
+                            done.look
+                    in
+                    { look | text = String.concat (List.reverse done.texts) }
+
+                ( lastRun, finished ) =
+                    List.foldl
+                        (\segment ( current, acc ) ->
+                            if sameLook current.look segment && current.length < joinedLength then
+                                ( { current | texts = segment.text :: current.texts, length = current.length + String.length segment.text }, acc )
+
+                            else
+                                ( { look = segment, texts = [ segment.text ], length = String.length segment.text }, finish current :: acc )
+                        )
+                        ( run, [] )
+                        rest
+            in
+            List.reverse (finish lastRun :: finished)
 
         [] ->
             []
+
+
+{-| How long `joinLines` lets a segment get by joining (see there).
+-}
+joinedLength : Int
+joinedLength =
+    16384
+
+
+{-| Whether two segments are drawn alike, so they can be one.
+-}
+sameLook : Segment -> Segment -> Bool
+sameLook a b =
+    a.color == b.color && a.font == b.font && a.decorations == b.decorations && a.link == b.link
 
 
 {-| Segments broken into lines at most `maxWidth` wide: at each '\\n', and at the space
@@ -1541,7 +1671,17 @@ wrapLinesHelper fontSize maxWidth segments =
             let
                 state : WrapState
                 state =
-                    wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
+                    case line of
+                        [ segment ] ->
+                            case segment.font of
+                                Mono ->
+                                    wrapMonoLine fontSize (Quantity.unwrap maxWidth * 64) segment
+
+                                Sans _ ->
+                                    wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
+
+                        _ ->
+                            wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
             in
             ( List.reverse state.current :: state.lines ++ lines, max widest (max state.widest state.x) )
         )
@@ -1581,6 +1721,128 @@ type alias Scan =
     , pieces : List Piece
     , wordWidth : Int
     }
+
+
+{-| `wrapLine` for a line that is one segment in the pixel font, where every character
+is as wide as the next: the same lines, found from where the spaces are and how many
+characters lie between them, without measuring each word. Each line is a slice of the
+segment's text.
+-}
+wrapMonoLine : FontSize -> Int -> Segment -> WrapState
+wrapMonoLine fontSize limit64 segment =
+    let
+        charWidth : Int
+        charWidth =
+            Tuple.first charSize * monoScale fontSize * 64
+
+        length : Int
+        length =
+            String.length segment.text
+    in
+    if length * charWidth <= limit64 then
+        { lines = []
+        , current =
+            if length == 0 then
+                []
+
+            else
+                [ segment ]
+        , x = length * charWidth
+        , widest = 0
+        }
+
+    else
+        let
+            slice : Int -> Int -> List Segment
+            slice start end =
+                if start == end then
+                    []
+
+                else
+                    [ { segment | text = String.slice start end segment.text } ]
+
+            -- How many characters fit on a line (at least one, as in `breakWord`).
+            perLine : Int
+            perLine =
+                max 1 (limit64 // charWidth)
+
+            -- The word from `start` to `end` put on an empty line, one line after another
+            -- when it's too long for one. `lines` gets every line but the last, which is
+            -- the new current line.
+            breakMonoWord : Int -> Int -> MonoWrap -> MonoWrap
+            breakMonoWord start end state =
+                if end - start > perLine then
+                    breakMonoWord
+                        (start + perLine)
+                        end
+                        { state | lines = slice start (start + perLine) :: state.lines, widest = max state.widest (perLine * charWidth) }
+
+                else
+                    { state | start = start, end = end }
+
+            -- Puts a word (from `start` to `end`, with the space before it at `space`
+            -- if there is one) on the line, as `placeWord` does.
+            place : Maybe Int -> Int -> Int -> MonoWrap -> MonoWrap
+            place space start end state =
+                let
+                    x : Int
+                    x =
+                        (state.end - state.start) * charWidth
+
+                    spaceWidth : Int
+                    spaceWidth =
+                        case space of
+                            Just _ ->
+                                charWidth
+
+                            Nothing ->
+                                0
+
+                    wordWidth : Int
+                    wordWidth =
+                        (end - start) * charWidth
+                in
+                if x + spaceWidth + wordWidth <= limit64 then
+                    if x == 0 then
+                        -- The line starts here, with the space if there is one.
+                        { state | start = Maybe.withDefault start space, end = end }
+
+                    else
+                        { state | end = end }
+
+                else if x == 0 then
+                    breakMonoWord start end state
+
+                else
+                    let
+                        newLine : MonoWrap
+                        newLine =
+                            { lines = slice state.start state.end :: state.lines, start = start, end = start, widest = max state.widest x }
+                    in
+                    if wordWidth <= limit64 then
+                        { newLine | end = end }
+
+                    else
+                        breakMonoWord start end newLine
+
+            ( lastSpace, lastStart, scanned ) =
+                List.foldl
+                    (\at ( space, start, state ) -> ( Just at, at + 1, place space start at state ))
+                    ( Nothing, 0, { lines = [], start = 0, end = 0, widest = 0 } )
+                    (String.indexes " " segment.text)
+
+            done : MonoWrap
+            done =
+                place lastSpace lastStart length scanned
+        in
+        { lines = done.lines, current = slice done.start done.end, x = (done.end - done.start) * charWidth, widest = done.widest }
+
+
+{-| `wrapMonoLine`'s state: the lines done (last first), the current line (from `start` to
+`end` in the text; empty when they're equal) and the widest line done (1/64 UI pixels).
+-}
+type alias MonoWrap =
+    { lines : List (List Segment), start : Int, end : Int, widest : Int }
 
 
 {-| One line (no '\\n' in it) broken at the spaces before words that would go past
@@ -1790,7 +2052,7 @@ pushSegment : Segment -> List Segment -> List Segment
 pushSegment segment line =
     case line of
         last :: rest ->
-            if last.color == segment.color && last.font == segment.font && last.decorations == segment.decorations && last.link == segment.link then
+            if sameLook last segment then
                 { last | text = last.text ++ segment.text } :: rest
 
             else
