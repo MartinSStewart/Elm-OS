@@ -113,6 +113,15 @@ isEdited name model =
     SeqDict.member name model.saved
 
 
+{-| Whether a saved module differs from what the running build was made from
+(SourceCode.elm, which a build made here has too): if none does, building would only
+make the running program again.
+-}
+differsFromRunning : Model -> Bool
+differsFromRunning model =
+    SeqDict.foldl (\name text acc -> acc || SeqDict.get name SourceCode.sourceCode /= Just text) False model.saved
+
+
 {-| Keeps `text` as the module's new text, or forgets the change if it is the text Elm
 OS was built from.
 -}
@@ -191,10 +200,16 @@ onClick id boxStyle text uiState model =
                     else
                         save text model
             in
-            ( { saved | build = Just (BuildRunning "Starting"), showErrors = False }
-            , uiState
-            , [ Effect.Build (buildModules saved) ]
-            )
+            if differsFromRunning saved then
+                ( { saved | build = Just (BuildRunning "Starting"), showErrors = False }
+                , uiState
+                , [ Effect.Build (buildModules saved) ]
+                )
+
+            else
+                -- Every module is as the running build was made from: building would
+                -- make the same program again and switch to it, for nothing.
+                ( { saved | build = Nothing, showErrors = False }, uiState, [] )
 
         ErrorsCloseButton ->
             ( { model | showErrors = False }, uiState, [] )
@@ -726,8 +741,8 @@ style windowSize model =
 last build's errors), where the cursor is, whether the text is saved, and how the last
 build went. `input` is the text box's model, `needle` what the find box says.
 -}
-view : Coord UiPixels -> TextInputMultiline.Model -> String -> Model -> Element UiId.UiId
-view windowSize input needle model =
+view : Coord UiPixels -> TextInputMultiline.Model -> String -> Maybe String -> Model -> Element UiId.UiId
+view windowSize input needle switchingTo model =
     let
         found : List ( Int, Int )
         found =
@@ -822,16 +837,28 @@ view windowSize input needle model =
                     [ segment Color.errorColor ("   The build failed: " ++ step) ]
 
                 Just (Built name) ->
-                    [ segment Color.successColor ("   Built " ++ name ++ ", switching to it") ]
+                    if switchingTo == Just name then
+                        [ segment Color.successColor ("   Built " ++ name ++ ", switching to it") ]
+
+                    else
+                        -- The switch is done: had it failed, the host would have said
+                        -- BuildFailed instead.
+                        [ segment Color.successColor ("   Running " ++ name ++ ", built here") ]
 
                 Nothing ->
                     []
 
-        -- Always there, even while a build is going: if the host never answers (an
-        -- older host, or one with no tools partition), the button still works.
+        -- There whenever something differs from the running build, even while a build
+        -- is going: if the host never answers (an older host, or one with no tools
+        -- partition), the button still works.
         buildButton =
-            button BuildButton "Build and run"
-                :: (if SeqDict.isEmpty model.saved && not unsaved then
+            (if unsaved || differsFromRunning model then
+                [ button BuildButton "Build and run" ]
+
+             else
+                []
+            )
+                ++ (if SeqDict.isEmpty model.saved && not unsaved then
                         []
 
                     else

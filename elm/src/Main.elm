@@ -3190,7 +3190,7 @@ noticeText model =
         Nothing ->
             case model.reflashNeeded of
                 Just build ->
-                    Just ("Build " ++ build ++ " is out, but this computer's USB stick needs flashing again to run it")
+                    Just ("Build " ++ build ++ " is out, but it needs a newer Elm OS image to run (a freshly flashed USB stick)")
 
                 Nothing ->
                     Nothing
@@ -3328,6 +3328,7 @@ appConfig app model =
                         size
                         (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState)
                         (Code.findText model.uiState)
+                        model.upgradingTo
                         model.code
             , limits = Code.appSize
             }

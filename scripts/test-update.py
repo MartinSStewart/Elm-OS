@@ -125,7 +125,7 @@ wait_for("first frame")
 wait_for(f"build {BAD[:12]} is deployed, but it changes the host: flash the USB stick again to run it")
 if downloads or "switching from" in serial():
     fail("the host downloaded or switched to a build for another host")
-facts.wait("notice", lambda text: "flashing" in text, "a notice that the USB stick needs flashing")
+facts.wait("notice", lambda text: "flash" in text, "a notice that the USB stick needs flashing")
 print("a build for another host: not downloaded, the host says (and shows) the USB stick needs flashing")
 
 # ---- 2. a build it can run
