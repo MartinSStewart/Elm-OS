@@ -31,10 +31,14 @@ qmp_path, serial_path = os.path.join(tmp, "qmp.sock"), os.path.join(tmp, "serial
 # eco builds for x86-64-v3 (AVX2), so the emulated CPU must have it.
 accel = ["-enable-kvm", "-cpu", "host"] if os.access("/dev/kvm", os.W_OK) else ["-cpu", "max"]
 gpu = "--gpu" in sys.argv[1:]
+# 1920 x 1080, like scripts/run-qemu.sh and test-build.py: at QEMU's default 1280 x 800
+# the Debug, Network and Weather windows open at start don't all fit, and the layout
+# leaves the oldest (Debug) out.
+res = "xres=1920,yres=1080"
 if gpu:
-    devices = ["-device", "virtio-gpu-gl-pci", "-display", os.environ.get("QEMU_DISPLAY", "egl-headless")]
+    devices = ["-device", f"virtio-gpu-gl-pci,{res}", "-display", os.environ.get("QEMU_DISPLAY", "egl-headless")]
 else:
-    devices = ["-device", "virtio-gpu-pci", "-display", "none"]
+    devices = ["-device", f"virtio-gpu-pci,{res}", "-display", "none"]
 
 usb = "--usb" in sys.argv[1:]
 

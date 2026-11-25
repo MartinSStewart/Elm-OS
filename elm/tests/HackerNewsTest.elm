@@ -9,7 +9,7 @@ import HackerNews exposing (HackerNewsState(..))
 import HackerNews.Types exposing (PostId(..))
 import SeqDict
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Time
 import Ui
 import UiId exposing (UiId)
@@ -51,8 +51,8 @@ commentsPage =
 
 suite : Test
 suite =
-    describe "HackerNews"
-        [ test "keeps the comments of the 10 posts opened last"
+    Test.describe "HackerNews"
+        [ Test.test "keeps the comments of the 10 posts opened last"
             (\() ->
                 openPosts 12 HackerNews.init
                     |> .comments
@@ -65,7 +65,7 @@ suite =
                             |> List.sortBy HackerNews.postIdToString
                         )
             )
-        , test "opening a post again keeps it"
+        , Test.test "opening a post again keeps it"
             (\() ->
                 openPosts 10 HackerNews.init
                     |> HackerNews.onClick (HackerNews.Types.PostButton (PostId "1"))
@@ -76,7 +76,7 @@ suite =
                     |> SeqDict.member (PostId "1")
                     |> Expect.equal True
             )
-        , test "reads the comment counts of the posts"
+        , Test.test "reads the comment counts of the posts"
             (\() ->
                 case respond HackerNews.TopPostsRequest frontPage HackerNews.init |> .data of
                     Loaded posts ->
@@ -86,7 +86,7 @@ suite =
                     _ ->
                         Expect.fail "posts not loaded"
             )
-        , test "reads a comment's date and how faded it is"
+        , Test.test "reads a comment's date and how faded it is"
             (\() ->
                 let
                     -- The Model in Wire3, a byte to a character. A comment's fields go in
@@ -107,7 +107,7 @@ suite =
                     ]
                     ()
             )
-        , test "Ui.lazy (as tools/wire generates it) draws what building it all again draws"
+        , Test.test "Ui.lazy (as tools/wire generates it) draws what building it all again draws"
             (\() ->
                 let
                     collapsed =
@@ -116,7 +116,7 @@ suite =
                 draw (HackerNews.view (Ui.lazyCache [ view Ui.noLazyCache commentsModel ]) uiScreen collapsed)
                     |> Expect.equal (draw (view Ui.noLazyCache collapsed))
             )
-        , test "a screenshot of an Element with Ui.lazy in it can be saved, and is the same when loaded"
+        , Test.test "a screenshot of an Element with Ui.lazy in it can be saved, and is the same when loaded"
             (\() ->
                 let
                     screenshot : Ui.Screenshot
@@ -128,7 +128,7 @@ suite =
                     |> Wire.fromBytes Ui.w3_decode_Screenshot
                     |> Expect.equal (Just screenshot)
             )
-        , test "hovering the second comment's toggle finds it, with the elements around it"
+        , Test.test "hovering the second comment's toggle finds it, with the elements around it"
             (\() ->
                 let
                     element =
@@ -175,7 +175,7 @@ view lazyCache model =
 
 draw : Ui.Element UiId -> List (Sprite.Triangle DevicePixels)
 draw element =
-    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing Ui.noFind screen element
+    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing screen element
 
 
 latin1 : Bytes -> String

@@ -15,10 +15,10 @@ module Network exposing
     , init
     , isOnline
     , isWiredConnected
+    , limits
     , passwordStyle
     , reconnect
     , refresh
-    , sample
     , select
     , selectedNeedsPassword
     , toggleShowPassword
@@ -30,8 +30,9 @@ password) and what the host's networking threads (host/init/src/net) tell Elm ab
 cards. The ids of its elements are in Network/Types.elm.
 -}
 
+import App
 import Color exposing (Color)
-import Coord
+import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Network.Ipv4 as Ipv4 exposing (Ipv4)
 import Network.Types exposing (Ssid)
@@ -165,9 +166,20 @@ refresh network =
 -}
 select : Ssid -> Network -> Maybe Network
 select ssid network =
-    List.filter (\n -> n.ssid == ssid) network.networks
-        |> List.head
-        |> Maybe.map (\picked -> { network | selected = Just picked })
+    case List.filter (\n -> n.ssid == ssid) network.networks of
+        head :: _ ->
+            Just
+                { network
+                    | selected =
+                        if Just head == network.selected then
+                            Nothing
+
+                        else
+                            Just head
+                }
+
+        [] ->
+            Nothing
 
 
 selectedNeedsPassword : Network -> Bool
@@ -296,22 +308,11 @@ sampleNetwork =
     { ssid = Network.Types.stringToSsid "Network", signal = -50, security = Wpa }
 
 
-{-| The wifi list shows this many networks before it scrolls.
--}
-listHeight : Quantity Int UiPixels
-listHeight =
-    let
-        rowHeight =
-            Coord.y (Ui.size (networkRow sample sampleNetwork))
-    in
-    Quantity.multiplyBy 8 rowHeight |> Quantity.plus (Units.uiPixels (4 * 7))
-
-
 {-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
 -}
 em : Int -> Quantity Int UiPixels
 em n =
-    Units.uiPixels (16 * n)
+    Units.ui (16 * n)
 
 
 sans : Sprite.Font
@@ -324,32 +325,30 @@ bodySize =
     Sprite.Small
 
 
-panelWidth : Quantity Int UiPixels
-panelWidth =
-    em 28
-
-
-{-| The network app's rows: a line for each wired card, then wifi (left out on a computer with
-a wired card and no wifi).
+{-| The network app's window size, from `sample`, once.
 -}
-view : Network -> List (Ui.Element UiId)
-view model =
+limits : App.Limits
+limits =
+    App.fixed ( em 28, Units.ui 400 )
+
+
+view : Network -> Coord UiPixels -> Ui.Element UiId
+view network size =
+    App.smallWindow2
+        { title = "Network", close = UiId.Network Network.Types.CloseButton }
+        (rows network)
+        { width = Just (Coord.xRaw size), height = Just (Coord.yRaw size) }
+
+
+small : Ui.Padding
+small =
+    Ui.paddingXY 6 3
+
+
+rows : Network -> Ui.TargetSize -> Ui.Element UiId
+rows model =
     let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        fit string =
-            Sprite.ellipsis bodySize font width string
-
-        small =
-            Ui.paddingXY 6 3
-
+        title : String
         title =
             case model.wifiDevice of
                 Card name ->
@@ -361,27 +360,31 @@ view model =
                 NoCard ->
                     "Wifi"
 
+        header : Ui.TargetSize -> Ui.Element UiId
         header =
             case model.wifiDevice of
                 Card _ ->
-                    Ui.leftAndRight width
-                        (t title)
-                        (Ui.button { id = uiId Network.Types.RefreshButton, padding = small }
-                            (t
-                                (if model.scanning then
-                                    "Scanning"
+                    Ui.row2
+                        0
+                        [ ( Ui.Fill2, Ui.text2 title )
+                        , ( Ui.Shrink2
+                          , Ui.button2 { id = uiId Network.Types.RefreshButton, pad = small }
+                                (Ui.text2
+                                    (if model.scanning then
+                                        "Scanning"
 
-                                 else
-                                    "Refresh"
+                                     else
+                                        "Refresh"
+                                    )
                                 )
-                            )
-                        )
+                          )
+                        ]
 
                 Unknown ->
-                    t title
+                    Ui.text2 title
 
                 NoCard ->
-                    t title
+                    Ui.text2 title
 
         status : WifiStatus
         status =
@@ -391,89 +394,111 @@ view model =
         ssid =
             Network.Types.ssidToString model.wifiStatus.ssid
 
-        statusLine : Ui.Element id
+        statusLine : Ui.TargetSize -> Ui.Element UiId
         statusLine =
             case model.wifiDevice of
                 Unknown ->
-                    t "Looking for a wifi card…"
+                    Ui.text2 "Looking for a wifi card…"
 
                 NoCard ->
-                    t "No wifi card found"
+                    Ui.text2 "No wifi card found"
 
                 Card _ ->
                     case status.state of
                         Idle ->
-                            t "Not connected. Pick a network:"
+                            Ui.text2 "Not connected. Pick a network:"
 
                         Connecting ->
-                            t (fit ("Joining " ++ ssid ++ "…"))
+                            Ui.ellipsisText2 { color = Color.textColor, font = sans } ("Joining " ++ ssid ++ "…")
 
                         Dhcp ->
-                            t (fit ("Getting an address on " ++ ssid))
+                            Ui.ellipsisText2 { color = Color.textColor, font = sans } ("Getting an address on " ++ ssid)
 
                         Connected ->
-                            Ui.colorText
-                                connectedColor
-                                (fit
-                                    ("Connected to "
-                                        ++ ssid
-                                        ++ ", "
-                                        ++ (case status.ip of
-                                                Just ip ->
-                                                    Ipv4.toString ip
+                            Ui.row2
+                                0
+                                [ ( Ui.Fill2
+                                  , Ui.ellipsisText2
+                                        { color = connectedColor, font = sans }
+                                        ("Connected to "
+                                            ++ ssid
+                                            ++ ", "
+                                            ++ (case status.ip of
+                                                    Just ip ->
+                                                        Ipv4.toString ip
 
-                                                Nothing ->
-                                                    ""
-                                           )
-                                    )
-                                )
+                                                    Nothing ->
+                                                        ""
+                                               )
+                                        )
+                                  )
+                                , ( Ui.Shrink2
+                                  , Ui.button2 { id = uiId Network.Types.DisconnectButton, pad = small } (Ui.text2 "Disconnect")
+                                  )
+                                ]
 
                         Failed ->
-                            Ui.colorText Color.errorColor (Sprite.wrap bodySize font width status.error)
+                            Ui.colorText2 Color.errorColor status.error
 
-        networkRows =
+        networkList : Ui.TargetSize -> Ui.Element UiId
+        networkList =
             case model.wifiDevice of
                 Card _ ->
                     if List.isEmpty model.networks then
-                        [ t
+                        Ui.text2
                             (if model.scanning then
                                 "Looking for networks…"
 
                              else
                                 "No networks found"
                             )
-                        ]
 
                     else
-                        [ Ui.viewport
-                            { id = uiId Network.Types.NetworkListViewport, viewportHeight = listHeight }
-                            (Ui.column 4 (List.map (networkRow model) model.networks))
-                        ]
+                        Ui.viewport2
+                            (uiId Network.Types.NetworkListViewport)
+                            (Ui.column2 4 (List.map (\network -> ( Ui.Shrink2, networkRow model network )) model.networks))
 
                 Unknown ->
-                    []
+                    Ui.fixed2 Ui.empty
 
                 NoCard ->
-                    []
+                    Ui.fixed2 Ui.empty
+    in
+    if model.wifiDevice == NoCard && not (List.isEmpty model.wired) then
+        Ui.column2 4 (wiredRows model)
 
-        joinRows =
-            case model.selected of
-                Just selected ->
-                    if selected.ssid == status.ssid && status.state /= Idle && status.state /= Failed then
-                        []
+    else
+        Ui.column2
+            4
+            [ ( Ui.Shrink2, Ui.column2 4 (wiredRows model) )
+            , ( Ui.Shrink2, header )
+            , ( Ui.Shrink2, statusLine )
+            , ( Ui.Fill2, networkList )
+            ]
 
-                    else if selected.security == Enterprise || selected.security == Wep || selected.security == Wpa3 then
-                        [ Ui.colorText Color.errorColor "That kind of network isn't supported yet" ]
 
-                    else
-                        (if needsPassword selected then
-                            [ Ui.row
+joinRows : Network -> Ui.TargetSize -> Ui.Element UiId
+joinRows model =
+    case model.selected of
+        Just selected ->
+            if selected.ssid == model.wifiStatus.ssid && model.wifiStatus.state /= Idle && model.wifiStatus.state /= Failed then
+                Ui.fixed2 Ui.empty
+
+            else if selected.security == Enterprise || selected.security == Wep || selected.security == Wpa3 then
+                Ui.colorText2 Color.errorColor "That kind of network isn't supported yet"
+
+            else
+                Ui.column2
+                    4
+                    [ ( Ui.Shrink2
+                      , if needsPassword selected then
+                            Ui.row
                                 6
-                                [ -- lined up with the text in the box, which is inset by its padding
-                                  Ui.el { padding = Ui.paddingXY 0 4, borderAndFill = Ui.NoBorderOrFill } (t "Password")
+                                [ -- lined up with the text in the box, which is inset by its pad
+                                  Ui.el { pad = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text "Password")
                                 , passwordInput model
-                                , Ui.button { id = uiId Network.Types.ShowPasswordButton, padding = small }
-                                    (t
+                                , Ui.button { id = uiId Network.Types.ShowPasswordButton, pad = small }
+                                    (Ui.text
                                         (if model.showPassword then
                                             "Hide"
 
@@ -482,43 +507,23 @@ view model =
                                         )
                                     )
                                 ]
-                            ]
+                                |> Ui.fixed2
 
-                         else
-                            []
-                        )
-                            ++ [ Ui.button
-                                    { id = uiId Network.Types.ConnectButton, padding = small }
-                                    (t
-                                        (Sprite.ellipsis
-                                            bodySize
-                                            font
-                                            (width |> Quantity.minus (Units.uiPixels 12))
-                                            ("Connect to " ++ Network.Types.ssidToString selected.ssid)
-                                        )
-                                    )
-                               ]
+                        else
+                            Ui.fixed2 Ui.empty
+                      )
+                    , ( Ui.Shrink2
+                      , Ui.button2
+                            { id = uiId Network.Types.ConnectButton, pad = small }
+                            (Ui.ellipsisText2
+                                { color = Color.textColor, font = sans }
+                                ("Connect to " ++ Network.Types.ssidToString selected.ssid)
+                            )
+                      )
+                    ]
 
-                Nothing ->
-                    []
-
-        disconnectRow =
-            if status.state /= Idle && status.state /= Failed then
-                [ Ui.button { id = uiId Network.Types.DisconnectButton, padding = small } (t "Disconnect") ]
-
-            else
-                []
-    in
-    wiredRows model
-        ++ (if model.wifiDevice == NoCard && not (List.isEmpty model.wired) then
-                []
-
-            else
-                [ header, statusLine ]
-                    ++ networkRows
-                    ++ joinRows
-                    ++ disconnectRow
-           )
+        Nothing ->
+            Ui.fixed2 Ui.empty
 
 
 {-| The password box: town-collab's text input, showing dots unless "Show" is on.
@@ -539,35 +544,23 @@ passwordInput model =
 
 {-| Two lines for each wired card: its name, and whether it has a cable and an address.
 -}
-wiredRows : Network -> List (Ui.Element UiId)
+wiredRows : Network -> List ( Ui.Length2, Ui.TargetSize -> Ui.Element UiId )
 wiredRows model =
     let
-        font =
-            sans
-
-        width =
-            panelWidth
-
-        t =
-            Ui.text
-
-        link : WiredLink -> List (Ui.Element id)
+        link : WiredLink -> List ( Ui.Length2, Ui.TargetSize -> Ui.Element id )
         link l =
-            [ t ("Wired (" ++ l.name ++ ")")
-            , case l.state of
-                WiredNoCable ->
-                    t "No cable plugged in"
+            [ ( Ui.Shrink2, Ui.text2 ("Wired (" ++ l.name ++ ")") )
+            , ( Ui.Shrink2
+              , case l.state of
+                    WiredNoCable ->
+                        Ui.text2 "No cable plugged in"
 
-                WiredDhcp ->
-                    t "Getting an address…"
+                    WiredDhcp ->
+                        Ui.text2 "Getting an address…"
 
-                WiredConnected ->
-                    Ui.colorText
-                        connectedColor
-                        (Sprite.ellipsis
-                            bodySize
-                            font
-                            width
+                    WiredConnected ->
+                        Ui.ellipsisText2
+                            { color = connectedColor, font = sans }
                             (case l.ip of
                                 Just ip ->
                                     "Connected, " ++ Ipv4.toString ip
@@ -575,23 +568,27 @@ wiredRows model =
                                 Nothing ->
                                     "Connected"
                             )
-                        )
 
-                WiredFailed ->
-                    Ui.colorText
-                        Color.errorColor
-                        (Sprite.wrap bodySize font width "Cable plugged in, but no address from the network (DHCP)")
+                    WiredFailed ->
+                        Ui.colorText2 Color.errorColor "Cable plugged in, but no address from the network (DHCP)"
+              )
             ]
 
-        divider =
+        divider : Ui.TargetSize -> Ui.Element id
+        divider target =
+            let
+                width : Quantity Int UiPixels
+                width =
+                    Units.ui (Maybe.withDefault 0 target.width)
+            in
             Ui.quads
-                { size = ( width, Units.uiPixels 6 )
+                { size = ( width, Units.ui 6 )
                 , triangles =
                     Sprite.rectangle
                         Color.outlineColor
                         { topLeft = Coord.origin, bottomRight = Coord.xy 99999 99999 }
                         (Coord.xy 0 2)
-                        ( width, Units.uiPixels 2 )
+                        ( width, Units.ui 2 )
                 }
     in
     case model.wired of
@@ -604,7 +601,7 @@ wiredRows model =
                         []
 
                     else
-                        [ divider ]
+                        [ ( Ui.Shrink2, divider ) ]
                    )
 
 
@@ -613,12 +610,9 @@ connectedColor =
     Color.successColor
 
 
-networkRow : Network -> WifiNetwork -> Ui.Element UiId
+networkRow : Network -> WifiNetwork -> Ui.TargetSize -> Ui.Element UiId
 networkRow model network =
     let
-        font =
-            sans
-
         connectedHere =
             model.wifiStatus.ssid == network.ssid && model.wifiStatus.state == Connected
 
@@ -642,26 +636,33 @@ networkRow model network =
 
                     Wpa3 ->
                         "WPA3"
-
-        -- The row fills the panel: its button's padding is 4 UI pixels each side.
-        width =
-            panelWidth |> Quantity.minus (Units.uiPixels 8)
-
-        labelWidth =
-            em 5
-
-        bars =
-            signalBars network.signal
-
-        nameWidth =
-            width |> Quantity.minus labelWidth |> Quantity.minus (Units.uiPixels (12 + 16))
     in
-    Ui.selectableButton { id = uiId (Network.Types.NetworkButton network.ssid), padding = Ui.paddingXY 4 2 }
-        (Maybe.map .ssid model.selected == Just network.ssid)
-        (Ui.leftAndRight width
-            (Ui.row 6 [ bars, Ui.text (Sprite.ellipsis bodySize font nameWidth (Network.Types.ssidToString network.ssid)) ])
-            (Ui.text label)
-        )
+    Ui.column2
+        0
+        [ ( Ui.Shrink2
+          , Ui.selectableButton2 { id = uiId (Network.Types.NetworkButton network.ssid), pad = Ui.paddingXY 4 2 }
+                (Maybe.map .ssid model.selected == Just network.ssid)
+                (Ui.row2
+                    6
+                    [ ( Ui.Shrink2, Ui.fixed2 (signalBars network.signal) )
+                    , ( Ui.Fill2, Ui.ellipsisText2 { color = Color.textColor, font = sans } (Network.Types.ssidToString network.ssid) )
+                    , ( Ui.Shrink2, Ui.fixed2 (Ui.right { width = em 5 } (Ui.text label)) )
+                    ]
+                )
+          )
+        , ( Ui.Shrink2
+          , case model.selected of
+                Just selected ->
+                    if selected.ssid == network.ssid then
+                        Ui.el2 { pad = Ui.paddingXY 8 4, style = Ui.NoBorderOrFill } (joinRows model)
+
+                    else
+                        Ui.fixed2 Ui.empty
+
+                Nothing ->
+                    Ui.fixed2 Ui.empty
+          )
+        ]
 
 
 {-| Four bars, filled by signal strength in dBm.

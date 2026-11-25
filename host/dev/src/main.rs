@@ -505,6 +505,15 @@ impl Runner {
                     output: "The desktop runner doesn't build from the Code app: edit elm/src instead, and it rebuilds by itself.".into(),
                 },
             }),
+            // Installing writes the computer's disks: only on Elm OS itself (host/init/src/install.rs).
+            Effect::ListDisks => elm::send(&ToElm::Disks { disks: Vec::new() }),
+            Effect::Install { .. } | Effect::UpdateInstall { .. } => elm::send(&ToElm::Install {
+                status: protocol::InstallStatus::Failed {
+                    step: "Starting".into(),
+                    message: "The desktop runner doesn't install Elm OS: boot the USB stick.".into(),
+                    wrote: false,
+                },
+            }),
         }
     }
 
@@ -683,6 +692,11 @@ impl Runner {
                 self.send_mouse();
                 elm::send(&ToElm::Button { b, down: state == ElementState::Pressed });
             }
+            WindowEvent::PinchGesture { delta, .. } => {
+                // A touchpad pinch (macOS): delta is the change in size, 0.1 for 10% bigger.
+                self.send_mouse();
+                elm::send(&ToElm::Gesture { dx: 0.0, dy: 0.0, pinch: 1.0 + delta });
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 // Positive is up (away from you), as Elm OS's.
                 self.wheel += match delta {
@@ -690,7 +704,7 @@ impl Runner {
                     MouseScrollDelta::PixelDelta(p) => {
                         // A touchpad: smooth scrolling, as /init sends it.
                         self.send_mouse();
-                        elm::send(&ToElm::Scroll { dy: p.y / self.ui_scale });
+                        elm::send(&ToElm::Gesture { dx: p.x / self.ui_scale, dy: p.y / self.ui_scale, pinch: 1.0 });
                         return;
                     }
                 };

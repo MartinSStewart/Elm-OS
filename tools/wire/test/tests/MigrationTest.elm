@@ -4,14 +4,13 @@ module MigrationTest exposing (suite)
 is read by the current build through the migration to version 2.
 -}
 
-import App
 import Array
 import Bytes exposing (Bytes)
 import Bytes.Encode as BE
 import Dict
 import ElmOs
-import Evergreen.V1.App
 import Evergreen.V1.Sub.Things
+import Evergreen.V1.WireApp
 import Expect
 import Json.Encode as E
 import Persist
@@ -22,9 +21,10 @@ import Set
 import Test exposing (Test, describe, test)
 import Time
 import Wire
+import WireApp
 
 
-v1Sample : Evergreen.V1.App.Model
+v1Sample : Evergreen.V1.WireApp.Model
 v1Sample =
     { int = 5
     , float = 1.5
@@ -49,12 +49,12 @@ v1Sample =
     , box = { value = "b", extra = Nothing }
     , labelled = ( Quantity.unsafe 1, Quantity.unsafe 2 )
     , removed = 9
-    , kind = Evergreen.V1.App.Gamma "abc"
-    , kinds = [ Evergreen.V1.App.Alpha, Evergreen.V1.App.Gamma "x" ]
-    , kindDict = Dict.fromList [ ( "a", Just (Evergreen.V1.App.Beta 4) ), ( "b", Nothing ) ]
+    , kind = Evergreen.V1.WireApp.Gamma "abc"
+    , kinds = [ Evergreen.V1.WireApp.Alpha, Evergreen.V1.WireApp.Gamma "x" ]
+    , kindDict = Dict.fromList [ ( "a", Just (Evergreen.V1.WireApp.Beta 4) ), ( "b", Nothing ) ]
     , seqSet = SeqSet.fromList [ 2, 1 ]
     , seqDict = SeqDict.empty
-    , kindSeqDict = SeqDict.fromList [ ( "z", Just (Evergreen.V1.App.Gamma "y") ), ( "a", Nothing ) ]
+    , kindSeqDict = SeqDict.fromList [ ( "z", Just (Evergreen.V1.WireApp.Gamma "y") ), ( "a", Nothing ) ]
     }
 
 
@@ -70,7 +70,7 @@ v1Snapshot =
                     , Wire.encodeSnapshotInt 1
                     , Wire.encodeString (Persist.hash (Maybe.withDefault "" (ElmOs.codecs.versionShape 1)))
                     , Wire.encodeSnapshotInt 4
-                    , Wire.encodeBytes (Wire.toBytes (Evergreen.V1.App.w3_encode_Model v1Sample))
+                    , Wire.encodeBytes (Wire.toBytes (Evergreen.V1.WireApp.w3_encode_Model v1Sample))
                     , Wire.encodeList Wire.encodeString []
                     ]
                 )
@@ -90,11 +90,11 @@ suite =
         , test "version 2's shape is the current one" (\_ -> ElmOs.codecs.versionShape 2 |> Expect.equal (Just ElmOs.codecs.modelShape))
         , test "a version 1 Model migrates"
             (\_ ->
-                case ElmOs.codecs.migrate 1 (Wire.toBytes (Evergreen.V1.App.w3_encode_Model v1Sample)) |> Maybe.andThen (Wire.fromBytes ElmOs.codecs.modelDecoder) of
+                case ElmOs.codecs.migrate 1 (Wire.toBytes (Evergreen.V1.WireApp.w3_encode_Model v1Sample)) |> Maybe.andThen (Wire.fromBytes ElmOs.codecs.modelDecoder) of
                     Just m ->
                         Expect.all
-                            [ \_ -> ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, App.Beta 3 ), ( [ App.Alpha, App.Beta 1 ], [ ( "a", Just (App.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
-                            , \_ -> ( SeqSet.toList m.seqSet, SeqDict.toList m.kindSeqDict ) |> Expect.equal ( [ 2, 1 ], [ ( "z", Just (App.Beta 1) ), ( "a", Nothing ) ] )
+                            [ \_ -> ( ( m.int, m.order, m.kind ), ( m.kinds, Dict.toList m.kindDict, Quantity.unwrap m.quantity ) ) |> Expect.equal ( ( 5, GT, WireApp.Beta 3 ), ( [ WireApp.Alpha, WireApp.Beta 1 ], [ ( "a", Just (WireApp.Beta 4) ), ( "b", Nothing ) ], 2.5 ) )
+                            , \_ -> ( SeqSet.toList m.seqSet, SeqDict.toList m.kindSeqDict ) |> Expect.equal ( [ 2, 1 ], [ ( "z", Just (WireApp.Beta 1) ), ( "a", Nothing ) ] )
                             ]
                             ()
 
@@ -105,10 +105,10 @@ suite =
             (\_ ->
                 let
                     restored =
-                        Persist.restore App.config ElmOs.codecs v1Snapshot
+                        Persist.restore WireApp.config ElmOs.codecs v1Snapshot
                 in
                 Expect.all
-                    [ \r -> r.model.kind |> Expect.equal (App.Beta 3)
+                    [ \r -> r.model.kind |> Expect.equal (WireApp.Beta 3)
 
                     -- The host's log carries on from the snapshot's place in it.
                     , \r -> r.seq |> Expect.equal (Just 4)
@@ -124,7 +124,7 @@ suite =
                         Persist.frame (text "[\"0123abcd\",3,[]]")
 
                     restored =
-                        Persist.restore App.config ElmOs.codecs (Just old)
+                        Persist.restore WireApp.config ElmOs.codecs (Just old)
                 in
                 ( restored.unreadable, restored.seq ) |> Expect.equal ( Just old, Nothing )
             )
@@ -145,7 +145,7 @@ suite =
                                 )
                             )
                 in
-                (Persist.restore App.config ElmOs.codecs (Just newer)).notes
+                (Persist.restore WireApp.config ElmOs.codecs (Just newer)).notes
                     |> Expect.equal [ "the snapshot is of version 3 of the Model, newer than this build's 2; starting afresh, and keeping it as snapshot-unreadable" ]
             )
         ]

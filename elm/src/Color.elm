@@ -15,8 +15,6 @@ module Color exposing
     , fillColor2
     , fillColor3
     , findMatchColor
-    , findMatchTextColor
-    , findOtherMatchColor
     , focusedInputColor
     , focusedUiColor
     , highlightColor
@@ -176,27 +174,12 @@ selectionColor =
     rgb255 40 75 140
 
 
-{-| Behind the selected match of what the find bar (Ctrl+F) is looking for: yellow, as
-browsers do it.
+{-| Behind each match of a search in the code editor: a faint yellow, which the text keeps
+its own colour on.
 -}
 findMatchColor : Color
 findMatchColor =
-    rgb255 255 214 60
-
-
-{-| Behind the other matches: a fainter yellow, which the text keeps its own colour on.
--}
-findOtherMatchColor : Color
-findOtherMatchColor =
     rgba255 255 214 60 90
-
-
-{-| The selected match's text, on `findMatchColor`: dark, as light text on
-yellow can't be read.
--}
-findMatchTextColor : Color
-findMatchTextColor =
-    rgb255 28 26 24
 
 
 {-| A button that does something that can't be undone, such as powering off.

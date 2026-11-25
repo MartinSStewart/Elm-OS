@@ -2,9 +2,10 @@ module WrapTest exposing (suite)
 
 import Color
 import Expect
+import Fuzz
 import Quantity
 import Sprite exposing (Font(..), FontSize(..), Segment, Style(..))
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Units
 
 
@@ -13,7 +14,7 @@ pixels a character at Small), so widths are easy to count.
 -}
 wrapMono : Int -> List Segment -> List String
 wrapMono width segments =
-    Sprite.wrapLines Small (Units.uiPixels width) segments
+    Sprite.wrapLines Small (Units.ui width) segments
         |> List.map (\line -> List.map .text line |> String.concat)
 
 
@@ -24,36 +25,62 @@ mono text =
 
 suite : Test
 suite =
-    describe "Sprite.wrapLines"
-        [ test "breaks between words, dropping the space at the break" (\() -> wrapMono 100 [ mono "aaaa bbbb cccc" ] |> Expect.equal [ "aaaa bbbb", "cccc" ])
-        , test "keeps a line that fits exactly" (\() -> wrapMono 90 [ mono "aaaa bbbb" ] |> Expect.equal [ "aaaa bbbb" ])
-        , test "keeps '\\n' and empty lines" (\() -> wrapMono 100 [ mono "aa\n\nbb" ] |> Expect.equal [ "aa", "", "bb" ])
-        , test "breaks a word wider than a line between characters" (\() -> wrapMono 40 [ mono "abcdefghij x" ] |> Expect.equal [ "abcd", "efgh", "ij x" ])
-        , test "a word split across segments stays together"
+    Test.describe "Sprite.wrapLines"
+        [ Test.test "breaks between words, dropping the space at the break" (\() -> wrapMono 100 [ mono "aaaa bbbb cccc" ] |> Expect.equal [ "aaaa bbbb", "cccc" ])
+        , Test.test "keeps a line that fits exactly" (\() -> wrapMono 90 [ mono "aaaa bbbb" ] |> Expect.equal [ "aaaa bbbb" ])
+        , Test.test "keeps '\\n' and empty lines" (\() -> wrapMono 100 [ mono "aa\n\nbb" ] |> Expect.equal [ "aa", "", "bb" ])
+        , Test.test "breaks a word wider than a line between characters" (\() -> wrapMono 40 [ mono "abcdefghij x" ] |> Expect.equal [ "abcd", "efgh", "ij x" ])
+        , Test.test "a word split across segments stays together"
             (\() ->
                 wrapMono 60 [ mono "aa b", { text = "bb", color = Color.white, font = Mono, decorations = [], link = Nothing }, mono "b" ]
                     |> Expect.equal [ "aa", "bbbb" ]
             )
-        , test "joins segments of the same look, keeps others apart"
+        , Test.test "joins segments of the same look, keeps others apart"
             (\() ->
-                Sprite.wrapLines Small (Units.uiPixels 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono, decorations = [], link = Nothing } ]
+                Sprite.wrapLines Small (Units.ui 1000) [ mono "a ", mono "b", { text = "c", color = Color.white, font = Mono, decorations = [], link = Nothing } ]
                     |> List.map (List.map .text)
                     |> Expect.equal [ [ "a b", "c" ] ]
             )
-        , test "wrapSegments joins the lines with '\\n'"
+        , Test.test "wrapSegments joins the lines with '\\n'"
             (\() ->
-                Sprite.wrapSegments Small (Units.uiPixels 100) [ mono "aaaa bbbb cccc" ]
+                Sprite.wrapSegments Small (Units.ui 100) [ mono "aaaa bbbb cccc" ]
                     |> List.map .text
                     |> String.concat
                     |> Expect.equal "aaaa bbbb\ncccc"
             )
-        , test "no line is wider than the width, in Noto Sans" (\() -> fitsWidth)
+        , Test.test "no line is wider than the width, in Noto Sans" (\() -> fitsWidth)
+        , Test.fuzz3
+            (Fuzz.intRange 1 400)
+            (Fuzz.intRange 0 60)
+            (Fuzz.list (Fuzz.oneOf [ Fuzz.constant " ", Fuzz.constant "\n", Fuzz.constant "a", Fuzz.constant "bc", Fuzz.constant "defghijklmnopqrstuvwxyz0123456789" ]))
+            "one pixel-font segment wraps as the same text in two segments does"
+            (\width cut parts ->
+                let
+                    text =
+                        String.concat parts
+
+                    -- Two segments that look different, so the general word wrap is used.
+                    split =
+                        [ mono (String.left cut text), { text = String.dropLeft cut text, color = Color.white, font = Mono, decorations = [], link = Nothing } ]
+
+                    sizes segments =
+                        Sprite.wrapWithSize Small (Units.ui width) segments |> Tuple.second
+                in
+                ( wrapMono width [ mono text ], sizes [ mono text ] )
+                    |> Expect.equal ( wrapMono width split, sizes split )
+            )
+        , Test.test "wrapSegments keeps a long text in one look as one segment"
+            (\() ->
+                Sprite.wrapSegments Small (Units.ui 100) [ mono "aaaa bbbb cccc dddd" ]
+                    |> List.map .text
+                    |> Expect.equal [ "aaaa bbbb\ncccc dddd" ]
+            )
         ]
 
 
 fitsWidth : Expect.Expectation
 fitsWidth =
-    Sprite.wrapSegments Small (Units.uiPixels 200) [ { text = String.repeat 20 "lorem ipsum dolor ", color = Color.black, font = Sans Regular, decorations = [], link = Nothing } ]
+    Sprite.wrapSegments Small (Units.ui 200) [ { text = String.repeat 20 "lorem ipsum dolor ", color = Color.black, font = Sans Regular, decorations = [], link = Nothing } ]
         |> List.map .text
         |> String.concat
         |> String.split "\n"

@@ -20,11 +20,12 @@ ssidToString (Ssid ssid) =
 
 
 type UiId
-    = RefreshButton
+    = OpenButton
+    | CloseButton
+    | RefreshButton
     | NetworkButton Ssid
     | PasswordInput
     | ShowPasswordButton
     | ConnectButton
     | DisconnectButton
-      -- The list of wifi networks, which scrolls so the app is always the same height.
     | NetworkListViewport

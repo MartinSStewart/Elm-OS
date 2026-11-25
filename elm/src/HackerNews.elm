@@ -30,8 +30,7 @@ import Dict exposing (Dict)
 import Effect
 import HackerNews.Types exposing (Comment(..), Post, PostId(..), Span)
 import Hex
-import Html.Parser
-import Quantity exposing (Quantity)
+import HtmlParser
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import Ui exposing (Element)
@@ -387,20 +386,20 @@ for none, and no link for a job), which is matched to the post by the id in its 
 parsePosts : String -> List Post
 parsePosts html =
     let
-        tree : List Html.Parser.Node
+        tree : List HtmlParser.Node
         tree =
-            Html.Parser.parse html
+            HtmlParser.parse html
 
         commentCounts : Dict String Int
         commentCounts =
-            Html.Parser.findAll (isElement "td" "subtext") tree
-                |> Html.Parser.findAll (isElement "a" "")
+            HtmlParser.findAll (isElement "td" "subtext") tree
+                |> HtmlParser.findAll (isElement "a" "")
                 |> List.filterMap
                     (\link ->
                         let
                             text : String
                             text =
-                                Html.Parser.textContent [ link ]
+                                HtmlParser.textContent [ link ]
                         in
                         Maybe.map2
                             (\href count -> ( href, count ))
@@ -417,7 +416,7 @@ parsePosts html =
                     )
                 |> Dict.fromList
     in
-    Html.Parser.findAll (isElement "tr" "athing") tree
+    HtmlParser.findAll (isElement "tr" "athing") tree
         |> List.filterMap
             (\row ->
                 Maybe.map2
@@ -428,11 +427,11 @@ parsePosts html =
                         }
                     )
                     (attribute "id" row)
-                    (Html.Parser.findAll (isElement "span" "titleline") [ row ]
+                    (HtmlParser.findAll (isElement "span" "titleline") [ row ]
                         |> List.concatMap nodeChildren
-                        |> Html.Parser.findAll (isElement "a" "")
+                        |> HtmlParser.findAll (isElement "a" "")
                         |> List.head
-                        |> Maybe.map (\link -> Html.Parser.textContent [ link ] |> String.trim)
+                        |> Maybe.map (\link -> HtmlParser.textContent [ link ] |> String.trim)
                     )
             )
 
@@ -447,28 +446,28 @@ kept, so the comments under it stay under it.
 -}
 parseComments : String -> List Comment
 parseComments html =
-    Html.Parser.parse html
-        |> Html.Parser.findAll (isElement "tr" "comtr")
+    HtmlParser.parse html
+        |> HtmlParser.findAll (isElement "tr" "comtr")
         |> List.filterMap
             (\row ->
                 Maybe.map2
                     (\indent content ->
                         { indent = indent
                         , author =
-                            Html.Parser.findAll (isElement "span" "comhead") [ row ]
+                            HtmlParser.findAll (isElement "span" "comhead") [ row ]
                                 |> List.concatMap nodeChildren
                                 |> List.filter (isElement "a" "")
                                 |> List.head
-                                |> Maybe.map (\link -> Html.Parser.textContent [ link ] |> String.trim)
+                                |> Maybe.map (\link -> HtmlParser.textContent [ link ] |> String.trim)
                                 |> Maybe.withDefault ""
                         , date =
-                            Html.Parser.findAll (isElement "span" "age") [ row ]
+                            HtmlParser.findAll (isElement "span" "age") [ row ]
                                 |> List.head
                                 |> Maybe.andThen (attribute "title")
                                 |> Maybe.andThen (\title -> String.words title |> List.head)
                                 |> Maybe.map (\date -> String.left 16 date |> String.replace "T" " ")
                         , grey =
-                            Html.Parser.findAll (isElement "div" "commtext") [ row ]
+                            HtmlParser.findAll (isElement "div" "commtext") [ row ]
                                 |> List.head
                                 |> Maybe.andThen (attribute "class")
                                 |> Maybe.map greyLevel
@@ -476,12 +475,12 @@ parseComments html =
                         , content = content
                         }
                     )
-                    (Html.Parser.findAll (isElement "td" "ind") [ row ]
+                    (HtmlParser.findAll (isElement "td" "ind") [ row ]
                         |> List.head
                         |> Maybe.andThen (attribute "indent")
                         |> Maybe.andThen String.toInt
                     )
-                    (Html.Parser.findAll (isElement "div" "comment") [ row ]
+                    (HtmlParser.findAll (isElement "div" "comment") [ row ]
                         |> List.head
                         |> Maybe.map (\comment -> commentText (nodeChildren comment))
                     )
@@ -510,78 +509,78 @@ greyLevel classes =
 
 {-| Whether a node is a tag with this name and class (any class, for "").
 -}
-isElement : String -> String -> Html.Parser.Node -> Bool
+isElement : String -> String -> HtmlParser.Node -> Bool
 isElement name class node =
     case node of
-        Html.Parser.Element tag attributes _ ->
+        HtmlParser.Element tag attributes _ ->
             tag
                 == name
                 && (String.isEmpty class
-                        || (Html.Parser.getAttribute "class" attributes
+                        || (HtmlParser.getAttribute "class" attributes
                                 |> Maybe.withDefault ""
                                 |> String.words
                                 |> List.member class
                            )
                    )
 
-        Html.Parser.Text _ ->
+        HtmlParser.Text _ ->
             False
 
-        Html.Parser.Comment _ ->
+        HtmlParser.Comment _ ->
             False
 
 
-attribute : String -> Html.Parser.Node -> Maybe String
+attribute : String -> HtmlParser.Node -> Maybe String
 attribute name node =
     case node of
-        Html.Parser.Element _ attributes _ ->
-            Html.Parser.getAttribute name attributes
+        HtmlParser.Element _ attributes _ ->
+            HtmlParser.getAttribute name attributes
 
-        Html.Parser.Text _ ->
+        HtmlParser.Text _ ->
             Nothing
 
-        Html.Parser.Comment _ ->
+        HtmlParser.Comment _ ->
             Nothing
 
 
-nodeChildren : Html.Parser.Node -> List Html.Parser.Node
+nodeChildren : HtmlParser.Node -> List HtmlParser.Node
 nodeChildren node =
     case node of
-        Html.Parser.Element _ _ nodes ->
+        HtmlParser.Element _ _ nodes ->
             nodes
 
-        Html.Parser.Text _ ->
+        HtmlParser.Text _ ->
             []
 
-        Html.Parser.Comment _ ->
+        HtmlParser.Comment _ ->
             []
 
 
 {-| A comment's text: a paragraph starts after an empty line, links (`<a>`) and italics
 (`<i>`) are marked, and the reply link is left out.
 -}
-commentText : List Html.Parser.Node -> List Span
+commentText : List HtmlParser.Node -> List Span
 commentText nodes =
     commentSpans Nothing False nodes |> mergeSpans
 
 
-commentSpans : Maybe String -> Bool -> List Html.Parser.Node -> List Span
+commentSpans : Maybe String -> Bool -> List HtmlParser.Node -> List Span
 commentSpans link isItalic nodes =
     List.concatMap
         (\node ->
             case node of
-                Html.Parser.Text text ->
+                HtmlParser.Text text ->
                     [ { text = String.replace "\n" " " text, link = link, isItalic = isItalic } ]
 
-                Html.Parser.Comment _ ->
+                HtmlParser.Comment _ ->
                     []
 
-                Html.Parser.Element "p" _ nodes2 ->
+                HtmlParser.Element "p" _ nodes2 ->
                     { text = "\n\n", link = Nothing, isItalic = False } :: commentSpans link isItalic nodes2
 
-                Html.Parser.Element "a" attributes nodes2 ->
+                HtmlParser.Element "a" attributes nodes2 ->
                     commentSpans
-                        (case Html.Parser.getAttribute "href" attributes of
+                        (case HtmlParser.getAttribute "href" attributes of
                             Just href ->
                                 Just href
 
@@ -591,11 +590,11 @@ commentSpans link isItalic nodes =
                         isItalic
                         nodes2
 
-                Html.Parser.Element "i" _ nodes2 ->
+                HtmlParser.Element "i" _ nodes2 ->
                     commentSpans link True nodes2
 
-                Html.Parser.Element _ attributes nodes2 ->
-                    if Html.Parser.getAttribute "class" attributes == Just "reply" then
+                HtmlParser.Element _ attributes nodes2 ->
+                    if HtmlParser.getAttribute "class" attributes == Just "reply" then
                         []
 
                     else
@@ -758,206 +757,178 @@ toggleSpacing =
 -}
 view : Ui.LazyCache UiId -> Coord UiPixels -> Model -> Element UiId
 view lazyCache windowSize model =
-    Ui.elWithWidth
-        { width = Coord.xRaw windowSize, padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
-        (\width ->
-            case model.page of
-                PostsPage ->
-                    case model.data of
-                        NotLoading ->
-                            Ui.empty
+    Ui.el2
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
+        (case model.page of
+            PostsPage ->
+                case model.data of
+                    NotLoading ->
+                        Ui.fixed2 Ui.empty
 
-                        Loading maybe ->
-                            case maybe of
-                                Just data ->
-                                    postsView lazyCache windowSize width data
+                    Loading maybe ->
+                        case maybe of
+                            Just data ->
+                                postsView lazyCache data
 
-                                Nothing ->
-                                    Ui.text "Loading..."
+                            Nothing ->
+                                Ui.text2 "Loading..."
 
-                        Loaded data ->
-                            postsView lazyCache windowSize width data
+                    Loaded data ->
+                        postsView lazyCache data
 
-                        LoadFailed httpError ->
-                            Ui.text (Effect.httpErrorToString httpError)
+                    LoadFailed httpError ->
+                        Ui.text2 (Effect.httpErrorToString httpError)
 
-                CommentsPage id title ->
-                    commentsView
-                        lazyCache
-                        windowSize
-                        width
-                        id
-                        title
-                        (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
+            CommentsPage id title ->
+                commentsView
+                    lazyCache
+                    id
+                    title
+                    (SeqDict.get id model.comments |> Maybe.map .state |> Maybe.withDefault CommentsLoading)
         )
+        { width = Just (Coord.xRaw windowSize), height = Just (Coord.yRaw windowSize) }
 
 
-postsView : Ui.LazyCache UiId -> Coord UiPixels -> Int -> List Post -> Element UiId
-postsView lazyCache windowSize width data =
-    let
-        title : Element id
-        title =
-            Ui.customText Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
-    in
-    Ui.column
+postsView : Ui.LazyCache UiId -> List Post -> Ui.TargetSize -> Element UiId
+postsView lazyCache data =
+    Ui.column2
         titleSpacing
-        [ title
-        , Ui.column
-            0
-            (List.indexedMap (\index post -> Ui.lazy3 lazyCache postView width index post) data)
-            |> scrolling (HackerNews HackerNews.Types.PostsViewport) windowSize (Coord.yRaw (Ui.size title))
-        ]
-
-
-postView : Int -> Int -> Post -> Element UiId
-postView width index { id, title, comments } =
-    let
-        countWidth : Quantity Int UiPixels
-        countWidth =
-            Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x
-
-        numberWidth : Quantity Int UiPixels
-        numberWidth =
-            Sprite.textSize Small (Sans Regular) "00." |> Coord.x
-
-        spacing : Int
-        spacing =
-            8
-    in
-    Ui.leftAndRight
-        (Units.uiPixels width)
-        (Ui.row
-            spacing
-            [ Ui.colorText
-                Color.dimTextColor
-                (String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ ".")
-            , Ui.text
-                (Sprite.ellipsis Small (Sans Regular) (Units.uiPixels (width - Quantity.unwrap numberWidth - Quantity.unwrap countWidth - 2 * spacing)) title)
-            ]
-        )
-        (Ui.right
-            { width = countWidth }
-            (Ui.colorText
-                Color.dimTextColor
-                (String.fromInt comments
-                    ++ (if comments == 1 then
-                            " comment"
-
-                        else
-                            " comments"
-                       )
-                )
-            )
-        )
-        |> Ui.customButton
-            { id = HackerNews (HackerNews.Types.PostButton id)
-            , padding = Ui.paddingXY 0 postPadding
-            , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
-            , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
-            }
-
-
-commentsView : Ui.LazyCache UiId -> Coord UiPixels -> Int -> PostId -> String -> CommentsState -> Element UiId
-commentsView lazyCache windowSize width postId title comments =
-    let
-        backButton : Element UiId
-        backButton =
-            Ui.button
-                { id = HackerNews HackerNews.Types.BackButton
-                , padding = Ui.paddingXY 6 0
-                }
-                (Ui.text "< Posts")
-
-        headerSpacing : Int
-        headerSpacing =
-            8
-    in
-    Ui.column
-        titleSpacing
-        [ Ui.rowFromLeft
-            { width = width, spacing = headerSpacing }
-            [ \_ -> backButton
-            , \rest ->
-                Ui.customText
-                    Small
-                    [ { text = Sprite.ellipsis Small (Sans Bold) (Units.uiPixels rest) title
-                      , color = Color.textColor
-                      , font = Sans Bold
-                      , decorations = []
-                      , link = Nothing
-                      }
-                    ]
-            ]
-        , (case comments of
-            CommentsLoading ->
-                Ui.text "Loading comments..."
-
-            CommentsLoaded [] ->
-                Ui.text "No comments yet."
-
-            CommentsLoaded loaded ->
-                Ui.lazy3 lazyCache commentsColumn lazyCache width loaded
-
-            CommentsLoadFailed error ->
-                Ui.text (Effect.httpErrorToString error)
+        [ ( Ui.Shrink2
+          , Ui.customText2 Small [ { text = "Hacker News", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ]
           )
-            |> Ui.left (Units.uiPixels width)
-            |> scrolling (HackerNews (HackerNews.Types.CommentsViewport postId)) windowSize (Coord.yRaw (Ui.size backButton))
+        , ( Ui.Fill2
+          , Ui.viewport2
+                (HackerNews HackerNews.Types.PostsViewport)
+                (Ui.column2
+                    0
+                    (List.indexedMap (\index post -> ( Ui.Shrink2, Ui.lazy3 lazyCache postView index post )) data)
+                )
+          )
         ]
 
 
-commentsColumn : Ui.LazyCache UiId -> Int -> List Comment -> Element UiId
-commentsColumn lazyCache width comments =
-    Ui.column
+postView : Int -> Post -> Ui.TargetSize -> Element UiId
+postView index { id, title, comments } =
+    Ui.customButton2
+        { id = HackerNews (HackerNews.Types.PostButton id)
+        , pad = Ui.paddingXY 0 postPadding
+        , inFront = []
+        , style = Ui.NoBorderOrFill
+        , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
+        }
+        (Ui.row2
+            8
+            [ ( Ui.Shrink2
+              , Ui.colorText Color.dimTextColor (String.fromInt (index + 1) ++ ".")
+                    |> Ui.right { width = Sprite.textSize Small (Sans Regular) "00." |> Coord.x }
+                    |> Ui.fixed2
+              )
+            , ( Ui.Fill2, Ui.ellipsisText2 { color = Color.textColor, font = Sans Regular } title )
+            , ( Ui.Shrink2
+              , Ui.colorText
+                    Color.dimTextColor
+                    (String.fromInt comments
+                        ++ (if comments == 1 then
+                                " comment"
+
+                            else
+                                " comments"
+                           )
+                    )
+                    |> Ui.right { width = Sprite.textSize Small (Sans Regular) "0000 comments" |> Coord.x }
+                    |> Ui.fixed2
+              )
+            ]
+        )
+
+
+commentsView : Ui.LazyCache UiId -> PostId -> String -> CommentsState -> Ui.TargetSize -> Element UiId
+commentsView lazyCache postId title comments =
+    Ui.column2
+        titleSpacing
+        [ ( Ui.Shrink2
+          , Ui.row2
+                8
+                [ ( Ui.Shrink2, Ui.button2 { id = HackerNews HackerNews.Types.BackButton, pad = Ui.paddingXY 6 0 } (Ui.text2 "< Posts") )
+                , ( Ui.Fill2, Ui.ellipsisText2 { color = Color.textColor, font = Sans Bold } title )
+                ]
+          )
+        , ( Ui.Fill2
+          , Ui.viewport2
+                (HackerNews (HackerNews.Types.CommentsViewport postId))
+                (case comments of
+                    CommentsLoading ->
+                        Ui.text2 "Loading comments..."
+
+                    CommentsLoaded [] ->
+                        Ui.text2 "No comments yet."
+
+                    CommentsLoaded loaded ->
+                        commentsColumn lazyCache loaded
+
+                    CommentsLoadFailed error ->
+                        Ui.text2 (Effect.httpErrorToString error)
+                )
+          )
+        ]
+
+
+commentsColumn : Ui.LazyCache UiId -> List Comment -> Ui.TargetSize -> Element UiId
+commentsColumn lazyCache comments =
+    Ui.column2
         commentSpacing
-        (List.map (\comment -> Ui.lazy3 lazyCache commentView lazyCache width comment) comments)
+        (List.map (\comment -> ( Ui.Shrink2, Ui.lazy3 lazyCache commentView lazyCache comment )) comments)
 
 
-{-| A comment, and under it its replies if they are shown. `width` is how wide it can be.
+{-| A comment, and under it its replies if they are shown.
 -}
-commentView : Ui.LazyCache UiId -> Int -> Comment -> Element UiId
-commentView lazyCache width (Comment comment) =
+commentView : Ui.LazyCache UiId -> Comment -> Ui.TargetSize -> Element UiId
+commentView lazyCache (Comment comment) =
     let
-        repliesButton : Element UiId
+        repliesButton : Ui.TargetSize -> Element UiId
         repliesButton =
-            if comment.isExpanded then
+            (if comment.isExpanded then
                 toggleButton comment.index "[-]"
 
-            else
+             else
                 toggleButton comment.index ("[+" ++ String.fromInt comment.descendants ++ "]")
-
-        text : Element UiId
-        text =
-            Ui.rowFromLeft
-                { width = width, spacing = toggleSpacing }
-                [ \_ -> Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-                , \rest ->
-                    Ui.customTextWrapped
-                        Small
-                        (Units.uiPixels rest)
-                        (commentHeader comment.author comment.date
-                            ++ List.map (spanSegment (greyColor comment.grey)) comment.content
-                        )
-                        |> Ui.links (HackerNews HackerNews.Types.CommentLink)
-                ]
+            )
+                |> Ui.right { width = Units.ui toggleWidth }
+                |> Ui.fixed2
     in
     if comment.isExpanded then
-        Ui.column
+        Ui.column2
             commentSpacing
-            [ text
-            , Ui.rowFromLeft
-                { width = width, spacing = 0 }
-                [ \_ -> Ui.left (Units.uiPixels replyIndent) Ui.empty
-                , \rest -> commentsColumn lazyCache rest comment.children
-                ]
+            [ ( Ui.Shrink2
+              , Ui.row2
+                    toggleSpacing
+                    [ ( Ui.Shrink2, repliesButton )
+                    , ( Ui.Fill2
+                      , \target ->
+                            Ui.customText2
+                                Small
+                                (commentHeader comment.author comment.date
+                                    ++ List.map (spanSegment (greyColor comment.grey)) comment.content
+                                )
+                                target
+                                |> Ui.links (HackerNews HackerNews.Types.CommentLink)
+                      )
+                    ]
+              )
+            , ( Ui.Shrink2
+              , Ui.row2
+                    0
+                    [ ( Ui.Shrink2, Ui.fixed2 (Ui.left (Units.ui replyIndent) Ui.empty) )
+                    , ( Ui.Fill2, commentsColumn lazyCache comment.children )
+                    ]
+              )
             ]
 
     else
-        Ui.rowFromLeft
-            { width = width, spacing = toggleSpacing }
-            [ \_ -> Ui.right { width = Units.uiPixels toggleWidth } repliesButton
-            , \rest -> Ui.customTextWrapped Small (Units.uiPixels rest) (commentHeader comment.author comment.date)
+        Ui.row2
+            toggleSpacing
+            [ ( Ui.Shrink2, repliesButton )
+            , ( Ui.Fill2, Ui.customText2 Small (commentHeader comment.author comment.date) )
             ]
 
 
@@ -1038,20 +1009,8 @@ toggleButton index label =
     Ui.monoColorText Color.dimTextColor label
         |> Ui.customButton
             { id = HackerNews (HackerNews.Types.CommentToggle index)
-            , padding = Ui.noPadding
+            , pad = Ui.noPadding
             , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
+            , style = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.NoBorderOrFill
             }
-
-
-{-| Content in a viewport that reaches from below the header (`headerHeight` high) to
-the bottom of the window, scrolled to where `uiState` says.
--}
-scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
-scrolling viewportId windowSize headerHeight content =
-    Ui.viewport
-        { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - titleSpacing)
-        }
-        content

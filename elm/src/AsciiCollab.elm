@@ -526,8 +526,8 @@ gridSize screen =
         ( w, h ) =
             Coord.toTuple screen
     in
-    ( max 1 ((w - 2 * padding) // charWidth)
-    , max 1 ((h - 2 * padding - headerHeight) // charHeight)
+    ( max 1 ((w - 2 * pad) // charWidth)
+    , max 1 ((h - 2 * pad - headerHeight) // charHeight)
     )
 
 
@@ -541,8 +541,8 @@ charHeight =
     18
 
 
-padding : Int
-padding =
+pad : Int
+pad =
     8
 
 
@@ -846,16 +846,16 @@ view screen focused model =
                         "Disconnected (" ++ reason ++ "), trying again…"
     in
     Ui.el
-        { padding = Ui.paddingXY padding padding, borderAndFill = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY pad pad, style = Ui.windowBorderAndFill }
         (Ui.column
             6
             [ Ui.leftAndRight
                 (Quantity.Quantity (cols * charWidth))
                 (Ui.text ("ascii-collab.app: " ++ Sprite.ellipsis Sprite.Small (Sprite.Sans Sprite.Regular) (Quantity.Quantity (cols * charWidth - 200)) status))
-                (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, padding = Ui.paddingXY 6 3 } (Ui.text "Close"))
+                (Ui.button { id = AsciiCollab AsciiCollab.Types.CloseButton, pad = Ui.paddingXY 6 3 } (Ui.text "Close"))
             , Ui.elWithId
                 (AsciiCollab AsciiCollab.Types.GridArea)
-                { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+                { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (gridView focused cols rows model)
             ]
         )

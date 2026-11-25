@@ -16,9 +16,9 @@ The board is a list of nine squares, top row first, each empty or holding a mark
 
 -}
 
+import App
 import Color
 import Coord exposing (Coord)
-import Layout
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TicTacToe.Types
 import Ui exposing (Element)
@@ -152,8 +152,8 @@ other mark =
 -- VIEW
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     4
 
 
@@ -166,7 +166,7 @@ squareSize =
 -}
 width : Int
 width =
-    3 * Coord.xRaw squareSize + 2 * spacing
+    3 * Coord.xRaw squareSize + 2 * gap
 
 
 sans : Font
@@ -180,22 +180,22 @@ view : Model -> Element UiId
 view model =
     let
         title =
-            Ui.leftAndRight (Units.uiPixels width)
+            Ui.leftAndRight (Units.ui width)
                 (Ui.text "Tic Tac Toe")
-                (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×"))
+                (Ui.button { id = TicTacToe TicTacToe.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "×"))
 
         board =
-            Ui.column spacing (List.map (boardRow model) [ [ 0, 1, 2 ], [ 3, 4, 5 ], [ 6, 7, 8 ] ])
+            Ui.column gap (List.map (boardRow model) [ [ 0, 1, 2 ], [ 3, 4, 5 ], [ 6, 7, 8 ] ])
 
         newGame =
-            Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, padding = Ui.paddingXY 8 3 } (Ui.text "New game")
+            Ui.button { id = TicTacToe TicTacToe.Types.NewGameButton, pad = Ui.paddingXY 8 3 } (Ui.text "New game")
     in
     Ui.elWithId
         (TicTacToe TicTacToe.Types.Panel)
-        { padding = Ui.paddingXY 8 8
-        , borderAndFill = Ui.windowBorderAndFill
+        { pad = Ui.paddingXY 8 8
+        , style = Ui.windowBorderAndFill
         }
-        (Ui.column spacing [ title, Ui.text (message model), board, newGame ])
+        (Ui.column gap [ title, Ui.text (message model), board, newGame ])
 
 
 message : Model -> String
@@ -223,7 +223,7 @@ markName mark =
 
 boardRow : Model -> List Int -> Element UiId
 boardRow model row =
-    Ui.row spacing (List.map (squareView model) row)
+    Ui.row gap (List.map (squareView model) row)
 
 
 squareView : Model -> Int -> Element UiId
@@ -249,13 +249,13 @@ squareView model i =
                 Draw ->
                     False
     in
-    Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), padding = Ui.noPadding }
+    Ui.selectableButton { id = TicTacToe (TicTacToe.Types.Square i), pad = Ui.noPadding }
         isWinning
         (Ui.center { size = squareSize } (Ui.customText Big [ { text = label, color = Color.textColor, font = sans, decorations = [], link = Nothing } ]))
 
 
 {-| The window's size, worked out once.
 -}
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
-    Layout.fixed (Ui.size (view init))
+    App.fixed (Ui.size (view init))

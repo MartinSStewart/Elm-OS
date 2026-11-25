@@ -433,6 +433,11 @@ impl Host {
                     }
                 }
                 Effect::Build { modules } => crate::build::request(modules),
+                Effect::ListDisks => crate::install::list(),
+                Effect::Install { disk, layout, target, keep_data } => {
+                    crate::install::install(disk, layout, target, keep_data)
+                }
+                Effect::UpdateInstall { disk, layout } => crate::install::update(disk, layout),
             }
         }
         if cursor_dirty {

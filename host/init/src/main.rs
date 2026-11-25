@@ -31,6 +31,7 @@ macro_rules! log {
 }
 
 mod build;
+mod disks;
 mod display;
 mod effects;
 mod elm;
@@ -41,6 +42,7 @@ mod host;
 mod hotplug;
 mod http;
 mod input;
+mod install;
 mod net;
 mod persist;
 mod programs;

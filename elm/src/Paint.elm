@@ -1,26 +1,44 @@
 module Paint exposing
     ( Model
+    , Stroke
     , appSize
+    , endPan
     , endStroke
     , init
     , onClick
+    , panBy
+    , pixelAt
+    , redo
+    , scrolledBy
+    , startPan
     , startStroke
     , strokeBy
+    , undo
+    , undoOrRedo
     , view
+    , wheel
     )
 
-{-| A paint program: pick a colour and a brush, and draw on the canvas with the mouse.
+{-| A paint program: pick a colour, a brush and a tool, and draw on the canvas with the mouse.
 
-The canvas is a 640 x 384 pixel Image (one pixel per UI pixel): 32 x 32 pixel chunks.
-A stroke rebuilds the chunks it touches; Sprite.image draws it.
+The fill tool fills the pixels of the colour under the mouse that are joined to it, but only
+those within `fillRadiusFactor` times the brush's radius from the mouse by walking distance. Dragging fills again from
+wherever the mouse is, but only the colour that was under the mouse when it went down, and the
+pixels the stroke has already filled count as that colour.
+
+The canvas is a 640 x 384 pixel Image (one pixel per UI pixel at a zoom of 1): 32 x 32 pixel
+chunks. A stroke rebuilds the chunks it touches; Sprite.image draws it. The window shows
+the canvas through a box the size of the canvas, zoomed by `zoom` with its top left corner
+at `offset` in the box (UI pixels). The mouse positions that come in are in the box.
 
 -}
 
+import App
 import Array
 import Color exposing (Color)
 import Coord exposing (Coord)
+import Dict exposing (Dict)
 import Image exposing (Image)
-import Layout
 import Paint.Types
 import Set exposing (Set)
 import Sprite
@@ -34,9 +52,39 @@ type alias Model =
     , canvas : Image
     , color : Color
     , brush : Int -- the brush's radius, in canvas pixels
+    , tool : Paint.Types.Tool
 
-    -- The canvas pixel the mouse was last at, while it draws.
-    , stroke : Maybe ( Int, Int )
+    -- The canvases before the latest changes (newest first), and the ones undone.
+    , undoable : List Image
+    , redoable : List Image
+
+    -- While the mouse is down on the canvas.
+    , stroke : Maybe Stroke
+
+    -- Pixels of the box for each pixel of the canvas.
+    , zoom : Float
+
+    -- Where the canvas' top left corner is in the box, in UI pixels.
+    , offset : ( Float, Float )
+
+    -- The middle button is down, and moving the mouse moves the canvas.
+    , panning : Bool
+    }
+
+
+type alias Stroke =
+    { -- The canvas pixel the mouse was last at.
+      at : ( Int, Int )
+
+    -- Exactly where, as a pixel is more than one mouse step when zoomed out.
+    , exact : ( Float, Float )
+
+    -- The colour under the mouse when it went down (0xRRGGBBAA), which the fill tool replaces.
+    , target : Int
+
+    -- The pixels the fill tool has filled so far in this stroke, as y * canvasWidth + x. The
+    -- fill treats them as still being the target colour.
+    , filled : Set Int
     }
 
 
@@ -46,7 +94,13 @@ init =
     , canvas = blank
     , color = Color.black
     , brush = 3
+    , tool = Paint.Types.Pen
+    , undoable = []
+    , redoable = []
     , stroke = Nothing
+    , zoom = 1
+    , offset = ( 0, 0 )
+    , panning = False
     }
 
 
@@ -94,12 +148,71 @@ blank =
 {-| The mouse went down on the canvas, at this pixel of it.
 -}
 startStroke : Coord UiPixels -> Model -> Model
-startStroke point model =
+startStroke point model0 =
     let
+        model =
+            remember model0
+
+        exact =
+            canvasPoint model0 (Coord.toTuple point |> Tuple.mapBoth toFloat toFloat)
+
         at =
-            Coord.toTuple point
+            ( floor (Tuple.first exact), floor (Tuple.second exact) )
+
+        stroke =
+            { at = at, exact = exact, filled = Set.empty, target = pixelAt at model.canvas |> Maybe.withDefault 0 }
     in
-    paint [ at ] { model | stroke = Just at }
+    case model.tool of
+        Paint.Types.Pen ->
+            paint [ at ] { model | stroke = Just stroke }
+
+        Paint.Types.Fill ->
+            fill [ at ] { model | stroke = Just stroke }
+
+
+{-| How many changes can be undone. A canvas is about 1 MB in a snapshot, so it's not many.
+-}
+historySize : Int
+historySize =
+    10
+
+
+{-| Keeps the canvas as it is, to go back to, and forgets what was undone.
+-}
+remember : Model -> Model
+remember model =
+    { model | undoable = List.take historySize (model.canvas :: model.undoable), redoable = [] }
+
+
+undo : Model -> Model
+undo model =
+    case model.undoable of
+        image :: older ->
+            { model | canvas = image, undoable = older, redoable = model.canvas :: model.redoable, stroke = Nothing }
+
+        [] ->
+            model
+
+
+redo : Model -> Model
+redo model =
+    case model.redoable of
+        image :: newer ->
+            { model | canvas = image, redoable = newer, undoable = model.canvas :: model.undoable, stroke = Nothing }
+
+        [] ->
+            model
+
+
+{-| Ctrl+Z, or with shift Ctrl+Shift+Z.
+-}
+undoOrRedo : Bool -> Model -> Model
+undoOrRedo shift model =
+    if shift then
+        redo model
+
+    else
+        undo model
 
 
 {-| The mouse moved by this much while drawing: paints along the way.
@@ -107,16 +220,32 @@ startStroke point model =
 strokeBy : Coord UiPixels -> Model -> Model
 strokeBy ( dx, dy ) model =
     case model.stroke of
-        Just ( x, y ) ->
+        Just stroke ->
             let
+                ( x, y ) =
+                    stroke.at
+
+                exact =
+                    ( Tuple.first stroke.exact + toFloat (Units.inUi dx) / model.zoom
+                    , Tuple.second stroke.exact + toFloat (Units.inUi dy) / model.zoom
+                    )
+
                 to =
-                    ( x + Units.inUiPixels dx, y + Units.inUiPixels dy )
+                    ( floor (Tuple.first exact), floor (Tuple.second exact) )
+
+                moved =
+                    { model | stroke = Just { stroke | at = to, exact = exact } }
             in
             if to == ( x, y ) then
                 model
 
             else
-                paint (line ( x, y ) to model.brush) { model | stroke = Just to }
+                case model.tool of
+                    Paint.Types.Pen ->
+                        paint (line ( x, y ) to model.brush) moved
+
+                    Paint.Types.Fill ->
+                        fill (line ( x, y ) to (fillRadius model)) moved
 
         Nothing ->
             model
@@ -125,6 +254,115 @@ strokeBy ( dx, dy ) model =
 endStroke : Model -> Model
 endStroke model =
     { model | stroke = Nothing }
+
+
+
+-- ZOOM AND PAN
+
+
+minZoom : Float
+minZoom =
+    1 / 4
+
+
+maxZoom : Float
+maxZoom =
+    32
+
+
+{-| How much each wheel click zooms.
+-}
+zoomStep : Float
+zoomStep =
+    1.25
+
+
+{-| How far each wheel click moves the canvas, in UI pixels.
+-}
+wheelPan : Float
+wheelPan =
+    40
+
+
+{-| The point of the canvas under a point of the box.
+-}
+canvasPoint : Model -> ( Float, Float ) -> ( Float, Float )
+canvasPoint model ( x, y ) =
+    ( (x - Tuple.first model.offset) / model.zoom, (y - Tuple.second model.offset) / model.zoom )
+
+
+{-| Moves the canvas by this much (UI pixels), keeping some of it in the box.
+-}
+panBy : ( Float, Float ) -> Model -> Model
+panBy ( dx, dy ) model =
+    let
+        ( x, y ) =
+            model.offset
+
+        keep =
+            32
+
+        limit size =
+            clamp (keep - size * model.zoom) (size - keep)
+    in
+    { model | offset = ( limit (toFloat canvasWidth) (x + dx), limit (toFloat canvasHeight) (y + dy) ) }
+
+
+startPan : Model -> Model
+startPan model =
+    { model | panning = True, stroke = Nothing }
+
+
+endPan : Model -> Model
+endPan model =
+    { model | panning = False }
+
+
+{-| Zooms by this factor, keeping the point of the box under the mouse where it is.
+-}
+zoomBy : Coord UiPixels -> Float -> Model -> Model
+zoomBy mouse factor model =
+    let
+        ( mx, my ) =
+            Coord.toTuple mouse |> Tuple.mapBoth toFloat toFloat
+
+        ( cx, cy ) =
+            canvasPoint model ( mx, my )
+
+        zoom =
+            clamp minZoom maxZoom (model.zoom * factor)
+    in
+    panBy ( 0, 0 ) { model | zoom = zoom, offset = ( mx - cx * zoom, my - cy * zoom ) }
+
+
+{-| The wheel turned over the canvas: zooms (up is in) with Ctrl, else moves it down for
+clicks up (across with shift).
+-}
+wheel : Coord UiPixels -> Bool -> Bool -> Int -> Model -> Model
+wheel mouse ctrl across clicks model =
+    if ctrl then
+        zoomBy mouse (zoomStep ^ toFloat clicks) model
+
+    else if across then
+        panBy ( toFloat clicks * wheelPan, 0 ) model
+
+    else
+        panBy ( 0, toFloat clicks * wheelPan ) model
+
+
+{-| Two fingers on the touchpad moved over the canvas (see HostMessage.Scroll): it follows
+them, or with Ctrl, they zoom (down is in), or they pinched by this factor.
+-}
+scrolledBy : Coord UiPixels -> Bool -> ( Float, Float ) -> Float -> Model -> Model
+scrolledBy mouse ctrl ( dx, dy ) pinch model =
+    if pinch /= 1 then
+        zoomBy mouse pinch model
+
+    else if ctrl then
+        zoomBy mouse (e ^ (dy / 100)) model
+
+    else
+        panBy ( dx, dy ) model
 
 
 {-| The points from one to the other (leaving out the first), close enough together
@@ -231,6 +469,259 @@ paintChunk index r color dabs chunk =
     List.foldl dab (Image.chunkPixels chunk) dabs |> Image.chunkFromPixels
 
 
+{-| The colour of a canvas pixel (0xRRGGBBAA).
+-}
+pixelAt : ( Int, Int ) -> Image -> Maybe Int
+pixelAt ( x, y ) canvas =
+    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight then
+        Nothing
+
+    else
+        Array.get (chunkIndexOf x y) canvas.chunks
+            |> Maybe.andThen (\chunk -> Array.get (inChunk x y) (Image.chunkPixels chunk))
+
+
+chunkIndexOf : Int -> Int -> Int
+chunkIndexOf x y =
+    y // chunkSize * chunksAcross + x // chunkSize
+
+
+inChunk : Int -> Int -> Int
+inChunk x y =
+    modBy chunkSize y * chunkSize + modBy chunkSize x
+
+
+{-| How many times the brush's radius the fill tool's radius is.
+-}
+fillRadiusFactor : Int
+fillRadiusFactor =
+    5
+
+
+fillRadius : Model -> Int
+fillRadius model =
+    model.brush * fillRadiusFactor
+
+
+{-| The chunks being filled, as pixels, which of them changed, the pixels filled in the stroke
+so far, and how far each pixel the current dab has reached is from its centre.
+-}
+type alias Work =
+    { chunks : Dict Int (Array.Array Int)
+    , changed : Set Int
+    , filled : Set Int
+    , distances : Dict Int Int
+    }
+
+
+{-| Fill around each point, in the brush's colour: the pixels of the stroke's target colour
+that are within the fill radius of the point by walking (over pixels that are the target
+colour, a step to any of the 8 pixels around one, diagonals costing the square root of 2).
+-}
+fill : List ( Int, Int ) -> Model -> Model
+fill points model =
+    case model.stroke of
+        Just stroke ->
+            let
+                color =
+                    Color.toInt model.color
+
+                canvas =
+                    model.canvas
+
+                start : Work
+                start =
+                    { chunks = Dict.empty, changed = Set.empty, filled = stroke.filled, distances = Dict.empty }
+            in
+            if color == stroke.target then
+                -- Nothing to do, and the fill would never stop: it would find its own pixels.
+                model
+
+            else
+                let
+                    work =
+                        List.foldl (fillAround canvas (fillRadius model) color stroke.target) start points
+                in
+                { model
+                    | stroke = Just { stroke | filled = work.filled }
+                    , canvas =
+                        { canvas
+                            | chunks =
+                                Set.foldl
+                                    (\index chunks ->
+                                        case Dict.get index work.chunks of
+                                            Just pixels ->
+                                                Array.set index (Image.chunkFromPixels pixels) chunks
+
+                                            Nothing ->
+                                                chunks
+                                    )
+                                    canvas.chunks
+                                    work.changed
+                        }
+                }
+
+        Nothing ->
+            model
+
+
+fillAround : Image -> Int -> Int -> Int -> ( Int, Int ) -> Work -> Work
+fillAround canvas r color target ( cx, cy ) previous =
+    let
+        chunksReached =
+            List.concatMap
+                (\chunkY -> List.map (\chunkX -> chunkY * chunksAcross + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth - 1) (cx + r) // chunkSize)))
+                (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight - 1) (cy + r) // chunkSize))
+
+        start =
+            List.foldl
+                (\index w -> { w | chunks = Dict.update index (loadChunk canvas index) w.chunks })
+                { previous | distances = Dict.empty }
+                chunksReached
+
+        -- The pixels the fill walks over: ones of the target colour, and ones filled already in
+        -- this stroke.
+        isWalkable w ( x, y ) =
+            Set.member (y * canvasWidth + x) w.filled
+                || (Dict.get (chunkIndexOf x y) w.chunks
+                        |> Maybe.andThen (Array.get (inChunk x y))
+                        |> (==) (Just target)
+                   )
+
+        -- Distances are in thousandths of a pixel.
+        limit =
+            r * straightCost
+
+        -- Walks out from the mouse, a pixel at a time (the 8 pixels around it), to every
+        -- walkable pixel that is within the limit, by the shortest walk. A pixel's distance
+        -- can fall when a shorter way to it is found, and then it is walked on from again.
+        spread : Queue -> Work -> Work
+        spread queue w =
+            case queue of
+                Queue [] [] ->
+                    w
+
+                Queue [] back ->
+                    spread (Queue (List.reverse back) []) w
+
+                Queue (( x, y, distance ) :: front) back ->
+                    if distance > (Dict.get (y * canvasWidth + x) w.distances |> Maybe.withDefault distance) then
+                        spread (Queue front back) w
+
+                    else
+                        let
+                            ( queue2, w2 ) =
+                                List.foldl (step x y distance) ( Queue front back, w ) neighbours
+                        in
+                        spread queue2 w2
+
+        step x y distance ( dx, dy, cost ) ( queue, w ) =
+            let
+                nx =
+                    x + dx
+
+                ny =
+                    y + dy
+
+                key =
+                    ny * canvasWidth + nx
+
+                nextDistance =
+                    distance + cost
+
+                -- Whether it was reached already, as quickly.
+                alreadyReached =
+                    nextDistance >= (Dict.get key w.distances |> Maybe.withDefault (nextDistance + 1))
+            in
+            if nx < 0 || ny < 0 || nx >= canvasWidth || ny >= canvasHeight || nextDistance > limit || alreadyReached || not (isWalkable w ( nx, ny )) then
+                ( queue, w )
+
+            else
+                ( push ( nx, ny, nextDistance ) queue
+                , setDistance nextDistance key (setPixel color ( nx, ny ) w)
+                )
+    in
+    if isWalkable start ( cx, cy ) then
+        spread (Queue [ ( cx, cy, 0 ) ] []) (setDistance 0 (cy * canvasWidth + cx) (setPixel color ( cx, cy ) start))
+
+    else
+        start
+
+
+{-| A first in, first out queue: what to take next, and what was added since (newest first).
+-}
+type Queue
+    = Queue (List ( Int, Int, Int )) (List ( Int, Int, Int ))
+
+
+push : ( Int, Int, Int ) -> Queue -> Queue
+push item (Queue front back) =
+    Queue front (item :: back)
+
+
+{-| What it costs to step to each of the 8 pixels around one, in thousandths of a pixel
+(a diagonal step is the square root of 2 times as far).
+-}
+neighbours : List ( Int, Int, Int )
+neighbours =
+    [ ( -1, 0, straightCost )
+    , ( 1, 0, straightCost )
+    , ( 0, -1, straightCost )
+    , ( 0, 1, straightCost )
+    , ( -1, -1, diagonalCost )
+    , ( 1, -1, diagonalCost )
+    , ( -1, 1, diagonalCost )
+    , ( 1, 1, diagonalCost )
+    ]
+
+
+straightCost : Int
+straightCost =
+    1000
+
+
+diagonalCost : Int
+diagonalCost =
+    1414
+
+
+setDistance : Int -> Int -> Work -> Work
+setDistance distance key work =
+    { work | distances = Dict.insert key distance work.distances }
+
+
+loadChunk : Image -> Int -> Maybe (Array.Array Int) -> Maybe (Array.Array Int)
+loadChunk canvas index loaded =
+    case loaded of
+        Just _ ->
+            loaded
+
+        Nothing ->
+            Array.get index canvas.chunks |> Maybe.map Image.chunkPixels
+
+
+{-| Paints the pixel and notes it as filled, unless it was filled already.
+-}
+setPixel : Int -> ( Int, Int ) -> Work -> Work
+setPixel color ( x, y ) work =
+    let
+        index =
+            chunkIndexOf x y
+
+        key =
+            y * canvasWidth + x
+    in
+    if Set.member key work.filled then
+        work
+
+    else
+        { work
+            | chunks = Dict.update index (Maybe.map (Array.set (inChunk x y) color)) work.chunks
+            , changed = Set.insert index work.changed
+            , filled = Set.insert key work.filled
+        }
+
+
 
 -- CLICKS
 
@@ -239,13 +730,23 @@ onClick : Paint.Types.UiId -> Model -> Model
 onClick id model =
     case id of
         Paint.Types.OpenButton ->
-            { model | isOpen = not model.isOpen, stroke = Nothing }
+            { model | isOpen = not model.isOpen, stroke = Nothing, panning = False }
 
         Paint.Types.CloseButton ->
-            { model | isOpen = False, stroke = Nothing }
+            { model | isOpen = False, stroke = Nothing, panning = False }
+
+        Paint.Types.UndoButton ->
+            undo model
+
+        Paint.Types.RedoButton ->
+            redo model
 
         Paint.Types.ClearButton ->
-            { model | canvas = blank }
+            let
+                remembered =
+                    remember model
+            in
+            { remembered | canvas = blank }
 
         Paint.Types.Canvas ->
             model
@@ -261,6 +762,9 @@ onClick id model =
         Paint.Types.BrushButton radius ->
             { model | brush = radius }
 
+        Paint.Types.ToolButton tool ->
+            { model | tool = tool }
+
 
 
 -- VIEW
@@ -270,34 +774,55 @@ view : Model -> Element UiId
 view model =
     let
         width =
-            Units.uiPixels canvasWidth
+            Units.ui canvasWidth
 
         title =
             Ui.leftAndRight width
                 (Ui.text "Paint")
                 (Ui.row 4
-                    [ Ui.button { id = Paint Paint.Types.ClearButton, padding = Ui.paddingXY 8 0 } (Ui.text "Clear")
-                    , Ui.button { id = Paint Paint.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "×")
+                    [ Ui.button { id = Paint Paint.Types.UndoButton, pad = Ui.paddingXY 8 0 } (Ui.text "Undo")
+                    , Ui.button { id = Paint Paint.Types.RedoButton, pad = Ui.paddingXY 8 0 } (Ui.text "Redo")
+                    , Ui.button { id = Paint Paint.Types.ClearButton, pad = Ui.paddingXY 8 0 } (Ui.text "Clear")
+                    , Ui.button { id = Paint Paint.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "×")
                     ]
                 )
 
         tools =
             Ui.leftAndRight width
                 (Ui.row 4 (List.indexedMap (colorButton model) Color.paintPalette))
-                (Ui.row 4 (List.map (brushButton model) brushes))
+                (Ui.row 4 (List.map (toolButton model) [ ( Paint.Types.Pen, "Pen" ), ( Paint.Types.Fill, "Fill" ) ] ++ List.map (brushButton model) brushes))
 
         canvas =
             Ui.elWithId (Paint Paint.Types.Canvas)
-                { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+                { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (Ui.quads
                     { size = Coord.xy canvasWidth canvasHeight
-                    , triangles = Sprite.image model.canvas
+                    , triangles =
+                        Sprite.rectangle Color.fillColor3 { topLeft = Coord.origin, bottomRight = Coord.xy canvasWidth canvasHeight } Coord.origin (Coord.xy canvasWidth canvasHeight)
+                            ++ (Sprite.image model.canvas
+                                    |> Sprite.scaleAndMove model.zoom model.offset
+                                    |> Sprite.clipTo { left = 0, top = 0, right = toFloat canvasWidth, bottom = toFloat canvasHeight }
+                                    |> Sprite.sampled
+                                        (if model.zoom >= 2 then
+                                            Sprite.Nearest
+
+                                         else
+                                            Sprite.Linear
+                                        )
+                               )
                     }
                 )
     in
     Ui.el
-        { padding = Ui.paddingXY 8 8, borderAndFill = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
         (Ui.column 6 [ title, tools, canvas ])
+
+
+toolButton : Model -> ( Paint.Types.Tool, String ) -> Element UiId
+toolButton model ( tool, name ) =
+    Ui.selectableButton { id = Paint (Paint.Types.ToolButton tool), pad = Ui.paddingXY 6 3 }
+        (tool == model.tool)
+        (Ui.text name)
 
 
 swatchSize : Int
@@ -311,7 +836,7 @@ colorButton model index color =
         s =
             toFloat swatchSize
     in
-    Ui.selectableButton { id = Paint (Paint.Types.ColorButton index), padding = Ui.paddingXY 3 3 }
+    Ui.selectableButton { id = Paint (Paint.Types.ColorButton index), pad = Ui.paddingXY 3 3 }
         (color == model.color)
         (Ui.quads
             { size = Coord.xy swatchSize swatchSize
@@ -331,7 +856,7 @@ brushButton model radius =
         s =
             toFloat swatchSize
     in
-    Ui.selectableButton { id = Paint (Paint.Types.BrushButton radius), padding = Ui.paddingXY 3 3 }
+    Ui.selectableButton { id = Paint (Paint.Types.BrushButton radius), pad = Ui.paddingXY 3 3 }
         (radius == model.brush)
         (Ui.quads
             { size = Coord.xy swatchSize swatchSize
@@ -342,6 +867,6 @@ brushButton model radius =
 
 {-| The window's size, worked out once.
 -}
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
-    Layout.fixed (Ui.size (view init))
+    App.fixed (Ui.size (view init))

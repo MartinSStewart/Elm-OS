@@ -82,7 +82,7 @@ def boot():
          "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs-qemu.cpio",
          "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "none",
          "-append", "console=ttyS0 loglevel=4 ELMOS_CURSOR=software ELMOS_DEBUG=1 ELMOS_TEST=1",
-         "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
+         "-vga", "none", "-device", "virtio-gpu-pci,xres=1920,yres=1080", "-display", "none",
          "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
          "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
     wait_for("[persist] mounted /dev/vda1 at /data")

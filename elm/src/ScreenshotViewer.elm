@@ -81,8 +81,8 @@ windowPadding =
     8
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     6
 
 
@@ -116,8 +116,8 @@ headerHeight =
 areaSize : Coord UiPixels -> Coord UiPixels
 areaSize window =
     Coord.xy
-        (max 1 (Coord.xRaw window - 2 * windowPadding - listWidth - spacing))
-        (max 1 (Coord.yRaw window - 2 * windowPadding - headerHeight - spacing))
+        (max 1 (Coord.xRaw window - 2 * windowPadding - listWidth - gap))
+        (max 1 (Coord.yRaw window - 2 * windowPadding - headerHeight - gap))
 
 
 
@@ -301,15 +301,15 @@ view scale window screenshots model =
 
         header =
             Ui.leftAndRight
-                (Units.uiPixels (Coord.xRaw area + listWidth + spacing))
+                (Units.ui (Coord.xRaw area + listWidth + gap))
                 (Ui.row
-                    spacing
+                    gap
                     [ headerButton Types.ZoomOutButton "-"
                     , headerButton Types.ZoomInButton "+"
                     , headerButton Types.ActualSizeButton "100%"
                     , headerButton Types.FitButton "Fit"
                     , Ui.el
-                        { padding = Ui.paddingXY 6 3, borderAndFill = Ui.NoBorderOrFill }
+                        { pad = Ui.paddingXY 6 3, style = Ui.NoBorderOrFill }
                         (text
                             (case model.selected of
                                 Just _ ->
@@ -324,12 +324,12 @@ view scale window screenshots model =
                 (headerButton Types.CloseButton "Close")
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (Ui.column
-            spacing
+            gap
             [ header
             , Ui.row
-                spacing
+                gap
                 [ previewList scale (Coord.yRaw area) screenshots model, imageArea scale area screenshots model ]
             ]
         )
@@ -337,7 +337,7 @@ view scale window screenshots model =
 
 headerButton : Types.UiId -> String -> Element UiId
 headerButton id label =
-    Ui.button { id = ScreenshotViewer id, padding = Ui.paddingXY 6 3 } (text label)
+    Ui.button { id = ScreenshotViewer id, pad = Ui.paddingXY 6 3 } (text label)
 
 
 text : String -> Element UiId
@@ -349,15 +349,15 @@ previewList : UiScale -> Int -> List Ui.Screenshot -> Model -> Element UiId
 previewList scale height screenshots model =
     Ui.viewport
         { id = ScreenshotViewer Types.PreviewList
-        , viewportHeight = Units.uiPixels height
+        , viewportHeight = Units.ui height
         }
         (Ui.column
-            spacing
+            gap
             (if List.isEmpty screenshots then
                 [ Ui.el
-                    { padding = Ui.paddingXY buttonPadding buttonPadding, borderAndFill = Ui.NoBorderOrFill }
+                    { pad = Ui.paddingXY buttonPadding buttonPadding, style = Ui.NoBorderOrFill }
                     (Ui.customTextWrapped Sprite.Small
-                        (Units.uiPixels (Coord.xRaw previewSize))
+                        (Units.ui (Coord.xRaw previewSize))
                         [ { text = "No screenshots yet. Press Print Screen, then click what to capture.", color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
                     )
                 ]
@@ -385,7 +385,7 @@ preview scale model index screenshot =
             Coord.xy (ceiling (w * zoom * uiPerScreenPixel scale)) (ceiling (h * zoom * uiPerScreenPixel scale))
     in
     Ui.selectableButton
-        { id = ScreenshotViewer (Types.Preview index), padding = Ui.paddingXY buttonPadding buttonPadding }
+        { id = ScreenshotViewer (Types.Preview index), pad = Ui.paddingXY buttonPadding buttonPadding }
         (model.selected == Just index)
         (Ui.quads
             { size = size
@@ -403,7 +403,7 @@ imageArea scale area screenshots model =
     in
     Ui.elWithId
         (ScreenshotViewer Types.ImageArea)
-        { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+        { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
         (Ui.quads
             { size = area
             , triangles =

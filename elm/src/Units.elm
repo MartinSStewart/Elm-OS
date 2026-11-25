@@ -3,17 +3,17 @@ module Units exposing
     , LocalUiPixels
     , UiPixels
     , UiScale
-    , inUiPixels
+    , inUi
     , scaleFor
     , scaleInt
     , toDevice
     , toUi
-    , uiPixels
+    , ui
     )
 
 {-| The two kinds of pixel, like CSS pixels and device pixels on the web.
 
-  - `UiPixels` are what the UI is laid out in: padding, borders, text sizes, icons.
+  - `UiPixels` are what the UI is laid out in: pad, borders, text sizes, icons.
   - `DevicePixels` are the screen's own pixels: the screen size, the mouse, and the
     triangles sent to the host.
 
@@ -46,13 +46,13 @@ type alias UiScale =
     Quantity Int (Rate DevicePixels UiPixels)
 
 
-uiPixels : number -> Quantity number UiPixels
-uiPixels =
+ui : number -> Quantity number UiPixels
+ui =
     Quantity
 
 
-inUiPixels : Quantity number UiPixels -> number
-inUiPixels =
+inUi : Quantity number UiPixels -> number
+inUi =
     Quantity.unwrap
 
 

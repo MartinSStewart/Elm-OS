@@ -1,4 +1,4 @@
-module Freeze exposing (Source, freeze)
+module Freeze exposing (Frozen, Source, freeze)
 
 {-| How `make migration` freezes the code: the program's modules are copied into
 `Evergreen.V<n>`, so that a migration can call any of it (an app's `init`, say) and
@@ -6,10 +6,28 @@ keep compiling however the code changes later. Only what's needed is kept: the
 Model's types, what the migrations use, and everything those use in turn. Run
 `make migration` again after writing a migration, and the copy has what it calls.
 
+Only what changed is copied. A module whose copy would be the same as an earlier
+version's (`Evergreen.V<j>.<Module>`, the newest one there is) isn't copied again:
+the new version imports that one. "The same" means each declaration that's needed
+now is in the earlier copy, with the same text (comments and white space aside),
+and the modules it names are where the earlier copy has them. So a module whose
+types changed is copied, and so is every module that uses it, up to the Model's
+own module, which every version has (that's how a version is found). Types that
+didn't change are then the very same types in both versions, and a migration
+passes them on as they are. An earlier copy that's shared like this is never
+changed or deleted, while any version is there.
+
+A migration can name a module of its own version, `Evergreen.V<n>.<Module>`, even
+when that module is shared: where it is the same as an earlier copy, the migration
+is changed to name that one, and otherwise the module is copied. Copying it makes
+its types new ones, though, so what the migration passed on as it was may now need
+converting.
+
 A copy differs from its module in these ways:
 
   - Its name, and every name it gives one of the program's modules, gets the
-    `Evergreen.V<n>.` prefix. Names in strings and comments are left as they are.
+    `Evergreen.V<n>.` prefix (or the earlier version's, for a module that's shared).
+    Names in strings and comments are left as they are.
   - It has only the declarations that are needed, and imports only modules that
     are copied too (and of them, exposes only what's kept).
   - It exposes everything (`exposing (..)`), so a migration can use any type,
@@ -42,16 +60,38 @@ type alias Source =
     { name : String, path : String, source : String, file : File }
 
 
-{-| The copies of `program`'s modules for version `version`: the path of each and its
-text. `roots` says what must be kept: whole modules (the migrations, whose names to
-`Evergreen.V<version>.<Module>` are names of modules in `program`) and declarations
-(`( module, name )`) in `program`.
+{-| What freezing writes:
+
+  - `files`: the copies, by path, with their text.
+  - `homes`: for each module the version has, the frozen module it is: its own copy
+    (`Evergreen.V<n>.Ui`) or an earlier version's (`Evergreen.V<j>.Ui`).
+  - `roots`: the root modules (migrations) whose text changed, because they named
+    a module of version n that is shared.
+
 -}
-freeze : Int -> List Source -> { modules : List Source, names : List ( String, String ) } -> List { path : String, source : String }
-freeze version program roots =
+type alias Frozen =
+    { files : List { path : String, source : String }
+    , homes : Dict String String
+    , roots : List { path : String, source : String }
+    }
+
+
+{-| The copies of `program`'s modules for version `version`. `earlier` are the frozen
+modules there already (`Evergreen.V<j>.<Module>`), which are shared where they are
+the same. `roots` says what must be kept: whole modules (the migrations, whose names
+to `Evergreen.V<version>.<Module>` are names of modules in `program`), declarations
+(`( module, name )`) in `program`, and modules that are always copied (the Model's).
+-}
+freeze :
+    Int
+    -> List Source
+    -> List Source
+    -> { modules : List Source, names : List ( String, String ), always : List String }
+    -> Frozen
+freeze version program earlier roots =
     let
         prefix =
-            "Evergreen.V" ++ String.fromInt version ++ "."
+            frozenPrefix version
 
         infos =
             program
@@ -81,19 +121,537 @@ freeze version program roots =
 
         programNames =
             Set.fromList (List.map .name program)
+
+        keptModule m =
+            Dict.get m infos |> Maybe.map (\info -> List.any (\d -> Set.member ( m, d.key ) kept) info.decls) |> Maybe.withDefault False
+
+        keptInfos =
+            program
+                |> List.map .name
+                |> List.filter keptModule
+                |> List.filterMap (\m -> Dict.get m infos)
+
+        earlierByModule =
+            latestEarlier version earlier
+
+        ctx found =
+            { prefix = prefix, homes = found, programNames = programNames, infos = infos, kept = kept }
+
+        decided =
+            List.foldl
+                (\info acc ->
+                    let
+                        m =
+                            info.source.name
+
+                        own =
+                            ( { shared = prefix ++ m, extra = Set.empty }, Copy )
+                    in
+                    Dict.insert m
+                        (if List.member m roots.always then
+                            own
+
+                         else
+                            case Dict.get m earlierByModule of
+                                Just ( j, old ) ->
+                                    case compareWithEarlier (ctx (Dict.map (\_ -> Tuple.first) acc)) info old of
+                                        Same ->
+                                            ( { shared = frozenPrefix j ++ m, extra = Set.empty }, Shared )
+
+                                        Supplement extra ->
+                                            ( { shared = frozenPrefix j ++ m, extra = extra }, Supplemented old )
+
+                                        Different ->
+                                            own
+
+                                Nothing ->
+                                    own
+                        )
+                        acc
+                )
+                Dict.empty
+                (dependencyOrder infos keptInfos)
+
+        homes =
+            Dict.map (\_ -> Tuple.first) decided
+
+        c =
+            ctx homes
     in
-    program
-        |> List.filter (\s -> Dict.get s.name infos |> Maybe.map (\info -> List.any (\d -> Set.member ( s.name, d.key ) kept) info.decls) |> Maybe.withDefault False)
+    { files =
+        keptInfos
+            |> List.filterMap
+                (\info ->
+                    let
+                        path =
+                            String.replace "." "/" (prefix ++ info.source.name) ++ ".elm"
+                    in
+                    case Dict.get info.source.name decided |> Maybe.map Tuple.second of
+                        Just Shared ->
+                            Nothing
+
+                        Just (Supplemented old) ->
+                            Just { path = path, source = supplement c info old }
+
+                        _ ->
+                            Just { path = path, source = copy c (\d -> Set.member ( info.source.name, d.key ) kept) Nothing info }
+                )
+    , homes = Dict.map (\_ -> .shared) homes
+    , roots =
+        roots.modules
+            |> List.filterMap
+                (\s ->
+                    let
+                        rewritten =
+                            redirect prefix homes s
+                    in
+                    if rewritten == s.source then
+                        Nothing
+
+                    else
+                        Just { path = s.path, source = rewritten }
+                )
+    }
+
+
+{-| Where a module of the new version is: `shared` is the frozen module with its
+declarations (its own copy, or an earlier version's), and `extra` the names that a
+supplement (its own copy, with only those) declares.
+-}
+type alias Home =
+    { shared : String, extra : Set String }
+
+
+type Decision
+    = Copy
+    | Shared
+    | Supplemented Source
+
+
+type Comparison
+    = Same
+      -- The declarations differ only in functions: the new version has a copy of
+      -- the module with only those (a supplement), and shares the rest.
+    | Supplement (Set String)
+    | Different
+
+
+type alias Context =
+    { prefix : String
+    , homes : Dict String Home
+    , programNames : Set String
+    , infos : Dict String Info
+    , kept : Set ( String, String )
+    }
+
+
+{-| The frozen module that has a module's `name` in the new version.
+-}
+homeOfName : Context -> String -> String -> String
+homeOfName c m name =
+    case Dict.get m c.homes of
+        Just home ->
+            if Set.member name home.extra then
+                c.prefix ++ m
+
+            else
+                home.shared
+
+        Nothing ->
+            c.prefix ++ m
+
+
+frozenPrefix : Int -> String
+frozenPrefix version =
+    "Evergreen.V" ++ String.fromInt version ++ "."
+
+
+{-| For each module, the newest earlier copy of it (before `version`), and its version.
+-}
+latestEarlier : Int -> List Source -> Dict String ( Int, Source )
+latestEarlier version earlier =
+    earlier
         |> List.filterMap
             (\s ->
-                Dict.get s.name infos
-                    |> Maybe.map
-                        (\info ->
-                            { path = String.replace "." "/" (prefix ++ s.name) ++ ".elm"
-                            , source = copy prefix programNames infos kept info
-                            }
-                        )
+                case String.split "." s.name of
+                    "Evergreen" :: v :: rest ->
+                        case ( String.startsWith "V" v, String.toInt (String.dropLeft 1 v) ) of
+                            ( True, Just j ) ->
+                                if j < version && not (List.isEmpty rest) then
+                                    Just ( String.join "." rest, ( j, s ) )
+
+                                else
+                                    Nothing
+
+                            _ ->
+                                Nothing
+
+                    _ ->
+                        Nothing
             )
+        |> List.foldl
+            (\( m, ( j, s ) ) acc ->
+                case Dict.get m acc of
+                    Just ( k, _ ) ->
+                        if k >= j then
+                            acc
+
+                        else
+                            Dict.insert m ( j, s ) acc
+
+                    Nothing ->
+                        Dict.insert m ( j, s ) acc
+            )
+            Dict.empty
+
+
+{-| The modules, each after the program's modules it imports (Elm's imports have no
+cycles), so that where those are is known when it's looked at.
+-}
+dependencyOrder : Dict String Info -> List Info -> List Info
+dependencyOrder infos todo =
+    let
+        names =
+            Set.fromList (List.map (.source >> .name) todo)
+
+        visit info ( seen, out ) =
+            if Set.member info.source.name seen then
+                ( seen, out )
+
+            else
+                info.imports
+                    |> List.filter (\i -> Set.member i.original names)
+                    |> List.filterMap (\i -> Dict.get i.original infos)
+                    |> List.foldl visit ( Set.insert info.source.name seen, out )
+                    |> Tuple.mapSecond (\o -> info :: o)
+    in
+    List.foldl visit ( Set.empty, [] ) todo
+        |> Tuple.second
+        |> List.reverse
+
+
+{-| How the copy of `info` would compare with `old`, an earlier copy of it.
+
+A declaration that's kept is the same when it is in `old` with the same text, once
+the program's modules are named where they are (`homes`), and what it uses is the
+same too: the declarations of its own module it uses, and no function of another
+module that the new version has a new copy of (a supplement). The program's modules
+that the same declarations use must be imported the same way (name, alias, and at
+least what's exposed). Packages' imports aren't compared: `old` compiled, and the
+same text can only mean something else with them if a package's name were reused.
+
+-}
+compareWithEarlier : Context -> Info -> Source -> Comparison
+compareWithEarlier c info old =
+    let
+        m =
+            info.source.name
+
+        oldInfo =
+            moduleInfo identity old
+
+        oldDecls =
+            oldInfo.decls
+                |> List.map (\d -> ( d.key, normalise (declText old.source d) ))
+                |> Dict.fromList
+
+        keptDecls =
+            List.filter (\d -> Set.member ( m, d.key ) c.kept) info.decls
+
+        rename =
+            renamer c (c.prefix ++ m) info
+
+        refs =
+            keptDecls |> List.map (\d -> ( d.key, refsOf c.infos info d )) |> Dict.fromList
+
+        refsOfKey key =
+            Dict.get key refs |> Maybe.withDefault []
+
+        supplemented ( n, key ) =
+            n /= m && isExtra c n key
+
+        differs0 =
+            keptDecls
+                |> List.filter
+                    (\d ->
+                        (Dict.get d.key oldDecls /= Just (normalise (renameModules rename (declText info.source.source d))))
+                            || List.any supplemented (refsOfKey d.key)
+                    )
+                |> List.map .key
+                |> Set.fromList
+
+        spread found =
+            let
+                more =
+                    keptDecls
+                        |> List.filter (\d -> not (Set.member d.key found) && List.any (\( n, key ) -> n == m && Set.member key found) (refsOfKey d.key))
+                        |> List.map .key
+            in
+            if List.isEmpty more then
+                found
+
+            else
+                spread (Set.union found (Set.fromList more))
+
+        differs =
+            spread differs0
+
+        sameDecls =
+            List.filter (\d -> not (Set.member d.key differs)) keptDecls
+
+        used =
+            sameDecls
+                |> List.concatMap (\d -> refsOfKey d.key)
+                |> List.map Tuple.first
+                |> Set.fromList
+
+        oldImports =
+            List.map (\i -> ( ( i.original, i.alias ), exposedNames (\_ -> True) i.exposing_ )) oldInfo.imports
+
+        importsSame =
+            info.imports
+                |> List.filter (\i -> i.original /= m && Set.member i.original c.programNames && Set.member i.original used)
+                |> List.all
+                    (\i ->
+                        let
+                            wanted =
+                                exposedNames (keptName c.infos c.kept i) i.exposing_
+                                    |> List.filter (\n -> not (isExtra c i.original n))
+                        in
+                        List.any
+                            (\( key, exposed ) -> key == ( Dict.get i.original c.homes |> Maybe.map .shared |> Maybe.withDefault "", i.alias ) && List.all (covers exposed) wanted)
+                            oldImports
+                    )
+
+        differing =
+            List.filter (\d -> Set.member d.key differs) keptDecls
+    in
+    if not importsSame then
+        Different
+
+    else if List.isEmpty differing then
+        Same
+
+    else if List.all .isValue differing then
+        Supplement (Set.fromList (List.concatMap .names differing))
+
+    else
+        Different
+
+
+isExtra : Context -> String -> String -> Bool
+isExtra c m item =
+    Dict.get m c.homes |> Maybe.map (.extra >> Set.member (exposedName item)) |> Maybe.withDefault False
+
+
+{-| `Msg` for an exposed `Msg(..)`.
+-}
+exposedName : String -> String
+exposedName item =
+    if String.endsWith "(..)" item then
+        String.dropRight 4 item
+
+    else
+        item
+
+
+{-| Whether an import's exposing list (`exposed`) makes `name` usable.
+-}
+covers : List String -> String -> Bool
+covers exposed name =
+    List.member name exposed || List.member ".." exposed || List.member (name ++ "(..)") exposed
+
+
+{-| The text of a declaration as its copy has it (`type LazyKey` with one variant).
+-}
+declText : String -> Decl -> String
+declText source d =
+    case d.isLazyKey of
+        Just variants ->
+            slice source { start = d.range.start, end = variants.start }
+                ++ "Restored"
+                ++ slice source { start = variants.end, end = d.range.end }
+
+        Nothing ->
+            slice source d.range
+
+
+{-| Code with its comments left out and each run of white space as one space, for
+comparing two copies: elm-format may have laid them out a little differently.
+-}
+normalise : String -> String
+normalise source =
+    stripComments (String.toList source) [] False
+
+
+stripComments : List Char -> List String -> Bool -> String
+stripComments chars out space =
+    let
+        sep =
+            if space then
+                [ " " ]
+
+            else
+                []
+    in
+    case chars of
+        [] ->
+            String.concat (List.reverse out) |> String.trim
+
+        '-' :: '-' :: rest ->
+            stripComments (Tuple.second (spanLine rest [])) out True
+
+        '{' :: '-' :: rest ->
+            stripComments (Tuple.second (spanBlock rest 1 [])) out True
+
+        '"' :: '"' :: '"' :: rest ->
+            let
+                ( str, after ) =
+                    spanTriple rest [ '"', '"', '"' ]
+            in
+            stripComments after (str :: sep ++ out) False
+
+        '"' :: rest ->
+            let
+                ( str, after ) =
+                    spanQuoted '"' rest [ '"' ]
+            in
+            stripComments after (str :: sep ++ out) False
+
+        '\'' :: rest ->
+            let
+                ( str, after ) =
+                    spanQuoted '\'' rest [ '\'' ]
+            in
+            stripComments after (str :: sep ++ out) False
+
+        ch :: rest ->
+            if ch == ' ' || ch == '\n' || ch == '\t' || ch == '\u{000D}' then
+                stripComments rest out True
+
+            else
+                stripComments rest (String.fromChar ch :: sep ++ out) False
+
+
+{-| A root module (a migration), with each name of version n's that is in an earlier
+version's copy (`Evergreen.V<n>.Ui.Model`, Ui being shared) changed to that one
+(`Evergreen.V<j>.Ui.Model`), and its imports to match. A module that has a
+supplement is imported from both.
+-}
+redirect : String -> Dict String Home -> Source -> String
+redirect prefix homes s =
+    let
+        ownModule moduleName =
+            if String.startsWith prefix moduleName then
+                Dict.get (String.dropLeft (String.length prefix) moduleName) homes
+                    |> Maybe.map (Tuple.pair (String.dropLeft (String.length prefix) moduleName))
+
+            else
+                Nothing
+
+        importEdits =
+            s.file.imports
+                |> List.filterMap
+                    (\(Node range i) ->
+                        let
+                            moduleName =
+                                String.join "." (Node.value i.moduleName)
+                        in
+                        case ownModule moduleName of
+                            Just ( m, home ) ->
+                                if home.shared == moduleName then
+                                    Nothing
+
+                                else
+                                    let
+                                        alias =
+                                            Maybe.map (Node.value >> String.join ".") i.moduleAlias
+
+                                        exposed =
+                                            exposedNames (\_ -> True) (Maybe.map Node.value i.exposingList)
+
+                                        line target items =
+                                            importLine target alias items
+                                    in
+                                    Just
+                                        ( range
+                                        , if Set.isEmpty home.extra then
+                                            line home.shared exposed
+
+                                          else
+                                            line home.shared (List.filter (\n -> n == ".." || not (Set.member (exposedName n) home.extra)) exposed)
+                                                ++ "\n"
+                                                ++ line (prefix ++ m) (List.filter (\n -> n == ".." || Set.member (exposedName n) home.extra) exposed)
+                                        )
+
+                            Nothing ->
+                                Nothing
+                    )
+
+        rename isModuleName token =
+            if isModuleName then
+                token
+
+            else
+                let
+                    ( qualifier, name ) =
+                        split token
+
+                    moduleName =
+                        String.join "." qualifier
+                in
+                case ownModule moduleName of
+                    Just ( _, home ) ->
+                        if Set.member name home.extra then
+                            token
+
+                        else
+                            home.shared ++ String.dropLeft (String.length moduleName) token
+
+                    Nothing ->
+                        token
+
+        renamed =
+            replaceRanges importEdits s.source |> renameModules rename
+    in
+    if renamed == s.source then
+        s.source
+
+    else
+        renamed
+            |> String.split "\n"
+            |> List.foldl
+                (\l ( seen, out ) ->
+                    if String.startsWith "import " l && Set.member l seen then
+                        ( seen, out )
+
+                    else
+                        ( Set.insert l seen, l :: out )
+                )
+                ( Set.empty, [] )
+            |> Tuple.second
+            |> List.reverse
+            |> String.join "\n"
+
+
+importLine : String -> Maybe String -> List String -> String
+importLine moduleName alias items =
+    "import "
+        ++ moduleName
+        ++ (case alias of
+                Just a ->
+                    " as " ++ a
+
+                Nothing ->
+                    ""
+           )
+        ++ (case items of
+                [] ->
+                    ""
+
+                _ ->
+                    " exposing (" ++ String.join ", " items ++ ")"
+           )
 
 
 
@@ -108,6 +666,9 @@ type alias Decl =
     , range : Range
     , isPort : Bool
     , isLazyKey : Maybe Range
+
+    -- A function or value (not a type, alias or port).
+    , isValue : Bool
     }
 
 
@@ -128,6 +689,10 @@ type alias Info =
     -- (of another type) can have the same name.
     , declares : Dict String (List String)
     , imports : List ImportInfo
+
+    -- The program's name for a module this one names (a migration's
+    -- `Evergreen.V<n>.Ui` is `Ui`).
+    , programName : String -> String
     }
 
 
@@ -158,6 +723,7 @@ moduleInfo moduleName s =
                 }
             )
             s.file.imports
+    , programName = moduleName
     }
 
 
@@ -168,7 +734,7 @@ declOf (Node range decl) =
             { range | start = List.foldl earliest range.start (List.filterMap (Maybe.map (Node.range >> .start)) docs) }
 
         plain key names r =
-            Just { key = key, names = names, range = r, isPort = False, isLazyKey = Nothing }
+            Just { key = key, names = names, range = r, isPort = False, isLazyKey = Nothing, isValue = False }
     in
     case decl of
         FunctionDeclaration f ->
@@ -177,6 +743,7 @@ declOf (Node range decl) =
                     Node.value (Node.value f.declaration).name
             in
             plain name [ name ] (from [ Maybe.map (Node.map (\_ -> ())) f.documentation, Maybe.map (Node.map (\_ -> ())) f.signature ])
+                |> Maybe.map (\d -> { d | isValue = True })
 
         AliasDeclaration a ->
             plain (Node.value a.name) [ Node.value a.name ] (from [ Maybe.map (Node.map (\_ -> ())) a.documentation ])
@@ -191,6 +758,7 @@ declOf (Node range decl) =
                 , names = name :: List.map (\(Node _ c) -> Node.value c.name) t.constructors
                 , range = from [ Maybe.map (Node.map (\_ -> ())) t.documentation ]
                 , isPort = False
+                , isValue = False
                 , isLazyKey =
                     case ( name, t.constructors, List.reverse t.constructors ) of
                         ( "LazyKey", (Node first _) :: _, (Node last _) :: _ ) ->
@@ -201,7 +769,7 @@ declOf (Node range decl) =
                 }
 
         PortDeclaration sig ->
-            Just { key = Node.value sig.name, names = [ Node.value sig.name ], range = range, isPort = True, isLazyKey = Nothing }
+            Just { key = Node.value sig.name, names = [ Node.value sig.name ], range = range, isPort = True, isLazyKey = Nothing, isValue = False }
 
         InfixDeclaration _ ->
             -- Only elm/core can declare operators.
@@ -287,9 +855,14 @@ resolve infos info token =
             q =
                 String.join "." qualifier
         in
-        info.imports
-            |> List.filter (\i -> i.alias == Just q || i.original == q)
-            |> List.concatMap (\i -> declIn i.moduleName)
+        case List.filter (\i -> i.alias == Just q || i.original == q) info.imports of
+            [] ->
+                -- Named in full with no import: it doesn't compile yet, but it's
+                -- still what the code means.
+                declIn (info.programName q)
+
+            imports ->
+                List.concatMap (\i -> declIn i.moduleName) imports
 
 
 {-| Whether `import` makes `name` usable unqualified.
@@ -355,70 +928,72 @@ split token =
 -- THE COPY
 
 
-copy : String -> Set String -> Dict String Info -> Set ( String, String ) -> Info -> String
-copy prefix programNames infos kept info =
+{-| The copy of a module: its declarations that `keep` says yes to, and `extraImport`
+after its imports.
+-}
+copy : Context -> (Decl -> Bool) -> Maybe String -> Info -> String
+copy c keep extraImport info =
     let
         s =
             info.source
 
-        isKept d =
-            Set.member ( s.name, d.key ) kept
-
         keptModule m =
-            Dict.get m infos |> Maybe.map (\target -> List.any (\d -> Set.member ( m, d.key ) kept) target.decls) |> Maybe.withDefault False
+            Dict.get m c.infos |> Maybe.map (\target -> List.any (\d -> Set.member ( m, d.key ) c.kept) target.decls) |> Maybe.withDefault False
 
         removed =
-            info.decls |> List.filter (not << isKept) |> List.map (\d -> ( d.range, "" ))
+            info.decls |> List.filter (not << keep) |> List.map (\d -> ( d.range, "" ))
 
         lazyKey =
-            info.decls |> List.filter isKept |> List.filterMap .isLazyKey |> List.map (\r -> ( r, "Restored" ))
+            info.decls |> List.filter keep |> List.filterMap .isLazyKey |> List.map (\r -> ( r, "Restored" ))
 
         imports =
             info.imports
                 |> List.filterMap
                     (\i ->
-                        if not (Set.member i.original programNames) then
+                        if not (Set.member i.original c.programNames) then
                             Nothing
 
                         else if keptModule i.original then
-                            Just ( i.range, importText infos kept i )
+                            Just ( i.range, importText c i )
 
                         else
                             -- With its line break.
                             Just ( { start = i.range.start, end = { row = i.range.end.row + 1, column = 1 } }, "" )
                     )
 
+        -- After the last import, or else after the module's documentation, or else
+        -- after the `module` line.
+        extra =
+            case extraImport of
+                Just text ->
+                    let
+                        after =
+                            case List.reverse info.imports of
+                                last :: _ ->
+                                    last.range.end
+
+                                [] ->
+                                    s.file.comments
+                                        |> List.filter (\(Node r comment) -> String.startsWith "{-|" comment && List.all (\d -> ( r.end.row, r.end.column ) < ( d.range.start.row, d.range.start.column )) info.decls)
+                                        |> List.head
+                                        |> Maybe.map (Node.range >> .end)
+                                        |> Maybe.withDefault (Node.range s.file.moduleDefinition).end
+                    in
+                    [ ( { start = after, end = after }, "\n" ++ text ++ "\n" ) ]
+
+                Nothing ->
+                    []
+
         portModule =
             case Node.value s.file.moduleDefinition of
                 Module.PortModule _ ->
-                    not (List.any (\d -> d.isPort && isKept d) info.decls)
+                    not (List.any (\d -> d.isPort && keep d) info.decls)
 
                 _ ->
                     False
 
-        aliases =
-            info.imports |> List.filterMap .alias |> Set.fromList
-
-        rename isModuleName token =
-            let
-                ( qualifier, _ ) =
-                    if isModuleName then
-                        ( String.split "." token, "" )
-
-                    else
-                        split token
-
-                moduleName =
-                    String.join "." qualifier
-            in
-            if not (List.isEmpty qualifier) && Set.member moduleName programNames && (isModuleName || not (Set.member moduleName aliases)) then
-                prefix ++ token
-
-            else
-                token
-
         edited =
-            replaceRanges (exposingEdit s.source s.file :: removed ++ lazyKey ++ imports) s.source
+            replaceRanges (exposingEdit s.source s.file :: removed ++ lazyKey ++ imports ++ extra) s.source
     in
     (if portModule then
         String.replace "port module " "module " edited
@@ -426,80 +1001,152 @@ copy prefix programNames infos kept info =
      else
         edited
     )
-        |> renameModules rename
+        |> renameModules (renamer c (c.prefix ++ s.name) info)
         |> tidyBlankLines
 
 
-importText : Dict String Info -> Set ( String, String ) -> ImportInfo -> String
-importText infos kept i =
+{-| A supplement: the copy of a module that has only the functions of it that the
+new version has and `old` (an earlier copy, which the new version shares) doesn't
+have the same, and imports the rest from `old`.
+-}
+supplement : Context -> Info -> Source -> String
+supplement c info old =
     let
-        keptName n =
-            Dict.get i.original infos
-                |> Maybe.andThen (\target -> Dict.get n target.declares)
-                |> Maybe.withDefault []
-                |> List.any (\key -> Set.member ( i.original, key ) kept)
+        extra =
+            Dict.get info.source.name c.homes |> Maybe.map .extra |> Maybe.withDefault Set.empty
 
-        items =
-            case i.exposing_ of
-                Just (Explicit list) ->
-                    list
-                        |> List.filterMap
-                            (\(Node _ item) ->
-                                case item of
-                                    FunctionExpose n ->
-                                        if keptName n then
-                                            Just n
+        oldNames =
+            (moduleInfo identity old).decls
+                |> List.filter (\d -> not (List.any (\n -> Set.member n extra) d.names))
+                |> List.map
+                    (\d ->
+                        if d.isValue || d.isPort || List.length d.names == 1 then
+                            d.key
 
-                                        else
-                                            Nothing
-
-                                    TypeOrAliasExpose n ->
-                                        if keptName n then
-                                            Just n
-
-                                        else
-                                            Nothing
-
-                                    TypeExpose t ->
-                                        if keptName t.name then
-                                            Just
-                                                (if t.open /= Nothing then
-                                                    t.name ++ "(..)"
-
-                                                 else
-                                                    t.name
-                                                )
-
-                                        else
-                                            Nothing
-
-                                    InfixExpose n ->
-                                        Just ("(" ++ n ++ ")")
-                            )
-                        |> Just
-
-                Just (All _) ->
-                    Just [ ".." ]
-
-                Nothing ->
-                    Nothing
+                        else
+                            d.key ++ "(..)"
+                    )
     in
-    "import "
-        ++ i.original
-        ++ (case i.alias of
-                Just a ->
-                    " as " ++ a
+    copy c
+        (\d -> Set.member ( info.source.name, d.key ) c.kept && List.any (\n -> Set.member n extra) d.names)
+        (Just (importLine old.name Nothing oldNames))
+        info
 
-                Nothing ->
-                    ""
-           )
-        ++ (case items of
-                Just ((_ :: _) as list) ->
-                    " exposing (" ++ String.join ", " list ++ ")"
 
-                _ ->
-                    ""
-           )
+{-| Renames a name of one of the program's modules (`Ui.Model`, or the module's own
+name after `module`) to the frozen module that has it, but not a name qualified by
+an import's alias. (Imports are written with their frozen names, see `importText`.)
+-}
+renamer : Context -> String -> Info -> Bool -> String -> String
+renamer c self info =
+    let
+        aliases =
+            info.imports |> List.filterMap .alias |> Set.fromList
+    in
+    \isModuleName token ->
+        if isModuleName then
+            if token == info.source.name then
+                self
+
+            else
+                token
+
+        else
+            let
+                ( qualifier, name ) =
+                    split token
+
+                moduleName =
+                    String.join "." qualifier
+            in
+            if not (List.isEmpty qualifier) && Set.member moduleName c.programNames && not (Set.member moduleName aliases) then
+                homeOfName c moduleName name ++ String.dropLeft (String.length moduleName) token
+
+            else
+                token
+
+
+{-| An import of one of the program's modules as the copy has it: of the frozen
+module that has it, exposing only what's kept, and of its supplement as well if
+it has one.
+-}
+importText : Context -> ImportInfo -> String
+importText c i =
+    let
+        exposed =
+            exposedNames (keptName c.infos c.kept i) i.exposing_
+    in
+    case Dict.get i.original c.homes of
+        Just home ->
+            if Set.isEmpty home.extra then
+                importLine home.shared i.alias exposed
+
+            else
+                importLine home.shared i.alias (List.filter (\n -> n == ".." || not (Set.member (exposedName n) home.extra)) exposed)
+                    ++ "\n"
+                    ++ importLine (c.prefix ++ i.original) i.alias (List.filter (\n -> n == ".." || Set.member (exposedName n) home.extra) exposed)
+
+        Nothing ->
+            importLine (c.prefix ++ i.original) i.alias exposed
+
+
+{-| Whether the module an import is of keeps a declaration that declares `n`.
+-}
+keptName : Dict String Info -> Set ( String, String ) -> ImportInfo -> String -> Bool
+keptName infos kept i n =
+    Dict.get i.original infos
+        |> Maybe.andThen (\target -> Dict.get n target.declares)
+        |> Maybe.withDefault []
+        |> List.any (\key -> Set.member ( i.original, key ) kept)
+
+
+{-| What an import exposes, as its copy writes it, of the names `keep` says yes to:
+`Model`, `Msg(..)`, `(|=)`, or `..` for everything.
+-}
+exposedNames : (String -> Bool) -> Maybe Exposing -> List String
+exposedNames keep exposing_ =
+    case exposing_ of
+        Just (Explicit list) ->
+            list
+                |> List.filterMap
+                    (\(Node _ item) ->
+                        case item of
+                            FunctionExpose n ->
+                                if keep n then
+                                    Just n
+
+                                else
+                                    Nothing
+
+                            TypeOrAliasExpose n ->
+                                if keep n then
+                                    Just n
+
+                                else
+                                    Nothing
+
+                            TypeExpose t ->
+                                if keep t.name then
+                                    Just
+                                        (if t.open /= Nothing then
+                                            t.name ++ "(..)"
+
+                                         else
+                                            t.name
+                                        )
+
+                                else
+                                    Nothing
+
+                            InfixExpose n ->
+                                Just ("(" ++ n ++ ")")
+                    )
+
+        Just (All _) ->
+            [ ".." ]
+
+        Nothing ->
+            []
 
 
 {-| No more than two blank lines in a row, as elm-format leaves them.

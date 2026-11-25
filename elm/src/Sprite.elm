@@ -19,8 +19,6 @@ module Sprite exposing
     , dotGrid
     , ellipsis
     , encoder
-    , findMatches
-    , foundText
     , fromImageTexture
     , image
     , inAtlas
@@ -922,30 +920,22 @@ linkAt fontSize segments point =
 -}
 segmentLines : List Segment -> List (List Segment)
 segmentLines segments =
-    linesOf .text (\part segment -> { segment | text = part }) segments
-
-
-{-| Pieces of text broken into lines at each '\\n', given how to get a piece's text and
-how to make a piece with other text.
--}
-linesOf : (a -> String) -> (String -> a -> a) -> List a -> List (List a)
-linesOf getText withText pieces =
     let
         ( current, done ) =
             List.foldl
-                (\piece state ->
-                    case String.split "\n" (getText piece) of
+                (\segment state ->
+                    case String.split "\n" segment.text of
                         first :: rest ->
                             List.foldl
-                                (\part ( line, lines ) -> ( [ withText part piece ], List.reverse line :: lines ))
-                                (Tuple.mapFirst ((::) (withText first piece)) state)
+                                (\part ( line, lines ) -> ( [ { segment | text = part } ], List.reverse line :: lines ))
+                                (Tuple.mapFirst ((::) { segment | text = first }) state)
                                 rest
 
                         [] ->
                             state
                 )
                 ( [], [] )
-                pieces
+                segments
     in
     List.reverse (List.reverse current :: done)
 
@@ -1012,10 +1002,23 @@ customText uiScale fontSize clip segments position =
 
         ascent =
             (lineMetrics fontSize).ascent
+
+        -- The lines that can reach into the clip, found without splitting the rest of
+        -- the text into lines: a long text drawn in a small viewport is mostly outside.
+        firstLine : Int
+        firstLine =
+            max 0 ((Quantity.unwrap (Coord.y clip.topLeft) - y) // height - 2)
+
+        lastLine : Int
+        lastLine =
+            (Quantity.unwrap (Coord.y clip.bottomRight) - y) // height + 2
     in
     List.indexedMap
-        (\lineIndex line ->
+        (\index line ->
             let
+                lineIndex =
+                    firstLine + index
+
                 top =
                     y + lineIndex * height
             in
@@ -1064,230 +1067,66 @@ customText uiScale fontSize clip segments position =
                     ++ decorationRun s fontSize deviceClip baseline Underline NotoSans.regular.underline spans
                     ++ decorationRun s fontSize deviceClip baseline Strikethrough NotoSans.regular.strikethrough spans
         )
-        (segmentLines segments)
+        (segmentLines (linesBetween firstLine lastLine segments))
         |> List.concat
 
 
-{-| Where `query` is in some text, as ranges of the text's characters (start, end) in
-order, with ones that touch or overlap joined. Case is ignored, and a '\\n' in the text counts as
-a space, so a match can go from one line to the next, as wrapped text has a '\\n' where
-the space was. An empty query is found nowhere.
+{-| The part of the segments from the start of line `first` to the end of line `last`
+(counting from 0, lines ending at each '\\n'). The segments after it aren't looked at.
 -}
-findMatches : String -> List Segment -> List ( Int, Int )
-findMatches query segments =
-    let
-        needle : String
-        needle =
-            findKey query
-    in
-    if String.isEmpty needle then
+linesBetween : Int -> Int -> List Segment -> List Segment
+linesBetween first last segments =
+    if last < first then
         []
 
     else
-        let
-            length : Int
-            length =
-                String.length needle
-        in
-        String.indexes needle (findKey (String.concat (List.map .text segments)))
-            |> List.foldl
-                (\start acc ->
-                    case acc of
-                        ( lastStart, lastEnd ) :: rest ->
-                            if start <= lastEnd then
-                                ( lastStart, max lastEnd (start + length) ) :: rest
-
-                            else
-                                ( start, start + length ) :: acc
-
-                        [] ->
-                            [ ( start, start + length ) ]
-                )
-                []
-            |> List.reverse
+        linesBetweenHelper first last 0 segments []
 
 
-{-| Text as `findMatches` compares it: lower case, with '\\n' as a space. Each character
-stays one character (one whose lower case is longer is kept as it is), so positions in
-it are positions in the text.
--}
-findKey : String -> String
-findKey string =
-    String.map
-        (\char ->
-            if char == '\n' then
-                ' '
+linesBetweenHelper : Int -> Int -> Int -> List Segment -> List Segment -> List Segment
+linesBetweenHelper first last line segments acc =
+    case segments of
+        segment :: rest ->
+            if line > last then
+                List.reverse acc
 
             else
                 let
-                    lower : Char
-                    lower =
-                        Char.toLower char
+                    -- Where the segment's '\\n's are: it starts on `line` and ends on
+                    -- `line + List.length newlines`.
+                    newlines : List Int
+                    newlines =
+                        String.indexes "\n" segment.text
+
+                    endLine : Int
+                    endLine =
+                        line + List.length newlines
                 in
-                if String.length (String.fromChar lower) == String.length (String.fromChar char) then
-                    lower
+                if endLine < first then
+                    linesBetweenHelper first last endLine rest acc
 
                 else
-                    char
-        )
-        string
+                    let
+                        start : Int
+                        start =
+                            if line >= first then
+                                0
 
+                            else
+                                List.drop (first - line - 1) newlines |> List.head |> Maybe.map ((+) 1) |> Maybe.withDefault 0
 
-{-| `customText` with each match of `query` (see `findMatches`) on an `otherBackground`
-rectangle as tall as the line, except the `selected` one (an index into `findMatches`),
-which is on `background`, in `color`. With no matches it's just `customText`.
-The matched characters are laid out as segments of their own, so there is no kerning
-between them and the characters next to them.
--}
-foundText :
-    UiScale
-    -> { query : String, selected : Maybe Int, background : Color, color : Color, otherBackground : Color }
-    -> FontSize
-    -> Bounds UiPixels
-    -> List Segment
-    -> Coord UiPixels
-    -> List (Triangle DevicePixels)
-foundText uiScale found fontSize clip segments position =
-    case findMatches found.query segments of
+                        end : Int
+                        end =
+                            if endLine <= last then
+                                String.length segment.text
+
+                            else
+                                List.drop (last - line) newlines |> List.head |> Maybe.withDefault (String.length segment.text)
+                    in
+                    linesBetweenHelper first last endLine rest ({ segment | text = String.slice start end segment.text } :: acc)
+
         [] ->
-            customText uiScale fontSize clip segments position
-
-        matches ->
-            let
-                pieces : List ( Maybe Int, Segment )
-                pieces =
-                    splitAtMatches matches segments
-
-                s =
-                    Units.scaleInt uiScale
-
-                ( x, y ) =
-                    Coord.toTuple position
-
-                deviceClip =
-                    { left = Quantity.unwrap (Coord.x clip.topLeft) * s
-                    , right = Quantity.unwrap (Coord.x clip.bottomRight) * s
-                    , top = Quantity.unwrap (Coord.y clip.topLeft) * s
-                    , bottom = Quantity.unwrap (Coord.y clip.bottomRight) * s
-                    }
-
-                height =
-                    lineHeightRaw fontSize
-
-                backgrounds : List (Triangle DevicePixels)
-                backgrounds =
-                    List.indexedMap
-                        (\lineIndex line ->
-                            let
-                                ( placed, end ) =
-                                    layoutSegments fontSize (List.map Tuple.second line)
-
-                                starts : List Int
-                                starts =
-                                    List.map Tuple.first placed
-                            in
-                            List.map3
-                                (\( match, _ ) start next ->
-                                    if match /= Nothing && next > start then
-                                        let
-                                            left =
-                                                ((x * 64 + start) * s + 32) // 64
-
-                                            right =
-                                                ((x * 64 + next) * s + 32) // 64
-                                        in
-                                        clippedSprite
-                                            (if match == found.selected then
-                                                found.background
-
-                                             else
-                                                found.otherBackground
-                                            )
-                                            deviceClip
-                                            ( left, (y + lineIndex * height) * s )
-                                            ( right - left, height * s )
-                                            ( 2, 2 )
-                                            ( 4, 4 )
-                                            |> fromSprite Sprites.Solid
-
-                                    else
-                                        []
-                                )
-                                line
-                                starts
-                                (List.drop 1 starts ++ [ end ])
-                                |> List.concat
-                        )
-                        (linesOf (\( _, segment ) -> segment.text) (\part ( match, segment ) -> ( match, { segment | text = part } )) pieces)
-                        |> List.concat
-            in
-            backgrounds
-                ++ customText
-                    uiScale
-                    fontSize
-                    clip
-                    (List.map
-                        (\( match, segment ) ->
-                            if match /= Nothing && match == found.selected then
-                                { segment | color = found.color }
-
-                            else
-                                segment
-                        )
-                        pieces
-                    )
-                    position
-
-
-{-| Segments cut where the matches (ranges of their characters, in order, not
-overlapping) start and end, each piece saying which match it is in, if any (counted
-from 0). Empty pieces are left out.
--}
-splitAtMatches : List ( Int, Int ) -> List Segment -> List ( Maybe Int, Segment )
-splitAtMatches matches segments =
-    List.foldl
-        (\segment ( offset, remaining, acc ) ->
-            let
-                length =
-                    String.length segment.text
-
-                segmentEnd =
-                    offset + length
-
-                -- The pieces from `at` to the segment's end, and the matches left
-                -- for the next segments.
-                cut : Int -> List ( Int, Int, Int ) -> List ( Maybe Int, Segment ) -> ( List ( Int, Int, Int ), List ( Maybe Int, Segment ) )
-                cut at matches2 pieces =
-                    case matches2 of
-                        ( index, start, end ) :: rest ->
-                            if start >= segmentEnd then
-                                ( matches2, piece Nothing at segmentEnd pieces )
-
-                            else if end > segmentEnd then
-                                ( matches2, piece (Just index) (max at start) segmentEnd (piece Nothing at (max at start) pieces) )
-
-                            else
-                                cut end rest (piece (Just index) (max at start) end (piece Nothing at (max at start) pieces))
-
-                        [] ->
-                            ( [], piece Nothing at segmentEnd pieces )
-
-                piece : Maybe Int -> Int -> Int -> List ( Maybe Int, Segment ) -> List ( Maybe Int, Segment )
-                piece match from to pieces =
-                    if to > from then
-                        ( match, { segment | text = String.slice (from - offset) (to - offset) segment.text } ) :: pieces
-
-                    else
-                        pieces
-
-                ( remaining2, acc2 ) =
-                    cut offset remaining acc
-            in
-            ( segmentEnd, remaining2, acc2 )
-        )
-        ( 0, List.indexedMap (\index ( start, end ) -> ( index, start, end )) matches, [] )
-        segments
-        |> (\( _, _, acc ) -> List.reverse acc)
+            List.reverse acc
 
 
 {-| One kind of line across one line of text: a rectangle for each run of segments next to
@@ -1713,29 +1552,88 @@ wrapSegments fontSize maxWidth segments =
     joinLines (wrapLines fontSize maxWidth segments)
 
 
-{-| Lines of segments joined into one list, with a '\\n' between each two.
+{-| Lines of segments joined into one list, with a '\\n' between each two. Segments next
+to each other that look the same are joined into one, across lines too, so a long text
+in one colour and font stays one segment (`customText` finds the lines it draws in it).
+The '\\n' looks like the segment before it.
 -}
 joinLines : List (List Segment) -> List Segment
 joinLines lines =
     let
-        newline : Segment -> Segment
-        newline segment =
-            { segment | text = "\n" }
-
         style : Segment
         style =
             List.concat lines |> List.head |> Maybe.withDefault { text = "", color = Color.textColor, font = Sans Regular, decorations = [], link = Nothing }
+
+        -- The segments in order, each '\\n' a segment of its own.
+        withNewlines : List Segment
+        withNewlines =
+            case lines of
+                first :: rest ->
+                    List.foldl
+                        (\line ( acc, last ) ->
+                            ( List.reverse line ++ ({ last | text = "\n" } :: acc)
+                            , List.foldl (\segment _ -> segment) last line
+                            )
+                        )
+                        ( List.reverse first, List.foldl (\segment _ -> segment) style first )
+                        rest
+                        |> Tuple.first
+                        |> List.reverse
+
+                [] ->
+                    []
     in
-    case lines of
+    -- Texts of a run of segments that look the same are kept (last first) and joined
+    -- once at the end of the run, rather than added one by one. A run is cut every
+    -- `joinedLength` characters: eco makes a longer String.concat a rope as deep as the
+    -- list is long, which String.slice then overflows the stack on
+    -- (/mnt/project-files/elm-os/eco-concat-deep-rope-sscce.tar.gz).
+    case withNewlines of
         first :: rest ->
-            List.foldl
-                (\line acc -> List.reverse line ++ (newline (List.head acc |> Maybe.withDefault style) :: acc))
-                (List.reverse first)
-                rest
-                |> List.reverse
+            let
+                run : { look : Segment, texts : List String, length : Int }
+                run =
+                    { look = first, texts = [ first.text ], length = String.length first.text }
+
+                finish : { look : Segment, texts : List String, length : Int } -> Segment
+                finish done =
+                    let
+                        look : Segment
+                        look =
+                            done.look
+                    in
+                    { look | text = String.concat (List.reverse done.texts) }
+
+                ( lastRun, finished ) =
+                    List.foldl
+                        (\segment ( current, acc ) ->
+                            if sameLook current.look segment && current.length < joinedLength then
+                                ( { current | texts = segment.text :: current.texts, length = current.length + String.length segment.text }, acc )
+
+                            else
+                                ( { look = segment, texts = [ segment.text ], length = String.length segment.text }, finish current :: acc )
+                        )
+                        ( run, [] )
+                        rest
+            in
+            List.reverse (finish lastRun :: finished)
 
         [] ->
             []
+
+
+{-| How long `joinLines` lets a segment get by joining (see there).
+-}
+joinedLength : Int
+joinedLength =
+    16384
+
+
+{-| Whether two segments are drawn alike, so they can be one.
+-}
+sameLook : Segment -> Segment -> Bool
+sameLook a b =
+    a.color == b.color && a.font == b.font && a.decorations == b.decorations && a.link == b.link
 
 
 {-| Segments broken into lines at most `maxWidth` wide: at each '\\n', and at the space
@@ -1773,7 +1671,17 @@ wrapLinesHelper fontSize maxWidth segments =
             let
                 state : WrapState
                 state =
-                    wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
+                    case line of
+                        [ segment ] ->
+                            case segment.font of
+                                Mono ->
+                                    wrapMonoLine fontSize (Quantity.unwrap maxWidth * 64) segment
+
+                                Sans _ ->
+                                    wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
+
+                        _ ->
+                            wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
             in
             ( List.reverse state.current :: state.lines ++ lines, max widest (max state.widest state.x) )
         )
@@ -1813,6 +1721,128 @@ type alias Scan =
     , pieces : List Piece
     , wordWidth : Int
     }
+
+
+{-| `wrapLine` for a line that is one segment in the pixel font, where every character
+is as wide as the next: the same lines, found from where the spaces are and how many
+characters lie between them, without measuring each word. Each line is a slice of the
+segment's text.
+-}
+wrapMonoLine : FontSize -> Int -> Segment -> WrapState
+wrapMonoLine fontSize limit64 segment =
+    let
+        charWidth : Int
+        charWidth =
+            Tuple.first charSize * monoScale fontSize * 64
+
+        length : Int
+        length =
+            String.length segment.text
+    in
+    if length * charWidth <= limit64 then
+        { lines = []
+        , current =
+            if length == 0 then
+                []
+
+            else
+                [ segment ]
+        , x = length * charWidth
+        , widest = 0
+        }
+
+    else
+        let
+            slice : Int -> Int -> List Segment
+            slice start end =
+                if start == end then
+                    []
+
+                else
+                    [ { segment | text = String.slice start end segment.text } ]
+
+            -- How many characters fit on a line (at least one, as in `breakWord`).
+            perLine : Int
+            perLine =
+                max 1 (limit64 // charWidth)
+
+            -- The word from `start` to `end` put on an empty line, one line after another
+            -- when it's too long for one. `lines` gets every line but the last, which is
+            -- the new current line.
+            breakMonoWord : Int -> Int -> MonoWrap -> MonoWrap
+            breakMonoWord start end state =
+                if end - start > perLine then
+                    breakMonoWord
+                        (start + perLine)
+                        end
+                        { state | lines = slice start (start + perLine) :: state.lines, widest = max state.widest (perLine * charWidth) }
+
+                else
+                    { state | start = start, end = end }
+
+            -- Puts a word (from `start` to `end`, with the space before it at `space`
+            -- if there is one) on the line, as `placeWord` does.
+            place : Maybe Int -> Int -> Int -> MonoWrap -> MonoWrap
+            place space start end state =
+                let
+                    x : Int
+                    x =
+                        (state.end - state.start) * charWidth
+
+                    spaceWidth : Int
+                    spaceWidth =
+                        case space of
+                            Just _ ->
+                                charWidth
+
+                            Nothing ->
+                                0
+
+                    wordWidth : Int
+                    wordWidth =
+                        (end - start) * charWidth
+                in
+                if x + spaceWidth + wordWidth <= limit64 then
+                    if x == 0 then
+                        -- The line starts here, with the space if there is one.
+                        { state | start = Maybe.withDefault start space, end = end }
+
+                    else
+                        { state | end = end }
+
+                else if x == 0 then
+                    breakMonoWord start end state
+
+                else
+                    let
+                        newLine : MonoWrap
+                        newLine =
+                            { lines = slice state.start state.end :: state.lines, start = start, end = start, widest = max state.widest x }
+                    in
+                    if wordWidth <= limit64 then
+                        { newLine | end = end }
+
+                    else
+                        breakMonoWord start end newLine
+
+            ( lastSpace, lastStart, scanned ) =
+                List.foldl
+                    (\at ( space, start, state ) -> ( Just at, at + 1, place space start at state ))
+                    ( Nothing, 0, { lines = [], start = 0, end = 0, widest = 0 } )
+                    (String.indexes " " segment.text)
+
+            done : MonoWrap
+            done =
+                place lastSpace lastStart length scanned
+        in
+        { lines = done.lines, current = slice done.start done.end, x = (done.end - done.start) * charWidth, widest = done.widest }
+
+
+{-| `wrapMonoLine`'s state: the lines done (last first), the current line (from `start` to
+`end` in the text; empty when they're equal) and the widest line done (1/64 UI pixels).
+-}
+type alias MonoWrap =
+    { lines : List (List Segment), start : Int, end : Int, widest : Int }
 
 
 {-| One line (no '\\n' in it) broken at the spaces before words that would go past
@@ -2022,7 +2052,7 @@ pushSegment : Segment -> List Segment -> List Segment
 pushSegment segment line =
     case line of
         last :: rest ->
-            if last.color == segment.color && last.font == segment.font && last.decorations == segment.decorations && last.link == segment.link then
+            if sameLook last segment then
                 { last | text = last.text ++ segment.text } :: rest
 
             else

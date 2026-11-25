@@ -207,6 +207,126 @@ pub enum Effect {
     /// "Code/Types.elm") and its text. Refused unless the Model's types are the running
     /// build's. Answered with `ToElm::Build`s as it goes.
     Build { modules: Vec<(String, String)> },
+    /// Lists the computer's disks and what is on them (host/init/src/install.rs), for
+    /// the Install app. Answered with `ToElm::Disks`.
+    ListDisks,
+    /// Installs Elm OS on `disk` (`DiskInfo::name`): in `target`, it makes an EFI system
+    /// partition, an "Elm OS tools" and an "Elm OS data" partition, copies itself there
+    /// and adds a UEFI boot entry. Everything else on the disk is left as it is.
+    /// `layout` is the `DiskInfo::layout` the choice was made from: the host refuses if
+    /// the disk has changed since. With `keep_data`, the data partition starts with a
+    /// copy of this one's (the Model, its log, builds), otherwise empty. Answered with
+    /// `ToElm::Install`s as it goes.
+    Install { disk: String, layout: String, target: InstallTarget, keep_data: bool },
+    /// Replaces the Elm OS installed on `disk` (`DiskInfo::installed`) with this one,
+    /// keeping its data partition: rewrites its EFI system partition's kernel and its
+    /// tools partition. Answered like `Install`.
+    UpdateInstall { disk: String, layout: String },
+}
+
+/// Where on a disk `Effect::Install` puts Elm OS.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum InstallTarget {
+    /// The free space (a `Region` without a partition) that starts at this byte.
+    Free { start: u64 },
+    /// In place of this partition (`PartitionInfo::number`), erasing it.
+    Partition { number: u32 },
+    /// The whole disk, erasing everything on it.
+    WholeDisk,
+}
+
+/// A disk, for the Install app.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiskInfo {
+    /// The kernel's name for it, such as "nvme0n1" or "sda".
+    pub name: String,
+    /// What the disk says it is, such as "Samsung SSD 970 EVO 1TB" (can be empty).
+    pub model: String,
+    pub bytes: u64,
+    pub usb: bool,
+    /// Elm OS runs from this disk (its data partition is mounted from it).
+    pub booted: bool,
+    /// Some partition on it is in use (mounted), so it can't be written to.
+    pub busy: bool,
+    /// Elm OS is installed on it (an "Elm OS" EFI, tools and data partition), so
+    /// `Effect::UpdateInstall` can update it.
+    pub installed: bool,
+    /// A fingerprint of its partition table and size: `Effect::Install` passes it back.
+    pub layout: String,
+    pub table: DiskTable,
+    /// The disk from start to end: partitions and the free space between them.
+    pub regions: Vec<Region>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum DiskTable {
+    Gpt,
+    /// The old (MBR) kind: Elm OS can only go on the whole disk.
+    Mbr,
+    /// No partition table: an empty disk.
+    Empty,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Region {
+    /// Its first byte and size. Free space smaller than a megabyte isn't listed.
+    pub start: u64,
+    pub bytes: u64,
+    /// None for free space.
+    pub partition: Option<PartitionInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartitionInfo {
+    pub number: u32,
+    /// Its GPT name (can be empty).
+    pub name: String,
+    pub contents: Contents,
+}
+
+/// What a partition holds, from its type and the first bytes of it.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Contents {
+    /// An EFI system partition: boot loaders (Windows', GRUB...). Never erased.
+    EfiSystem,
+    /// Windows' files (or another NTFS volume).
+    Ntfs,
+    /// Encrypted by Windows' BitLocker.
+    BitLocker,
+    /// Linux's usual file system (Mint, Ubuntu...).
+    Ext4,
+    Btrfs,
+    Fat,
+    Swap,
+    /// Encrypted Linux (LUKS).
+    Luks,
+    /// Windows' small reserved partition.
+    MicrosoftReserved,
+    WindowsRecovery,
+    ElmOsData,
+    ElmOsTools,
+    /// Only zeros at its start.
+    Empty,
+    Other,
+}
+
+/// How `Effect::Install` (or `UpdateInstall`) is going.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum InstallStatus {
+    /// The step it is on, and how far through the whole install it is (0 to 1).
+    Running { step: String, done: f64 },
+    /// It stopped: at which step, and why. `wrote` says whether the disk was changed.
+    Failed { step: String, message: String, wrote: bool },
+    /// Done. `grub` is a GRUB menu entry that starts it, for a computer whose other
+    /// system's GRUB comes first (Linux Mint's /etc/grub.d/40_custom).
+    Installed { grub: String },
 }
 
 /// A mouse cursor's picture, `width` x `height` device pixels of the texture atlas: the
@@ -353,7 +473,8 @@ pub enum ToElm {
     DisplaysChanged { displays: Vec<Display> },
     /// Smooth scrolling (two fingers on a touchpad), in UI pixels: how far the content
     /// under the pointer follows the fingers. Positive is down, the way the content
-    /// goes for a `Wheel` click up. A mouse wheel still sends `Wheel`.
+    /// goes for a `Wheel` click up. A mouse wheel still sends `Wheel`. No longer sent
+    /// (see `Gesture`), but the message log still holds some.
     Scroll { dy: f64 },
     /// The fingers left the touchpad (or all but one did) while scrolling: the content
     /// they were scrolling should keep going at `velocity` UI pixels a second (positive
@@ -372,6 +493,17 @@ pub enum ToElm {
     TlsClosed { id: String, reason: String },
     /// How the build that `Effect::Build` asked for is going.
     Build { status: BuildStatus },
+    /// Two fingers on a touchpad, in UI pixels: how far the content
+    /// under the pointer follows the fingers. `dy` positive is down, the way the content
+    /// goes for a `Wheel` click up; `dx` positive is right. `pinch` is how much the
+    /// fingers spread: the distance between them now over what it was (1 when they
+    /// kept their distance, above 1 zooms in). A report is either a scroll or a pinch,
+    /// whichever the fingers did most. A mouse wheel still sends `Wheel`.
+    Gesture { dx: f64, dy: f64, pinch: f64 },
+    /// The computer's disks (`Effect::ListDisks`).
+    Disks { disks: Vec<DiskInfo> },
+    /// How `Effect::Install` or `UpdateInstall` is going.
+    Install { status: InstallStatus },
 }
 
 /// A build made on the computer (`Effect::Build`): the step it is on, why it stopped
@@ -550,6 +682,9 @@ pub fn effect_name(effect: &Effect) -> &'static str {
         Effect::TlsClose { .. } => "TlsClose",
         Effect::WriteImage { .. } => "WriteImage",
         Effect::Build { .. } => "Build",
+        Effect::ListDisks => "ListDisks",
+        Effect::Install { .. } => "Install",
+        Effect::UpdateInstall { .. } => "UpdateInstall",
     }
 }
 
@@ -620,9 +755,12 @@ mod tests {
             Effect::TlsClose { .. } => "tlsClose",
             Effect::WriteImage { .. } => "writeImage",
             Effect::Build { .. } => "build",
+            Effect::ListDisks => "listDisks",
+            Effect::Install { .. } => "install",
+            Effect::UpdateInstall { .. } => "updateInstall",
         }
     }
-    const EFFECT_TAGS: usize = 27;
+    const EFFECT_TAGS: usize = 30;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {
@@ -632,6 +770,7 @@ mod tests {
             ToElm::Button { .. } => "button",
             ToElm::Wheel { .. } => "wheel",
             ToElm::Scroll { .. } => "scroll",
+            ToElm::Gesture { .. } => "gesture",
             ToElm::ScrollMomentum { .. } => "scrollMomentum",
             ToElm::Key { .. } => "key",
             ToElm::Renderer { .. } => "renderer",
@@ -663,9 +802,11 @@ mod tests {
             ToElm::TlsData { .. } => "tlsData",
             ToElm::TlsClosed { .. } => "tlsClosed",
             ToElm::Build { .. } => "build",
+            ToElm::Disks { .. } => "disks",
+            ToElm::Install { .. } => "install",
         }
     }
-    const TO_ELM_TAGS: usize = 37;
+    const TO_ELM_TAGS: usize = 40;
 
     #[test]
     fn reads_the_render_example() {

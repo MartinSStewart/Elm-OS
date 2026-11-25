@@ -1,40 +1,51 @@
 module Ui exposing
-    ( BorderAndFill(..)
-    , Clickable
+    ( Clickable
     , Element
     , ElementFull
     , ElementState(..)
-    , Find
-    , FindMatch
     , InputType(..)
     , LazyCache
+    , Length(..)
+    , Length2(..)
     , Model
     , Padding
     , Screenshot
     , ScrollBy(..)
     , Source
+    , Style(..)
+    , TargetSize
     , ViewportData
     , ViewportModel
     , bottomRight
     , button
+    , button2
     , buttons
     , center
     , colorText
+    , colorText2
     , column
+    , column2
+    , columnFill
+    , columnFromTop
     , cursorAt
     , customButton
+    , customButton2
     , customText
+    , customText2
     , customTextWrapped
     , defaultButtonBorderAndFillFocus
     , defaultElBorderAndFill
     , dragScrollbar
     , el
+    , el2
     , elWithId
+    , elWithSize
     , elWithWidth
     , elementToScreenshot
+    , ellipsisText2
     , empty
-    , findAll
     , findInput
+    , fixed2
     , getTextInput
     , getTextInputMultiline
     , hover
@@ -53,7 +64,6 @@ module Ui exposing
     , links
     , monoColorText
     , monoText
-    , noFind
     , noLazyCache
     , noPadding
     , onAnimationFrame
@@ -62,26 +72,30 @@ module Ui exposing
     , onWheel
     , paddingXY
     , quads
-    , revealMatch
     , right
     , row
+    , row2
+    , rowFill
     , rowFromLeft
     , rowFromRight
     , screenshotSize
     , screenshotView
     , scrolls
     , selectableButton
+    , selectableButton2
     , setFocus
     , size
     , sourced
     , stopMomentum
     , text
+    , text2
     , textInput
     , textInputMultiline
     , topRight
     , updateElement
     , view
     , viewport
+    , viewport2
     , windowBorderAndFill
     )
 
@@ -89,13 +103,13 @@ module Ui exposing
 drawing textured triangles for the render port instead of WebGL meshes.
 
 Elements know their size when they are made, so laying out is one pass: a row puts
-its children side by side, a column stacks them, `el` adds padding, a border and a
+its children side by side, a column stacks them, `el` adds pad, a border and a
 fill, and the alignment helpers (`center`, `topRight`, ...) pad a child out to a
 given size. `view` turns the tree into triangles, and `hover` finds the elements
 with ids under a point.
 
 Everything here is in UI pixels (Units.elm); only `view` turns them into device pixels,
-with the screen's UI scale. Spacing, padding and border widths are plain Ints of UI
+with the screen's UI scale. Spacing, pad and border widths are plain Ints of UI
 pixels; sizes and widths are Quantities.
 
 Text inputs come from town-collab's TextInput (TextInput.elm, with a US layout in
@@ -121,17 +135,17 @@ import Units exposing (DevicePixels, UiPixels, UiScale)
 
 
 type alias RowColumn =
-    { spacing : Int
+    { gap : Int
     , cachedSize : Coord UiPixels
     }
 
 
 type alias ButtonData id lazy =
     { id : id
-    , padding : Padding
-    , borderAndFill : BorderAndFill
-    , borderAndFillFocus : BorderAndFill
-    , borderAndFillHover : BorderAndFill
+    , pad : Padding
+    , style : Style
+    , borderAndFillFocus : Style
+    , borderAndFillHover : Style
     , cachedSize : Coord UiPixels
     , inFront : List (ElementFull id lazy)
     }
@@ -161,8 +175,8 @@ type ElementFull id lazy
     | Row RowColumn (List (ElementFull id lazy))
     | Column RowColumn (List (ElementFull id lazy))
     | Single
-        { padding : Padding
-        , borderAndFill : BorderAndFill
+        { pad : Padding
+        , style : Style
         , cachedSize : Coord UiPixels
         , id : Maybe id
         }
@@ -316,8 +330,8 @@ elementToScreenshotHelper model element acc =
             ( acc4
             , Button
                 { id = id
-                , padding = data.padding
-                , borderAndFill = data.borderAndFill
+                , pad = data.pad
+                , style = data.style
                 , borderAndFillFocus = data.borderAndFillFocus
                 , borderAndFillHover = data.borderAndFillHover
                 , cachedSize = data.cachedSize
@@ -347,8 +361,8 @@ elementToScreenshotHelper model element acc =
             in
             ( acc3
             , Single
-                { padding = data.padding
-                , borderAndFill = data.borderAndFill
+                { pad = data.pad
+                , style = data.style
                 , cachedSize = data.cachedSize
                 , id = maybeId
                 }
@@ -409,15 +423,14 @@ screenshotView { time, uiState, uiScale, screenshot } =
         uiScale
         False
         Nothing
-        noFind
         { topLeft = Coord.origin, bottomRight = sizeHelper screenshot }
         Coord.origin
         screenshot
 
 
 {-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
-UI pixels two fingers moved on a touchpad (positive is down, the content following
-them), which move the content at once, or the speed the fingers lifted at, in UI
+UI pixels two fingers moved on a touchpad (positive is down, the content moving
+the other way, as in the text editor), which move the content at once, or the speed the fingers lifted at, in UI
 pixels a second (positive is down), at which the content keeps going, slowing down.
 -}
 type ScrollBy
@@ -444,8 +457,8 @@ stopMomentum model =
             SeqDict.map
                 (\_ value ->
                     case value of
-                        ViewportState viewport2 ->
-                            ViewportState { viewport2 | momentum = 0 }
+                        ViewportState viewportModel ->
+                            ViewportState { viewportModel | momentum = 0 }
 
                         TextInputState _ ->
                             value
@@ -469,8 +482,8 @@ onMouseUp model =
             SeqDict.map
                 (\_ value ->
                     case value of
-                        ViewportState viewport2 ->
-                            ViewportState { viewport2 | grab = Nothing }
+                        ViewportState viewportModel ->
+                            ViewportState { viewportModel | grab = Nothing }
 
                         TextInputState _ ->
                             value
@@ -493,11 +506,28 @@ setFocus maybe model =
 getViewport : id -> Model id -> ViewportModel
 getViewport id model =
     case SeqDict.get id model.uiState of
-        Just (ViewportState viewport2) ->
-            viewport2
+        Just (ViewportState viewportModel) ->
+            viewportModel
 
         _ ->
             initViewportModel
+
+
+{-| A viewport's state, its offset kept inside its content as it is now: content that got
+shorter (a list that lost items) would otherwise show blank, scrolled past its end.
+-}
+shownViewport : { a | id : id, viewportHeight : Quantity Int UiPixels } -> ElementFull id lazy -> Model id -> ViewportModel
+shownViewport data child model =
+    let
+        state : ViewportModel
+        state =
+            getViewport data.id model
+
+        clamp : Quantity Float UiPixels -> Quantity Float UiPixels
+        clamp =
+            clampScroll data.viewportHeight (sizeHelper child)
+    in
+    { state | offset = clamp state.offset, target = clamp state.target }
 
 
 getTextInput : id -> Model id -> TextInput.Model
@@ -622,12 +652,12 @@ onAnimationFrame timeElapsed mouse hovered model =
                         ButtonState _ ->
                             value
 
-                        ViewportState viewport2 ->
-                            (if viewport2.momentum /= 0 then
-                                glide timeElapsed viewport2
+                        ViewportState viewportModel ->
+                            (if viewportModel.momentum /= 0 then
+                                glide timeElapsed viewportModel
 
                              else
-                                ease timeElapsed viewport2
+                                ease timeElapsed viewportModel
                             )
                                 |> Scrollbar.fade timeElapsed (scrollbarHovered id)
                                 |> ViewportState
@@ -752,7 +782,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
                     Coord.minus relativePositionToUi cursor
 
                 viewportModel =
-                    getViewport data.id model
+                    shownViewport data child model
             in
             if overScrollbar local data.viewportHeight child then
                 case Scrollbar.press (viewportGeometry data.viewportHeight childSize) (scrolled viewportModel.offset) (Coord.yRaw local) of
@@ -827,7 +857,7 @@ scrollTo viewportHeight contentSize pixels state =
     let
         offset : Quantity Float UiPixels
         offset =
-            Units.uiPixels (negate pixels) |> clampScroll viewportHeight contentSize
+            Units.ui (negate pixels) |> clampScroll viewportHeight contentSize
     in
     { state | offset = offset, target = offset, momentum = 0 }
 
@@ -977,7 +1007,7 @@ initViewportModel =
 {-| A frame of easing towards where the wheel scrolled to.
 -}
 ease : Duration -> ViewportModel -> ViewportModel
-ease timeElapsed viewport2 =
+ease timeElapsed viewportModel =
     let
         distance : Quantity Float UiPixels
         distance =
@@ -990,25 +1020,25 @@ ease timeElapsed viewport2 =
 
         target : Quantity Float UiPixels
         target =
-            viewport2.target
+            viewportModel.target
 
         diff : Quantity Float UiPixels
         diff =
-            target |> Quantity.minus viewport2.offset |> Quantity.abs
+            target |> Quantity.minus viewportModel.offset |> Quantity.abs
     in
-    { viewport2
+    { viewportModel
         | offset =
             -- Also mends an offset that a negative frame time made
             -- NaN (NaN is never less than anything), which a saved
             -- Model may still hold.
-            if isNaN (Quantity.unwrap viewport2.offset) || (diff |> Quantity.lessThan distance) then
+            if isNaN (Quantity.unwrap viewportModel.offset) || (diff |> Quantity.lessThan distance) then
                 target
 
-            else if viewport2.offset |> Quantity.lessThan target then
-                Quantity.plus distance viewport2.offset
+            else if viewportModel.offset |> Quantity.lessThan target then
+                Quantity.plus distance viewportModel.offset
 
             else
-                viewport2.offset |> Quantity.minus distance
+                viewportModel.offset |> Quantity.minus distance
     }
 
 
@@ -1024,7 +1054,7 @@ glide timeElapsed model =
 
         moved : Quantity Float UiPixels
         moved =
-            Quantity.plus (Units.uiPixels (model.momentum * seconds)) model.offset
+            Quantity.plus (Units.ui (model.momentum * seconds)) model.offset
 
         offset : Quantity Float UiPixels
         offset =
@@ -1056,14 +1086,15 @@ scroll scrollBy size2 data model =
     case scrollBy of
         WheelClicks clicks ->
             { model
-                | target = Quantity.plus (Units.uiPixels (toFloat (clicks * 150))) model.target |> clampOffset
+                | target = Quantity.plus (Units.ui (toFloat (clicks * 150))) model.target |> clampOffset
                 , momentum = 0
             }
 
         ScrollPixels pixels ->
-            -- No easing: the content stays under the fingers.
-            { offset = Quantity.plus pixels model.offset |> clampOffset
-            , target = Quantity.plus pixels model.target |> clampOffset
+            -- No easing: the content follows the fingers, reversed like the text editor's
+            -- (fingers moving down move the content up).
+            { offset = Quantity.minus pixels model.offset |> clampOffset
+            , target = Quantity.minus pixels model.target |> clampOffset
             , momentum = 0
             , bottom = model.bottom
             , grab = model.grab
@@ -1072,7 +1103,7 @@ scroll scrollBy size2 data model =
             }
 
         Momentum velocity ->
-            { model | momentum = velocity, bottom = clampOffset (Units.uiPixels -1.0e9) }
+            { model | momentum = negate velocity, bottom = clampOffset (Units.ui -1.0e9) }
 
 
 {-| Keep an offset between the top of the content and its bottom. Content no taller than
@@ -1133,10 +1164,10 @@ overScrollbar point viewportHeight child =
 
 scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
 scrollBaseSpeed =
-    Quantity.rate (Units.uiPixels 1000) Duration.second
+    Quantity.rate (Units.ui 1000) Duration.second
 
 
-type BorderAndFill
+type Style
     = NoBorderOrFill
     | BorderOnly { borderWidth : Int, borderColor : Color }
     | FillOnly Color
@@ -1166,8 +1197,8 @@ paddingXY x y =
 {-| Where the child goes, from the element's top left.
 -}
 paddingTopLeft : Padding -> Coord UiPixels
-paddingTopLeft padding =
-    Coord.xy padding.left padding.top
+paddingTopLeft pad =
+    Coord.xy pad.left pad.top
 
 
 
@@ -1185,8 +1216,8 @@ text =
 {-| `text` in a given colour.
 -}
 colorText : Color -> String -> Element id
-colorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
+colorText color string =
+    customText Sprite.Small [ { text = string, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
 
 
 {-| Black text in the small monospace font. '\\n' starts a new line.
@@ -1199,8 +1230,8 @@ monoText =
 {-| `monoText` in a given colour.
 -}
 monoColorText : Color -> String -> Element id
-monoColorText color text2 =
-    customText Sprite.Small [ { text = text2, color = color, font = Sprite.Mono, decorations = [], link = Nothing } ]
+monoColorText color string =
+    customText Sprite.Small [ { text = string, color = color, font = Sprite.Mono, decorations = [], link = Nothing } ]
 
 
 {-| Runs of text one after another, each in its own colour and font. They all share one
@@ -1257,6 +1288,10 @@ linksHelper id element =
         Sourced source child ->
             Sourced source (linksHelper id child)
 
+        -- What `fitTo` pads or clips a text with.
+        Single data child ->
+            Single data (linksHelper id child)
+
         _ ->
             element
 
@@ -1307,67 +1342,67 @@ empty =
     Element Empty
 
 
-button : { id : id, padding : Padding } -> Element id -> Element id
+button : { id : id, pad : Padding } -> Element id -> Element id
 button data child =
     customButton
         { id = data.id
-        , padding = data.padding
+        , pad = data.pad
         , inFront = []
-        , borderAndFill = defaultButtonBorderAndFill
+        , style = defaultButtonBorderAndFill
         , borderAndFillFocus = defaultButtonBorderAndFillFocus
         }
         child
 
 
-defaultElBorderAndFill : BorderAndFill
+defaultElBorderAndFill : Style
 defaultElBorderAndFill =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor }
 
 
-defaultButtonBorderAndFill : BorderAndFill
+defaultButtonBorderAndFill : Style
 defaultButtonBorderAndFill =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor2 }
 
 
-defaultButtonBorderAndFillFocus : BorderAndFill
+defaultButtonBorderAndFillFocus : Style
 defaultButtonBorderAndFillFocus =
     BorderAndFill { borderWidth = 2, borderColor = Color.focusedUiColor, fillColor = Color.fillColor2 }
 
 
-defaultButtonBorderAndFillHover : BorderAndFill
+defaultButtonBorderAndFillHover : Style
 defaultButtonBorderAndFillHover =
     BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = Color.fillColor3 }
 
 
-windowBorderAndFill : BorderAndFill
+windowBorderAndFill : Style
 windowBorderAndFill =
     BorderFillAndDots { borderWidth = 1, borderColor = Color.outlineColor, fillColor = Color.fillColor, dotColor = Color.dotGridColor }
 
 
 customButton :
     { id : id
-    , padding : Padding
+    , pad : Padding
     , inFront : List (Element id)
-    , borderAndFill : BorderAndFill
-    , borderAndFillFocus : BorderAndFill
+    , style : Style
+    , borderAndFillFocus : Style
     }
     -> Element id
     -> Element id
 customButton data (Element child) =
     Button
         { id = data.id
-        , padding = data.padding
+        , pad = data.pad
         , inFront = List.map (\(Element a) -> a) data.inFront
-        , borderAndFill = data.borderAndFill
+        , style = data.style
         , borderAndFillFocus = data.borderAndFillFocus
         , borderAndFillHover = defaultButtonBorderAndFillHover
-        , cachedSize = paddedSize data.padding child
+        , cachedSize = paddedSize data.pad child
         }
         child
         |> Element
 
 
-selectableButton : { id : id, padding : Padding } -> Bool -> Element id -> Element id
+selectableButton : { id : id, pad : Padding } -> Bool -> Element id -> Element id
 selectableButton data isSelected child =
     let
         fill =
@@ -1379,9 +1414,9 @@ selectableButton data isSelected child =
     in
     customButton
         { id = data.id
-        , padding = data.padding
+        , pad = data.pad
         , inFront = []
-        , borderAndFill = BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = fill }
+        , style = BorderAndFill { borderWidth = 2, borderColor = Color.outlineColor, fillColor = fill }
         , borderAndFillFocus = BorderAndFill { borderWidth = 2, borderColor = Color.focusedUiColor, fillColor = fill }
         }
         child
@@ -1392,8 +1427,8 @@ selectableButton data isSelected child =
 
 
 paddedSize : Padding -> ElementFull id lazy -> Coord UiPixels
-paddedSize padding child =
-    Coord.plus (Coord.xy (padding.left + padding.right) (padding.top + padding.bottom)) (sizeHelper child)
+paddedSize pad child =
+    Coord.plus (Coord.xy (pad.left + pad.right) (pad.top + pad.bottom)) (sizeHelper child)
 
 
 row : Int -> List (Element id) -> Element id
@@ -1410,11 +1445,11 @@ row data children =
                 )
                 children
     in
-    Row { spacing = data, cachedSize = rowSize data children2 } children2 |> Element
+    Row { gap = data, cachedSize = rowSize data children2 } children2 |> Element
 
 
 column : Int -> List (Element id) -> Element id
-column spacing children =
+column gap children =
     let
         children2 =
             List.filterMap
@@ -1427,16 +1462,16 @@ column spacing children =
                 )
                 children
     in
-    Column { spacing = spacing, cachedSize = columnSize spacing children2 } children2
+    Column { gap = gap, cachedSize = columnSize gap children2 } children2
         |> Element
 
 
-el : { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
+el : { pad : Padding, style : Style } -> Element id -> Element id
 el data (Element child) =
     Single
-        { padding = data.padding
-        , borderAndFill = data.borderAndFill
-        , cachedSize = paddedSize data.padding child
+        { pad = data.pad
+        , style = data.style
+        , cachedSize = paddedSize data.pad child
         , id = Nothing
         }
         child
@@ -1446,12 +1481,12 @@ el data (Element child) =
 {-| An `el` that `hover` finds, so a click anywhere on it (and not on a button in it) is a
 click on `id`. For windows, so clicking one gives it the keyboard.
 -}
-elWithId : id -> { padding : Padding, borderAndFill : BorderAndFill } -> Element id -> Element id
+elWithId : id -> { pad : Padding, style : Style } -> Element id -> Element id
 elWithId id data (Element child) =
     Single
-        { padding = data.padding
-        , borderAndFill = data.borderAndFill
-        , cachedSize = paddedSize data.padding child
+        { pad = data.pad
+        , style = data.style
+        , cachedSize = paddedSize data.pad child
         , id = Just id
         }
         child
@@ -1633,13 +1668,13 @@ align fx fy areaSize child =
             (sizeY - childY) * fy // 2
     in
     Single
-        { padding =
+        { pad =
             { top = top
             , bottom = sizeY - childY - top
             , left = left2
             , right = sizeX - childX - left2
             }
-        , borderAndFill = NoBorderOrFill
+        , style = NoBorderOrFill
         , cachedSize = areaSize
         , id = Nothing
         }
@@ -1759,26 +1794,26 @@ viewportInside position data child =
 
 
 rowSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
-rowSize spacing children =
+rowSize gap children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + spacing + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( Coord.xRaw (sizeHelper child) + gap + x, max (Coord.yRaw (sizeHelper child)) y )) ( 0, 0 ) children
     in
     Coord.xy
         (if List.isEmpty children then
             w
 
          else
-            w - spacing
+            w - gap
         )
         h
 
 
 columnSize : Int -> List (ElementFull id lazy) -> Coord UiPixels
-columnSize spacing children =
+columnSize gap children =
     let
         ( w, h ) =
-            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + spacing + y )) ( 0, 0 ) children
+            List.foldl (\child ( x, y ) -> ( max (Coord.xRaw (sizeHelper child)) x, Coord.yRaw (sizeHelper child) + gap + y )) ( 0, 0 ) children
     in
     Coord.xy
         w
@@ -1786,22 +1821,22 @@ columnSize spacing children =
             h
 
          else
-            h - spacing
+            h - gap
         )
 
 
 {-| Where each child of a row or column goes.
 -}
 childPositions : Bool -> Int -> Coord UiPixels -> List (ElementFull id lazy) -> List ( Coord UiPixels, ElementFull id lazy )
-childPositions isRow spacing position children =
+childPositions isRow gap position children =
     List.foldl
         (\child ( at, acc ) ->
             ( Coord.plus
                 (if isRow then
-                    Coord.xy (Coord.xRaw (sizeHelper child) + spacing) 0
+                    Coord.xy (Coord.xRaw (sizeHelper child) + gap) 0
 
                  else
-                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + spacing)
+                    Coord.xy 0 (Coord.yRaw (sizeHelper child) + gap)
                 )
                 at
             , ( at, child ) :: acc
@@ -1817,29 +1852,63 @@ childPositions isRow spacing position children =
 -- WIDTH HELPERS
 
 
-{-| An `el` exactly `width` wide. `child` is given the width inside the padding, and is
+{-| An `el` exactly `width` wide. `child` is given the width inside the pad, and is
 padded out to it if it comes out narrower.
 -}
-elWithWidth : { width : Int, padding : Padding, borderAndFill : BorderAndFill } -> (Int -> Element id) -> Element id
+elWithWidth : { width : Int, pad : Padding, style : Style } -> (Int -> Element id) -> Element id
 elWithWidth data child =
     let
-        inner : Int
-        inner =
-            data.width - data.padding.left - data.padding.right
+        pad =
+            data.pad
+
+        child2 =
+            child (data.width - pad.left - pad.right)
+
+        missingPadding =
+            data.width - Coord.xRaw (size child2)
     in
-    el { padding = data.padding, borderAndFill = data.borderAndFill } (padToWidth 0 inner (child inner))
+    el { pad = { pad | right = missingPadding + pad.right }, style = data.style } child2
+
+
+elWithSize : { size : Coord UiPixels, pad : Padding, style : Style } -> (Coord UiPixels -> Element id) -> Element id
+elWithSize data child =
+    let
+        pad =
+            data.pad
+
+        size2 =
+            data.size
+                |> Coord.minus (Coord.xy pad.left pad.top)
+                |> Coord.minus (Coord.xy pad.right pad.bottom)
+
+        child2 =
+            child size2
+
+        missingPadding : Coord UiPixels
+        missingPadding =
+            size2 |> Coord.minus (size child2)
+    in
+    el
+        { pad =
+            { pad
+                | right = Coord.xRaw missingPadding + pad.right
+                , bottom = Coord.yRaw missingPadding + pad.bottom
+            }
+        , style = data.style
+        }
+        child2
 
 
 {-| A row exactly `width` wide. Each child is given the width the children left of it
-leave (less the spacing), so the first is given all of it. A child that doesn't care
+leave (less the gap), so the first is given all of it. A child that doesn't care
 ignores its Int:
 
-    Ui.rowFromLeft { width = 600, spacing = 8 } [ \_ -> backButton, \rest -> title rest ]
+    Ui.rowFromLeft { width = 600, gap = 8 } [ \_ -> backButton, \rest -> title rest ]
 
 If it comes out narrower than `width`, the row is padded on the right.
 
 -}
-rowFromLeft : { width : Int, spacing : Int } -> List (Int -> Element id) -> Element id
+rowFromLeft : { width : Int, gap : Int } -> List (Int -> Element id) -> Element id
 rowFromLeft data children =
     List.foldl
         (\child ( rest, made ) ->
@@ -1848,21 +1917,163 @@ rowFromLeft data children =
                 element =
                     child rest
             in
-            ( rest - Coord.xRaw (size element) - data.spacing, element :: made )
+            ( rest - Coord.xRaw (size element) - data.gap, element :: made )
         )
         ( data.width, [] )
         children
         |> Tuple.second
         |> List.reverse
-        |> row data.spacing
+        |> row data.gap
         |> padToWidth 0 data.width
+
+
+{-| A child of `rowFill` or `columnFill`. A `Shrink` element keeps its own size. The
+`Fill` ones share the room the `Shrink` ones leave, evenly: each is given its share (a
+width in a row, a height in a column).
+-}
+type Length id
+    = Shrink (Element id)
+    | Fill (Int -> Element id)
+
+
+{-| A row exactly `width` wide. The `Fill` children share the width the `Shrink` children
+and the gap leave evenly (the first ones a pixel more when it doesn't divide), and
+each is padded out to its share, so whatever is right of it lines up. A `Fill` child can
+be anywhere in the row:
+
+    Ui.rowFill { width = 600, gap = 8 }
+        [ Ui.Shrink number
+        , Ui.Fill (\titleWidth -> title titleWidth)
+        , Ui.Shrink commentCount
+        ]
+
+-}
+rowFill : { width : Int, gap : Int } -> List (Length id) -> Element id
+rowFill data children =
+    fillChildren Coord.xRaw (\width -> Coord.xy width 0) data.width data.gap children
+        |> row data.gap
+        |> padToWidth 0 data.width
+
+
+{-| `rowFill` turned on its side: a column exactly `height` tall, whose `Fill` children
+share the height the `Shrink` ones leave.
+
+    Ui.columnFill { height = 600, gap = 8 }
+        [ Ui.Shrink title
+        , Ui.Fill (\height -> Ui.viewport { id = id, viewportHeight = Units.ui height } content)
+        ]
+
+-}
+columnFill : { height : Int, gap : Int } -> List (Length id) -> Element id
+columnFill data children =
+    fillChildren Coord.yRaw (\height -> Coord.xy 0 height) data.height data.gap children
+        |> column data.gap
+        |> padTo (Coord.xy 0 data.height)
+
+
+{-| The children of a `rowFill` or `columnFill`, made, with each `Fill` one given and
+padded out to its share of `total`. `along` reads a size along the row or column.
+-}
+fillChildren : (Coord UiPixels -> Int) -> (Int -> Coord UiPixels) -> Int -> Int -> List (Length id) -> List (Element id)
+fillChildren along toCoord total gap children =
+    let
+        shrinkSizes : Int
+        shrinkSizes =
+            List.foldl
+                (\child sum ->
+                    case child of
+                        Shrink element ->
+                            sum + along (size element)
+
+                        Fill _ ->
+                            sum
+                )
+                0
+                children
+
+        fillCount : Int
+        fillCount =
+            List.length (List.filter isFill children)
+    in
+    List.foldl
+        (\child ( shares, made ) ->
+            case child of
+                Shrink element ->
+                    ( shares, element :: made )
+
+                Fill fill ->
+                    case shares of
+                        share2 :: rest ->
+                            ( rest, padTo (toCoord share2) (fill share2) :: made )
+
+                        [] ->
+                            ( [], made )
+        )
+        ( share (total - gap * (List.length children - 1) - shrinkSizes) fillCount, [] )
+        children
+        |> Tuple.second
+        |> List.reverse
+
+
+isFill : Length id -> Bool
+isFill child =
+    case child of
+        Shrink _ ->
+            False
+
+        Fill _ ->
+            True
+
+
+{-| `total` split into `count` whole shares as even as can be (the first ones a pixel
+bigger), none below zero.
+-}
+share : Int -> Int -> List Int
+share total count =
+    let
+        total2 : Int
+        total2 =
+            max 0 total
+    in
+    List.range 0 (count - 1)
+        |> List.map
+            (\index ->
+                total2
+                    // count
+                    + (if index < modBy (max 1 count) total2 then
+                        1
+
+                       else
+                        0
+                      )
+            )
+
+
+{-| An element padded at the right and bottom out to `minimum`, along each side it's smaller.
+-}
+padTo : Coord UiPixels -> Element id -> Element id
+padTo minimum (Element child) =
+    let
+        childSize : Coord UiPixels
+        childSize =
+            sizeHelper child
+
+        padded : Coord UiPixels
+        padded =
+            Coord.componentMax minimum childSize
+    in
+    if padded == childSize then
+        Element child
+
+    else
+        align 0 0 padded child |> Element
 
 
 {-| `rowFromLeft` starting from the right: the last child is given all of `width`, and
 each one before it what the ones right of it leave. If it comes out narrower than `width`,
 the row is padded on the left, so the right end stays put.
 -}
-rowFromRight : { width : Int, spacing : Int } -> List (Int -> Element id) -> Element id
+rowFromRight : { width : Int, gap : Int } -> List (Int -> Element id) -> Element id
 rowFromRight data children =
     List.foldr
         (\child ( rest, made ) ->
@@ -1871,13 +2082,36 @@ rowFromRight data children =
                 element =
                     child rest
             in
-            ( rest - Coord.xRaw (size element) - data.spacing, element :: made )
+            ( rest - Coord.xRaw (size element) - data.gap, element :: made )
         )
         ( data.width, [] )
         children
         |> Tuple.second
-        |> row data.spacing
+        |> row data.gap
         |> padToWidth 2 data.width
+
+
+columnFromTop : { size : Coord UiPixels, gap : Int } -> List (Coord UiPixels -> Element id) -> Element id
+columnFromTop data children =
+    let
+        width =
+            Coord.xRaw data.size
+    in
+    List.foldl
+        (\child ( rest, made ) ->
+            let
+                element : Element id
+                element =
+                    child (Coord.xy width rest)
+            in
+            ( rest - Coord.yRaw (size element) - data.gap, element :: made )
+        )
+        ( Coord.yRaw data.size, [] )
+        children
+        |> Tuple.second
+        |> List.reverse
+        |> column data.gap
+        |> padToWidth 2 (Coord.yRaw data.size)
 
 
 {-| An element padded out to `width` if it's narrower; `fx` 0 puts it at the left, 2 at the right.
@@ -1894,6 +2128,272 @@ padToWidth fx width (Element child) =
 
     else
         align fx 0 (Coord.xy width (Coord.yRaw childSize)) child |> Element
+
+
+
+-- TARGET SIZES (TRYING OUT: the functions ending in 2)
+
+
+{-| The size an element should be. A `Just` side is exact: the element is padded out to it,
+or clipped to it. A `Nothing` side is as big as the content.
+-}
+type alias TargetSize =
+    { width : Maybe Int, height : Maybe Int }
+
+
+{-| How a child of `row2` or `column2` is sized along the row or column. A `Shrink2` child
+is as big as its content there. The `Fill2` children share what's left evenly.
+-}
+type Length2
+    = Shrink2
+    | Fill2
+
+
+{-| An element made exactly `target` big: padded out to it, or clipped to it, along each
+side that is `Just`.
+-}
+fitTo : TargetSize -> Element id -> Element id
+fitTo target (Element child) =
+    let
+        ( width, height ) =
+            Coord.toTuple (sizeHelper child)
+
+        targetWidth : Int
+        targetWidth =
+            Maybe.withDefault width target.width
+
+        targetHeight : Int
+        targetHeight =
+            Maybe.withDefault height target.height
+    in
+    if targetWidth == width && targetHeight == height then
+        Element child
+
+    else
+        Single
+            { pad = { top = 0, left = 0, right = targetWidth - width, bottom = targetHeight - height }
+            , style = NoBorderOrFill
+            , cachedSize = Coord.xy targetWidth targetHeight
+            , id = Nothing
+            }
+            child
+            |> Element
+
+
+{-| The target inside some padding.
+-}
+insidePadding : Padding -> TargetSize -> TargetSize
+insidePadding pad target =
+    { width = Maybe.map (\width -> width - pad.left - pad.right) target.width
+    , height = Maybe.map (\height -> height - pad.top - pad.bottom) target.height
+    }
+
+
+{-| Any element, padded out or clipped to the target. For ones whose size doesn't depend on
+the room they're given, such as a text input.
+-}
+fixed2 : Element id -> TargetSize -> Element id
+fixed2 element target =
+    fitTo target element
+
+
+{-| `text` that wraps to the target width, if there is one.
+-}
+text2 : String -> TargetSize -> Element id
+text2 =
+    colorText2 Color.textColor
+
+
+{-| `text2` in a given colour.
+-}
+colorText2 : Color -> String -> TargetSize -> Element id
+colorText2 color text3 =
+    customText2 Sprite.Small [ { text = text3, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
+
+
+{-| `customText` that wraps to the target width, if there is one.
+-}
+customText2 : Sprite.FontSize -> List Sprite.Segment -> TargetSize -> Element id
+customText2 fontSize segments target =
+    (case target.width of
+        Just width ->
+            customTextWrapped fontSize (Units.ui width) segments
+
+        Nothing ->
+            customText fontSize segments
+    )
+        |> fitTo target
+
+
+{-| One line of text in the small size, cut short with an ellipsis to fit the target width.
+-}
+ellipsisText2 : { color : Color, font : Sprite.Font } -> String -> TargetSize -> Element id
+ellipsisText2 { color, font } text3 target =
+    customText
+        Sprite.Small
+        [ { text =
+                case target.width of
+                    Just width ->
+                        Sprite.ellipsis Sprite.Small font (Units.ui width) text3
+
+                    Nothing ->
+                        text3
+          , color = color
+          , font = font
+          , decorations = []
+          , link = Nothing
+          }
+        ]
+        |> fitTo target
+
+
+{-| `el` whose child is given the target less the padding.
+-}
+el2 : { pad : Padding, style : Style } -> (TargetSize -> Element id) -> TargetSize -> Element id
+el2 data child target =
+    el data (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| `button` whose child is given the target less the padding.
+-}
+button2 : { id : id, pad : Padding } -> (TargetSize -> Element id) -> TargetSize -> Element id
+button2 data child target =
+    button data (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| `selectableButton` whose child is given the target less the padding.
+-}
+selectableButton2 : { id : id, pad : Padding } -> Bool -> (TargetSize -> Element id) -> TargetSize -> Element id
+selectableButton2 data isSelected child target =
+    selectableButton data isSelected (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| `customButton` whose child is given the target less the padding.
+-}
+customButton2 :
+    { id : id
+    , pad : Padding
+    , inFront : List (Element id)
+    , style : Style
+    , borderAndFillFocus : Style
+    }
+    -> (TargetSize -> Element id)
+    -> TargetSize
+    -> Element id
+customButton2 data child target =
+    customButton data (child (insidePadding data.pad target)) |> fitTo target
+
+
+{-| A row. Every child is given the row's target height. A `Shrink2` child is given no
+width and is as wide as it is; the `Fill2` children share the width the others and the
+gaps leave evenly (the first ones a pixel more when it doesn't divide). With no target
+width, `Fill2` children are as wide as they are too.
+-}
+row2 : Int -> List ( Length2, TargetSize -> Element id ) -> TargetSize -> Element id
+row2 gap children target =
+    lineUp2
+        (\made -> row gap made)
+        Coord.xRaw
+        (\along -> { width = along, height = target.height })
+        target.width
+        gap
+        children
+        |> fitTo target
+
+
+{-| `row2` turned on its side: every child is given the column's target width, and the
+`Fill2` children share the height the `Shrink2` ones leave.
+-}
+column2 : Int -> List ( Length2, TargetSize -> Element id ) -> TargetSize -> Element id
+column2 gap children target =
+    lineUp2
+        (\made -> column gap made)
+        Coord.yRaw
+        (\along -> { width = target.width, height = along })
+        target.height
+        gap
+        children
+        |> fitTo target
+
+
+{-| The children of a `row2` or `column2`, made and put in it. `along` reads a size along
+it; `targetFor` makes a child's target from its size along it.
+-}
+lineUp2 :
+    (List (Element id) -> Element id)
+    -> (Coord UiPixels -> Int)
+    -> (Maybe Int -> TargetSize)
+    -> Maybe Int
+    -> Int
+    -> List ( Length2, TargetSize -> Element id )
+    -> Element id
+lineUp2 container along targetFor total gap children =
+    let
+        shrunk : List ( Length2, TargetSize -> Element id, Maybe (Element id) )
+        shrunk =
+            List.map
+                (\( length, child ) ->
+                    case ( length, total ) of
+                        ( Fill2, Just _ ) ->
+                            ( length, child, Nothing )
+
+                        _ ->
+                            ( length, child, Just (child (targetFor Nothing)) )
+                )
+                children
+
+        shares : List Int
+        shares =
+            case total of
+                Just total2 ->
+                    share
+                        (total2
+                            - gap
+                            * (List.length children - 1)
+                            - List.sum (List.filterMap (\( _, _, made ) -> Maybe.map (\element -> along (size element)) made) shrunk)
+                        )
+                        (List.length (List.filter (\( _, _, made ) -> made == Nothing) shrunk))
+
+                Nothing ->
+                    []
+    in
+    List.foldl
+        (\( _, child, made ) ( shares2, acc ) ->
+            case ( made, shares2 ) of
+                ( Just element, _ ) ->
+                    ( shares2, element :: acc )
+
+                ( Nothing, share2 :: rest ) ->
+                    ( rest, child (targetFor (Just share2)) :: acc )
+
+                ( Nothing, [] ) ->
+                    ( [], acc )
+        )
+        ( shares, [] )
+        shrunk
+        |> Tuple.second
+        |> List.reverse
+        |> container
+
+
+{-| A viewport as tall as the target. Its content is given the target width and no height,
+so it can be as tall as it likes. With no target height it's just the content.
+-}
+viewport2 : id -> (TargetSize -> Element id) -> TargetSize -> Element id
+viewport2 id child target =
+    let
+        content : Element id
+        content =
+            child { width = target.width, height = Nothing }
+    in
+    (case target.height of
+        Just height ->
+            viewport { id = id, viewportHeight = Units.ui height } content
+
+        Nothing ->
+            content
+    )
+        |> fitTo target
 
 
 
@@ -2002,22 +2502,22 @@ inspectHelper model point clip position element found =
 
             Button data child ->
                 -- The ones in front first.
-                firstOf (List.reverse (List.map (Tuple.pair position) data.inFront) ++ [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ])
+                firstOf (List.reverse (List.map (Tuple.pair position) data.inFront) ++ [ ( Coord.plus (paddingTopLeft data.pad) position, child ) ])
                     |> orItself
 
             Row data children ->
-                firstOf (childPositions True data.spacing position children)
+                firstOf (childPositions True data.gap position children)
 
             Column data children ->
-                firstOf (childPositions False data.spacing position children)
+                firstOf (childPositions False data.gap position children)
 
             Single data child ->
                 let
                     inChild =
-                        firstOf [ ( Coord.plus (paddingTopLeft data.padding) position, child ) ]
+                        firstOf [ ( Coord.plus (paddingTopLeft data.pad) position, child ) ]
                 in
                 -- Only a fill can be seen everywhere in it.
-                case data.borderAndFill of
+                case data.style of
                     NoBorderOrFill ->
                         inChild
 
@@ -2044,7 +2544,7 @@ inspectHelper model point clip position element found =
 
                     viewportModel : ViewportModel
                     viewportModel =
-                        getViewport data.id model
+                        shownViewport data child model
                 in
                 case Bounds.intersection clip inside of
                     Just clip2 ->
@@ -2113,23 +2613,23 @@ buttonsHelper model clip position element found =
             in
             List.foldl
                 (\child2 found2 -> buttonsHelper model clip position child2 found2)
-                (buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child withThis)
+                (buttonsHelper model clip (Coord.plus (paddingTopLeft data.pad) position) child withThis)
                 data.inFront
 
         Row data children ->
             List.foldl
                 (\( at, child ) found2 -> buttonsHelper model clip at child found2)
                 found
-                (childPositions True data.spacing position children)
+                (childPositions True data.gap position children)
 
         Column data children ->
             List.foldl
                 (\( at, child ) found2 -> buttonsHelper model clip at child found2)
                 found
-                (childPositions False data.spacing position children)
+                (childPositions False data.gap position children)
 
         Single data child ->
-            buttonsHelper model clip (Coord.plus (paddingTopLeft data.padding) position) child found
+            buttonsHelper model clip (Coord.plus (paddingTopLeft data.pad) position) child found
 
         InFront _ children ->
             List.foldl
@@ -2140,7 +2640,7 @@ buttonsHelper model clip position element found =
         Viewport data child ->
             case Bounds.intersection clip (viewportInside position data child) of
                 Just inside ->
-                    buttonsHelper model inside (Coord.plus (contentPosition (getViewport data.id model)) position) child found
+                    buttonsHelper model inside (Coord.plus (contentPosition (shownViewport data child model)) position) child found
 
                 Nothing ->
                     found
@@ -2332,11 +2832,11 @@ hoverHelper model hovers point position element =
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             Row data children ->
-                childPositions True data.spacing position children
+                childPositions True data.gap position children
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Column data children ->
-                childPositions False data.spacing position children
+                childPositions False data.gap position children
                     |> List.foldl (\( at, child ) acc -> hoverHelper model acc point at child) hovers
 
             Single data child ->
@@ -2344,7 +2844,7 @@ hoverHelper model hovers point position element =
                     model
                     (( data.id, { relativePositionToUi = position, ui = element } ) :: hovers)
                     point
-                    (Coord.plus (paddingTopLeft data.padding) position)
+                    (Coord.plus (paddingTopLeft data.pad) position)
                     child
 
             InFront _ children ->
@@ -2378,7 +2878,7 @@ hoverHelper model hovers point position element =
                         ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
                     viewportModel =
-                        getViewport data.id model
+                        shownViewport data child model
                 in
                 -- Content scrolled out of sight, or under the scroll bar, can't be hovered.
                 if
@@ -2441,13 +2941,13 @@ findInputHelper model id position element =
                 Nothing
 
         Row data children ->
-            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data.spacing position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions True data.gap position children)
 
         Column data children ->
-            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.spacing position children)
+            findFirst (\( at, child ) -> findInputHelper model id at child) (childPositions False data.gap position children)
 
         Single data child ->
-            findInputHelper model id (Coord.plus (paddingTopLeft data.padding) position) child
+            findInputHelper model id (Coord.plus (paddingTopLeft data.pad) position) child
 
         InFront _ children ->
             findFirst (\( coord, child ) -> findInputHelper model id (Coord.plus coord position) child) (List.reverse children)
@@ -2466,7 +2966,7 @@ findInputHelper model id position element =
                 Just (ViewportType { position = position, viewportHeight = data.viewportHeight, contentSize = sizeHelper child })
 
             else
-                findInputHelper model id (Coord.plus (contentPosition (getViewport data.id model)) position) child
+                findInputHelper model id (Coord.plus (contentPosition (shownViewport data child model)) position) child
 
         Lazy _ _ child ->
             findInputHelper model id position child
@@ -2491,243 +2991,29 @@ findFirst f list =
 
 
 
--- FIND (Ctrl+F)
-
-
-{-| What the find bar is looking for: `query` ("" for nothing), and the selected match,
-as the top left of the text element it is in (where `view` draws that element) and
-which of that element's matches it is (see `FindMatch`).
--}
-type alias Find =
-    { query : String, selected : Maybe ( Coord UiPixels, Int ) }
-
-
-noFind : Find
-noFind =
-    { query = "", selected = Nothing }
-
-
-{-| One match of the find bar's text: the top left of the text element it is in, as
-`view` draws it, which of that element's matches it is (Sprite.findMatches), and for
-each viewport it is in (outermost first) how far down that viewport's content its
-lines start and end, for `revealMatch`.
--}
-type alias FindMatch id =
-    { at : Coord UiPixels
-    , index : Int
-    , viewports :
-        List
-            { id : id
-            , viewportHeight : Quantity Int UiPixels
-            , contentSize : Coord UiPixels
-            , top : Int
-            , bottom : Int
-            }
-    }
-
-
-{-| Every match of `query` in the text of an element, in the order they come in the
-tree, including the ones scrolled out of sight in a viewport.
--}
-findAll : Model id -> String -> Element id -> List (FindMatch id)
-findAll model query (Element element) =
-    if String.isEmpty query then
-        []
-
-    else
-        findAllHelper model query Coord.origin [] element [] |> List.reverse
-
-
-{-| `findAll`, adding to `found` (last first). `viewports` are the viewports the
-element is in, innermost first, each with where its content's top is.
--}
-findAllHelper :
-    Model id
-    -> String
-    -> Coord UiPixels
-    -> List { id : id, viewportHeight : Quantity Int UiPixels, contentSize : Coord UiPixels, contentTop : Int }
-    -> ElementFull id lazy
-    -> List (FindMatch id)
-    -> List (FindMatch id)
-findAllHelper model query position viewports element found =
-    case element of
-        Text data ->
-            let
-                -- How many lines start before a character.
-                lineOf : Int -> Int
-                lineOf index =
-                    String.left index allText |> String.indexes "\n" |> List.length
-
-                allText : String
-                allText =
-                    String.concat (List.map .text data.segments)
-
-                lineHeight : Int
-                lineHeight =
-                    Quantity.unwrap (Sprite.lineHeight data.fontSize)
-            in
-            Sprite.findMatches query data.segments
-                |> List.indexedMap Tuple.pair
-                |> List.foldl
-                    (\( index, ( start, end ) ) found2 ->
-                        let
-                            top =
-                                Coord.yRaw position + lineOf start * lineHeight
-
-                            bottom =
-                                Coord.yRaw position + (lineOf (max start (end - 1)) + 1) * lineHeight
-                        in
-                        { at = position
-                        , index = index
-                        , viewports =
-                            List.foldl
-                                (\around acc ->
-                                    { id = around.id
-                                    , viewportHeight = around.viewportHeight
-                                    , contentSize = around.contentSize
-                                    , top = top - around.contentTop
-                                    , bottom = bottom - around.contentTop
-                                    }
-                                        :: acc
-                                )
-                                []
-                                viewports
-                        }
-                            :: found2
-                    )
-                    found
-
-        Button data child ->
-            List.foldl
-                (\child2 found2 -> findAllHelper model query position viewports child2 found2)
-                (findAllHelper model query (Coord.plus (paddingTopLeft data.padding) position) viewports child found)
-                data.inFront
-
-        Row data children ->
-            List.foldl
-                (\( at, child ) found2 -> findAllHelper model query at viewports child found2)
-                found
-                (childPositions True data.spacing position children)
-
-        Column data children ->
-            List.foldl
-                (\( at, child ) found2 -> findAllHelper model query at viewports child found2)
-                found
-                (childPositions False data.spacing position children)
-
-        Single data child ->
-            findAllHelper model query (Coord.plus (paddingTopLeft data.padding) position) viewports child found
-
-        InFront _ children ->
-            List.foldl
-                (\( coord, child ) found2 -> findAllHelper model query (Coord.plus coord position) viewports child found2)
-                found
-                children
-
-        Viewport data child ->
-            let
-                contentAt : Coord UiPixels
-                contentAt =
-                    Coord.plus (contentPosition (getViewport data.id model)) position
-            in
-            findAllHelper
-                model
-                query
-                contentAt
-                ({ id = data.id, viewportHeight = data.viewportHeight, contentSize = sizeHelper child, contentTop = Coord.yRaw contentAt } :: viewports)
-                child
-                found
-
-        Lazy _ _ child ->
-            findAllHelper model query position viewports child found
-
-        Sourced _ child ->
-            findAllHelper model query position viewports child found
-
-        TextInput _ ->
-            found
-
-        TextInputMultiline _ ->
-            found
-
-        Quads _ ->
-            found
-
-        Empty ->
-            found
-
-
-{-| Scrolls every viewport a match is in so that it can be seen: one that already shows
-it stays where it is, and the others put it in the middle.
--}
-revealMatch : FindMatch id -> Model id -> Model id
-revealMatch match model =
-    List.foldl
-        (\around model2 ->
-            let
-                state : ViewportModel
-                state =
-                    getViewport around.id model2
-
-                shownTop : Float
-                shownTop =
-                    scrolled state.offset
-
-                height : Int
-                height =
-                    Quantity.unwrap (insideHeight around.viewportHeight)
-            in
-            if toFloat around.top >= shownTop && toFloat around.bottom <= shownTop + toFloat height then
-                model2
-
-            else
-                insertElement
-                    around.id
-                    (ViewportState
-                        (scrollTo
-                            around.viewportHeight
-                            around.contentSize
-                            (toFloat ((around.top + around.bottom - height) // 2))
-                            state
-                        )
-                    )
-                    model2
-        )
-        model
-        match.viewports
-
-
-
 -- DRAWING
 
 
 {-| The triangles that draw the UI in drawing order (back to front), given the hovered and
 focused ids, on a screen with the given UI scale. A parent draws before its children, and
 `inFront` elements after the child.
-
-`find` is what the find bar (Ctrl+F) is looking for (see `Find`): every match of it in
-text gets a yellow background, the selected one a stronger one (see Sprite.foundText).
-It's done here, while drawing, rather than by the apps' views, so that typing in the
-find bar changes no view's arguments and every `lazy` element is reused.
-
 -}
-view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Find -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
-view uiState time scale showUiBorder maybeHover find screenSize (Element element) =
+view : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Coord DevicePixels -> Element id -> List (Triangle DevicePixels)
+view uiState time scale showUiBorder maybeHover screenSize (Element element) =
     viewList
         uiState
         time
         scale
         showUiBorder
         maybeHover
-        find
         { topLeft = Coord.origin, bottomRight = Coord.toUi scale screenSize }
         Coord.origin
         element
 
 
-viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Find -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
-viewList model time scale showUiBorder maybeHover find viewport2 position element =
-    case Bounds.intersection viewport2 { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
+viewList : Model id -> Time.Posix -> UiScale -> Bool -> Maybe id -> Bounds UiPixels -> Coord UiPixels -> ElementFull id lazy -> List (Triangle DevicePixels)
+viewList model time scale showUiBorder maybeHover clipBounds position element =
+    case Bounds.intersection clipBounds { topLeft = position, bottomRight = Coord.plus position (sizeHelper element) } of
         Just viewport3 ->
             case element of
                 TextInput data ->
@@ -2758,33 +3044,7 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                      else
                         []
                     )
-                        ++ (if String.isEmpty find.query then
-                                Sprite.customText scale data.fontSize viewport3 data.segments position
-
-                            else
-                                Sprite.foundText
-                                    scale
-                                    { query = find.query
-                                    , selected =
-                                        case find.selected of
-                                            Just ( at, index ) ->
-                                                if at == position then
-                                                    Just index
-
-                                                else
-                                                    Nothing
-
-                                            Nothing ->
-                                                Nothing
-                                    , background = Color.findMatchColor
-                                    , color = Color.findMatchTextColor
-                                    , otherBackground = Color.findOtherMatchColor
-                                    }
-                                    data.fontSize
-                                    viewport3
-                                    data.segments
-                                    position
-                           )
+                        ++ Sprite.customText scale data.fontSize viewport3 data.segments position
 
                 Button data child ->
                     let
@@ -2803,7 +3063,7 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                             data.borderAndFillFocus
 
                          else
-                            data.borderAndFill
+                            data.style
                         )
                         data.cachedSize
                         ++ (case state.buttonDown of
@@ -2821,9 +3081,9 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                                             (Color.pressColor opacity)
                                             1
                                             (Coord.toTuple buttonDownPos |> Tuple.mapBoth toFloat toFloat)
-                                            (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUiPixels |> min 100)
+                                            (Quantity.at buttonCircleGrowSpeed timeElapsed |> Units.inUi |> min 100)
                                             |> Sprite.move position
-                                            |> Sprite.clipTo (boundsToArea (Bounds.shrink (Units.uiPixels 2) viewport3))
+                                            |> Sprite.clipTo (boundsToArea (Bounds.shrink (Units.ui 2) viewport3))
                                             |> Sprite.toDevice scale
 
                                     else
@@ -2832,16 +3092,16 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                                 Nothing ->
                                     []
                            )
-                        ++ viewList model time scale showUiBorder maybeHover find viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
-                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover find viewport3 position) data.inFront
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.pad) position) child
+                        ++ List.concatMap (viewList model time scale showUiBorder maybeHover viewport3 position) data.inFront
 
                 Row data children ->
-                    childPositions True data.spacing position children
-                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover find viewport3 at child)
+                    childPositions True data.gap position children
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Column data children ->
-                    childPositions False data.spacing position children
-                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover find viewport3 at child)
+                    childPositions False data.gap position children
+                        |> List.concatMap (\( at, child ) -> viewList model time scale showUiBorder maybeHover viewport3 at child)
 
                 Single data child ->
                     borderAndFillView
@@ -2849,7 +3109,7 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                         viewport3
                         position
                         (if showUiBorder then
-                            case data.borderAndFill of
+                            case data.style of
                                 NoBorderOrFill ->
                                     BorderOnly { borderWidth = 1, borderColor = Color.focusedUiColor }
 
@@ -2866,10 +3126,10 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                                     BorderFillAndDots { data2 | borderWidth = 1, borderColor = Color.focusedUiColor }
 
                          else
-                            data.borderAndFill
+                            data.style
                         )
                         data.cachedSize
-                        ++ viewList model time scale showUiBorder maybeHover find viewport3 (Coord.plus (paddingTopLeft data.padding) position) child
+                        ++ viewList model time scale showUiBorder maybeHover viewport3 (Coord.plus (paddingTopLeft data.pad) position) child
 
                 InFront _ children ->
                     List.concatMap
@@ -2880,7 +3140,6 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                                 scale
                                 showUiBorder
                                 maybeHover
-                                find
                                 viewport3
                                 (Coord.plus coord position)
                                 child
@@ -2902,7 +3161,7 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                             sizeHelper child
 
                         viewportModel =
-                            getViewport data.id model
+                            shownViewport data child model
                     in
                     borderAndFillView
                         scale
@@ -2918,7 +3177,6 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                                         scale
                                         showUiBorder
                                         maybeHover
-                                        find
                                         inside
                                         (Coord.plus (contentPosition viewportModel) position)
                                         child
@@ -2937,10 +3195,10 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
                            )
 
                 Lazy _ _ child ->
-                    viewList model time scale showUiBorder maybeHover find viewport3 position child
+                    viewList model time scale showUiBorder maybeHover viewport3 position child
 
                 Sourced _ child ->
-                    viewList model time scale showUiBorder maybeHover find viewport3 position child
+                    viewList model time scale showUiBorder maybeHover viewport3 position child
 
         Nothing ->
             []
@@ -2948,12 +3206,12 @@ viewList model time scale showUiBorder maybeHover find viewport2 position elemen
 
 buttonCircleGrowSpeed : Quantity Float (Rate UiPixels Seconds)
 buttonCircleGrowSpeed =
-    Quantity.rate (Units.uiPixels 250) Duration.second
+    Quantity.rate (Units.ui 250) Duration.second
 
 
-borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> BorderAndFill -> Coord UiPixels -> List (Triangle DevicePixels)
-borderAndFillView scale viewport2 position borderAndFill size2 =
-    case borderAndFill of
+borderAndFillView : UiScale -> Bounds UiPixels -> Coord UiPixels -> Style -> Coord UiPixels -> List (Triangle DevicePixels)
+borderAndFillView scale clipBounds position style size2 =
+    case style of
         NoBorderOrFill ->
             []
 
@@ -2965,32 +3223,32 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                 horizontalSize =
                     Coord.xy (Coord.xRaw size2) borderWidth
             in
-            Sprite.rectangle borderColor viewport2 position verticalSize
+            Sprite.rectangle borderColor clipBounds position verticalSize
                 ++ Sprite.rectangle borderColor
-                    viewport2
+                    clipBounds
                     (Coord.plus
-                        ( Coord.x size2 |> Quantity.minus (Units.uiPixels borderWidth), Quantity.zero )
+                        ( Coord.x size2 |> Quantity.minus (Units.ui borderWidth), Quantity.zero )
                         position
                     )
                     verticalSize
-                ++ Sprite.rectangle borderColor viewport2 position horizontalSize
+                ++ Sprite.rectangle borderColor clipBounds position horizontalSize
                 ++ Sprite.rectangle borderColor
-                    viewport2
+                    clipBounds
                     (Coord.plus
-                        ( Quantity.zero, Coord.y size2 |> Quantity.minus (Units.uiPixels borderWidth) )
+                        ( Quantity.zero, Coord.y size2 |> Quantity.minus (Units.ui borderWidth) )
                         position
                     )
                     horizontalSize
                 |> Sprite.toDevice scale
 
         FillOnly fillColor ->
-            Sprite.rectangle fillColor viewport2 position size2 |> Sprite.toDevice scale
+            Sprite.rectangle fillColor clipBounds position size2 |> Sprite.toDevice scale
 
         BorderAndFill { borderWidth, borderColor, fillColor } ->
-            Sprite.rectangle borderColor viewport2 position size2
+            Sprite.rectangle borderColor clipBounds position size2
                 ++ Sprite.rectangle
                     fillColor
-                    viewport2
+                    clipBounds
                     (Coord.plus (Coord.xy borderWidth borderWidth) position)
                     (size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth)))
                 |> Sprite.toDevice scale
@@ -3003,9 +3261,9 @@ borderAndFillView scale viewport2 position borderAndFill size2 =
                 insideSize =
                     size2 |> Coord.minus (Coord.xy (2 * borderWidth) (2 * borderWidth))
             in
-            Sprite.rectangle borderColor viewport2 position size2
-                ++ Sprite.rectangle fillColor viewport2 inside insideSize
-                ++ Sprite.dotGrid dotColor viewport2 inside insideSize
+            Sprite.rectangle borderColor clipBounds position size2
+                ++ Sprite.rectangle fillColor clipBounds inside insideSize
+                ++ Sprite.dotGrid dotColor clipBounds inside insideSize
                 |> Sprite.toDevice scale
 
 

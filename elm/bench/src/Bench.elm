@@ -14,7 +14,7 @@ import Effect
 import Fixture
 import HackerNews
 import HackerNews.Types
-import Html.Parser
+import HtmlParser
 import ScreenshotViewer
 import ScreenshotViewer.Types
 import Sprite
@@ -23,6 +23,7 @@ import Time
 import Ui
 import UiId
 import Units
+import WebViewer
 import Wire
 
 
@@ -100,8 +101,8 @@ steps =
 
         Just itemRequest ->
             timed "bodyToString" (\() -> Effect.bodyToString itemBody |> Maybe.map String.length)
-                |> Task.andThen (\_ -> timed "Html.Parser.parse" (\() -> Html.Parser.parse Fixture.item))
-                |> Task.andThen (\nodes -> timed "  find every tr (Html.Parser.findAll)" (\() -> Html.Parser.findAll (\_ -> True) nodes |> List.length))
+                |> Task.andThen (\_ -> timed "HtmlParser.parse" (\() -> HtmlParser.parse Fixture.item))
+                |> Task.andThen (\nodes -> timed "  find every tr (HtmlParser.findAll)" (\() -> HtmlParser.findAll (\_ -> True) nodes |> List.length))
                 |> Task.andThen
                     (\_ ->
                         timed "parse comments (gotHttpRequest)"
@@ -121,6 +122,8 @@ steps =
                             |> Task.andThen (\_ -> screenshotViewer 1 open)
                             |> Task.andThen (\_ -> screenshotViewer 5 open)
                     )
+                |> Task.andThen (\_ -> webViewer "front page" Fixture.top)
+                |> Task.andThen (\_ -> webViewer "item page" Fixture.item)
 
 
 {-| One frame of the comments page on a screen this big (device pixels), at its UI scale:
@@ -154,8 +157,8 @@ frame screen model =
                 let
                     _ =
                         Debug.log (named "after collapsing, Ui.lazy draws the same triangles")
-                            (Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen (HackerNews.view (Ui.lazyCache [ ui ]) (Coord.toUi scale screen) collapsed)
-                                == Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) collapsed)
+                            (Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (HackerNews.view (Ui.lazyCache [ ui ]) (Coord.toUi scale screen) collapsed)
+                                == Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (HackerNews.view Ui.noLazyCache (Coord.toUi scale screen) collapsed)
                             )
                 in
                 timed (named "view after collapsing the first comment (Ui.lazy)")
@@ -163,8 +166,8 @@ frame screen model =
                     |> Task.map (\_ -> ui)
             )
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles) x100") (\() -> List.range 1 100 |> List.map (\i -> Ui.view Ui.init (Time.millisToPosix i) scale False Nothing Ui.noFind screen ui |> List.length)) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles) x100") (\() -> List.range 1 100 |> List.map (\i -> Ui.view Ui.init (Time.millisToPosix i) scale False Nothing screen ui |> List.length)) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
@@ -182,7 +185,7 @@ frame screen model =
                     _ =
                         Debug.log "render bytes" bytes
                 in
-                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen (element ()) } ]) ] |> Bytes.width)
+                timed (named "whole frame") (\() -> Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (element ()) } ]) ] |> Bytes.width)
             )
         |> Task.andThen
             (\_ ->
@@ -192,7 +195,7 @@ frame screen model =
 
                     _ =
                         Debug.log (named "Ui.lazy draws the same triangles")
-                            (Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen (elementAgain first ()) == Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen first)
+                            (Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen (elementAgain first ()) == Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen first)
                 in
                 timed (named "whole frame, nothing changed (Ui.lazy) x100")
                     (\() ->
@@ -205,7 +208,7 @@ frame screen model =
                                     in
                                     ( Ui.hover Ui.init (Coord.xy 400 (300 + i)) ui |> List.length
                                     , Ui.lazyCache [ ui ]
-                                    , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix i) scale False Nothing Ui.noFind screen ui } ]) ] |> Bytes.width
+                                    , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix i) scale False Nothing screen ui } ]) ] |> Bytes.width
                                     )
                                 )
                     )
@@ -220,7 +223,7 @@ frame screen model =
                                     in
                                     ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
                                     , Ui.lazyCache [ ui ]
-                                    , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen ui } ]) ] |> Bytes.width
+                                    , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui } ]) ] |> Bytes.width
                                     )
                                 )
                         )
@@ -277,8 +280,8 @@ screenshotViewer count model =
             )
         |> Task.andThen (\_ -> timed (named "ScreenshotViewer.view (build the Element)") (\() -> element ()))
         |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles) x100") (\() -> List.range 1 100 |> List.map (\i -> Ui.view Ui.init (Time.millisToPosix i) scale False Nothing Ui.noFind screen ui |> List.length)) |> Task.map (\_ -> ui))
-        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles) x100") (\() -> List.range 1 100 |> List.map (\i -> Ui.view Ui.init (Time.millisToPosix i) scale False Nothing screen ui |> List.length)) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui))
         |> Task.andThen
             (\triangles ->
                 let
@@ -296,7 +299,58 @@ screenshotViewer count model =
                                 element ()
                         in
                         ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
-                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing Ui.noFind screen ui } ]) ] |> Bytes.width
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui } ]) ] |> Bytes.width
+                        )
+                    )
+            )
+        |> Task.map (\_ -> ())
+
+
+{-| One frame of the web viewer showing a page's raw HTML (its HTML mode), at 1x.
+-}
+webViewer : String -> String -> Task Never ()
+webViewer name html =
+    let
+        scale =
+            Units.scaleFor (Coord.x screen)
+
+        screen =
+            Coord.xy 1280 800
+
+        window =
+            Coord.xy 900 700
+
+        model : WebViewer.Model
+        model =
+            { isOpen = True
+            , mode = WebViewer.HtmlMode
+            , page = WebViewer.Loaded { url = "https://example.com", status = 200, html = html, text = "" }
+            , requestCount = 1
+            }
+
+        element () =
+            WebViewer.view window model
+
+        named label =
+            "web viewer, " ++ name ++ " (" ++ String.fromInt (String.length html) ++ " chars): " ++ label
+    in
+    timed (named "view (build the Element)") (\() -> element ())
+        |> Task.andThen (\ui -> timed (named "Ui.hover") (\() -> Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length) |> Task.map (\_ -> ui))
+        |> Task.andThen (\ui -> timed (named "Ui.view (triangles)") (\() -> Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui))
+        |> Task.andThen
+            (\triangles ->
+                let
+                    _ =
+                        Debug.log (named "triangles, checksum") ( List.length triangles, Debug.toString triangles |> String.foldl (\c h -> modBy 1000000007 (h * 31 + Char.toCode c)) 7 )
+                in
+                timed (named "whole frame")
+                    (\() ->
+                        let
+                            ui =
+                                element ()
+                        in
+                        ( Ui.hover Ui.init (Coord.xy 400 300) ui |> List.length
+                        , Effect.message [ Effect.Render (\() -> [ { display = 0, triangles = Ui.view Ui.init (Time.millisToPosix 0) scale False Nothing screen ui } ]) ] |> Bytes.width
                         )
                     )
             )

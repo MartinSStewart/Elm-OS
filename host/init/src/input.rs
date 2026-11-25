@@ -26,7 +26,7 @@
 //!   {"t":"mouse","x":X,"y":Y}            absolute pixels
 //!   {"t":"button","b":N,"down":true}     N: 0 left, 1 right, 2 middle
 //!   {"t":"wheel","dy":N}                 scroll wheel clicks, positive away from you (up)
-//!   {"t":"scroll","dy":F}                two-finger scrolling, UI pixels, positive down
+//!   {"t":"gesture","dx":F,"dy":F,"pinch":F} two-finger scrolling, UI pixels (positive down, right), or a pinch (spread ratio)
 //!   {"t":"scrollMomentum","velocity":F}  the fingers lifted: keep going at F UI px/s
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
@@ -143,6 +143,8 @@ struct Device {
     fingers: i32, // most fingers down during this touch
     tools: u8,    // bit n: the BTN_TOOL_* for n + 1 fingers is down
     scroll: f64,  // two-finger scrolling since the last SYN_REPORT, in device pixels
+    scroll_x: f64,
+    pinch: f64, // how much two fingers spread since the last SYN_REPORT (1: not at all)
     // this scroll's recent reports (when, UI pixels), for its speed as the fingers lift
     scroll_reports: Vec<(f64, f64)>,
     touch_start: f64,
@@ -238,6 +240,8 @@ impl Device {
             fingers: 0,
             tools: 0,
             scroll: 0.0,
+            scroll_x: 0.0,
+            pinch: 1.0,
             scroll_reports: Vec::new(),
             touch_start: 0.0,
             frac_x: 0.0,
@@ -493,6 +497,8 @@ impl Inputs {
         // Each finger's motion since the last report, in touchpad units. A finger that
         // just landed has none yet.
         let mut motions = Vec::new();
+        // Where each finger was and is, for the distance between two.
+        let mut moves = Vec::new();
         let mut down = 0;
         for c in dev.contacts.iter_mut() {
             if c.id < 0 {
@@ -502,6 +508,7 @@ impl Inputs {
             down += 1;
             if c.seen {
                 motions.push(((c.x - c.prev_x) as f64, (c.y - c.prev_y) as f64));
+                moves.push((c.prev_x as f64, c.prev_y as f64, c.x as f64, c.y as f64));
             }
             (c.prev_x, c.prev_y, c.seen) = (c.x, c.y, true);
         }
@@ -525,9 +532,20 @@ impl Inputs {
             let dx = motions.iter().map(|m| m.0).sum::<f64>() / n * sx;
             let dy = motions.iter().map(|m| m.1).sum::<f64>() / n * sy;
             dev.tap_moved += dx.abs() + dy.abs();
+            // Two fingers that moved apart or together more than they moved along are
+            // pinching: zoom, and don't scroll.
+            if let [(px1, py1, x1, y1), (px2, py2, x2, y2)] = moves[..] {
+                let before = ((px2 - px1) * sx).hypot((py2 - py1) * sy);
+                let now = ((x2 - x1) * sx).hypot((y2 - y1) * sy);
+                if before > 0.0 && now > 0.0 && (now - before).abs() > dx.hypot(dy) {
+                    dev.pinch *= now / before;
+                    return;
+                }
+            }
             // Fingers moving down (y growing) pull the content down by as many pixels
             // as the pointer would have moved (sent at the SYN_REPORT), so the content
-            // stays under the fingers from the first pixel. Nothing scrolls sideways yet.
+            // stays under the fingers from the first pixel.
+            dev.scroll_x += dx;
             dev.scroll += dy;
             return;
         }
@@ -559,9 +577,14 @@ impl Inputs {
                     self.touchpad_frame(i, area, moved);
                 }
                 let dev = &mut self.devices[i];
-                if dev.scroll != 0.0 {
-                    let dy = dev.scroll / self.scale;
-                    elm::send(&ToElm::Scroll { dy });
+                if dev.pinch != 1.0 {
+                    elm::send(&ToElm::Gesture { dx: 0.0, dy: 0.0, pinch: dev.pinch });
+                    dev.pinch = 1.0;
+                }
+                if dev.scroll != 0.0 || dev.scroll_x != 0.0 {
+                    let (dx, dy) = (dev.scroll_x / self.scale, dev.scroll / self.scale);
+                    elm::send(&ToElm::Gesture { dx, dy, pinch: 1.0 });
+                    dev.scroll_x = 0.0;
                     dev.scroll = 0.0;
                     dev.scroll_reports.retain(|(t, _)| event_time - t <= MOMENTUM_WINDOW);
                     dev.scroll_reports.push((event_time, dy));
@@ -641,6 +664,8 @@ impl Inputs {
                         dev.tap_clicked = false;
                         dev.fingers = 1;
                         dev.scroll = 0.0;
+                        dev.scroll_x = 0.0;
+                        dev.pinch = 1.0;
                         dev.frac_x = 0.0;
                         dev.frac_y = 0.0;
                         dev.touch_start = event_time;
@@ -954,7 +979,7 @@ mod tests {
     /// How far the content scrolled, in UI pixels.
     fn scrolled(msgs: &[ToElm]) -> f64 {
         msgs.iter()
-            .map(|m| if let ToElm::Scroll { dy } = m { *dy } else { 0.0 })
+            .map(|m| if let ToElm::Gesture { dy, .. } = m { *dy } else { 0.0 })
             .sum()
     }
 
@@ -971,6 +996,42 @@ mod tests {
         assert_eq!(area.clamp(5000, 10), (4479, 10));
         assert_eq!(area.bounds(), (0, 0, 4480, 1600));
         assert_eq!(Inputs::new(&area).mouse_x, 1280);
+    }
+
+    /// The (across, down, pinch) of the scroll messages sent.
+    fn gesture(msgs: &[ToElm]) -> (f64, f64, f64) {
+        msgs.iter().fold((0.0, 0.0, 1.0), |(x, y, p), m| match m {
+            ToElm::Gesture { dx, dy, pinch } => (x + dx, y + dy, p * pinch),
+            _ => (x, y, p),
+        })
+    }
+
+    #[test]
+    fn two_fingers_pinch_or_scroll() {
+        let _q = queue_lock();
+        let mut t = multitouch();
+        send(
+            &mut t,
+            &report(&[
+                vec![(EV_KEY, BTN_TOUCH, 1), (EV_KEY, BTN_TOOL_DOUBLETAP, 1)],
+                land(0, 400, 300),
+                land(1, 600, 300),
+            ]),
+        );
+        // Spreading from 200 apart to 300: a pinch, and nothing scrolls.
+        let mut msgs = Vec::new();
+        for n in 1..=10 {
+            msgs.extend(send(&mut t, &report(&[to(0, 400 - 5 * n, 300), to(1, 600 + 5 * n, 300)])));
+        }
+        let (across, down, pinch) = gesture(&msgs);
+        assert_eq!((across, down), (0.0, 0.0));
+        assert!((pinch - 1.5).abs() < 1e-9, "{pinch}");
+        // Moving together keeps their distance: a scroll across and down.
+        let msgs = send(&mut t, &report(&[to(0, 360, 320), to(1, 660, 320)]));
+        let (across, down, pinch) = gesture(&msgs);
+        assert_eq!((across, down, pinch), (15.0, 30.0, 1.0));
+        let msgs = send(&mut t, &report(&[to(0, 380, 320), to(1, 680, 320)]));
+        assert_eq!(gesture(&msgs), (30.0, 0.0, 1.0));
     }
 
     #[test]

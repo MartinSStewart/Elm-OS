@@ -8,16 +8,14 @@ KERNEL_VER := v6.12.115
 HOSTAP_VER := 2.12
 WPA_SUPPLICANT_SHA256 := 08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6
 HOSTAPD_SHA256 := f43502561c28ba47ab77e18e1a973d07361c68cc8b14178e619bd5796b70eabd
-# eco, the Elm compiler: the x86_64-linux-musl bundle of this release, and its SHA-256.
-# `make` installs it into ECO_DIR (see the Makefile). `make refresh` doesn't move it:
-# change both lines by hand.
-ECO_VER := 0.2.0-rc3
-ECO_SHA256 := 02e2b5f0b27cb4a1d743e572911d2b43a707ab668304fa6cb4e75c06c75508ca
-# The eco source commit of that release (its v0.2.0-rc3 tag), which `make ECO_PATCHED=1` builds
-# with tools/eco-patched/*.patch applied (tools/build-patched-eco.sh), and the llhttp release its
-# build fetches.
-ECO_COMMIT := 40881d4c07b8c63dd4ec0a0cfeed4b3a3ab636b9
-ECO_LLHTTP_TAG := release/v9.2.1
+# eco, the Elm compiler: built from this commit of eco's master (with tools/eco-patched/*.patch
+# applied, unless ECO_PATCHED=0) by tools/build-patched-eco.sh, as eco's own static musl release
+# bundle, in Docker, against the prebuilt LLVM/MLIR image eco's master pins (eco's
+# scripts/deps.sh artifact alpine). No eco release has eco/system's SeqDict yet. ECO_VER is the
+# version the bundle says it is. `make refresh` doesn't move these: change them by hand, together.
+ECO_COMMIT := dcab1dba02f612a02db00309d29e5c90ee3565d4
+ECO_LLVM_IMAGE := ghcr.io/eco-lang/eco-llvm-alpine:8d4fc8f1d17e64e1826346a0230a87b50ec371e4-e73f3c2e9447
+ECO_VER := 0.2.0-elmos.dcab1db
 
 # When `make refresh` last ran (seconds since 1970). `make` warns when it's 30 days old.
 REFRESHED := 1793970461

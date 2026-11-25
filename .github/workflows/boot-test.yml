@@ -25,27 +25,23 @@ jobs:
           # The runner's KVM, so QEMU isn't emulating the CPU (the tests use it if they can).
           sudo chmod 666 /dev/kvm || true
 
-      - name: Install what the patched eco's build needs (LLVM/MLIR 21 from apt.llvm.org)
-        # Its eco binary links them at run time, so this is needed even when it's cached.
-        run: sudo tools/build-env/build-patched-eco-deps.sh
-
       - name: Install Rust's musl target
         # host/rust-toolchain.toml picks the Rust version; add the target to that one.
         run: cd host && rustup target add x86_64-unknown-linux-musl
 
       - name: Cache eco
-        # make installs the eco versions.mk pins (tools/install-eco.sh) into ~/.cache/elm-os,
-        # and builds it patched for eco/containers (tools/build-patched-eco.sh, ~10 minutes).
+        # make builds the eco versions.mk pins, patched, into ~/.cache/elm-os
+        # (tools/build-patched-eco.sh: eco's static release build in Docker, ~20 minutes).
         uses: actions/cache@v4
         with:
           # Not its package cache (home/), which is cached on its own below.
           path: |
             ~/.cache/elm-os
             !~/.cache/elm-os/*/home
-          key: eco-${{ hashFiles('versions.mk', 'tools/install-eco.sh', 'tools/build-patched-eco.sh', 'tools/eco-patched/**', 'eco-containers/elm.json', 'eco-containers/src/**') }}
+          key: eco-${{ hashFiles('versions.mk', 'tools/build-patched-eco.sh', 'tools/eco-patched/**') }}
 
-      - name: Install eco
-        # Downloaded once, then cached. On PATH too, for the debugging step below.
+      - name: Build eco
+        # Built once, then cached. On PATH too, for the debugging step below.
         run: make -s eco >> "$GITHUB_PATH"
 
       - name: Cache Elm packages
@@ -53,7 +49,7 @@ jobs:
         # kept, and a change to any elm.json starts from it.
         uses: actions/cache@v4
         with:
-          # The pinned eco's own package cache (see tools/install-eco.sh).
+          # The pinned eco's own package cache (see tools/build-patched-eco.sh).
           path: ~/.cache/elm-os/eco-*/home/.eco/0.2.0/packages
           key: eco-packages-${{ hashFiles('elm/elm.json', 'elm/review/elm.json', 'tools/wire/elm.json') }}
           restore-keys: eco-packages-

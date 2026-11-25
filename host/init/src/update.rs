@@ -8,7 +8,7 @@
 //!   1. Which commit `deployed` is on (GitHub's API; the repository is public, so no
 //!      token). If the running build is from that commit, there is nothing to do.
 //!   2. If GitHub says the running build's commit is newer than `deployed` (CI hasn't
-//!      finished with it yet), nothing either.
+//!      finished with it yet) or on another line (a build from dev), nothing either.
 //!   3. The release's manifest.json: its host version must be this host's
 //!      (/etc/elmos/host-version), or the build needs the USB stick flashed again (Elm
 //!      shows that: ToElm::ReflashNeeded); and
@@ -98,10 +98,16 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
         return Ok(());
     }
 
-    // 2. Is ours newer? (An unknown commit, such as one never pushed, isn't.)
-    if clean {
-        if let Ok(compare) = get_json(&format!("{api}/repos/{repo}/compare/{commit}...{mine}")) {
-            if compare.get("status").and_then(|s| s.as_str()) == Some("ahead") {
+    // 2. Is ours newer, or on another line (a build from a branch such as dev, which
+    //    `deployed` hasn't got yet)? Then it isn't ours to replace, and an older host's
+    //    build isn't news either. A build made with uncommitted changes counts as its
+    //    commit. (An unknown commit, such as one never pushed, is replaced.)
+    let base = mine.strip_suffix("-dirty").unwrap_or(&mine);
+    if !base.is_empty() && base.chars().all(|c| c.is_ascii_hexdigit()) {
+        if let Ok(compare) = get_json(&format!("{api}/repos/{repo}/compare/{commit}...{base}")) {
+            if let Some(status @ ("ahead" | "diverged")) = compare.get("status").and_then(|s| s.as_str()) {
+                given_up.insert(name.to_owned());
+                log!("update", "build {name} is deployed, but the running build's commit {base} is {status} of it: staying");
                 return Ok(());
             }
         }

@@ -9,7 +9,7 @@ import Expect
 import Json.Decode as D
 import News
 import News.Types exposing (Emphasis(..), Inline(..), Item(..), NewsState(..))
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Time
 import Ui
 import Units
@@ -47,8 +47,8 @@ link article label =
 
 suite : Test
 suite =
-    describe "News"
-        [ test "a day's wikitext"
+    Test.describe "News"
+        [ Test.test "a day's wikitext"
             (\_ ->
                 News.parseWikitext day
                     |> Expect.equal
@@ -94,7 +94,7 @@ suite =
                           }
                         ]
             )
-        , test "the API's answer, newest first, without missing or empty days"
+        , Test.test "the API's answer, newest first, without missing or empty days"
             (\_ ->
                 D.decodeString News.decoder
                     """{"batchcomplete":true,"query":{"pages":[
@@ -111,7 +111,7 @@ suite =
                             ]
                         )
             )
-        , test "the last days, across a month's end"
+        , Test.test "the last days, across a month's end"
             (\_ ->
                 -- 2026-11-01T12:00:00Z
                 News.lastDays 3 (Time.millisToPosix 1793534400000)
@@ -121,7 +121,7 @@ suite =
                         , date 2026 10 30
                         ]
             )
-        , test "the request"
+        , Test.test "the request"
             (\_ ->
                 -- Bytes can't be compared with ==, so the body is compared as its width.
                 case News.request "news" [ date 2026 11 8, date 2026 11 7 ] of
@@ -145,14 +145,14 @@ suite =
                     _ ->
                         Expect.fail "not an HTTP request"
             )
-        , test "the view is no wider than its window"
+        , Test.test "the view is no wider than its window"
             (\_ ->
                 -- The bullet before each item used to be left out of the items' width,
                 -- so wrapped items stuck out of the window by its width.
                 News.view
                     Ui.noLazyCache
-                    (Units.uiPixels 300)
-                    (Units.uiPixels 400)
+                    (Units.ui 300)
+                    (Units.ui 400)
                     (LoadedNews [ { date = date 2026 11 7, topics = News.parseWikitext day } ])
                     |> Ui.size
                     |> Coord.xRaw

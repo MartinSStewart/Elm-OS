@@ -2,9 +2,15 @@ module Code exposing
     ( Model
     , appSize
     , buildUpdate
+    , findChanged
+    , findKeyDown
+    , findShown
+    , findText
+    , forgetPushed
     , httpResponse
     , init
     , onClick
+    , openFind
     , save
     , style
     , testFact
@@ -25,18 +31,21 @@ Commit and push sends the saved modules to GitHub as a commit (Code/GitHub.elm).
 
 -}
 
+import App
 import BuildInfo
+import Code.Find
 import Code.GitHub
 import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), UiId(..))
 import Color
 import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Json.Encode as E
-import Layout
+import Keyboard
 import Quantity exposing (Quantity)
 import SeqDict exposing (SeqDict)
 import SourceCode
 import Sprite
+import TextInput
 import TextInputMultiline
 import Ui exposing (Element)
 import UiId
@@ -64,6 +73,10 @@ type alias Model =
     -- What a commit would hold, the token, the message and Push show instead of the text.
     , committing : Bool
     , git : Git
+
+    -- The find and replace bar shows over the code (what is typed in it is in the UI's
+    -- state, under FindInput and ReplaceInput).
+    , finding : Bool
     }
 
 
@@ -77,6 +90,7 @@ init =
     , showErrors = False
     , committing = False
     , git = Code.GitHub.init
+    , finding = False
     }
 
 
@@ -99,6 +113,15 @@ isEdited name model =
     SeqDict.member name model.saved
 
 
+{-| Whether a saved module differs from what the running build was made from
+(SourceCode.elm, which a build made here has too): if none does, building would only
+make the running program again.
+-}
+differsFromRunning : Model -> Bool
+differsFromRunning model =
+    SeqDict.foldl (\name text acc -> acc || SeqDict.get name SourceCode.sourceCode /= Just text) False model.saved
+
+
 {-| Keeps `text` as the module's new text, or forgets the change if it is the text Elm
 OS was built from.
 -}
@@ -119,8 +142,8 @@ save text model =
 {-| A click on one of the app's elements. Opening a module puts its text in the text
 box, so this takes and gives the UI's state too, and the text box's current text.
 -}
-onClick : UiId -> String -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId, List Effect )
-onClick id text uiState model =
+onClick : UiId -> TextInputMultiline.Style -> String -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId, List Effect )
+onClick id boxStyle text uiState model =
     case id of
         OpenButton ->
             ( { model | isOpen = not model.isOpen }
@@ -177,10 +200,16 @@ onClick id text uiState model =
                     else
                         save text model
             in
-            ( { saved | build = Just (BuildRunning "Starting"), showErrors = False }
-            , uiState
-            , [ Effect.Build (buildModules saved) ]
-            )
+            if differsFromRunning saved then
+                ( { saved | build = Just (BuildRunning "Starting"), showErrors = False }
+                , uiState
+                , [ Effect.Build (buildModules saved) ]
+                )
+
+            else
+                -- Every module is as the running build was made from: building would
+                -- make the same program again and switch to it, for nothing.
+                ( { saved | build = Nothing, showErrors = False }, uiState, [] )
 
         ErrorsCloseButton ->
             ( { model | showErrors = False }, uiState, [] )
@@ -228,6 +257,211 @@ onClick id text uiState model =
         PushButton ->
             push uiState model
 
+        FindInput ->
+            ( model, Ui.setFocus (Just (UiId.Code FindInput)) uiState, [] )
+
+        ReplaceInput ->
+            ( model, Ui.setFocus (Just (UiId.Code ReplaceInput)) uiState, [] )
+
+        FindPreviousButton ->
+            ( model, find boxStyle False uiState, [] )
+
+        FindNextButton ->
+            ( model, find boxStyle True uiState, [] )
+
+        ReplaceButton ->
+            ( model, replace boxStyle uiState, [] )
+
+        ReplaceAllButton ->
+            ( model, replaceAll boxStyle uiState, [] )
+
+        FindCloseButton ->
+            ( closeFind model, Ui.setFocus (Just (UiId.Code Input)) uiState, [] )
+
+
+
+-- FIND AND REPLACE
+
+
+{-| Whether the find and replace bar shows: only over the code of a module.
+-}
+findShown : Model -> Bool
+findShown model =
+    model.finding && not model.picking && not model.showErrors && not model.committing && model.module_ /= Nothing
+
+
+{-| Ctrl+F: shows the bar (or goes back to it), with what is selected in the code, if it is
+one line, as what to find, all selected so that typing replaces it.
+-}
+openFind : Coord UiPixels -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+openFind windowSize uiState model =
+    let
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState
+
+        state : TextInput.State
+        state =
+            editor.input.current
+
+        selected : String
+        selected =
+            String.slice (TextInput.selectionMin state) (TextInput.selectionMax state) state.text
+
+        needle : String
+        needle =
+            if selected /= "" && not (String.contains "\n" selected) then
+                selected
+
+            else
+                inputText FindInput uiState
+
+        -- The bar takes some of the code's lines, so the cursor may be hidden now.
+        shown : TextInputMultiline.Style
+        shown =
+            style windowSize { model | finding = True }
+    in
+    ( { model | finding = True }
+    , uiState
+        |> Ui.insertElement
+            (UiId.Code FindInput)
+            (Ui.TextInputState
+                { current = { text = needle, cursorPosition = String.length needle, cursorSize = -(String.length needle) }
+                , undoHistory = []
+                , redoHistory = []
+                , lastClick = Nothing
+                }
+            )
+        |> Ui.insertElement
+            (UiId.Code Input)
+            (Ui.TextInputMultilineState (TextInputMultiline.select shown (TextInput.selectionMin state) (TextInput.selectionMax state) editor))
+        |> Ui.setFocus (Just (UiId.Code FindInput))
+    )
+
+
+closeFind : Model -> Model
+closeFind model =
+    { model | finding = False }
+
+
+{-| A key pressed in the find or replace box (`focus`), before the box gets it: Escape
+closes the bar, Enter in the find box goes to the next match (Shift+Enter the previous) and
+in the replace box replaces the current one. Nothing for the other keys.
+-}
+findKeyDown : TextInputMultiline.Style -> Bool -> Bool -> Keyboard.Key -> Model -> Ui.Model UiId.UiId -> Maybe ( Model, Ui.Model UiId.UiId )
+findKeyDown boxStyle inFindBox shift key model uiState =
+    case key of
+        Keyboard.Escape ->
+            Just ( closeFind model, Ui.setFocus (Just (UiId.Code Input)) uiState )
+
+        Keyboard.Enter ->
+            if inFindBox then
+                Just ( model, find boxStyle (not shift) uiState )
+
+            else
+                Just ( model, replace boxStyle uiState )
+
+        _ ->
+            Nothing
+
+
+{-| The matches of the find box's text in the code.
+-}
+matchRanges : Ui.Model UiId.UiId -> List ( Int, Int )
+matchRanges uiState =
+    Code.Find.matches (inputText FindInput uiState) (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+
+
+{-| Selects the next (or previous) match after the selection, wrapping around.
+-}
+find : TextInputMultiline.Style -> Bool -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+find boxStyle forward uiState =
+    let
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState
+
+        state : TextInput.State
+        state =
+            editor.input.current
+
+        found : Maybe ( Int, Int )
+        found =
+            if forward then
+                Code.Find.next (TextInput.selectionMax state) (matchRanges uiState)
+
+            else
+                Code.Find.previous (TextInput.selectionMin state) (matchRanges uiState)
+    in
+    case found of
+        Just ( start, end ) ->
+            Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.select boxStyle start end editor)) uiState
+
+        Nothing ->
+            uiState
+
+
+{-| After the find box's text changed: selects the first match from the start of the
+selection, so the one already selected stays while it still matches.
+-}
+findChanged : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+findChanged boxStyle uiState =
+    let
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState
+    in
+    case Code.Find.next (TextInput.selectionMin editor.input.current) (matchRanges uiState) of
+        Just ( start, end ) ->
+            Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.select boxStyle start end editor)) uiState
+
+        Nothing ->
+            uiState
+
+
+{-| Replaces the selected match with the replace box's text and selects the next one.
+When what is selected isn't a match, it just goes to the next.
+-}
+replace : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+replace boxStyle uiState =
+    let
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState
+
+        state : TextInput.State
+        state =
+            editor.input.current
+
+        selection : ( Int, Int )
+        selection =
+            ( TextInput.selectionMin state, TextInput.selectionMax state )
+    in
+    if List.member selection (matchRanges uiState) then
+        Ui.insertElement
+            (UiId.Code Input)
+            (Ui.TextInputMultilineState (TextInputMultiline.replaceRanges boxStyle (inputText ReplaceInput uiState) [ selection ] editor))
+            uiState
+            |> find boxStyle True
+
+    else
+        find boxStyle True uiState
+
+
+replaceAll : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+replaceAll boxStyle uiState =
+    Ui.insertElement
+        (UiId.Code Input)
+        (Ui.TextInputMultilineState
+            (TextInputMultiline.replaceRanges
+                boxStyle
+                (inputText ReplaceInput uiState)
+                (matchRanges uiState)
+                (Ui.getTextInputMultiline (UiId.Code Input) uiState)
+            )
+        )
+        uiState
+
 
 {-| Starts committing and pushing the saved modules, with the token and message typed.
 -}
@@ -272,6 +506,31 @@ noCommitToStartFrom =
     "This build of Elm OS was made from code with changes that weren't committed, so there's no commit on GitHub to put these on top of."
 
 
+{-| For when Elm OS starts a program built from the commit `commit` (BuildInfo.commit).
+If it isn't the commit the last push was made on top of, it's a build made since, such
+as CI's of that push: the saved modules it has as they are aren't changes any more, so
+they go, with the last push's news.
+
+Builds made here of the Code app's edits say the commit they were made on top of, so
+they never drop any.
+
+-}
+forgetPushed : String -> Model -> Model
+forgetPushed commit model =
+    let
+        git =
+            model.git
+
+        saved =
+            SeqDict.filter (\name text -> SeqDict.get name SourceCode.sourceCode /= Just text) model.saved
+    in
+    if commit == "" || git.from == "" || commit == git.from || saved == model.saved then
+        model
+
+    else
+        { model | saved = saved, git = { git | pushed = SeqDict.empty, status = GitIdle } }
+
+
 {-| GitHub's answer to the request with this number (Code.GitHub.requestId).
 -}
 httpResponse : Int -> Result String { status : Int, body : String } -> Model -> ( Model, List Effect )
@@ -298,6 +557,13 @@ gitWorking git =
 
         GitFailed _ _ ->
             False
+
+
+{-| What is typed in the find box.
+-}
+findText : Ui.Model UiId.UiId -> String
+findText uiState =
+    inputText FindInput uiState
 
 
 inputText : UiId -> Ui.Model UiId.UiId -> String
@@ -423,7 +689,7 @@ load name uiState model =
 
 {-| How big the window can be.
 -}
-appSize : Layout.Limits
+appSize : App.Limits
 appSize =
     { min = Coord.xy 400 250
     , preferred = Coord.xy 900 (chrome + 30 * lineHeight)
@@ -436,44 +702,65 @@ lineHeight =
     Quantity.unwrap (Sprite.lineHeight Sprite.Small)
 
 
-{-| The window's height besides its lines of code: the padding, the title, the status
-line, the spacing between them and the text box's own padding.
+{-| The window's height besides its lines of code: the pad, the title, the status
+line, the gap between them and the text box's own pad.
 -}
 chrome : Int
 chrome =
     2 * 8 + Quantity.unwrap (Sprite.lineHeight Sprite.Big) + lineHeight + 2 * 6 + 2 * 4 + 6
 
 
-{-| The text box, as big as the window (of this size) lets it be.
+{-| The text box, as big as the window (of this size) lets it be: with the find bar over
+it, it has fewer lines.
 -}
-style : Coord UiPixels -> TextInputMultiline.Style
-style windowSize =
+style : Coord UiPixels -> Model -> TextInputMultiline.Style
+style windowSize model =
+    let
+        width : Quantity Int UiPixels
+        width =
+            Units.ui (Coord.xRaw windowSize - 16)
+
+        barHeight : Int
+        barHeight =
+            if findShown model then
+                Coord.yRaw (Ui.size (findBar width)) + 6
+
+            else
+                0
+    in
     { font = Sprite.Mono
     , fontSize = Sprite.Small
-    , width = Units.uiPixels (Coord.xRaw windowSize - 16)
-    , lines = max 1 ((Coord.yRaw windowSize - chrome) // lineHeight)
+    , width = width
+    , lines = max 1 ((Coord.yRaw windowSize - chrome - barHeight) // lineHeight)
     , syntax = TextInputMultiline.ElmCode
+    , highlights = []
     }
 
 
 {-| The window: the module's name and buttons, the code (or the list of modules, or the
 last build's errors), where the cursor is, whether the text is saved, and how the last
-build went. `input` is the text box's model.
+build went. `input` is the text box's model, `needle` what the find box says.
 -}
-view : Coord UiPixels -> TextInputMultiline.Model -> Model -> Element UiId.UiId
-view windowSize input model =
+view : Coord UiPixels -> TextInputMultiline.Model -> String -> Maybe String -> Model -> Element UiId.UiId
+view windowSize input needle switchingTo model =
     let
-        boxStyle =
-            style windowSize
+        found : List ( Int, Int )
+        found =
+            if findShown model then
+                Code.Find.matches needle input.input.current.text
 
-        t =
-            Ui.text
+            else
+                []
+
+        boxStyle : TextInputMultiline.Style
+        boxStyle =
+            style windowSize model |> (\plain -> { plain | highlights = found })
 
         segment color text =
             { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
 
         button id label =
-            Ui.button { id = UiId.Code id, padding = Ui.paddingXY 6 3 } (t label)
+            Ui.button { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text label)
 
         state =
             input.input.current
@@ -523,6 +810,15 @@ view windowSize input model =
 
                       else
                         segment Color.dimTextColor "As built"
+                    , segment Color.dimTextColor
+                        ((if findShown model then
+                            matchCount needle found state
+
+                          else
+                            ""
+                         )
+                            ++ "   Ctrl+F finds and replaces"
+                        )
                     ]
 
                 Nothing ->
@@ -541,16 +837,28 @@ view windowSize input model =
                     [ segment Color.errorColor ("   The build failed: " ++ step) ]
 
                 Just (Built name) ->
-                    [ segment Color.successColor ("   Built " ++ name ++ ", switching to it") ]
+                    if switchingTo == Just name then
+                        [ segment Color.successColor ("   Built " ++ name ++ ", switching to it") ]
+
+                    else
+                        -- The switch is done: had it failed, the host would have said
+                        -- BuildFailed instead.
+                        [ segment Color.successColor ("   Running " ++ name ++ ", built here") ]
 
                 Nothing ->
                     []
 
-        -- Always there, even while a build is going: if the host never answers (an
-        -- older host, or one with no tools partition), the button still works.
+        -- There whenever something differs from the running build, even while a build
+        -- is going: if the host never answers (an older host, or one with no tools
+        -- partition), the button still works.
         buildButton =
-            button BuildButton "Build and run"
-                :: (if SeqDict.isEmpty model.saved && not unsaved then
+            (if unsaved || differsFromRunning model then
+                [ button BuildButton "Build and run" ]
+
+             else
+                []
+            )
+                ++ (if SeqDict.isEmpty model.saved && not unsaved then
                         []
 
                     else
@@ -600,7 +908,7 @@ view windowSize input model =
                         ++ [ button ModulesButton "Modules", button CloseButton "Close" ]
 
         boxHeight =
-            Units.uiPixels (Coord.yRaw (TextInputMultiline.size boxStyle))
+            Units.ui (Coord.yRaw (TextInputMultiline.size boxStyle))
 
         errors =
             case model.build of
@@ -619,7 +927,7 @@ view windowSize input model =
             else if model.showErrors then
                 Ui.viewport
                     { id = UiId.Code ErrorsViewport, viewportHeight = boxHeight }
-                    -- Wrapped: a compiler's lines can be wider than the window.
+                    -- Wrapped: a compiler's lines can be wider than the App.
                     (Ui.customTextWrapped
                         Sprite.Small
                         boxStyle.width
@@ -629,7 +937,11 @@ view windowSize input model =
             else
                 case editing of
                     Just _ ->
-                        Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle }
+                        if findShown model then
+                            Ui.column 6 [ findBar boxStyle.width, Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle } ]
+
+                        else
+                            Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle }
 
                     Nothing ->
                         Ui.viewport
@@ -639,12 +951,12 @@ view windowSize input model =
                                 (List.map
                                     (\name ->
                                         Ui.button
-                                            { id = UiId.Code (ModuleButton name), padding = Ui.paddingXY 6 3 }
+                                            { id = UiId.Code (ModuleButton name), pad = Ui.paddingXY 6 3 }
                                             (if isEdited name model then
                                                 Ui.customText Sprite.Small [ segment Color.textColor name, segment Color.successColor "  changed" ]
 
                                              else
-                                                t name
+                                                Ui.text name
                                             )
                                     )
                                     (List.filter shownModule (SeqDict.keys SourceCode.sourceCode))
@@ -665,10 +977,88 @@ view windowSize input model =
         (UiId.Code Window)
         -- The code shows in whole lines, so what's left of the window's height under them
         -- goes below the status line.
-        { padding = { top = 8, bottom = 8 + max 0 (Coord.yRaw windowSize - 16 - Coord.yRaw (Ui.size content)), left = 8, right = 8 }
-        , borderAndFill = Ui.windowBorderAndFill
+        { pad = { top = 8, bottom = 8 + max 0 (Coord.yRaw windowSize - 16 - Coord.yRaw (Ui.size content)), left = 8, right = 8 }
+        , style = Ui.windowBorderAndFill
         }
         content
+
+
+{-| Which match the selection is, and how many there are: "3 of 15 matches", or just the
+count when the selection isn't one of them, or "No matches". Nothing when `needle`,
+the find box's text, is empty.
+-}
+matchCount : String -> List ( Int, Int ) -> TextInput.State -> String
+matchCount needle found state =
+    let
+        count : Int
+        count =
+            List.length found
+
+        selection : ( Int, Int )
+        selection =
+            ( TextInput.selectionMin state, TextInput.selectionMax state )
+
+        position : List Int
+        position =
+            List.indexedMap Tuple.pair found
+                |> List.filter (\( _, range ) -> range == selection)
+                |> List.map Tuple.first
+    in
+    case ( found, position ) of
+        ( [], _ ) ->
+            if needle == "" then
+                ""
+
+            else
+                "   No matches"
+
+        ( _, index :: _ ) ->
+            "   " ++ String.fromInt (index + 1) ++ " of " ++ String.fromInt count ++ " matches"
+
+        ( _, [] ) ->
+            "   " ++ String.fromInt count ++ " matches"
+
+
+{-| The find and replace bar: two rows, each a box (as wide as is left) and its buttons.
+-}
+findBar : Quantity Int UiPixels -> Element UiId.UiId
+findBar width =
+    let
+        button id caption =
+            Ui.button { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text caption)
+
+        findButtons : Element UiId.UiId
+        findButtons =
+            Ui.row 8 [ button FindPreviousButton "Previous", button FindNextButton "Next", button FindCloseButton "Close" ]
+
+        replaceButtons : Element UiId.UiId
+        replaceButtons =
+            Ui.row 8 [ button ReplaceButton "Replace", button ReplaceAllButton "Replace all" ]
+
+        label : String -> Element UiId.UiId
+        label text =
+            Ui.left
+                (Coord.x (Ui.size (Ui.text "Replace")))
+                (Ui.el { pad = Ui.paddingXY 0 4, style = Ui.NoBorderOrFill } (Ui.text text))
+
+        inputWidth : Int
+        inputWidth =
+            (Quantity.unwrap width - Coord.xRaw (Ui.size (label "Replace")) - Coord.xRaw (Ui.size findButtons) - 2 * 8)
+                |> max 80
+                |> min 400
+
+        input id =
+            Ui.textInput
+                { id = UiId.Code id
+                , style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.ui inputWidth, masked = False }
+                , isValid = True
+                }
+    in
+    Ui.column
+        4
+        [ Ui.row 8 [ label "Find", input FindInput, findButtons ]
+        , Ui.row 8 [ label "Replace", input ReplaceInput, replaceButtons ]
+        ]
 
 
 {-| Whether the list of modules shows it: not the frozen copies of old versions (they

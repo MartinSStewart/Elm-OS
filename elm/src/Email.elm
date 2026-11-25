@@ -603,8 +603,8 @@ windowPadding =
     4
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     8
 
 
@@ -612,7 +612,7 @@ spacing =
 -}
 inputStyle : TextInput.Style
 inputStyle =
-    { font = Sans Regular, fontSize = Small, width = Units.uiPixels 320, masked = False }
+    { font = Sans Regular, fontSize = Small, width = Units.ui 320, masked = False }
 
 
 {-| The password box hides what is typed.
@@ -630,7 +630,7 @@ view windowSize model =
             Coord.xRaw windowSize - 2 * windowPadding
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (case model.account of
             Nothing ->
                 formView width model
@@ -654,7 +654,7 @@ wrapped : Int -> Color.Color -> String -> Element id
 wrapped width color text =
     Ui.customTextWrapped
         Small
-        (Units.uiPixels width)
+        (Units.ui width)
         [ { text = text, color = color, font = Sans Regular, decorations = [], link = Nothing } ]
 
 
@@ -670,13 +670,13 @@ formView width model =
                 ]
     in
     Ui.column
-        spacing
+        gap
         [ closeRow width "Email" Nothing
         , wrapped width Color.textColor "Link an email account to read its messages. This app only reads: it can't send, delete or change anything."
         , field "Email address" AddressField inputStyle
         , field "App password" PasswordField passwordStyle
         , field "IMAP server (leave empty to guess from the address)" ServerField inputStyle
-        , Ui.button { id = Email Email.Types.LinkButton, padding = Ui.paddingXY 6 0 } (Ui.text "Link account")
+        , Ui.button { id = Email Email.Types.LinkButton, pad = Ui.paddingXY 6 0 } (Ui.text "Link account")
         , case model.session of
             Just _ ->
                 Ui.colorText Color.dimTextColor "Connecting..."
@@ -702,11 +702,11 @@ closeRow width title extra =
     let
         close : Element UiId
         close =
-            Ui.button { id = Email Email.Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "Close")
+            Ui.button { id = Email Email.Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "Close")
     in
     Ui.leftAndRight
-        (Units.uiPixels width)
-        (Ui.row spacing [ heading title, Maybe.withDefault Ui.empty extra ])
+        (Units.ui width)
+        (Ui.row gap [ heading title, Maybe.withDefault Ui.empty extra ])
         (Ui.right { width = Coord.x (Ui.size close) } close)
 
 
@@ -715,22 +715,22 @@ inboxView windowSize width account model =
     let
         refresh : Element UiId
         refresh =
-            Ui.button { id = Email Email.Types.RefreshButton, padding = Ui.paddingXY 6 0 } (Ui.text "Refresh")
+            Ui.button { id = Email Email.Types.RefreshButton, pad = Ui.paddingXY 6 0 } (Ui.text "Refresh")
 
         signOut : Element UiId
         signOut =
-            Ui.button { id = Email Email.Types.SignOutButton, padding = Ui.paddingXY 6 0 } (Ui.text "Unlink")
+            Ui.button { id = Email Email.Types.SignOutButton, pad = Ui.paddingXY 6 0 } (Ui.text "Unlink")
 
         header : Element UiId
         header =
             Ui.column
-                spacing
+                gap
                 [ closeRow width "Email" (Just (Ui.colorText Color.dimTextColor account.address))
-                , Ui.row spacing [ refresh, signOut, status model ]
+                , Ui.row gap [ refresh, signOut, status model ]
                 ]
     in
     Ui.column
-        spacing
+        gap
         [ header
         , (if List.isEmpty model.inbox && model.session == Nothing && model.error == Nothing then
             Ui.text "The inbox is empty."
@@ -738,7 +738,7 @@ inboxView windowSize width account model =
            else
             Ui.column 0 (List.map (summaryView width) model.inbox)
           )
-            |> Ui.left (Units.uiPixels width)
+            |> Ui.left (Units.ui width)
             |> scrolling (Email Email.Types.ListViewport) windowSize (Coord.yRaw (Ui.size header))
         ]
 
@@ -779,15 +779,15 @@ summaryView width summary2 =
 
         subjectWidth : Int
         subjectWidth =
-            width - fromWidth - Quantity.unwrap dateWidth - 3 * spacing
+            width - fromWidth - Quantity.unwrap dateWidth - 3 * gap
     in
     Ui.leftAndRight
-        (Units.uiPixels width)
+        (Units.ui width)
         (Ui.row
-            spacing
-            [ Ui.left (Units.uiPixels fromWidth)
+            gap
+            [ Ui.left (Units.ui fromWidth)
                 (Ui.customText Small
-                    [ { text = Sprite.ellipsis Small font (Units.uiPixels fromWidth) summary2.from
+                    [ { text = Sprite.ellipsis Small font (Units.ui fromWidth) summary2.from
                       , color = Color.textColor
                       , font = font
                       , decorations = []
@@ -796,7 +796,7 @@ summaryView width summary2 =
                     ]
                 )
             , Ui.customText Small
-                [ { text = Sprite.ellipsis Small font (Units.uiPixels subjectWidth) summary2.subject
+                [ { text = Sprite.ellipsis Small font (Units.ui subjectWidth) summary2.subject
                   , color = Color.textColor
                   , font = font
                   , decorations = []
@@ -808,9 +808,9 @@ summaryView width summary2 =
         (Ui.right { width = dateWidth } (Ui.colorText Color.dimTextColor summary2.date))
         |> Ui.customButton
             { id = Email (Email.Types.MessageButton summary2.uid)
-            , padding = Ui.paddingXY 0 2
+            , pad = Ui.paddingXY 0 2
             , inFront = []
-            , borderAndFill = Ui.NoBorderOrFill
+            , style = Ui.NoBorderOrFill
             , borderAndFillFocus = Ui.BorderOnly { borderWidth = 2, borderColor = Color.highlightColor }
             }
 
@@ -824,20 +824,20 @@ messageView windowSize width model page =
 
         back : Element UiId
         back =
-            Ui.button { id = Email Email.Types.BackButton, padding = Ui.paddingXY 6 0 } (Ui.text "< Inbox")
+            Ui.button { id = Email Email.Types.BackButton, pad = Ui.paddingXY 6 0 } (Ui.text "< Inbox")
 
         header : Element UiId
         header =
             Ui.column
-                spacing
+                gap
                 [ Ui.row
-                    spacing
+                    gap
                     [ back
                     , heading
                         (Sprite.ellipsis
                             Small
                             (Sans Bold)
-                            (Units.uiPixels (width - Coord.xRaw (Ui.size back) - spacing))
+                            (Units.ui (width - Coord.xRaw (Ui.size back) - gap))
                             (Maybe.map .subject summary2 |> Maybe.withDefault "")
                         )
                     ]
@@ -850,7 +850,7 @@ messageView windowSize width model page =
                 ]
     in
     Ui.column
-        spacing
+        gap
         [ header
         , (case page.state of
             MessageLoading ->
@@ -862,18 +862,18 @@ messageView windowSize width model page =
             MessageFailed error ->
                 wrapped width Color.errorColor error
           )
-            |> Ui.left (Units.uiPixels width)
+            |> Ui.left (Units.ui width)
             |> scrolling (Email Email.Types.MessageViewport) windowSize (Coord.yRaw (Ui.size header))
         ]
 
 
 {-| Content in a viewport that reaches from below the header (`headerHeight` high) to
-the bottom of the window.
+the bottom of the App.
 -}
 scrolling : UiId -> Coord UiPixels -> Int -> Element UiId -> Element UiId
 scrolling viewportId windowSize headerHeight content =
     Ui.viewport
         { id = viewportId
-        , viewportHeight = Units.uiPixels (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - spacing)
+        , viewportHeight = Units.ui (Coord.yRaw windowSize - 2 * windowPadding - headerHeight - gap)
         }
         content

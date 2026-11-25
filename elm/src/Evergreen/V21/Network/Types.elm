@@ -1,0 +1,21 @@
+module Evergreen.V21.Network.Types exposing (..)
+
+{-| The network app's ids, and the name of a wifi network that one holds: here rather than
+in Network.elm, as UiId.elm imports them and can't import a module that imports it.
+-}
+
+
+type Ssid
+    = Ssid String
+
+
+type UiId
+    = OpenButton
+    | CloseButton
+    | RefreshButton
+    | NetworkButton Ssid
+    | PasswordInput
+    | ShowPasswordButton
+    | ConnectButton
+    | DisconnectButton
+    | NetworkListViewport

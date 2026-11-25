@@ -15,6 +15,7 @@ import Duration
 import Effect exposing (Effect)
 import Expect
 import HostMessage
+import Install.Types
 import Main
 import Network.Types
 import Persist
@@ -22,7 +23,7 @@ import Postcard
 import ProtocolExamples
 import Quantity
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Time
 import Units
 import Unsafe
@@ -73,6 +74,11 @@ effects =
     , Effect.TlsClose "email"
     , Effect.WriteImage { left = 3, top = 300, width = 2, pixels = byteList [ 255, 0, 0, 255, 0, 0, 255, 128 ] }
     , Effect.Build [ ( "Main.elm", "module Main exposing (main)\n" ), ( "Code/Types.elm", "" ) ]
+    , Effect.ListDisks
+    , Effect.Install { disk = "nvme0n1", layout = "3f2a", target = Install.Types.FreeSpace 1048576, keepData = True }
+    , Effect.Install { disk = "sda", layout = "", target = Install.Types.InPartition 4, keepData = False }
+    , Effect.Install { disk = "vdb", layout = "x", target = Install.Types.WholeDisk, keepData = True }
+    , Effect.UpdateInstall { disk = "nvme0n1", layout = "3f2a" }
     , Effect.Render
         (\() ->
             [ { display = 33, triangles = Sprite.atlasRectangle Color.white (Coord.xy 0 0) (Coord.xy 10 10) ( 4, 3588 ) }
@@ -180,19 +186,19 @@ hexDigits =
 
 suite : Test
 suite =
-    describe "The messages between Elm and the host (host/protocol/examples.json)"
-        [ test "every Effect is encoded as the host encodes the examples"
+    Test.describe "The messages between Elm and the host (host/protocol/examples.json)"
+        [ Test.test "every Effect is encoded as the host encodes the examples"
             (\_ ->
                 List.map (\effect -> hex (BE.encode (Effect.encode effect))) effects
                     |> Expect.equal (List.map (\( _, bytes ) -> Just bytes) ProtocolExamples.toHost)
             )
-        , test "a message is the number of Effects, then each"
+        , Test.test "a message is the number of Effects, then each"
             (\_ ->
                 Effect.message [ Effect.WifiScan, Effect.Log "a" ]
                     |> hex
                     |> Expect.equal (Just "02020e0161")
             )
-        , test "varints: 7 bits a byte, low first; signed ones zigzagged"
+        , Test.test "varints: 7 bits a byte, low first; signed ones zigzagged"
             (\_ ->
                 [ Postcard.unsigned 0, Postcard.unsigned 127, Postcard.unsigned 128, Postcard.unsigned 300, Postcard.unsigned (2 ^ 53 - 1), Postcard.int -1, Postcard.int 1, Postcard.int -150 ]
                     |> List.map (\encoder -> BE.encode encoder)
@@ -208,22 +214,22 @@ suite =
                         , ( Just "ab02", Just 299 )
                         ]
             )
-        , test "signed varints come back"
+        , Test.test "signed varints come back"
             (\_ ->
                 [ 0, -1, 1, -150, 1000000, -(2 ^ 52) ]
                     |> List.map (\n -> BD.decode Postcard.decodeInt (BE.encode (Postcard.int n)))
                     |> Expect.equal (List.map Just [ 0, -1, 1, -150, 1000000, -(2 ^ 52) ])
             )
-        , describe "every message the host sends is read"
-            (List.map (\( json, bytes ) -> test json (\_ -> readsHostMessage bytes)) ProtocolExamples.fromHost)
-        , test "a message from the host carries its number in the host's log"
+        , Test.describe "every message the host sends is read"
+            (List.map (\( json, bytes ) -> Test.test json (\_ -> readsHostMessage bytes)) ProtocolExamples.fromHost)
+        , Test.test "a message from the host carries its number in the host's log"
             (\_ ->
                 -- Some(300), then Tick at 0.0 (an f64).
                 fromHex "01ac02180000000000000000"
                     |> Maybe.map (Persist.fromHost Main.persistConfig)
                     |> Expect.equal (Just (Persist.AppMsg (Just 300) 12 (Main.persistConfig.fromHost (Ok (HostMessage.Tick (Time.millisToPosix 0))))))
             )
-        , test "a message from the host that can't be read is logged, and nothing else happens"
+        , Test.test "a message from the host that can't be read is logged, and nothing else happens"
             (\_ ->
                 [ "63", "", "02" ]
                     |> List.filterMap fromHex

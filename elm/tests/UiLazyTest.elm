@@ -3,7 +3,7 @@ module UiLazyTest exposing (suite)
 import Coord
 import Expect
 import Sprite
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 import Time
 import Ui
 import Units
@@ -51,7 +51,7 @@ screen =
 
 draw : Ui.Element Id -> List (Sprite.Triangle Units.DevicePixels)
 draw =
-    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing Ui.noFind screen
+    Ui.view Ui.init (Time.millisToPosix 0) (Units.scaleFor (Coord.x screen)) False Nothing screen
 
 
 nextFrame : ( List String, String ) -> ( List String, String ) -> List (Sprite.Triangle Units.DevicePixels)
@@ -61,29 +61,29 @@ nextFrame ( lastTexts, lastTitle ) ( texts, title ) =
 
 suite : Test
 suite =
-    describe "Ui.lazyKeyed"
-        [ test "draws the same as without it when nothing changed"
+    Test.describe "Ui.lazyKeyed"
+        [ Test.test "draws the same as without it when nothing changed"
             (\() ->
                 nextFrame ( [ "a", "b" ], "T" ) ( [ "a", "b" ], "T" )
                     |> Expect.equal (draw (window Ui.noLazyCache [ "a", "b" ] "T"))
             )
-        , test "draws what the new arguments give when they changed"
+        , Test.test "draws what the new arguments give when they changed"
             (\() ->
                 nextFrame ( [ "a", "b" ], "T" ) ( [ "a", "c" ], "Title" )
                     |> Expect.equal (draw (window Ui.noLazyCache [ "a", "c" ] "Title"))
             )
-        , test "keeps the sizes"
+        , Test.test "keeps the sizes"
             (\() ->
                 Ui.size (window (Ui.lazyCache [ window Ui.noLazyCache [ "a", "bbbbbb" ] "T" ]) [ "a", "bbbbbb" ] "T")
                     |> Expect.equal (Ui.size (window Ui.noLazyCache [ "a", "bbbbbb" ] "T"))
             )
-        , test "finds buttons inside lazy elements"
+        , Test.test "finds buttons inside lazy elements"
             (\() ->
                 Ui.findInput Ui.init OkButton (window (Ui.lazyCache [ window Ui.noLazyCache [] "T" ]) [] "T")
                     |> Maybe.map (\_ -> True)
                     |> Expect.equal (Just True)
             )
-        , test "a lazy element's key isn't hovered"
+        , Test.test "a lazy element's key isn't hovered"
             (\() ->
                 Ui.hoverIdOnly Ui.init (Coord.xy 1 1) (window Ui.noLazyCache [ "a" ] "T")
                     |> List.map Tuple.first

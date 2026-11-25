@@ -21,6 +21,7 @@ import ExposeAllRecordFields
 import NoConfusingPrefixOperator
 import NoDebug.TodoOrToString
 import NoExposingEverything
+import NoExposingFunctions
 import NoImportingEverything
 import NoInconsistentAliases
 import NoMissingTypeAnnotation
@@ -59,12 +60,18 @@ rules =
     -- AsciiCollab/Types.elm copies ascii-collab's types whole: a custom type's tags in
     -- Wire3 depend on all of its constructors, used here or not.
     -- UiId.elm's `Lazy` is only made by the code tools/wire generates for Ui.lazy.
-    , NoUnused.CustomTypeConstructors.rule [] |> Review.Rule.ignoreErrorsForFiles [ "src/Sprite.elm", "src/AsciiCollab/Types.elm", "src/UiId.elm" ]
+    , NoUnused.CustomTypeConstructors.rule []
+        |> Review.Rule.ignoreErrorsForFiles
+            [ "src/Sprite.elm"
+            , "src/AsciiCollab/Types.elm"
+            , "src/UiId.elm"
+            ]
     , NoUnused.Patterns.rule
     , Docs.ReviewAtDocs.rule
     , NoConfusingPrefixOperator.rule
     , NoDebug.TodoOrToString.rule
     , NoExposingEverything.rule
+    , NoExposingFunctions.rule
     , NoImportingEverything.rule []
     , NoMissingTypeAnnotation.rule
     , NoMissingTypeExpose.rule

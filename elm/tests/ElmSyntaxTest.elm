@@ -2,7 +2,7 @@ module ElmSyntaxTest exposing (suite)
 
 import ElmSyntax exposing (Kind(..))
 import Expect
-import Test exposing (Test, describe, test)
+import Test exposing (Test)
 
 
 {-| Lexes lines one after another, as the Code app does, and gives each line's runs.
@@ -25,20 +25,20 @@ runs lines =
 
 suite : Test
 suite =
-    describe "ElmSyntax"
-        [ test "keywords, names, types and operators"
+    Test.describe "ElmSyntax"
+        [ Test.test "keywords, names, types and operators"
             (\_ ->
                 runs [ "type alias Model = Maybe Int -> a" ]
                     |> Expect.equal
                         [ [ ( Keyword, "type" ), ( Plain, " " ), ( Keyword, "alias" ), ( Plain, " " ), ( TypeName, "Model" ), ( Plain, " " ), ( Operator, "=" ), ( Plain, " " ), ( TypeName, "Maybe" ), ( Plain, " " ), ( TypeName, "Int" ), ( Plain, " " ), ( Operator, "->" ), ( Plain, " a" ) ] ]
             )
-        , test "strings, characters, numbers and line comments"
+        , Test.test "strings, characters, numbers and line comments"
             (\_ ->
                 runs [ "f \"a \\\" b\" 'c' 12 -- done" ]
                     |> Expect.equal
                         [ [ ( Plain, "f " ), ( StringLiteral, "\"a \\\" b\"" ), ( Plain, " " ), ( StringLiteral, "'c'" ), ( Plain, " " ), ( NumberLiteral, "12" ), ( Plain, " " ), ( Comment, "-- done" ) ] ]
             )
-        , test "a nested block comment over several lines"
+        , Test.test "a nested block comment over several lines"
             (\_ ->
                 runs [ "x {- a {- b -}", "still -} y" ]
                     |> Expect.equal
@@ -46,7 +46,7 @@ suite =
                         , [ ( Comment, "still -}" ), ( Plain, " y" ) ]
                         ]
             )
-        , test "a triple-quoted string over several lines"
+        , Test.test "a triple-quoted string over several lines"
             (\_ ->
                 runs [ "s = \"\"\"one", "two\"\"\" ++ t" ]
                     |> Expect.equal
@@ -54,7 +54,7 @@ suite =
                         , [ ( StringLiteral, "two\"\"\"" ), ( Plain, " " ), ( Operator, "++" ), ( Plain, " t" ) ]
                         ]
             )
-        , test "stateAt skips to a line inside a comment"
+        , Test.test "stateAt skips to a line inside a comment"
             (\_ ->
                 ElmSyntax.highlightLine (ElmSyntax.stateAt 1 [ "{- open", "inside" ]) "inside"
                     |> Tuple.first

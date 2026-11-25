@@ -11,45 +11,36 @@ app keeps such types in `<App>/Types.elm`, not in `<App>.elm`.
 
 -}
 
+import About.Types
 import AsciiCollab.Types
 import Calculator.Types
 import Code.Types
+import DebugInfo.Types
+import Editor.Types
 import Email.Types
 import HackerNews.Types
+import Install.Types
 import Network.Types
 import News.Types
 import Paint.Types
 import ScreenshotViewer.Types
 import TicTacToe.Types
+import Weather.Types
 import WebViewer.Types
 
 
 type UiId
-    = WeatherButton
-    | AboutButton
+    = About About.Types.UiId
+    | DebugInfo DebugInfo.Types.UiId
+    | Editor Editor.Types.UiId
+    | Weather Weather.Types.UiId
     | NewsButton
-    | CloseAboutButton
     | CalculatorButton
     | TicTacToeButton
     | PowerOffButton
     | RestartButton
     | ConfirmPowerButton
     | CancelPowerButton
-    | EditorButton
-    | EditorInput
-    | EditorWindow
-    | CloseEditorButton
-    | DebugButton
-    | CloseDebugButton
-    | NetworkAppButton
-    | CloseNetworkButton
-    | WeatherAppButton
-    | CloseWeatherButton
-      -- The find bar (Ctrl+F): its text box and buttons.
-    | FindInput
-    | FindPreviousButton
-    | FindNextButton
-    | CloseFindButton
     | Network Network.Types.UiId
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
@@ -61,6 +52,7 @@ type UiId
     | Email Email.Types.UiId
     | WebViewer WebViewer.Types.UiId
     | ScreenshotViewer ScreenshotViewer.Types.UiId
+    | Install Install.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
 

@@ -26,7 +26,7 @@ import Bytes exposing (Bytes)
 import Color
 import Coord exposing (Coord)
 import Effect
-import Html.Parser exposing (Node(..))
+import HtmlParser exposing (Node(..))
 import Sprite exposing (Font(..), FontSize(..), Style(..))
 import TextInput
 import Ui exposing (Element)
@@ -194,7 +194,7 @@ start a new line (a blank line between paragraphs), a `<br>` ends one.
 -}
 pageText : String -> String
 pageText html =
-    Html.Parser.parse html
+    HtmlParser.parse html
         |> List.foldr textOf []
         |> resolveBreaks
         |> String.split "\n"
@@ -378,8 +378,8 @@ windowPadding =
     4
 
 
-spacing : Int
-spacing =
+gap : Int
+gap =
     8
 
 
@@ -395,7 +395,7 @@ urlStyle : Coord UiPixels -> TextInput.Style
 urlStyle windowSize =
     { font = Sans Regular
     , fontSize = Small
-    , width = Units.uiPixels (max 100 (Coord.xRaw windowSize - 2 * windowPadding - goButtonWidth - spacing - 8))
+    , width = Units.ui (max 100 (Coord.xRaw windowSize - 2 * windowPadding - goButtonWidth - gap - 8))
     , masked = False
     }
 
@@ -409,30 +409,30 @@ view windowSize model =
 
         close : Element UiId
         close =
-            Ui.button { id = WebViewer Types.CloseButton, padding = Ui.paddingXY 6 0 } (Ui.text "Close")
+            Ui.button { id = WebViewer Types.CloseButton, pad = Ui.paddingXY 6 0 } (Ui.text "Close")
 
         modeButton : Types.UiId -> Mode -> String -> Element UiId
         modeButton id mode label =
             Ui.selectableButton
-                { id = WebViewer id, padding = Ui.paddingXY 6 0 }
+                { id = WebViewer id, pad = Ui.paddingXY 6 0 }
                 (model.mode == mode)
                 (Ui.text label)
 
         header : Element UiId
         header =
             Ui.column
-                spacing
+                gap
                 [ Ui.leftAndRight
-                    (Units.uiPixels width)
+                    (Units.ui width)
                     (Ui.customText Small [ { text = "Web viewer", color = Color.textColor, font = Sans Bold, decorations = [], link = Nothing } ])
                     (Ui.right { width = Coord.x (Ui.size close) } close)
                 , Ui.row
-                    spacing
+                    gap
                     [ Ui.textInput { id = WebViewer Types.UrlInput, style = urlStyle windowSize, isValid = True }
-                    , Ui.button { id = WebViewer Types.GoButton, padding = Ui.paddingXY 6 0 } (Ui.text "Go")
+                    , Ui.button { id = WebViewer Types.GoButton, pad = Ui.paddingXY 6 0 } (Ui.text "Go")
                     ]
                 , Ui.row
-                    spacing
+                    gap
                     [ modeButton Types.TextModeButton TextMode "Text"
                     , modeButton Types.HtmlModeButton HtmlMode "HTML"
                     , statusText model
@@ -460,11 +460,11 @@ view windowSize model =
                             wrapped width Color.textColor Mono page.html
     in
     Ui.el
-        { padding = Ui.paddingXY windowPadding windowPadding, borderAndFill = Ui.windowBorderAndFill }
+        { pad = Ui.paddingXY windowPadding windowPadding, style = Ui.windowBorderAndFill }
         (Ui.column
-            spacing
+            gap
             [ header
-            , Ui.left (Units.uiPixels width) content
+            , Ui.left (Units.ui width) content
                 |> Ui.viewport
                     { id =
                         WebViewer
@@ -476,8 +476,8 @@ view windowSize model =
                                     Types.HtmlViewport
                             )
                     , viewportHeight =
-                        Units.uiPixels
-                            (Coord.yRaw windowSize - 2 * windowPadding - Coord.yRaw (Ui.size header) - spacing)
+                        Units.ui
+                            (Coord.yRaw windowSize - 2 * windowPadding - Coord.yRaw (Ui.size header) - gap)
                     }
             ]
         )
@@ -503,5 +503,5 @@ wrapped : Int -> Color.Color -> Font -> String -> Element id
 wrapped width color font text =
     Ui.customTextWrapped
         Small
-        (Units.uiPixels width)
+        (Units.ui width)
         [ { text = text, color = color, font = font, decorations = [], link = Nothing } ]

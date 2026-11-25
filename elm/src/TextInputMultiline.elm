@@ -13,7 +13,9 @@ module TextInputMultiline exposing
     , mouseUp
     , overScrollbar
     , paste
+    , replaceRanges
     , scrollPixels
+    , select
     , size
     , stopGlide
     , view
@@ -79,11 +81,18 @@ type Glide
     | Easing Float
 
 
-{-| How the box looks: its font and size, its width, how many lines tall it is, and
-whether the text is coloured as code.
+{-| How the box looks: its font and size, its width, how many lines tall it is, whether
+the text is coloured as code, and ranges of the text (start, end, in order) to mark, as
+the matches of a search are.
 -}
 type alias Style =
-    { font : Sprite.Font, fontSize : Sprite.FontSize, width : Quantity Int UiPixels, lines : Int, syntax : Syntax }
+    { font : Sprite.Font
+    , fontSize : Sprite.FontSize
+    , width : Quantity Int UiPixels
+    , lines : Int
+    , syntax : Syntax
+    , highlights : List ( Int, Int )
+    }
 
 
 {-| Plain text is all one colour; Elm code is coloured by ElmSyntax.elm.
@@ -223,11 +232,6 @@ cursorX style state =
 -- WORDS
 
 
-isSpace : Char -> Bool
-isSpace char =
-    char == ' ' || char == '\n' || char == '\t'
-
-
 countWhile : (a -> Bool) -> List a -> Int
 countWhile isGood list =
     case list of
@@ -242,7 +246,8 @@ countWhile isGood list =
             0
 
 
-{-| The start of the word before `index` (skipping spaces first).
+{-| The start of the word before `index`: skips anything that isn't a letter, digit or
+underscore, then those.
 -}
 wordStart : String -> Int -> Int
 wordStart text index =
@@ -250,13 +255,13 @@ wordStart text index =
         before =
             String.left index text |> String.toList |> List.reverse
 
-        spaces =
-            countWhile isSpace before
+        symbols =
+            countWhile (\char -> not (TextInput.isWordChar char)) before
     in
-    index - spaces - countWhile (\char -> not (isSpace char)) (List.drop spaces before)
+    index - symbols - countWhile TextInput.isWordChar (List.drop symbols before)
 
 
-{-| The end of the word after `index` (skipping spaces first).
+{-| The end of the word after `index`, the same way.
 -}
 wordEnd : String -> Int -> Int
 wordEnd text index =
@@ -264,10 +269,19 @@ wordEnd text index =
         after =
             String.dropLeft index text |> String.toList
 
-        spaces =
-            countWhile isSpace after
+        symbols =
+            countWhile (\char -> not (TextInput.isWordChar char)) after
     in
-    index + spaces + countWhile (\char -> not (isSpace char)) (List.drop spaces after)
+    index + symbols + countWhile TextInput.isWordChar (List.drop symbols after)
+
+
+{-| The start and end of the line holding caret `index`, without its newline.
+-}
+lineRange : String -> Int -> ( Int, Int )
+lineRange text index =
+    ( String.left index text |> String.indexes "\n" |> List.reverse |> List.head |> Maybe.map ((+) 1) |> Maybe.withDefault 0
+    , String.dropLeft index text |> String.indexes "\n" |> List.head |> Maybe.map ((+) index) |> Maybe.withDefault (String.length text)
+    )
 
 
 
@@ -425,6 +439,56 @@ isVertical key =
 paste : Style -> String -> Model -> Model
 paste style text model =
     { model | input = TextInput.paste text model.input |> limitHistory, goalX = Nothing } |> scrollToCursor style
+
+
+{-| Selects the text from `start` to `end`, with the cursor at its end, and scrolls to show
+it.
+-}
+select : Style -> Int -> Int -> Model -> Model
+select style start end model =
+    { model
+        | input = TextInput.replaceState (\state -> { state | cursorPosition = end, cursorSize = start - end }) model.input
+        , goalX = Nothing
+    }
+        |> scrollToCursor style
+
+
+{-| Replaces each of the ranges (start, end; in order, not overlapping) of the text with
+`replacement`, as one change to undo, and puts the cursor after the last one.
+-}
+replaceRanges : Style -> String -> List ( Int, Int ) -> Model -> Model
+replaceRanges style replacement ranges model =
+    if List.isEmpty ranges then
+        model
+
+    else
+        let
+            change : TextInput.State -> TextInput.State
+            change state =
+                let
+                    ( pieces, rest, cursor ) =
+                        List.foldl
+                            (\( start, end ) ( done, from, length ) ->
+                                let
+                                    before : String
+                                    before =
+                                        String.slice from start state.text
+                                in
+                                ( replacement :: before :: done
+                                , end
+                                , length + String.length before + String.length replacement
+                                )
+                            )
+                            ( [], 0, 0 )
+                            ranges
+                in
+                { text = String.concat (List.reverse pieces ++ [ String.dropLeft rest state.text ])
+                , cursorPosition = cursor
+                , cursorSize = 0
+                }
+        in
+        { model | input = TextInput.pushState change model.input |> limitHistory, goalX = Nothing }
+            |> scrollToCursor style
 
 
 {-| Scroll the smallest amount that shows the cursor's line, and no further than the text.
@@ -610,7 +674,7 @@ indexAt style mousePosition position model =
             Coord.toTuple (Coord.minus position mousePosition)
 
         relativeY =
-            my - padding
+            my - pad
 
         line =
             -- rounded down, so above the box is the line before the first in view
@@ -623,12 +687,12 @@ indexAt style mousePosition position model =
         String.length state.text
 
     else
-        indexAtX style ls line (mx - padding - caretWidth style + scrollX style state)
+        indexAtX style ls line (mx - pad - caretWidth style + scrollX style state)
 
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
 it grabs it, else it moves the cursor there (two clicks in a row select the word there,
-three select everything: see TextInput.mouseDown).
+three select the line: see TextInput.mouseDown).
 -}
 mouseDown : Time.Posix -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
 mouseDown time style mousePosition position model =
@@ -659,7 +723,20 @@ mouseDown time style mousePosition position model =
                 TextInput.registerClick time index model.input
         in
         { model
-            | input = TextInput.replaceState (TextInput.selectClicks clicks index) input
+            | input =
+                TextInput.replaceState
+                    (\state ->
+                        if clicks >= 3 then
+                            let
+                                ( start, end ) =
+                                    lineRange state.text index
+                            in
+                            { state | cursorPosition = end, cursorSize = start - end }
+
+                        else
+                            TextInput.selectClicks clicks index state
+                    )
+                    input
             , goalX = Nothing
         }
 
@@ -676,7 +753,7 @@ mouseDownMove style mousePosition position model =
                 (Scrollbar.drag
                     (scrollbarGeometry style model.input.current)
                     grab
-                    (Coord.yRaw mousePosition - Coord.yRaw position - padding)
+                    (Coord.yRaw mousePosition - Coord.yRaw position - pad)
                 )
                 model
 
@@ -716,7 +793,7 @@ area, over the text.
 -}
 scrollbarPosition : Style -> Coord UiPixels
 scrollbarPosition style =
-    Coord.xy (width style - padding - Scrollbar.width) padding
+    Coord.xy (width style - pad - Scrollbar.width) pad
 
 
 {-| How far the text is scrolled down, in UI pixels.
@@ -753,8 +830,8 @@ scrollToPixels style pixels model =
 
 {-| Between the border and the text, on every side, in UI pixels.
 -}
-padding : Int
-padding =
+pad : Int
+pad =
     4
 
 
@@ -775,14 +852,14 @@ width style =
 
 size : Style -> Coord UiPixels
 size style =
-    Coord.xy (width style) (lineHeight style * style.lines + padding * 2)
+    Coord.xy (width style) (lineHeight style * style.lines + pad * 2)
 
 
-{-| The pixels between the box's padding that text shows in (the scroll bar lies over it).
+{-| The pixels between the box's pad that text shows in (the scroll bar lies over it).
 -}
 innerWidth : Style -> Int
 innerWidth style =
-    width style - 2 * padding - 2 * caretWidth style
+    width style - 2 * pad - 2 * caretWidth style
 
 
 {-| How far every line is scrolled left, in UI pixels: just enough to show the cursor.
@@ -811,17 +888,17 @@ view scale viewport style offset hasFocus model =
             lineHeight style
 
         textLeft =
-            x + padding + caretWidth style - scrollX style state
+            x + pad + caretWidth style - scrollX style state
 
         clip =
-            { left = x + padding, right = x + width style - padding }
+            { left = x + pad, right = x + width style - pad }
 
         -- The text area, where lines partly scrolled out of it are cut off.
         textArea : Bounds UiPixels
         textArea =
             Bounds.fromTopLeftAndSize
-                (Coord.xy (x + padding) (y + padding))
-                (Coord.xy (width style - 2 * padding) (height * style.lines))
+                (Coord.xy (x + pad) (y + pad))
+                (Coord.xy (width style - 2 * pad) (height * style.lines))
                 |> Bounds.intersection viewport
                 |> Maybe.withDefault (Bounds.fromTopLeftAndSize offset Coord.origin)
 
@@ -838,7 +915,7 @@ view scale viewport style offset hasFocus model =
                 |> List.take (style.lines + 1)
 
         top n =
-            y + padding + n * height - shownPixels style model
+            y + pad + n * height - shownPixels style model
 
         ( boxWidth, boxHeight ) =
             Coord.toTuple (size style)
@@ -862,8 +939,8 @@ view scale viewport style offset hasFocus model =
                         Color.fillColor3
                     )
                     viewport
-                    (Coord.xy (x + padding) (y + padding))
-                    (Coord.xy (boxWidth - 2 * padding) (boxHeight - 2 * padding))
+                    (Coord.xy (x + pad) (y + pad))
+                    (Coord.xy (boxWidth - 2 * pad) (boxHeight - 2 * pad))
 
         -- Each line's part of the selection, with a bit more past its end when the
         -- selection goes on to the next line, so a selected empty line shows.
@@ -912,6 +989,36 @@ view scale viewport style offset hasFocus model =
                                     (Coord.xy (min clip.right right - max clip.left left) height)
                         )
 
+        -- The marked ranges, which are each inside one line.
+        marks =
+            List.concatMap
+                (\( start, end ) ->
+                    let
+                        ( line, column ) =
+                            lineAndColumn state.text start
+                    in
+                    if line < first || line > first + style.lines then
+                        []
+
+                    else
+                        let
+                            positions =
+                                carets style (lineAt ls line)
+
+                            left =
+                                textLeft + caretX positions column
+
+                            right =
+                                textLeft + caretX positions (column + end - start)
+                        in
+                        Sprite.rectangle
+                            Color.findMatchColor
+                            textArea
+                            (Coord.xy (max clip.left left) (top line))
+                            (Coord.xy (max 0 (min clip.right right - max clip.left left)) height)
+                )
+                style.highlights
+
         ( cursorLine, cursorColumn ) =
             lineAndColumn state.text state.cursorPosition
 
@@ -937,7 +1044,7 @@ view scale viewport style offset hasFocus model =
                 (scrolledPixels style model)
                 model
     in
-    Sprite.toDevice scale (box ++ selection)
+    Sprite.toDevice scale (box ++ marks ++ selection)
         ++ List.concatMap
             (\l ->
                 Sprite.customText
