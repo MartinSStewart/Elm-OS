@@ -20,6 +20,7 @@ module TextInput exposing
     , selectionMin
     , size
     , view
+    , withText
     )
 
 {-| town-collab's single-line text input (src/TextInput.elm in
@@ -64,6 +65,13 @@ type alias State =
 init : Model
 init =
     { current = { cursorPosition = 0, cursorSize = 0, text = "" }, undoHistory = [], redoHistory = [], lastClick = Nothing }
+
+
+{-| A box holding `text`, with the cursor at its end.
+-}
+withText : String -> Model
+withText text =
+    { init | current = { cursorPosition = String.length text, cursorSize = 0, text = text } }
 
 
 pushState : (State -> State) -> Model -> Model

@@ -21,6 +21,7 @@ import Email.Types
 import HackerNews.Types
 import History.Types
 import Install.Types
+import ModelViewer.Types
 import Network.Types
 import News.Types
 import Paint.Types
@@ -55,6 +56,7 @@ type UiId
     | ScreenshotViewer ScreenshotViewer.Types.UiId
     | Install Install.Types.UiId
     | History History.Types.UiId
+    | ModelViewer ModelViewer.Types.UiId
       -- The `Ui.lazy` elements, which nothing clicks or focuses.
     | Lazy LazyKey
 

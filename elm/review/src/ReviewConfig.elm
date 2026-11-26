@@ -47,8 +47,9 @@ import SimplifyUi
 config : List Rule
 config =
     -- elm/src/Evergreen is frozen copies of old types, and the migrations between
-    -- them, which tools/wire writes (`make migration`).
-    List.map (Review.Rule.ignoreErrorsForDirectories [ "src/Evergreen/" ]) rules
+    -- them, which tools/wire writes (`make migration`). elm/src/Generated is written by
+    -- tools/wire too (`make`): checked in so what it uses counts as used.
+    List.map (Review.Rule.ignoreErrorsForDirectories [ "src/Evergreen/", "src/Generated/" ]) rules
 
 
 rules : List Rule
@@ -79,8 +80,9 @@ rules =
     , NoUnused.Dependencies.rule
 
     -- Persist.program is used by build/wire/src/ElmOs.elm, Wire's functions by the
-    -- codecs, and UiSource by every view: tools/wire writes those uses.
-    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm", "src/Wire.elm", "src/Nonempty.elm", "src/UiSource.elm" ]
+    -- codecs, and UiSource by every view: tools/wire writes those uses. ModelTree's are
+    -- for src/Generated/ModelTree.elm, which uses those of the types the Model has now.
+    , NoUnused.Exports.rule |> Review.Rule.ignoreErrorsForFiles [ "src/Persist.elm", "src/Wire.elm", "src/Nonempty.elm", "src/UiSource.elm", "src/ModelTree.elm" ]
     , NoUnused.Modules.rule |> Review.Rule.ignoreErrorsForFiles [ "src/UiSource.elm" ]
     , NoUnused.Parameters.rule
         -- Unsafe.unreachable recurses on purpose, to crash with a stack overflow.
