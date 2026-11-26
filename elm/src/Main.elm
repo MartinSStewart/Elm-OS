@@ -1883,7 +1883,7 @@ clickElement model id =
             Install.onClick uiId2 model.install |> Tuple.mapFirst (\install -> { model | install = install })
 
         History uiId2 ->
-            History.onClick uiId2 (historyBranches model) model.history |> Tuple.mapFirst (\history -> { model | history = history })
+            History.onClick uiId2 { branches = historyBranches model, token = Code.githubToken model.uiState } model.history |> Tuple.mapFirst (\history -> { model | history = history })
 
         ModelViewer uiId2 ->
             ( modelViewerClick uiId2 model, [] )

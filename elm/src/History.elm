@@ -2,6 +2,7 @@ module History exposing
     ( Context
     , Head
     , Model
+    , Request
     , appSize
     , gotResponse
     , init
@@ -116,34 +117,42 @@ requestId generation i =
     "history_" ++ String.fromInt generation ++ "_" ++ String.fromInt i
 
 
-onClick : UiId -> List String -> Model -> ( Model, List Effect )
-onClick id otherBranches model =
+onClick : UiId -> Request -> Model -> ( Model, List Effect )
+onClick id request model =
     case id of
         OpenButton ->
             if model.isOpen then
                 ( { model | isOpen = False }, [] )
 
             else
-                refresh otherBranches { model | isOpen = True }
+                refresh request { model | isOpen = True }
 
         CloseButton ->
             ( { model | isOpen = False }, [] )
 
         RefreshButton ->
-            refresh otherBranches model
+            refresh request model
 
         ListViewport ->
             ( model, [] )
 
 
-{-| Asks GitHub for the newest commits of each branch. `otherBranches` are ones besides
-the usual three. What is shown stays until the answers come.
+{-| What a refresh needs: branches besides the usual three, and a GitHub token ("" if
+none). Without one GitHub allows only 60 requests an hour per IP address, and each refresh
+makes one request per branch; with one, 5000.
 -}
-refresh : List String -> Model -> ( Model, List Effect )
-refresh otherBranches model =
+type alias Request =
+    { branches : List String, token : String }
+
+
+{-| Asks GitHub for the newest commits of each branch. What is shown stays until the
+answers come.
+-}
+refresh : Request -> Model -> ( Model, List Effect )
+refresh { branches, token } model =
     let
-        branches : List String
-        branches =
+        allBranches : List String
+        allBranches =
             List.foldl
                 (\branch sofar ->
                     if branch == "" || List.member branch sofar then
@@ -153,7 +162,7 @@ refresh otherBranches model =
                         sofar ++ [ branch ]
                 )
                 [ "main", "deployed", "dev" ]
-                otherBranches
+                branches
 
         generation : Int
         generation =
@@ -161,7 +170,7 @@ refresh otherBranches model =
     in
     ( { model
         | generation = generation
-        , waiting = List.indexedMap (\i branch -> ( i, branch )) branches
+        , waiting = List.indexedMap (\i branch -> ( i, branch )) allBranches
         , error = Nothing
       }
     , List.indexedMap
@@ -170,12 +179,19 @@ refresh otherBranches model =
                 { id = requestId generation i
                 , method = "GET"
                 , url = "https://api.github.com/repos/" ++ repository ++ "/commits?per_page=" ++ String.fromInt perBranch ++ "&sha=" ++ branch
-                , headers = [ ( "Accept", "application/vnd.github+json" ) ]
+                , headers =
+                    ( "Accept", "application/vnd.github+json" )
+                        :: (if token == "" then
+                                []
+
+                            else
+                                [ ( "Authorization", "Bearer " ++ token ) ]
+                           )
                 , body = Effect.noBody
                 , timeoutMs = Just (Duration.seconds 30)
                 }
         )
-        branches
+        allBranches
     )
 
 
@@ -236,6 +252,9 @@ answer result =
 
                     Nothing ->
                         Err "the answer isn't text"
+
+            else if response.status == 403 || response.status == 429 then
+                Err "GitHub's limit on requests was reached (60 an hour without a token, 5000 with one). Type a GitHub token in the Code app's commit view, or try again in up to an hour."
 
             else
                 Err ("GitHub said " ++ String.fromInt response.status)

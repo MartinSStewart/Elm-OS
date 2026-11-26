@@ -19,6 +19,7 @@ module Code exposing
     , save
     , style
     , testFact
+    , githubToken
     , uncommittedModules
     , view
     )
@@ -616,6 +617,13 @@ gitWorking git =
 findText : Ui.Model UiId.UiId -> String
 findText uiState =
     inputText FindInput uiState
+
+
+{-| The GitHub token typed in the commit view, if any.
+-}
+githubToken : Ui.Model UiId.UiId -> String
+githubToken uiState =
+    String.trim (inputText TokenInput uiState)
 
 
 inputText : UiId -> Ui.Model UiId.UiId -> String
