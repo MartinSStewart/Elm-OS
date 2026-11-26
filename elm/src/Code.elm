@@ -1692,7 +1692,7 @@ commitView width model =
             )
          , where_
          , line Color.dimTextColor "GitHub token (a fine-grained one that can only write the contents of Elm-OS)"
-         , input TokenInput True
+         , input TokenInput False
          , line Color.dimTextColor "Commit message"
          , input MessageInput False
          ]

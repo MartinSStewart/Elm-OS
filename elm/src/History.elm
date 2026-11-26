@@ -505,7 +505,7 @@ appSize =
 view : Context -> Model -> Coord.Coord UiPixels -> Ui.Element UiId.UiId
 view context model size =
     App.smallWindow2
-        { title = "History", close = UiId.History CloseButton }
+        { title = "Git History", close = UiId.History CloseButton }
         (body context model)
         { width = Just (Coord.xRaw size), height = Just (Coord.yRaw size) }
 
