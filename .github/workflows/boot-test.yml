@@ -61,6 +61,10 @@ jobs:
         # (tools/build-patched-eco.sh: eco's static release build in Docker), unless the
         # restored one is already that build. On PATH too, for the debugging step below.
         run: |
+          # The restored cache can hold the marker saying eco/system is already in ~/.elm (the
+          # exclusion above doesn't always keep it out), but ~/.elm isn't cached: without the
+          # marker the script puts eco/system and its docs.json back, which elm-review needs.
+          rm -f ~/.cache/elm-os/*/.elm-home-built
           bin=$(make -s eco)
           echo "$bin" >> "$GITHUB_PATH"
           built=$(cat "$bin/../.eco-built")
@@ -117,8 +121,8 @@ jobs:
         with:
           # Not Alpine's index, which must be fresh whenever a package set is pinned again.
           path: |
-            build/apk-cache
-            !build/apk-cache/APKINDEX-*
+            build/*/apk-cache
+            !build/*/apk-cache/APKINDEX-*
           key: alpine-${{ hashFiles('alpine.lock') }}
           restore-keys: alpine-
 
@@ -131,8 +135,8 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            build/apk-cache
-            !build/apk-cache/APKINDEX-*
+            build/*/apk-cache
+            !build/*/apk-cache/APKINDEX-*
           key: alpine-${{ hashFiles('alpine.lock') }}
 
       - name: Tests that don't boot (review, Elm, tools/wire, host protocol)
