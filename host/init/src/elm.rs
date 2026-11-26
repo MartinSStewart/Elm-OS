@@ -269,7 +269,7 @@ pub fn send(msg: &ToElm) {
     if coalesces(msg) && coalesce(&mut s.queue, msg) {
         return;
     }
-    if s.queue.len() >= MAX_QUEUE && http_answer(msg).is_none() {
+    if dropped(s.queue.len(), msg) {
         s.dropped += 1;
         if s.dropped == 1 {
             log!("host", "the Elm program isn't taking messages; dropping them");
@@ -279,6 +279,14 @@ pub fn send(msg: &ToElm) {
     s.queue.push_back(Queued::new(msg.clone()));
     drop(s);
     link().ready.notify_all();
+}
+
+/// Whether `msg` is dropped, with `waiting` messages already queued. Never dropped: an
+/// HTTP answer, and the answers that start a program up (the snapshot, ReplayDone). A
+/// replay can fill the queue by itself (a long log after the snapshot), and without
+/// its ReplayDone the program waits for it for ever.
+fn dropped(waiting: usize, msg: &ToElm) -> bool {
+    waiting >= MAX_QUEUE && http_answer(msg).is_none() && protocol::is_logged(msg)
 }
 
 /// The messages waiting for a program, taken off the queue: for tests.
@@ -1067,6 +1075,16 @@ mod tests {
         disconnect(program);
         assert_eq!(scrolled, 250.0, "no scrolling is lost");
         assert!(behind < Duration::from_millis(100));
+    }
+
+    /// Martin's QEMU data disk: 10,456 logged messages after the snapshot, replayed
+    /// all at once, filled the queue, so ReplayDone was dropped and the program hung.
+    #[test]
+    fn a_full_queue_still_takes_the_startup_answers() {
+        assert!(dropped(MAX_QUEUE, &ToElm::Mouse { x: 0, y: 0 }));
+        assert!(!dropped(MAX_QUEUE - 1, &ToElm::Mouse { x: 0, y: 0 }));
+        assert!(!dropped(MAX_QUEUE + 456, &ToElm::ReplayDone { upto: 189_920 }));
+        assert!(!dropped(MAX_QUEUE, &ToElm::Snapshot { data: None }));
     }
 
     #[test]
