@@ -15,6 +15,7 @@ module Code exposing
     , init
     , onClick
     , openFind
+    , programStarted
     , save
     , style
     , testFact
@@ -240,6 +241,9 @@ onClick id boxStyle text uiState model =
                 -- Every module is as the running build was made from: building would
                 -- make the same program again and switch to it, for nothing.
                 ( { saved | build = Nothing, showErrors = False }, uiState, [] )
+
+        DeployedButton ->
+            ( { model | build = Just (BuildRunning goingBack), showErrors = False }, uiState, [ Effect.FollowDeployed ] )
 
         ErrorsCloseButton ->
             ( { model | showErrors = False }, uiState, [] )
@@ -700,6 +704,58 @@ testFact model =
         ]
 
 
+{-| The step the host names while going back to the deployed build, and if that fails
+(host/init/src/update.rs).
+-}
+goingBack : String
+goingBack =
+    "Going back to the deployed build"
+
+
+{-| A program has started, running `build` (About.Types.SystemInfo): what was said about
+another build, or about going back to the deployed one, is over. (The Model outlives
+builds, so without this the line under the code kept naming a build long gone.)
+-}
+programStarted : String -> Model -> Model
+programStarted build model =
+    case model.build of
+        Just (Built name) ->
+            if name == build then
+                model
+
+            else
+                { model | build = Nothing }
+
+        Just (BuildRunning step) ->
+            if step == goingBack then
+                { model | build = Nothing }
+
+            else
+                model
+
+        Just (BuildFailed _ _) ->
+            model
+
+        Nothing ->
+            model
+
+
+buildRunning : Model -> Bool
+buildRunning model =
+    case model.build of
+        Just (BuildRunning _) ->
+            True
+
+        Just (BuildFailed _ _) ->
+            False
+
+        Just (Built _) ->
+            False
+
+        Nothing ->
+            False
+
+
 {-| What the host said about the build. Errors show at once.
 -}
 buildUpdate : BuildStatus -> Model -> Model
@@ -1106,8 +1162,8 @@ style windowSize model =
 last build's errors), where the cursor is, whether the text is saved, and how the last
 build went. `input` is the text box's model, `needle` what the find box says.
 -}
-view : Coord UiPixels -> TextInputMultiline.Model -> String -> Maybe String -> Model -> Element UiId.UiId
-view windowSize input needle switchingTo model =
+view : Coord UiPixels -> TextInputMultiline.Model -> String -> String -> Maybe String -> Model -> Element UiId.UiId
+view windowSize input needle running switchingTo model =
     let
         found : List ( Int, Int )
         found =
@@ -1196,10 +1252,18 @@ view windowSize input needle switchingTo model =
         buildStatus =
             case model.build of
                 Just (BuildRunning step) ->
-                    [ segment Color.textColor ("   Building: " ++ step ++ "...") ]
+                    if step == goingBack then
+                        [ segment Color.textColor ("   " ++ goingBack ++ "...") ]
+
+                    else
+                        [ segment Color.textColor ("   Building: " ++ step ++ "...") ]
 
                 Just (BuildFailed step _) ->
-                    [ segment Color.errorColor ("   The build failed: " ++ step) ]
+                    if step == goingBack then
+                        [ segment Color.errorColor "   Couldn't go back to the deployed build" ]
+
+                    else
+                        [ segment Color.errorColor ("   The build failed: " ++ step) ]
 
                 Just (Built name) ->
                     if switchingTo == Just name then
@@ -1223,6 +1287,14 @@ view windowSize input needle switchingTo model =
              else
                 []
             )
+                -- A build made here stays until this: the host follows the deployed
+                -- builds again only when asked, so as not to drop the edits.
+                ++ (if String.startsWith "local-" running && not (buildRunning model) then
+                        [ button DeployedButton "Back to deployed build" ]
+
+                    else
+                        []
+                   )
                 ++ (if SeqDict.isEmpty model.saved && not unsaved then
                         []
 

@@ -438,6 +438,7 @@ impl Host {
                     crate::install::install(disk, layout, target, keep_data)
                 }
                 Effect::UpdateInstall { disk, layout } => crate::install::update(disk, layout),
+                Effect::FollowDeployed => crate::update::follow_deployed(),
             }
         }
         if cursor_dirty {
@@ -509,6 +510,7 @@ fn send_system() {
         commit: std::fs::read_to_string("/etc/elmos/commit")
             .map(|s| s.trim().to_owned())
             .unwrap_or_else(|_| "unknown".into()),
+        build: String::new(), // filled in for each program (elm.rs)
     });
 }
 

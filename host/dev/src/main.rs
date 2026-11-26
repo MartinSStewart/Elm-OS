@@ -514,6 +514,12 @@ impl Runner {
                     wrote: false,
                 },
             }),
+            Effect::FollowDeployed => elm::send(&ToElm::Build {
+                status: protocol::BuildStatus::Failed {
+                    step: "Going back to the deployed build".into(),
+                    output: "The desktop runner runs the build made from elm/src.".into(),
+                },
+            }),
         }
     }
 
@@ -856,7 +862,7 @@ fn system(commit: &str) -> ToElm {
                 .map(|(_, v)| v.trim().to_owned())
         })
         .unwrap_or_else(|| "unknown".into());
-    ToElm::System { kernel: format!("Linux {kernel} (dev runner)"), cpu, commit: commit.to_owned() }
+    ToElm::System { kernel: format!("Linux {kernel} (dev runner)"), cpu, commit: commit.to_owned(), build: String::new() }
 }
 
 fn main() {

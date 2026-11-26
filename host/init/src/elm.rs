@@ -330,13 +330,22 @@ pub fn http_started(id: &str) {
     state().http_in_flight.push(id.to_owned());
 }
 
-/// What goes on the socket for `msg`: the data disk message gets the requests in flight.
+/// What goes on the socket for `msg`: the data disk message gets the requests in flight,
+/// and the system one the build running.
 fn encode(s: &State, msg: &ToElm) -> Vec<u8> {
     match msg {
         ToElm::DataDisk { path, .. } => ToElm::DataDisk {
             path: path.clone(),
             http_in_flight: s.http_in_flight.clone(),
             web_sockets_open: crate::websocket::open_ids(),
+        }
+        .to_bytes(),
+        // Sent once, but each program is told which build it is.
+        ToElm::System { kernel, cpu, commit, .. } => ToElm::System {
+            kernel: kernel.clone(),
+            cpu: cpu.clone(),
+            commit: commit.clone(),
+            build: s.build.clone().unwrap_or_default(),
         }
         .to_bytes(),
         msg => msg.to_bytes(),

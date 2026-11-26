@@ -17,6 +17,11 @@
 //!   4. Download its `elm`, check its SHA-256, put it on the disk (programs.rs), and
 //!      switch to it (elm::switch_to), which goes back if it fails.
 //!
+//! A build made on this computer (build.rs, `local-...`) is left alone, so as not to drop
+//! the edits it was made from, until Elm asks for the deployed build
+//! (Effect::FollowDeployed, the Code app's button): then the thread checks at once, as
+//! above, and tells Elm with a failed ToElm::Build if it couldn't switch.
+//!
 //! A build that can't be used is tried again only after a restart. Where to look can be
 //! changed for the tests: ELMOS_UPDATE_API (https://api.github.com), ELMOS_UPDATE_DOWNLOAD
 //! (https://github.com), ELMOS_UPDATE_REPO (MartinSStewart/Elm-OS), ELMOS_UPDATE_FIRST
@@ -24,7 +29,7 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::{elm, persist, programs};
@@ -51,22 +56,70 @@ fn seconds(name: &str, default: u64) -> Duration {
     Duration::from_secs(std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default))
 }
 
+/// The step of the ToElm::Build that says Effect::FollowDeployed failed (Code.elm).
+const FOLLOW_STEP: &str = "Going back to the deployed build";
+
+/// Set by Effect::FollowDeployed until the thread takes it; WOKEN wakes the thread.
+static FOLLOW: Mutex<bool> = Mutex::new(false);
+static WOKEN: Condvar = Condvar::new();
+
+/// Effect::FollowDeployed: leave the build made on this computer for the deployed one.
+pub fn follow_deployed() {
+    if std::env::var("ELMOS_UPDATES").as_deref() != Ok("1") {
+        return follow_failed(
+            "This Elm OS doesn't follow the deployed builds: its kernel command line has no ELMOS_UPDATES=1 (the USB stick's has it, make run's hasn't).",
+        );
+    }
+    if !is_local(&elm::running_build()) {
+        return follow_failed("The build running wasn't made on this computer: it follows the deployed builds already.");
+    }
+    *FOLLOW.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    WOKEN.notify_all();
+}
+
+fn follow_failed(why: &str) {
+    log!("update", "not going back to the deployed build: {why}");
+    elm::send(&protocol::ToElm::Build {
+        status: protocol::BuildStatus::Failed { step: FOLLOW_STEP.into(), output: why.into() },
+    });
+}
+
+fn is_local(build: &programs::Build) -> bool {
+    build.as_deref().is_some_and(|n| n.starts_with("local-"))
+}
+
+/// Sleeps for `how_long`, or until Effect::FollowDeployed; says which.
+fn wait(how_long: Duration) -> bool {
+    let follow = FOLLOW.lock().unwrap_or_else(|e| e.into_inner());
+    let mut follow = WOKEN.wait_timeout_while(follow, how_long, |f| !*f).unwrap_or_else(|e| e.into_inner()).0;
+    std::mem::take(&mut *follow)
+}
+
 fn run() {
     if !persist::wait_mounted() {
         log!("update", "no data disk: not following deployed builds");
         return;
     }
     let mut given_up = HashSet::new();
-    std::thread::sleep(seconds("ELMOS_UPDATE_FIRST", 30));
+    let mut follow = wait(seconds("ELMOS_UPDATE_FIRST", 30));
     loop {
-        if let Err(e) = check(&mut given_up) {
+        if follow {
+            // Asked for: whatever was given up on is worth another look.
+            given_up.clear();
+        }
+        let result = check(&mut given_up, follow);
+        if let Err(e) = &result {
             log!("update", "{e}");
         }
-        std::thread::sleep(seconds("ELMOS_UPDATE_EVERY", 600));
+        if follow && is_local(&elm::running_build()) {
+            follow_failed(&result.err().unwrap_or_else(|| "There's no deployed build to go back to.".into()));
+        }
+        follow = wait(seconds("ELMOS_UPDATE_EVERY", 600));
     }
 }
 
-fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
+/// With `follow`, a build made on this computer is replaced too.
+fn check(given_up: &mut HashSet<String>, follow: bool) -> Result<(), String> {
     let api = setting("ELMOS_UPDATE_API", "https://api.github.com");
     let download = setting("ELMOS_UPDATE_DOWNLOAD", "https://github.com");
     let repo = setting("ELMOS_UPDATE_REPO", "MartinSStewart/Elm-OS");
@@ -80,9 +133,9 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
         .ok_or("GitHub's answer for the deployed branch has no commit")?;
     let name = &commit[..12];
     let running = elm::running_build();
-    if running.as_deref().is_some_and(|n| n.starts_with("local-")) {
+    if is_local(&running) && !follow {
         // Made on this computer from edited code (build.rs): switching to the deployed
-        // build would drop the edits from what runs. Not until there's a way to choose.
+        // build would drop the edits from what runs, unless Elm asks for it.
         return Ok(());
     }
     let mine = programs::commit(&running).unwrap_or_default();
@@ -157,6 +210,7 @@ fn check(given_up: &mut HashSet<String>) -> Result<(), String> {
     if !elm::switch_to(name.to_owned()) && elm::running_build().as_deref() != Some(name) {
         given_up.insert(name.to_owned());
         programs::remove_all_but(&elm::running_build());
+        return Err(format!("build {name} didn't start, so {} runs again", programs::describe(&elm::running_build())));
     }
     Ok(())
 }

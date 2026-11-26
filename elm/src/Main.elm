@@ -1103,7 +1103,11 @@ step event model =
 
         System info ->
             -- The host says this as a program starts.
-            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code, install = Install.programStarted model.install }
+            ( { model
+                | system = Just info
+                , code = Code.forgetPushed BuildInfo.commit model.code |> Code.programStarted info.build
+                , install = Install.programStarted model.install
+              }
             , if model.install.isOpen then
                 [ Effect.ListDisks ]
 
@@ -1381,6 +1385,9 @@ appButton id =
                     Nothing
 
                 Code.Types.BuildButton ->
+                    Nothing
+
+                Code.Types.DeployedButton ->
                     Nothing
 
                 Code.Types.ErrorsCloseButton ->
@@ -3410,6 +3417,7 @@ appConfig app model =
                         size
                         (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState)
                         (Code.findText model.uiState)
+                        (Maybe.map .build model.system |> Maybe.withDefault "")
                         model.upgradingTo
                         model.code
             , limits = Code.appSize
