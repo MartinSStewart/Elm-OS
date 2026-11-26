@@ -3551,12 +3551,41 @@ treeFunction env def =
         params =
             String.concat (List.map (\g -> " tree_" ++ g) (treeGenerics env def))
 
+        suffix =
+            String.dropLeft (String.length "tree_") (treeFunctionName key)
+
         head =
             treeFunctionName key ++ params ++ " put value =\n"
     in
     case def.body of
+        Alias (TRecord []) ->
+            head ++ "    ModelTree.record [] ModelTree.noChild"
+
         Alias (TRecord fields) ->
-            head ++ "    " ++ treeRecordLines env fields
+            -- Each field's tree comes from a function of its own, `field_`, by its index:
+            -- one function, rather than a lambda for each field.
+            let
+                fieldsName =
+                    "field_" ++ suffix
+
+                fieldCase ( name, ty ) =
+                    treeHead (treeExpr env 1 ty)
+                        ++ " (ModelTree.Put (\\x -> ModelTree.apply put { value | "
+                        ++ name
+                        ++ " = x })) value."
+                        ++ name
+            in
+            head
+                ++ "    ModelTree.record [ "
+                ++ String.join ", " (List.map (\( name, _ ) -> stringLiteral name) fields)
+                ++ " ] ("
+                ++ fieldsName
+                ++ params
+                ++ " put value)\n\n\n"
+                ++ fieldsName
+                ++ params
+                ++ " put value "
+                ++ indexCases 4 (List.map fieldCase fields)
 
         Alias ty ->
             head ++ "    " ++ treeHead (treeExpr env 1 ty) ++ " put value"
@@ -3566,78 +3595,156 @@ treeFunction env def =
                 nullary =
                     List.filter (\( _, args ) -> List.isEmpty args) variants
 
-                -- The variants that hold nothing, in a function of their own when there are
-                -- any, so each branch doesn't list them all again.
-                choicesName =
-                    "choices_" ++ String.dropLeft (String.length "tree_") (treeFunctionName key)
+                -- What each variant holds, by its index (`args_`), and the variants that hold
+                -- nothing, to change to (`choose_`): functions of their own, rather than a
+                -- lambda for each.
+                argsName =
+                    "args_" ++ suffix
+
+                chooseName =
+                    "choose_" ++ suffix
+
+                anyArgs =
+                    List.any (\( _, args ) -> not (List.isEmpty args)) variants
+
+                argsFn =
+                    if anyArgs then
+                        "(" ++ argsName ++ params ++ " put value)"
+
+                    else
+                        "ModelTree.noChild"
+
+                namesName =
+                    "names_" ++ suffix
 
                 choices =
                     if List.isEmpty nullary then
-                        "[]"
+                        "[] (ModelTree.unchanged put value)"
 
                     else
-                        "(" ++ choicesName ++ params ++ " put)"
+                        namesName ++ " (" ++ chooseName ++ params ++ " put)"
 
-                choicesFunction =
+                qualified ctor =
+                    def.moduleName ++ "." ++ ctor
+
+                vars args =
+                    List.indexedMap (\i _ -> "a" ++ String.fromInt i) args
+
+                pattern ( ctor, args ) =
+                    String.join " " (qualified ctor :: vars args)
+
+                branch ( ctor, args ) =
+                    "        "
+                        ++ String.join " " (qualified ctor :: List.map (\_ -> "_") args)
+                        ++ " ->\n            ModelTree.variant "
+                        ++ stringLiteral ctor
+                        ++ " "
+                        ++ String.fromInt (List.length args)
+                        ++ " "
+                        ++ argsFn
+                        ++ " "
+                        ++ choices
+
+                argTree ctor args i ty =
+                    treeHead (treeExpr env 1 ty)
+                        ++ " (ModelTree.Put (\\new -> ModelTree.apply put ("
+                        ++ String.join " "
+                            (qualified ctor
+                                :: List.indexedMap
+                                    (\j v ->
+                                        if i == j then
+                                            "new"
+
+                                        else
+                                            v
+                                    )
+                                    (vars args)
+                            )
+                        ++ "))) a"
+                        ++ String.fromInt i
+
+                argsBranch ( ctor, args ) =
+                    "        "
+                        ++ (if List.isEmpty args then
+                                qualified ctor ++ " ->\n            ModelTree.noChild i"
+
+                            else
+                                pattern ( ctor, args ) ++ " ->\n            " ++ indexExpr 12 (List.indexedMap (argTree ctor args) args)
+                           )
+
+                argsFunction =
+                    if anyArgs then
+                        "\n\n\n"
+                            ++ argsName
+                            ++ params
+                            ++ " put value i =\n    case value of\n"
+                            ++ String.join "\n\n" (List.map argsBranch variants)
+
+                    else
+                        ""
+
+                chooseFunction =
                     if List.isEmpty nullary then
                         ""
 
                     else
                         "\n\n\n"
-                            ++ choicesName
+                            ++ namesName
+                            ++ " =\n    [ "
+                            ++ String.join "\n    , " (List.map (\( ctor, _ ) -> stringLiteral ctor) nullary)
+                            ++ "\n    ]\n\n\n"
+                            ++ chooseName
                             ++ params
-                            ++ " put =\n    [ "
-                            ++ String.join "\n    , "
-                                (List.map
-                                    (\( ctor, _ ) -> "( \"" ++ ctor ++ "\", \\() -> put " ++ def.moduleName ++ "." ++ ctor ++ " )")
-                                    nullary
-                                )
-                            ++ "\n    ]"
-
-                branch ( ctor, args ) =
-                    let
-                        vars =
-                            List.indexedMap (\i _ -> "a" ++ String.fromInt i) args
-
-                        qualified =
-                            def.moduleName ++ "." ++ ctor
-
-                        argTree i ty =
-                            "\\() -> "
-                                ++ treeHead (treeExpr env 1 ty)
-                                ++ " (\\new -> put ("
-                                ++ String.join " "
-                                    (qualified
-                                        :: List.indexedMap
-                                            (\j v ->
-                                                if i == j then
-                                                    "new"
-
-                                                else
-                                                    v
-                                            )
-                                            vars
-                                    )
-                                ++ ")) a"
-                                ++ String.fromInt i
-
-                        argList =
-                            if List.isEmpty args then
-                                "[]"
-
-                            else
-                                "[ " ++ String.join ", " (List.indexedMap argTree args) ++ " ]"
-                    in
-                    "        "
-                        ++ String.join " " (qualified :: vars)
-                        ++ " ->\n            ModelTree.variant \""
-                        ++ ctor
-                        ++ "\" "
-                        ++ argList
-                        ++ " "
-                        ++ choices
+                            ++ " put "
+                            ++ indexCases 4 (List.map (\( ctor, _ ) -> "ModelTree.apply put " ++ qualified ctor) nullary)
             in
-            head ++ "    case value of\n" ++ String.join "\n\n" (List.map branch variants) ++ choicesFunction
+            head
+                ++ "    case value of\n"
+                ++ String.join "\n\n" (List.map branch variants)
+                ++ argsFunction
+                ++ chooseFunction
+
+
+{-| The rest of a function whose last argument is an index (named `i`, or `_` when
+there is one case): the expression for each, the last for any other index. Written at
+`indent` spaces.
+-}
+indexCases : Int -> List String -> String
+indexCases indent cases =
+    case cases of
+        [ only ] ->
+            "_ =\n" ++ String.repeat indent " " ++ only
+
+        _ ->
+            "i =\n" ++ String.repeat indent " " ++ indexExpr indent cases
+
+
+{-| An expression picking one of `cases` by the index `i`, the last for any other.
+-}
+indexExpr : Int -> List String -> String
+indexExpr indent cases =
+    case cases of
+        [ only ] ->
+            only
+
+        _ ->
+            "case i of\n"
+                ++ String.join "\n\n"
+                    (List.indexedMap
+                        (\n expr ->
+                            String.repeat (indent + 4) " "
+                                ++ (if n == List.length cases - 1 then
+                                        "_"
+
+                                    else
+                                        String.fromInt n
+                                   )
+                                ++ " ->\n"
+                                ++ String.repeat (indent + 8) " "
+                                ++ expr
+                        )
+                        cases
+                    )
 
 
 {-| The type variables of a type that hold data: each is given a `Tree`.
@@ -3652,29 +3759,15 @@ treeGenerics env def =
             def.generics
 
 
-{-| A record type's fields as the body of a top-level tree function, one per line.
--}
-treeRecordLines : TreeEnv -> List ( String, Ty ) -> String
-treeRecordLines env fields =
-    case fields of
-        [] ->
-            "ModelTree.record []"
-
-        _ ->
-            "ModelTree.record\n        [ "
-                ++ String.join "\n        , " (List.map (treeField env 1 "put" "value" "x") fields)
-                ++ "\n        ]"
-
-
 treeField : TreeEnv -> Int -> String -> String -> String -> ( String, Ty ) -> String
 treeField env depth put value x ( name, ty ) =
     "( \""
         ++ name
         ++ "\", \\() -> "
         ++ treeHead (treeExpr env depth ty)
-        ++ " (\\"
+        ++ " (ModelTree.Put (\\"
         ++ x
-        ++ " -> "
+        ++ " -> ModelTree.apply "
         ++ put
         ++ " { "
         ++ value
@@ -3682,7 +3775,7 @@ treeField env depth put value x ( name, ty ) =
         ++ name
         ++ " = "
         ++ x
-        ++ " }) "
+        ++ " })) "
         ++ value
         ++ "."
         ++ name
@@ -3722,7 +3815,7 @@ treeExpr env depth ty =
                 ++ put
                 ++ " "
                 ++ value
-                ++ " -> ModelTree.record [ "
+                ++ " -> ModelTree.fields [ "
                 ++ String.join ", " (List.map (treeField env (depth + 1) put value ("x" ++ d)) fields)
                 ++ " ])"
 

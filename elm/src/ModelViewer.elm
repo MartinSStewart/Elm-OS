@@ -28,7 +28,7 @@ code never expected (a cursor past the end of its text, say) is saved all the sa
 import App
 import Color exposing (Color)
 import Coord exposing (Coord)
-import ModelTree exposing (Node(..))
+import ModelTree exposing (Node, Shown(..))
 import ModelViewer.Types exposing (UiId(..))
 import Set exposing (Set)
 import Sprite
@@ -209,7 +209,7 @@ pathName path root =
             "the Model"
 
         i :: rest ->
-            case root of
+            case ModelTree.show root of
                 BranchNode branch ->
                     case List.drop i branch.children of
                         ( label, child ) :: _ ->
@@ -234,7 +234,7 @@ pathName path root =
 -}
 children : Model -> Int -> List Int -> Node root -> List (Ui.Element UiId.UiId)
 children model depth path node =
-    case node of
+    case ModelTree.show node of
         BranchNode branch ->
             List.indexedMap (\i ( label, child ) -> rows model depth (path ++ [ i ]) label (child ())) branch.children
                 |> List.concat
@@ -252,7 +252,7 @@ rows model depth path label node =
         isOpen =
             Set.member path model.expanded
     in
-    case node of
+    case ModelTree.show node of
         BranchNode branch ->
             row depth
                 (Ui.button

@@ -4021,7 +4021,7 @@ writes from the Model's types).
 -}
 modelTree : Model -> ModelTree.Node Model
 modelTree model =
-    Generated.ModelTree.model identity model
+    Generated.ModelTree.model (ModelTree.Put identity) model
 
 
 modelViewerClick : ModelViewer.Types.UiId -> Model -> Model

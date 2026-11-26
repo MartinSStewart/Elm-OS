@@ -2,7 +2,7 @@ module ModelTreeTest exposing (suite)
 
 import Expect
 import Generated.ModelTree
-import ModelTree exposing (Node(..))
+import ModelTree exposing (Node, Shown(..))
 import Sub.Things as Things
 import Test exposing (Test, describe, test)
 import WireApp
@@ -10,7 +10,7 @@ import WireApp
 
 root : WireApp.Model -> Node WireApp.Model
 root model =
-    Generated.ModelTree.model identity model
+    Generated.ModelTree.model (ModelTree.Put identity) model
 
 
 {-| The node the labels lead to, from the Model's.
@@ -22,7 +22,7 @@ find labels node =
             Just node
 
         label :: rest ->
-            case node of
+            case ModelTree.show node of
                 BranchNode branch ->
                     branch.children
                         |> List.filter (\( l, _ ) -> l == label)
@@ -35,7 +35,7 @@ find labels node =
 
 edit : List String -> String -> WireApp.Model -> Maybe WireApp.Model
 edit labels text model =
-    case find labels (root model) of
+    case Maybe.map ModelTree.show (find labels (root model)) of
         Just (LeafNode leaf) ->
             Maybe.andThen (\f -> f text) leaf.edit
 
@@ -50,7 +50,7 @@ previewOf labels model =
 
 choose : List String -> String -> WireApp.Model -> Maybe WireApp.Model
 choose labels name model =
-    case find labels (root model) of
+    case Maybe.map ModelTree.show (find labels (root model)) of
         Just (BranchNode branch) ->
             branch.choices
                 |> List.filter (\( n, _ ) -> n == name)

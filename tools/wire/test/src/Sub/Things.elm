@@ -47,4 +47,4 @@ number, which can be changed.
 -}
 modelTreeOpaque : ModelTree.Tree Opaque root
 modelTreeOpaque put (Opaque n b c) =
-    ModelTree.record [ ( "number", \() -> ModelTree.int (\new -> put (Opaque new b c)) n ) ]
+    ModelTree.fields [ ( "number", \() -> ModelTree.int (ModelTree.Put (\new -> ModelTree.apply put (Opaque new b c))) n ) ]
