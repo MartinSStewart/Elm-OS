@@ -3124,8 +3124,9 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
                         |> List.filter (\( flag, _, _ ) -> flag)
                         |> List.map (\( _, o, n ) -> convFn env depth o n)
             in
-            if homeKey mig.newHome newKey == oldKey && List.all (\( _, isSame, _ ) -> isSame) mappers then
-                -- The new version shares the old one's copy of the type: it's the same type.
+            if homeKey mig.newHome newKey == oldKey && List.all (\( o, n ) -> convFn env depth o n |> (\( _, isSame, _ ) -> isSame)) (List.map2 Tuple.pair oldArgs newArgs) then
+                -- The new version shares the old one's copy of the type, and every argument
+                -- (saved or not, like Ui.LazyCache's id) is the same: it's the same type.
                 Just (sameConv value)
 
             else
@@ -3176,26 +3177,41 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
                     Nothing
 
             ( ( "SeqDict", "SeqDict" ), [ oldK, oldV ], [ newK, newV ] ) ->
-                if not (fixed oldK) || oldK /= newK then
-                    Nothing
+                let
+                    ( fk, sameK, needsK ) =
+                        convFn env depth oldK newK
+
+                    ( f, isSame, needs ) =
+                        convFn env depth oldV newV
+
+                    pair =
+                        "w3_p" ++ String.fromInt depth
+                in
+                if sameK && isSame then
+                    Just (sameConv value)
+
+                else if sameK then
+                    Just (changedConv ("SeqDict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
 
                 else
-                    let
-                        ( f, isSame, needs ) =
-                            convFn env depth oldV newV
-                    in
-                    if isSame then
-                        Just (sameConv value)
-
-                    else
-                        Just (changedConv ("SeqDict.map (\\_ -> " ++ f ++ ") " ++ value) needs)
+                    -- A key of one of the program's types (its own in each version, even
+                    -- when it didn't change): every key is converted, in order.
+                    Just
+                        (changedConv
+                            ("SeqDict.fromList (List.map (\\( " ++ pair ++ "_k, " ++ pair ++ "_v ) -> ( " ++ applyFn fk (pair ++ "_k") ++ ", " ++ applyFn f (pair ++ "_v") ++ " )) (SeqDict.toList " ++ value ++ "))")
+                            (Set.union needsK needs)
+                        )
 
             ( ( "SeqSet", "SeqSet" ), [ o ], [ n ] ) ->
-                if fixed o && o == n then
+                let
+                    ( f, isSame, needs ) =
+                        convFn env depth o n
+                in
+                if isSame then
                     Just (sameConv value)
 
                 else
-                    Nothing
+                    Just (changedConv ("SeqSet.fromList (List.map " ++ f ++ " (SeqSet.toList " ++ value ++ "))") needs)
 
             ( ( "Result", "Result" ), [ oldE, oldA ], [ newE, newA ] ) ->
                 let
@@ -3231,6 +3247,17 @@ convNamed env depth ( oldKey, oldArgs ) ( newKey, newArgs ) value =
 
             _ ->
                 Nothing
+
+
+{-| `f x`, for a function from `convFn`.
+-}
+applyFn : String -> String -> String
+applyFn f x =
+    if f == "identity" then
+        x
+
+    else
+        f ++ " " ++ x
 
 
 {-| The two names of Json's Value are the same type.

@@ -26,11 +26,13 @@ module Color exposing
     , rgb255
     , rgba255
     , scrollbarColor
+    , scrollbarMarkColor
     , selectionColor
     , successColor
     , textColor
     , toInt
     , white
+    , wrapMarkerColor
     )
 
 {-| Colours, packed as 0xRRGGBBAA, which is how the render port carries them.
@@ -167,6 +169,14 @@ highlightColor =
     rgb255 88 81 76
 
 
+{-| The marker (Sprite.wrapMarker) at the start of each row a long line in the pixel font
+wraps onto, in viewports and the code editor: faint, so it doesn't read as part of the text.
+-}
+wrapMarkerColor : Color
+wrapMarkerColor =
+    rgb255 92 85 80
+
+
 {-| Behind selected text.
 -}
 selectionColor : Color
@@ -196,6 +206,13 @@ scrollbarColor alpha =
     rgba255 232 226 220 alpha
 
 
+{-| The bars on a scroll bar's track that show where the matches of a search are.
+-}
+scrollbarMarkColor : Color
+scrollbarMarkColor =
+    rgb255 255 214 60
+
+
 {-| The ripple a pressed button draws, with this alpha.
 -}
 pressColor : Int -> Color
@@ -210,6 +227,7 @@ paintPalette : List Color
 paintPalette =
     [ black
     , white
+    , wrapMarkerColor
     , rgb255 128 128 128
     , rgb255 200 30 40
     , rgb255 245 130 30

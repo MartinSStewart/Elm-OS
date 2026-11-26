@@ -1,4 +1,4 @@
-module Keyboard exposing (Key(..), fromCode, isCtrl, isShift)
+module Keyboard exposing (Key(..), fromCode, isAlt, isCtrl, isShift)
 
 {-| Linux key codes (KEY\_\* in linux/input-event-codes.h) to keys, with what they type on a
 US keyboard. The Key names follow the ones town-collab's TextInput uses (from the
@@ -35,6 +35,11 @@ isShift code =
 isCtrl : Int -> Bool
 isCtrl code =
     code == 29 || code == 97
+
+
+isAlt : Int -> Bool
+isAlt code =
+    code == 56 || code == 100
 
 
 fromCode : Bool -> Int -> Key

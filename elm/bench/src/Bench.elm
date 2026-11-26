@@ -7,6 +7,7 @@ Each step runs a few times and the fastest run is printed, in milliseconds.
 
 -}
 
+import Bounds
 import Bytes exposing (Bytes)
 import Bytes.Encode as BE
 import Coord
@@ -15,10 +16,12 @@ import Fixture
 import HackerNews
 import HackerNews.Types
 import HtmlParser
+import Keyboard
 import ScreenshotViewer
 import ScreenshotViewer.Types
 import Sprite
 import Task exposing (Task)
+import TextInputMultiline
 import Time
 import Ui
 import UiId
@@ -124,6 +127,7 @@ steps =
                     )
                 |> Task.andThen (\_ -> webViewer "front page" Fixture.top)
                 |> Task.andThen (\_ -> webViewer "item page" Fixture.item)
+                |> Task.andThen (\_ -> codeEditor (String.left 300000 Fixture.item))
 
 
 {-| One frame of the comments page on a screen this big (device pixels), at its UI scale:
@@ -364,3 +368,40 @@ main =
         , update = \() () -> ( (), Cmd.none )
         , subscriptions = \() -> Sub.none
         }
+
+
+{-| The code editor (TextInputMultiline, in the pixel font, so long lines wrap) holding
+`text`, with the cursor half way down it: a frame, and the work of a key that moves the
+cursor down a row.
+-}
+codeEditor : String -> Task Never ()
+codeEditor text =
+    let
+        scale =
+            Units.scaleFor (Coord.x screen)
+
+        screen =
+            Coord.xy 1280 800
+
+        style : TextInputMultiline.Style
+        style =
+            { font = Sprite.Mono
+            , fontSize = Sprite.Small
+            , width = Units.ui 900
+            , lines = 40
+            , syntax = TextInputMultiline.PlainText
+            , highlights = []
+            }
+
+        model : TextInputMultiline.Model
+        model =
+            TextInputMultiline.withText text
+                |> TextInputMultiline.select style (String.length text // 2) (String.length text // 2)
+
+        named label =
+            "code editor (" ++ String.fromInt (String.length text) ++ " chars, " ++ String.fromInt (List.length (String.lines text)) ++ " lines): " ++ label
+    in
+    timed (named "view (triangles)")
+        (\() -> TextInputMultiline.view scale (Bounds.fromTopLeftAndSize Coord.origin (Coord.xy 1280 800)) style (Coord.xy 10 10) True model |> List.length)
+        |> Task.andThen (\_ -> timed (named "ArrowDown") (\() -> TextInputMultiline.keyMsg style False False Keyboard.ArrowDown model |> Tuple.first |> .scroll))
+        |> Task.map (\_ -> ())

@@ -1,7 +1,7 @@
 module HtmlParserTest exposing (suite)
 
 import Expect
-import Html.Parser exposing (Node(..))
+import HtmlParser exposing (Node(..))
 import Test exposing (Test)
 
 
@@ -17,7 +17,7 @@ plain : Node -> Plain
 plain node =
     case node of
         Element name attributes children ->
-            E name (Html.Parser.attributeList attributes) (List.map plain children)
+            E name (HtmlParser.attributeList attributes) (List.map plain children)
 
         Text text ->
             T text
@@ -28,7 +28,7 @@ plain node =
 
 parsesTo : List Plain -> String -> Expect.Expectation
 parsesTo expected html =
-    Html.Parser.parse html |> List.map plain |> Expect.equal expected
+    HtmlParser.parse html |> List.map plain |> Expect.equal expected
 
 
 suite : Test
@@ -73,9 +73,9 @@ suite =
             (\_ -> "<table><tr><td>a<tr><td>b</table>" |> parsesTo [ E "table" [] [ E "tr" [] [ E "td" [] [ T "a" ] ], E "tr" [] [ E "td" [] [ T "b" ] ] ] ])
         , Test.test "findAll (matches and what's in them) and getAttribute"
             (\_ ->
-                Html.Parser.parse "<div class=\"a b\"><i class=\"b\">x</i><i>y</i></div>"
-                    |> Html.Parser.findAll hasClassB
-                    |> List.map (\node -> Html.Parser.textContent [ node ])
+                HtmlParser.parse "<div class=\"a b\"><i class=\"b\">x</i><i>y</i></div>"
+                    |> HtmlParser.findAll hasClassB
+                    |> List.map (\node -> HtmlParser.textContent [ node ])
                     |> Expect.equal [ "xy", "x" ]
             )
         ]
@@ -85,7 +85,7 @@ hasClassB : Node -> Bool
 hasClassB node =
     case node of
         Element _ attributes _ ->
-            Html.Parser.getAttribute "class" attributes |> Maybe.withDefault "" |> String.words |> List.member "b"
+            HtmlParser.getAttribute "class" attributes |> Maybe.withDefault "" |> String.words |> List.member "b"
 
         Text _ ->
             False

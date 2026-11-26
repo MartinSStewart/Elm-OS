@@ -1,7 +1,9 @@
 module ElmSyntax exposing
     ( Kind(..)
     , State
+    , codeOnly
     , highlightLine
+    , startStates
     , stateAt
     )
 
@@ -41,6 +43,56 @@ type State
 stateAt : Int -> List String -> State
 stateAt n lines =
     List.foldl endState Normal (List.take n lines)
+
+
+{-| The state at the start of every line.
+-}
+startStates : List String -> List State
+startStates lines =
+    List.foldl (\line ( state, acc ) -> ( endState line state, state :: acc )) ( Normal, [] ) lines
+        |> Tuple.second
+        |> List.reverse
+
+
+{-| The line (which starts in `state`) with its comments, strings and character literals
+replaced by spaces, so that only code is left, in the places it was.
+-}
+codeOnly : State -> String -> String
+codeOnly state line =
+    if
+        (state == Normal)
+            && not (String.contains "--" line || String.contains "{-" line || String.contains "\"" line || String.contains "'" line)
+    then
+        line
+
+    else
+        highlightLine state line
+            |> Tuple.first
+            |> List.map
+                (\( kind, text ) ->
+                    case kind of
+                        Comment ->
+                            String.repeat (String.length text) " "
+
+                        StringLiteral ->
+                            String.repeat (String.length text) " "
+
+                        Plain ->
+                            text
+
+                        Keyword ->
+                            text
+
+                        TypeName ->
+                            text
+
+                        NumberLiteral ->
+                            text
+
+                        Operator ->
+                            text
+                )
+            |> String.concat
 
 
 {-| The state after a line. Most lines have no `{-`, `-}` or `"""`, and those leave

@@ -16,6 +16,7 @@ module TextInputMultiline exposing
     , replaceRanges
     , scrollPixels
     , select
+    , selectCentered
     , size
     , stopGlide
     , view
@@ -32,13 +33,21 @@ column (in pixels, since Noto Sans is proportional), Home and End go to the ends
 line (with Ctrl, of the text), Page Up and Page Down move a box at a time, and Ctrl with
 Left, Right, Backspace or Delete works a word at a time. Shift with any move selects.
 Everything else (typing, Ctrl+A, C, X, Z, Y, Backspace, Delete, Left, Right) is
-TextInput's. Lines don't wrap: the box scrolls sideways to keep the cursor in view.
+TextInput's.
+
+In the pixel font (`Sprite.Mono`) long lines wrap at the box's edge, wherever a row is
+full (not between words, as viewports wrap the pixel font too), and every row a line wraps
+onto starts with a faint `Sprite.wrapMarker`. The marker is only drawn: it isn't in the text, and the cursor and
+selection go straight past it. Up, Down, Page Up and Page Down move by rows on screen;
+Home and End still go to the ends of the whole line. In Noto Sans lines don't wrap: the
+box scrolls sideways to keep the cursor in view.
 
 -}
 
 import Bounds exposing (Bounds)
 import Color
 import Coord exposing (Coord)
+import Dict exposing (Dict)
 import Duration exposing (Duration)
 import ElmSyntax
 import Keyboard
@@ -176,6 +185,164 @@ lineAt ls line =
     List.drop line ls |> List.head |> Maybe.withDefault ""
 
 
+
+-- ROWS
+
+
+{-| A row of text on screen: a whole line, or in the pixel font, the part of one that
+fits on a row. `start` is where it starts in the text and `column` where in its line;
+`indent` is how far in from the left its text is drawn (past the wrap marker, on rows
+after a line's first); `last` is whether it is its line's last row.
+-}
+type alias Row =
+    { line : Int
+    , start : Int
+    , column : Int
+    , text : String
+    , indent : Int
+    , last : Bool
+    }
+
+
+{-| Every row of the text, from the top.
+-}
+rows : Style -> String -> List Row
+rows style text =
+    let
+        ls : List String
+        ls =
+            lines text
+
+        whole : Int -> Int -> String -> List Row
+        whole n start l =
+            [ { line = n, start = start, column = 0, text = l, indent = 0, last = True } ]
+
+        perLine : Int -> Int -> String -> List Row
+        perLine =
+            case style.font of
+                Sprite.Mono ->
+                    let
+                        markerWidth : Int
+                        markerWidth =
+                            Coord.xRaw (Sprite.textSize style.fontSize Sprite.Mono Sprite.wrapMarker)
+
+                        columns : Int
+                        columns =
+                            max 2 (innerWidth style // max 1 markerWidth)
+                    in
+                    \n start l ->
+                        let
+                            length : Int
+                            length =
+                                String.length l
+                        in
+                        if length <= columns then
+                            whole n start l
+
+                        else
+                            wrapColumns columns l
+                                |> List.indexedMap
+                                    (\index ( from, to ) ->
+                                        { line = n
+                                        , start = start + from
+                                        , column = from
+                                        , text = String.slice from to l
+                                        , indent =
+                                            if index == 0 then
+                                                0
+
+                                            else
+                                                markerWidth
+                                        , last = to == length
+                                        }
+                                    )
+
+                Sprite.Sans _ ->
+                    whole
+    in
+    List.map2 Tuple.pair (lineStarts ls) ls
+        |> List.indexedMap (\n ( start, l ) -> perLine n start l)
+        |> List.concat
+
+
+{-| Where (start, end) a line `columns` characters wide wraps: wherever a row is full,
+with no regard for words, as Sprite.wrapLines wraps the pixel font. The rows after the
+first hold one character less, for the wrap marker.
+-}
+wrapColumns : Int -> String -> List ( Int, Int )
+wrapColumns columns line =
+    let
+        length : Int
+        length =
+            String.length line
+
+        go : Int -> Int -> List ( Int, Int ) -> List ( Int, Int )
+        go start fits done =
+            if length - start <= fits then
+                List.reverse (( start, length ) :: done)
+
+            else
+                go (start + fits) (columns - 1) (( start, start + fits ) :: done)
+    in
+    go 0 columns []
+
+
+rowEnd : Row -> Int
+rowEnd row =
+    row.start + String.length row.text
+
+
+{-| Which row caret `index` is on (from 0) and that row. A caret where a line wraps is at
+the start of the next row, so the end of a row is in it only if it ends its line.
+-}
+rowOf : List Row -> Int -> ( Int, Row )
+rowOf rs index =
+    rowOfHelper index 0 rs
+
+
+rowOfHelper : Int -> Int -> List Row -> ( Int, Row )
+rowOfHelper index n rs =
+    case rs of
+        row :: rest ->
+            if index < rowEnd row || (row.last && index == rowEnd row) || List.isEmpty rest then
+                ( n, row )
+
+            else
+                rowOfHelper index (n + 1) rest
+
+        [] ->
+            ( n, { line = 0, start = 0, column = 0, text = "", indent = 0, last = True } )
+
+
+rowAt : List Row -> Int -> Row
+rowAt rs n =
+    List.drop n rs |> List.head |> Maybe.withDefault { line = 0, start = 0, column = 0, text = "", indent = 0, last = True }
+
+
+{-| How far caret `index` (on `row`) is from the left of the text, in UI pixels.
+-}
+rowX : Style -> Row -> Int -> Int
+rowX style row index =
+    row.indent + caretX (carets style row.text) (index - row.start)
+
+
+{-| The caret on `row` nearest `x` UI pixels from the left of the text. Not the end of a
+row that wraps on, which is where the next row starts.
+-}
+indexAtX : Style -> Row -> Int -> Int
+indexAtX style row x =
+    let
+        positions : List Int
+        positions =
+            if row.last then
+                carets style row.text
+
+            else
+                carets style row.text |> List.take (String.length row.text)
+    in
+    row.start + nearestCaret positions (x - row.indent)
+
+
 {-| Where the cursor goes before each character of a line and after the last, in UI pixels.
 -}
 carets : Style -> String -> List Int
@@ -206,26 +373,15 @@ nearestCaret positions x =
         |> Tuple.first
 
 
-{-| The position in the text nearest `x` UI pixels along `line` (kept within the text).
--}
-indexAtX : Style -> List String -> Int -> Int -> Int
-indexAtX style ls line x =
-    let
-        clamped =
-            clamp 0 (List.length ls - 1) line
-    in
-    lineStart ls clamped + nearestCaret (carets style (lineAt ls clamped)) x
-
-
-{-| How far the cursor is from the start of its line, in UI pixels.
+{-| How far the cursor is from the left of its row, in UI pixels.
 -}
 cursorX : Style -> TextInput.State -> Int
 cursorX style state =
     let
-        ( line, column ) =
-            lineAndColumn state.text state.cursorPosition
+        ( _, row ) =
+            rowOf (rows style state.text) state.cursorPosition
     in
-    caretX (carets style (lineAt (lines state.text) line)) column
+    rowX style row state.cursorPosition
 
 
 
@@ -317,14 +473,20 @@ keyMsg style ctrl shift key model =
         ls =
             lines state.text
 
-        lastLine =
-            List.length ls - 1
+        rs =
+            rows style state.text
+
+        lastRow =
+            List.length rs - 1
 
         ( line, _ ) =
             lineAndColumn state.text state.cursorPosition
 
+        ( cursorRow, row ) =
+            rowOf rs state.cursorPosition
+
         x =
-            Maybe.withDefault (cursorX style state) model.goalX
+            Maybe.withDefault (rowX style row state.cursorPosition) model.goalX
 
         move position =
             ( { model | input = TextInput.replaceState (moveTo shift position) model.input }, TextInput.NoOutMsg )
@@ -332,15 +494,15 @@ keyMsg style ctrl shift key model =
         edit change =
             ( { model | input = TextInput.pushState change model.input |> limitHistory }, TextInput.NoOutMsg )
 
-        toLine target =
+        toRow target =
             if target < 0 then
                 0
 
-            else if target > lastLine then
+            else if target > lastRow then
                 String.length state.text
 
             else
-                indexAtX style ls target x
+                indexAtX style (rowAt rs target) x
 
         -- Up and Down keep aiming for the same column; every other key forgets it.
         moveVertically position =
@@ -364,16 +526,16 @@ keyMsg style ctrl shift key model =
             edit (TextInput.insertText "    ")
 
         ( False, Keyboard.ArrowUp ) ->
-            moveVertically (toLine (line - 1))
+            moveVertically (toRow (cursorRow - 1))
 
         ( False, Keyboard.ArrowDown ) ->
-            moveVertically (toLine (line + 1))
+            moveVertically (toRow (cursorRow + 1))
 
         ( False, Keyboard.PageUp ) ->
-            moveVertically (toLine (line - page))
+            moveVertically (toRow (cursorRow - page))
 
         ( False, Keyboard.PageDown ) ->
-            moveVertically (toLine (line + page))
+            moveVertically (toRow (cursorRow + page))
 
         ( False, Keyboard.Home ) ->
             move (lineStart ls line)
@@ -453,6 +615,30 @@ select style start end model =
         |> scrollToCursor style
 
 
+{-| Like `select`, but when the cursor's row is out of view it goes in the middle of the box
+rather than at its edge, as it does after a jump.
+-}
+selectCentered : Style -> Int -> Int -> Model -> Model
+selectCentered style start end model =
+    let
+        selected : Model
+        selected =
+            select style start end model
+
+        state : TextInput.State
+        state =
+            selected.input.current
+
+        ( row, _ ) =
+            rowOf (rows style state.text) state.cursorPosition
+    in
+    if row >= model.scroll && row < model.scroll + style.lines then
+        selected
+
+    else
+        jumpTo (clampScroll style state (row - style.lines // 2)) selected
+
+
 {-| Replaces each of the ranges (start, end; in order, not overlapping) of the text with
 `replacement`, as one change to undo, and puts the cursor after the last one.
 -}
@@ -491,7 +677,7 @@ replaceRanges style replacement ranges model =
             |> scrollToCursor style
 
 
-{-| Scroll the smallest amount that shows the cursor's line, and no further than the text.
+{-| Scroll the smallest amount that shows the cursor's row, and no further than the text.
 -}
 scrollToCursor : Style -> Model -> Model
 scrollToCursor style model =
@@ -499,15 +685,15 @@ scrollToCursor style model =
         state =
             model.input.current
 
-        ( line, _ ) =
-            lineAndColumn state.text state.cursorPosition
+        ( row, _ ) =
+            rowOf (rows style state.text) state.cursorPosition
 
         scroll =
-            if line < model.scroll then
-                line
+            if row < model.scroll then
+                row
 
-            else if line >= model.scroll + style.lines then
-                line - style.lines + 1
+            else if row >= model.scroll + style.lines then
+                row - style.lines + 1
 
             else
                 model.scroll
@@ -528,7 +714,7 @@ jumpTo scroll model =
 
 clampScroll : Style -> TextInput.State -> Int -> Int
 clampScroll style state scroll =
-    clamp 0 (max 0 (List.length (lines state.text) - style.lines)) scroll
+    clamp 0 (max 0 (List.length (rows style state.text) - style.lines)) scroll
 
 
 {-| The mouse wheel turned `clicks` (positive is up): glide three lines a click.
@@ -667,8 +853,8 @@ indexAt style mousePosition position model =
         state =
             model.input.current
 
-        ls =
-            lines state.text
+        rs =
+            rows style state.text
 
         ( mx, my ) =
             Coord.toTuple (Coord.minus position mousePosition)
@@ -676,18 +862,18 @@ indexAt style mousePosition position model =
         relativeY =
             my - pad
 
-        line =
-            -- rounded down, so above the box is the line before the first in view
+        row =
+            -- rounded down, so above the box is the row before the first in view
             floor (toFloat (relativeY + shownPixels style model) / toFloat (lineHeight style))
     in
-    if line < 0 then
+    if row < 0 then
         0
 
-    else if line >= List.length ls then
+    else if row >= List.length rs then
         String.length state.text
 
     else
-        indexAtX style ls line (mx - pad - caretWidth style + scrollX style state)
+        indexAtX style (rowAt rs row) (mx - pad - caretWidth style + scrollX style state)
 
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
@@ -779,12 +965,12 @@ overScrollbar style point model =
     Scrollbar.isOver (scrollbarGeometry style model.input.current) (Coord.minus (scrollbarPosition style) point)
 
 
-{-| The scroll bar's track is the text area, a line for each line of text.
+{-| The scroll bar's track is the text area, a line for each row of text.
 -}
 scrollbarGeometry : Style -> TextInput.State -> Scrollbar.Geometry
 scrollbarGeometry style state =
     { track = lineHeight style * style.lines
-    , content = lineHeight style * List.length (lines state.text)
+    , content = lineHeight style * List.length (rows style state.text)
     }
 
 
@@ -862,11 +1048,17 @@ innerWidth style =
     width style - 2 * pad - 2 * caretWidth style
 
 
-{-| How far every line is scrolled left, in UI pixels: just enough to show the cursor.
+{-| How far every line is scrolled left, in UI pixels: just enough to show the cursor
+(never, in the pixel font, whose lines wrap).
 -}
 scrollX : Style -> TextInput.State -> Int
 scrollX style state =
-    max 0 (cursorX style state - innerWidth style)
+    case style.font of
+        Sprite.Mono ->
+            0
+
+        Sprite.Sans _ ->
+            max 0 (cursorX style state - innerWidth style)
 
 
 view : UiScale -> Bounds UiPixels -> Style -> Coord UiPixels -> Bool -> Model -> List (Triangle DevicePixels)
@@ -880,6 +1072,9 @@ view scale viewport style offset hasFocus model =
 
         ls =
             lines state.text
+
+        rs =
+            rows style state.text
 
         ( x, y ) =
             Coord.toTuple offset
@@ -908,11 +1103,11 @@ view scale viewport style offset hasFocus model =
         selectionEnd =
             TextInput.selectionMax state
 
+        visible : List ( Int, Row )
         visible =
-            List.map2 (\start l -> ( start, l )) (lineStarts ls) ls
-                |> List.indexedMap (\n ( start, l ) -> { line = n, start = start, text = l })
-                |> List.drop first
+            List.drop first rs
                 |> List.take (style.lines + 1)
+                |> List.indexedMap (\n row -> ( first + n, row ))
 
         top n =
             y + pad + n * height - shownPixels style model
@@ -942,8 +1137,26 @@ view scale viewport style offset hasFocus model =
                     (Coord.xy (x + pad) (y + pad))
                     (Coord.xy (boxWidth - 2 * pad) (boxHeight - 2 * pad))
 
-        -- Each line's part of the selection, with a bit more past its end when the
-        -- selection goes on to the next line, so a selected empty line shows.
+        -- From `from` to `to` on a row, cut off at the sides of the text area.
+        band color n row from to extra =
+            let
+                positions =
+                    carets style row.text
+
+                left =
+                    textLeft + row.indent + caretX positions (from - row.start)
+
+                right =
+                    textLeft + row.indent + caretX positions (to - row.start) + extra
+            in
+            Sprite.rectangle
+                color
+                textArea
+                (Coord.xy (max clip.left left) (top n))
+                (Coord.xy (max 0 (min clip.right right - max clip.left left)) height)
+
+        -- Each row's part of the selection, with a bit more past the end of a line when
+        -- the selection goes on to the next line, so a selected empty line shows.
         selection =
             if state.cursorSize == 0 then
                 []
@@ -951,90 +1164,121 @@ view scale viewport style offset hasFocus model =
             else
                 visible
                     |> List.concatMap
-                        (\l ->
+                        (\( n, row ) ->
                             let
                                 end =
-                                    l.start + String.length l.text
+                                    rowEnd row
 
                                 from =
-                                    max selectionStart l.start
+                                    max selectionStart row.start
 
                                 to =
                                     min selectionEnd end
-
-                                positions =
-                                    carets style l.text
-
-                                left =
-                                    textLeft + caretX positions (from - l.start)
-
-                                right =
-                                    textLeft
-                                        + caretX positions (to - l.start)
-                                        + (if selectionEnd > end then
-                                            height // 3
-
-                                           else
-                                            0
-                                          )
                             in
-                            if from > to || (from == to && selectionEnd <= end) then
+                            if from > to || (from == to && (selectionEnd <= end || not row.last)) then
                                 []
 
                             else
-                                Sprite.rectangle
+                                band
                                     Color.selectionColor
-                                    textArea
-                                    (Coord.xy (max clip.left left) (top l.line))
-                                    (Coord.xy (min clip.right right - max clip.left left) height)
+                                    n
+                                    row
+                                    from
+                                    to
+                                    (if row.last && selectionEnd > end then
+                                        height // 3
+
+                                     else
+                                        0
+                                    )
                         )
 
-        -- The marked ranges, which are each inside one line.
+        -- The marked ranges (each inside one line, but maybe over more than one row).
         marks =
-            List.concatMap
-                (\( start, end ) ->
+            case ( List.head visible, List.reverse visible |> List.head ) of
+                ( Just ( _, firstRow ), Just ( _, lastRow ) ) ->
                     let
-                        ( line, column ) =
-                            lineAndColumn state.text start
+                        shown =
+                            List.filter
+                                (\( start, end ) -> end > firstRow.start && start < rowEnd lastRow)
+                                style.highlights
                     in
-                    if line < first || line > first + style.lines then
-                        []
+                    List.concatMap
+                        (\( n, row ) ->
+                            List.concatMap
+                                (\( start, end ) ->
+                                    let
+                                        from =
+                                            max start row.start
 
-                    else
-                        let
-                            positions =
-                                carets style (lineAt ls line)
+                                        to =
+                                            min end (rowEnd row)
+                                    in
+                                    if from < to then
+                                        band Color.findMatchColor n row from to 0
 
-                            left =
-                                textLeft + caretX positions column
+                                    else
+                                        []
+                                )
+                                shown
+                        )
+                        visible
 
-                            right =
-                                textLeft + caretX positions (column + end - start)
-                        in
-                        Sprite.rectangle
-                            Color.findMatchColor
-                            textArea
-                            (Coord.xy (max clip.left left) (top line))
-                            (Coord.xy (max 0 (min clip.right right - max clip.left left)) height)
-                )
-                style.highlights
+                _ ->
+                    []
 
-        ( cursorLine, cursorColumn ) =
-            lineAndColumn state.text state.cursorPosition
+        ( cursorRow, cursorRowText ) =
+            rowOf rs state.cursorPosition
 
         caret =
-            if hasFocus && cursorLine >= first && cursorLine <= first + style.lines then
+            if hasFocus && cursorRow >= first && cursorRow <= first + style.lines then
                 Sprite.rectangle
                     Color.textColor
                     textArea
                     (Coord.xy
-                        (textLeft + caretX (carets style (lineAt ls cursorLine)) cursorColumn - caretWidth style)
-                        (top cursorLine)
+                        (textLeft + rowX style cursorRowText state.cursorPosition - caretWidth style)
+                        (top cursorRow)
                     )
                     (Coord.xy (caretWidth style) height)
 
             else
                 []
+
+        -- The lines the rows in view are parts of, coloured.
+        segmentsByLine : Dict Int (List Sprite.Segment)
+        segmentsByLine =
+            case visible of
+                ( _, firstRow ) :: _ ->
+                    let
+                        lastLine =
+                            List.foldl (\( _, row ) _ -> row.line) firstRow.line visible
+                    in
+                    List.drop firstRow.line ls
+                        |> List.take (lastLine - firstRow.line + 1)
+                        |> List.indexedMap (\n l -> { line = firstRow.line + n, text = l })
+                        |> colored style firstRow.line ls
+                        |> List.map (\l -> ( l.line, l.segments ))
+                        |> Dict.fromList
+
+                [] ->
+                    Dict.empty
+
+        marker =
+            { text = Sprite.wrapMarker, color = Color.wrapMarkerColor, font = Sprite.Mono, decorations = [], link = Nothing }
+
+        rowSegments row =
+            let
+                segments =
+                    Dict.get row.line segmentsByLine |> Maybe.withDefault []
+            in
+            if row.column == 0 && row.last then
+                segments
+
+            else if row.indent > 0 then
+                marker :: sliceSegments row.column (row.column + String.length row.text) segments
+
+            else
+                sliceSegments row.column (row.column + String.length row.text) segments
 
         scrollBar =
             Scrollbar.view
@@ -1043,19 +1287,87 @@ view scale viewport style offset hasFocus model =
                 (scrollbarGeometry style state)
                 (scrolledPixels style model)
                 model
+                ++ Scrollbar.marks
+                    viewport
+                    (Coord.plus (scrollbarPosition style) offset)
+                    (scrollbarGeometry style state)
+                    (List.map (\row -> row * height) (highlightRows style.highlights rs))
     in
     Sprite.toDevice scale (box ++ marks ++ selection)
         ++ List.concatMap
-            (\l ->
+            (\( n, row ) ->
                 Sprite.customText
                     scale
                     style.fontSize
                     textArea
-                    l.segments
-                    (Coord.xy textLeft (top l.line))
+                    (rowSegments row)
+                    (Coord.xy textLeft (top n))
             )
-            (colored style first ls visible)
+            visible
         ++ Sprite.toDevice scale (caret ++ scrollBar)
+
+
+{-| The rows (from 0, in order, maybe repeating) the highlighted ranges (in order) start on:
+one pass over both.
+-}
+highlightRows : List ( Int, Int ) -> List Row -> List Int
+highlightRows highlights rs =
+    highlightRowsHelper highlights 0 rs
+
+
+highlightRowsHelper : List ( Int, Int ) -> Int -> List Row -> List Int
+highlightRowsHelper highlights n rs =
+    case ( highlights, rs ) of
+        ( ( start, _ ) :: restHighlights, row :: restRows ) ->
+            if start < rowEnd row || (row.last && start == rowEnd row) || List.isEmpty restRows then
+                n :: highlightRowsHelper restHighlights n rs
+
+            else
+                highlightRowsHelper highlights (n + 1) restRows
+
+        _ ->
+            []
+
+
+{-| The parts of `segments` (one line, one after another) from character `from` to `to`.
+-}
+sliceSegments : Int -> Int -> List Sprite.Segment -> List Sprite.Segment
+sliceSegments from to segments =
+    sliceSegmentsHelper from to 0 segments []
+
+
+sliceSegmentsHelper : Int -> Int -> Int -> List Sprite.Segment -> List Sprite.Segment -> List Sprite.Segment
+sliceSegmentsHelper from to at segments done =
+    case segments of
+        segment :: rest ->
+            if at >= to then
+                List.reverse done
+
+            else
+                let
+                    length =
+                        String.length segment.text
+
+                    a =
+                        max from at
+
+                    b =
+                        min to (at + length)
+                in
+                sliceSegmentsHelper
+                    from
+                    to
+                    (at + length)
+                    rest
+                    (if a < b then
+                        { segment | text = String.slice (a - at) (b - at) segment.text } :: done
+
+                     else
+                        done
+                    )
+
+        [] ->
+            List.reverse done
 
 
 {-| Each line in view, in pieces of one colour. For Elm code, the lines before the first

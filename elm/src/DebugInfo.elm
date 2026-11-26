@@ -10,7 +10,7 @@ import Color
 import Coord exposing (Coord)
 import DebugInfo.Types exposing (RendererInfo, SystemStats)
 import Display exposing (Display)
-import Quantity exposing (Quantity)
+import Quantity
 import Sprite
 import Time
 import Ui
@@ -34,7 +34,7 @@ type alias Info =
     }
 
 
-{-| The app's window size, from `sample`, once.
+{-| The app's window size.
 -}
 limits : App.Limits
 limits =

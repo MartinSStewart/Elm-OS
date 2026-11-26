@@ -1,7 +1,11 @@
 module Code exposing
     ( Model
+    , afterEvent
     , appSize
     , buildUpdate
+    , ctrlClick
+    , cursorBack
+    , cursorForward
     , findChanged
     , findKeyDown
     , findShown
@@ -35,7 +39,8 @@ import App
 import BuildInfo
 import Code.Find
 import Code.GitHub
-import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), UiId(..))
+import Code.Index
+import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), Place, UiId(..), UsageList)
 import Color
 import Coord exposing (Coord)
 import Effect exposing (Effect)
@@ -54,9 +59,6 @@ import Units exposing (UiPixels)
 
 type alias Model =
     { isOpen : Bool
-
-    -- The list of modules shows instead of the text.
-    , picking : Bool
 
     -- The module being edited, by name.
     , module_ : Maybe String
@@ -77,13 +79,22 @@ type alias Model =
     -- The find and replace bar shows over the code (what is typed in it is in the UI's
     -- state, under FindInput and ReplaceInput).
     , finding : Bool
+
+    -- Where the cursor jumped from, newest first, and where it was before going back
+    -- through them (Alt+Shift+Left and Right). `lastPlace` is where it was after the last
+    -- event, to tell when it moves far.
+    , back : List Place
+    , forward : List Place
+    , lastPlace : Maybe Place
+
+    -- Where a definition is used, shown under the code after Ctrl+click on it.
+    , usages : Maybe UsageList
     }
 
 
 init : Model
 init =
     { isOpen = False
-    , picking = True
     , module_ = Nothing
     , saved = SeqDict.empty
     , build = Nothing
@@ -91,6 +102,10 @@ init =
     , committing = False
     , git = Code.GitHub.init
     , finding = False
+    , back = []
+    , forward = []
+    , lastPlace = Nothing
+    , usages = Nothing
     }
 
 
@@ -147,7 +162,7 @@ onClick id boxStyle text uiState model =
     case id of
         OpenButton ->
             ( { model | isOpen = not model.isOpen }
-            , if model.isOpen || model.picking then
+            , if model.isOpen || model.module_ == Nothing then
                 uiState
 
               else
@@ -157,7 +172,7 @@ onClick id boxStyle text uiState model =
 
         Window ->
             -- A click around the text still types into it.
-            if model.picking || model.showErrors then
+            if model.module_ == Nothing || model.showErrors || model.committing then
                 ( model, uiState, [] )
 
             else
@@ -169,14 +184,11 @@ onClick id boxStyle text uiState model =
         CloseButton ->
             ( { model | isOpen = False }, uiState, [] )
 
-        ModulesButton ->
-            ( { model | picking = not model.picking || model.module_ == Nothing, showErrors = False }, Ui.setFocus Nothing uiState, [] )
-
         ModulesViewport ->
             ( model, uiState, [] )
 
         ModuleButton name ->
-            load name uiState { model | picking = False, module_ = Just name }
+            openModule name text uiState model
 
         SaveButton ->
             ( save text model, uiState, [] )
@@ -194,7 +206,7 @@ onClick id boxStyle text uiState model =
             -- host refuses another.
             let
                 saved =
-                    if model.picking || model.module_ == Nothing then
+                    if model.module_ == Nothing then
                         model
 
                     else
@@ -220,7 +232,7 @@ onClick id boxStyle text uiState model =
         CommitButton ->
             let
                 saved =
-                    if model.picking || model.module_ == Nothing then
+                    if model.module_ == Nothing then
                         model
 
                     else
@@ -278,6 +290,24 @@ onClick id boxStyle text uiState model =
         FindCloseButton ->
             ( closeFind model, Ui.setFocus (Just (UiId.Code Input)) uiState, [] )
 
+        UsagesViewport ->
+            ( model, uiState, [] )
+
+        UsageButton index ->
+            case model.usages |> Maybe.andThen (\list -> List.drop index list.found |> List.head) of
+                Just usage ->
+                    let
+                        ( model2, uiState2 ) =
+                            jump boxStyle { module_ = usage.module_, position = usage.position, line = usage.line } uiState model
+                    in
+                    ( model2, uiState2, [] )
+
+                Nothing ->
+                    ( model, uiState, [] )
+
+        UsagesCloseButton ->
+            ( { model | usages = Nothing }, Ui.setFocus (Just (UiId.Code Input)) uiState, [] )
+
 
 
 -- FIND AND REPLACE
@@ -287,7 +317,7 @@ onClick id boxStyle text uiState model =
 -}
 findShown : Model -> Bool
 findShown model =
-    model.finding && not model.picking && not model.showErrors && not model.committing && model.module_ /= Nothing
+    model.finding && not model.showErrors && not model.committing && model.module_ /= Nothing
 
 
 {-| Ctrl+F: shows the bar (or goes back to it), with what is selected in the code, if it is
@@ -658,13 +688,315 @@ buildUpdate : BuildStatus -> Model -> Model
 buildUpdate status model =
     case status of
         BuildFailed _ _ ->
-            { model | build = Just status, showErrors = True, isOpen = True, picking = False }
+            { model | build = Just status, showErrors = True, isOpen = True }
 
         BuildRunning _ ->
             { model | build = Just status }
 
         Built _ ->
             { model | build = Just status }
+
+
+{-| Shows the module in the text box (when it isn't already there). The text of the module
+that was open is saved first, so changing module never loses a change.
+-}
+openModule : String -> String -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId, List Effect )
+openModule name text uiState model =
+    if model.module_ == Just name then
+        ( { model | showErrors = False, committing = False }
+        , Ui.setFocus (Just (UiId.Code Input)) uiState
+        , []
+        )
+
+    else
+        let
+            saved : Model
+            saved =
+                if model.module_ == Nothing then
+                    model
+
+                else
+                    save text model
+        in
+        load name uiState { saved | module_ = Just name, committing = False }
+
+
+
+-- CURSOR HISTORY
+
+
+{-| How many places the cursor can go back through.
+-}
+historyLimit : Int
+historyLimit =
+    200
+
+
+{-| How many lines the cursor moves in one go for it to count as a jump (a click, Page
+Up, a search match, a change of module) and not a step (an arrow key, Enter).
+-}
+jumpLines : Int
+jumpLines =
+    3
+
+
+{-| The module's name and the cursor's position in the text box, with its line.
+-}
+currentPlace : Ui.Model UiId.UiId -> Model -> Maybe Place
+currentPlace uiState model =
+    case model.module_ of
+        Just name ->
+            let
+                state : TextInput.State
+                state =
+                    (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current
+            in
+            Just
+                { module_ = name
+                , position = state.cursorPosition
+                , line = List.length (String.indexes "\n" (String.left state.cursorPosition state.text))
+                }
+
+        Nothing ->
+            Nothing
+
+
+{-| After every event Main handles: notes where the cursor is, and if it jumped (to another
+module, or `jumpLines` lines or more) from where it was after the last event, keeps that
+place to go back to. A jump forgets the places to go forward to.
+-}
+afterEvent : Ui.Model UiId.UiId -> Model -> Model
+afterEvent uiState model =
+    case ( model.module_, model.lastPlace ) of
+        ( Just name, Just last ) ->
+            if last.module_ == name && last.position == (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.cursorPosition then
+                -- Not moved (most events): nothing to work out.
+                model
+
+            else
+                case currentPlace uiState model of
+                    Just now ->
+                        if last.module_ /= now.module_ || abs (last.line - now.line) >= jumpLines then
+                            { model | back = remember last model.back, forward = [], lastPlace = Just now }
+
+                        else
+                            { model | lastPlace = Just now }
+
+                    Nothing ->
+                        model
+
+        _ ->
+            { model | lastPlace = currentPlace uiState model }
+
+
+remember : Place -> List Place -> List Place
+remember place places =
+    place :: List.take (historyLimit - 1) places
+
+
+{-| Alt+Shift+Left: puts the cursor where it was before it last jumped, in that module.
+-}
+cursorBack : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+cursorBack boxStyle uiState model =
+    case ( model.back, currentPlace uiState model ) of
+        ( target :: older, Just now ) ->
+            goTo boxStyle target uiState { model | back = older, forward = now :: model.forward }
+
+        _ ->
+            ( model, uiState )
+
+
+{-| Alt+Shift+Right: goes on again to where the cursor was when it went back.
+-}
+cursorForward : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+cursorForward boxStyle uiState model =
+    case ( model.forward, currentPlace uiState model ) of
+        ( target :: later, Just now ) ->
+            goTo boxStyle target uiState { model | forward = later, back = remember now model.back }
+
+        _ ->
+            ( model, uiState )
+
+
+{-| Moves the cursor to a place as a jump: where it was can be gone back to.
+-}
+jump : TextInputMultiline.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+jump boxStyle target uiState model =
+    case currentPlace uiState model of
+        Just now ->
+            goTo boxStyle target uiState { model | back = remember now model.back, forward = [] }
+
+        Nothing ->
+            goTo boxStyle target uiState model
+
+
+
+-- GO TO DEFINITION AND USAGES
+
+
+{-| Ctrl+click in the code, with the cursor where the mouse went down (so it is on the
+name that was clicked):
+
+  - on a name that is used: goes to where it is defined, in whichever module;
+  - on a name where it is defined: shows where it is used (under the code);
+  - on a module in a name (the `Ui` of `Ui.text`) or in an import: goes to the module.
+
+Nothing if there is nothing to go to (a name from a package, or not a name), and then the
+click is an ordinary one.
+
+-}
+ctrlClick : Coord UiPixels -> Ui.Model UiId.UiId -> Model -> Maybe ( Model, Ui.Model UiId.UiId )
+ctrlClick windowSize uiState model =
+    case model.module_ of
+        Just thisModule ->
+            let
+                state : TextInput.State
+                state =
+                    (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current
+            in
+            case Code.Index.wordAt state.cursorPosition state.text of
+                Just word ->
+                    ctrlClickWord windowSize thisModule state word uiState model
+
+                Nothing ->
+                    Nothing
+
+        Nothing ->
+            Nothing
+
+
+ctrlClickWord : Coord UiPixels -> String -> TextInput.State -> Code.Index.Word -> Ui.Model UiId.UiId -> Model -> Maybe ( Model, Ui.Model UiId.UiId )
+ctrlClickWord windowSize thisModule state word uiState model =
+    let
+        text : String
+        text =
+            state.text
+
+        boxStyle : TextInputMultiline.Style
+        boxStyle =
+            style windowSize model
+
+        imports : List Code.Index.Import
+        imports =
+            Code.Index.imports text
+
+        -- What a module has: the open one as it is in the text box, the others as saved.
+        textOf : String -> Maybe String
+        textOf name =
+            if name == thisModule then
+                Just text
+
+            else
+                moduleText name model
+
+        declarationsOf : String -> List Code.Index.Declaration
+        declarationsOf name =
+            textOf name |> Maybe.map Code.Index.declarations |> Maybe.withDefault []
+
+        goToModule : String -> Maybe ( Model, Ui.Model UiId.UiId )
+        goToModule name =
+            if SeqDict.member name SourceCode.sourceCode then
+                Just (jump boxStyle { module_ = name, position = 0, line = 0 } uiState model)
+
+            else
+                Nothing
+
+        lineStart : Int
+        lineStart =
+            word.start - word.column
+    in
+    if word.column == 7 && String.slice lineStart (lineStart + 7) text == "import " then
+        goToModule (String.join "." (word.qualifier ++ [ word.name ]))
+
+    else
+        case Code.Index.qualifierAt state.cursorPosition word of
+            Just qualifier ->
+                Code.Index.moduleOf imports qualifier |> Maybe.andThen goToModule
+
+            Nothing ->
+                if List.isEmpty word.qualifier && List.any (\declaration -> declaration.start == word.nameStart) (declarationsOf thisModule) then
+                    -- A definition: where it is used.
+                    let
+                        target : Code.Index.Target
+                        target =
+                            { module_ = thisModule, name = word.name, position = word.nameStart }
+
+                        sources : List { name : String, text : String }
+                        sources =
+                            SeqDict.keys SourceCode.sourceCode
+                                |> List.filter shownModule
+                                |> List.filterMap (\name -> textOf name |> Maybe.map (\moduleText_ -> { name = name, text = moduleText_ }))
+
+                        withUsages : Model
+                        withUsages =
+                            { model | usages = Just { module_ = thisModule, name = word.name, found = Code.Index.usages target sources } }
+
+                        editor : TextInputMultiline.Model
+                        editor =
+                            Ui.getTextInputMultiline (UiId.Code Input) uiState
+                    in
+                    -- The list takes some of the code's lines, so the cursor may be hidden now.
+                    Just
+                        ( withUsages
+                        , Ui.insertElement
+                            (UiId.Code Input)
+                            (Ui.TextInputMultilineState
+                                (TextInputMultiline.select (style windowSize withUsages) state.cursorPosition state.cursorPosition editor)
+                            )
+                            uiState
+                        )
+
+                else
+                    Code.Index.resolve { thisModule = thisModule, imports = imports, declarationsOf = declarationsOf } word
+                        |> Maybe.map
+                            (\target ->
+                                jump
+                                    boxStyle
+                                    { module_ = target.module_
+                                    , position = target.position
+                                    , line = lineOf (textOf target.module_ |> Maybe.withDefault "") target.position
+                                    }
+                                    uiState
+                                    model
+                            )
+
+
+{-| The line (from 0) a position in the text is on.
+-}
+lineOf : String -> Int -> Int
+lineOf text position =
+    List.length (String.indexes "\n" (String.left position text))
+
+
+{-| Puts the cursor at a place, in whichever module, and shows it. That is not a jump to
+remember (the caller keeps the history).
+-}
+goTo : TextInputMultiline.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+goTo boxStyle target uiState model =
+    let
+        text : String
+        text =
+            (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+
+        ( opened, uiState2, _ ) =
+            openModule target.module_ text uiState model
+
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState2
+
+        position : Int
+        position =
+            min target.position (String.length editor.input.current.text)
+
+        uiState3 : Ui.Model UiId.UiId
+        uiState3 =
+            Ui.insertElement
+                (UiId.Code Input)
+                (Ui.TextInputMultilineState (TextInputMultiline.selectCentered boxStyle position position editor))
+                uiState2
+    in
+    ( { opened | lastPlace = currentPlace uiState3 opened }, Ui.setFocus (Just (UiId.Code Input)) uiState3 )
 
 
 {-| Puts the module's text in the text box.
@@ -691,7 +1023,7 @@ load name uiState model =
 -}
 appSize : App.Limits
 appSize =
-    { min = Coord.xy 400 250
+    { min = Coord.xy (sidebarWidth + 400) 250
     , preferred = Coord.xy 900 (chrome + 30 * lineHeight)
     , max = Coord.xy 1600 100000
     }
@@ -710,6 +1042,14 @@ chrome =
     2 * 8 + Quantity.unwrap (Sprite.lineHeight Sprite.Big) + lineHeight + 2 * 6 + 2 * 4 + 6
 
 
+{-| The space between the list of modules and what is beside it, and between the parts
+of the window above each other.
+-}
+gap : Int
+gap =
+    6
+
+
 {-| The text box, as big as the window (of this size) lets it be: with the find bar over
 it, it has fewer lines.
 -}
@@ -718,15 +1058,22 @@ style windowSize model =
     let
         width : Quantity Int UiPixels
         width =
-            Units.ui (Coord.xRaw windowSize - 16)
+            Units.ui (Coord.xRaw windowSize - 16 - sidebarWidth - gap)
 
         barHeight : Int
         barHeight =
-            if findShown model then
-                Coord.yRaw (Ui.size (findBar width)) + 6
+            (if findShown model then
+                Coord.yRaw (Ui.size (findBar width)) + gap
 
-            else
+             else
                 0
+            )
+                + (if usagesShown model then
+                    usagesPanelHeight
+
+                   else
+                    0
+                  )
     in
     { font = Sprite.Mono
     , fontSize = Sprite.Small
@@ -769,7 +1116,7 @@ view windowSize input needle switchingTo model =
             TextInputMultiline.lineAndColumn state.text state.cursorPosition
 
         editing =
-            if model.picking || model.showErrors || model.committing then
+            if model.showErrors || model.committing then
                 Nothing
 
             else
@@ -881,15 +1228,7 @@ view windowSize input needle switchingTo model =
                             ++ [ button CommitCloseButton "Back to code", button CloseButton "Close" ]
 
                     else
-                        (case model.module_ of
-                            Just _ ->
-                                [ button ModulesButton "Back" ]
-
-                            Nothing ->
-                                []
-                        )
-                            ++ buildButton
-                            ++ [ button CloseButton "Close" ]
+                        buildButton ++ [ button CloseButton "Close" ]
 
                 ( False, Just name ) ->
                     (if unsaved then
@@ -905,7 +1244,7 @@ view windowSize input needle switchingTo model =
                                 []
                            )
                         ++ buildButton
-                        ++ [ button ModulesButton "Modules", button CloseButton "Close" ]
+                        ++ [ button CloseButton "Close" ]
 
         boxHeight =
             Units.ui (Coord.yRaw (TextInputMultiline.size boxStyle))
@@ -918,7 +1257,7 @@ view windowSize input needle switchingTo model =
                 _ ->
                     ""
 
-        body =
+        pane =
             if model.committing then
                 Ui.viewport
                     { id = UiId.Code CommitViewport, viewportHeight = boxHeight }
@@ -937,36 +1276,36 @@ view windowSize input needle switchingTo model =
             else
                 case editing of
                     Just _ ->
-                        if findShown model then
-                            Ui.column 6 [ findBar boxStyle.width, Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle } ]
+                        Ui.column
+                            gap
+                            ((if findShown model then
+                                [ findBar boxStyle.width ]
 
-                        else
-                            Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle }
+                              else
+                                []
+                             )
+                                ++ [ Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle } ]
+                                ++ (case model.usages of
+                                        Just usages ->
+                                            [ usagesPanel boxStyle.width usages ]
+
+                                        Nothing ->
+                                            []
+                                   )
+                            )
 
                     Nothing ->
-                        Ui.viewport
-                            { id = UiId.Code ModulesViewport, viewportHeight = boxHeight }
-                            (Ui.column
-                                4
-                                (List.map
-                                    (\name ->
-                                        Ui.button
-                                            { id = UiId.Code (ModuleButton name), pad = Ui.paddingXY 6 3 }
-                                            (if isEdited name model then
-                                                Ui.customText Sprite.Small [ segment Color.textColor name, segment Color.successColor "  changed" ]
+                        Ui.center
+                            { size = Coord.xy (Quantity.unwrap boxStyle.width) (Quantity.unwrap boxHeight) }
+                            (Ui.customText Sprite.Small [ segment Color.dimTextColor "Pick a module on the left" ])
 
-                                             else
-                                                Ui.text name
-                                            )
-                                    )
-                                    (List.filter shownModule (SeqDict.keys SourceCode.sourceCode))
-                                )
-                            )
+        body =
+            Ui.row gap [ modulesList boxHeight editing model, pane ]
 
         content =
             Ui.column
                 6
-                [ Ui.leftAndRight boxStyle.width
+                [ Ui.leftAndRight (Units.ui (Coord.xRaw windowSize - 16))
                     (Ui.customText Sprite.Big [ segment Color.textColor title ])
                     (Ui.row 6 buttons)
                 , body
@@ -981,6 +1320,136 @@ view windowSize input needle switchingTo model =
         , style = Ui.windowBorderAndFill
         }
         content
+
+
+{-| Whether the usages of a definition show under the code: only over the code of a
+module.
+-}
+usagesShown : Model -> Bool
+usagesShown model =
+    model.usages /= Nothing && not model.showErrors && not model.committing && model.module_ /= Nothing
+
+
+{-| How tall the usages' panel is, and what it takes from the code's height with the gap
+above it.
+-}
+usagesPanelHeight : Int
+usagesPanelHeight =
+    Coord.yRaw (Ui.size (usagesPanel (Units.ui 600) { module_ = "", name = "", found = [] })) + gap
+
+
+{-| Where a definition is used, one use to a line (a button that goes there), and a button
+to hide them. Lines are cut off where the panel ends.
+-}
+usagesPanel : Quantity Int UiPixels -> UsageList -> Element UiId.UiId
+usagesPanel width usages =
+    let
+        found : Int
+        found =
+            List.length usages.found
+
+        characterWidth : Int
+        characterWidth =
+            Coord.xRaw (Sprite.textSize Sprite.Small Sprite.Mono "x")
+
+        -- What the viewport's outline, a button's border and padding and the scroll bar
+        -- take of the width.
+        fits : Int
+        fits =
+            (Quantity.unwrap width - 2 - 2 * 6 - 2 * 2 - 8) // characterWidth
+
+        mono color text =
+            { text = text, color = color, font = Sprite.Mono, decorations = [], link = Nothing }
+
+        row index usage =
+            let
+                place : String
+                place =
+                    usage.module_ ++ ":" ++ String.fromInt (usage.line + 1) ++ "  "
+            in
+            Ui.button
+                { id = UiId.Code (UsageButton index), pad = Ui.paddingXY 6 2 }
+                (Ui.customText
+                    Sprite.Small
+                    [ mono Color.dimTextColor (String.left fits place)
+                    , mono Color.textColor (String.left (fits - String.length place) usage.text)
+                    ]
+                )
+
+        rowHeight : Int
+        rowHeight =
+            lineHeight + 8
+
+        title : String
+        title =
+            "Used "
+                ++ String.fromInt found
+                ++ (if found == 1 then
+                        " time: "
+
+                    else
+                        " times: "
+                   )
+                ++ usages.module_
+                ++ "."
+                ++ usages.name
+    in
+    Ui.column
+        gap
+        [ Ui.leftAndRight
+            width
+            (Ui.customText Sprite.Small [ { text = title, color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ])
+            (Ui.button { id = UiId.Code UsagesCloseButton, pad = Ui.paddingXY 6 3 } (Ui.text "Close"))
+        , Ui.viewport
+            { id = UiId.Code UsagesViewport, viewportHeight = Units.ui (5 * rowHeight) }
+            (Ui.column 4 (List.indexedMap row usages.found))
+        ]
+
+
+{-| The modules beside the code, one under another, to pick the one to read or change
+(`open` is the one shown, if any). It is as tall as the text box.
+-}
+modulesList : Quantity Int UiPixels -> Maybe String -> Model -> Element UiId.UiId
+modulesList height open model =
+    Ui.viewport
+        { id = UiId.Code ModulesViewport, viewportHeight = height }
+        (Ui.column
+            4
+            (List.map
+                (\name ->
+                    Ui.button
+                        { id = UiId.Code (ModuleButton name), pad = Ui.paddingXY 6 3 }
+                        (Ui.customText
+                            Sprite.Small
+                            [ { text = name
+                              , color =
+                                    if isEdited name model then
+                                        Color.successColor
+
+                                    else
+                                        Color.textColor
+                              , font = Sprite.Sans Sprite.Regular
+                              , decorations =
+                                    if open == Just name then
+                                        [ Sprite.Underline ]
+
+                                    else
+                                        []
+                              , link = Nothing
+                              }
+                            ]
+                        )
+                )
+                (List.filter shownModule (SeqDict.keys SourceCode.sourceCode))
+            )
+        )
+
+
+{-| How wide the list of modules is: the widest name's button, and the viewport's frame.
+-}
+sidebarWidth : Int
+sidebarWidth =
+    Coord.xRaw (Ui.size (modulesList (Units.ui 100) Nothing init))
 
 
 {-| Which match the selection is, and how many there are: "3 of 15 matches", or just the

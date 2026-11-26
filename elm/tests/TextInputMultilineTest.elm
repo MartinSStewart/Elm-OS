@@ -235,6 +235,46 @@ suite =
                 )
                     |> Expect.equal ( True, False, False )
             )
+        , Test.test "a long line wraps: Down goes to the next row, at the same column past the wrap marker"
+            (\_ ->
+                let
+                    -- 39 characters fit on a row, 38 on the rows after, past the marker.
+                    wrapped =
+                        TextInputMultiline.withText (String.repeat 100 "a")
+
+                    press keys =
+                        List.foldl (\key m -> TextInputMultiline.keyMsg style False False key m |> Tuple.first) wrapped keys
+                            |> .input
+                            |> .current
+                            |> .cursorPosition
+                in
+                [ press [ Keyboard.ArrowDown ]
+                , press [ Keyboard.ArrowDown, Keyboard.ArrowDown ]
+                , press [ Keyboard.ArrowRight, Keyboard.ArrowRight, Keyboard.ArrowDown ]
+                , press [ Keyboard.ArrowDown, Keyboard.ArrowLeft ]
+                , press [ Keyboard.ArrowDown, Keyboard.ArrowDown, Keyboard.ArrowDown ]
+                , press [ Keyboard.ArrowDown, Keyboard.End ]
+                , press [ Keyboard.ArrowDown, Keyboard.ArrowDown, Keyboard.ArrowUp, Keyboard.ArrowUp ]
+                ]
+                    |> Expect.equal [ 39, 77, 40, 38, 100, 100, 0 ]
+            )
+        , Test.test "a long line wraps where the row is full, not between words"
+            (\_ ->
+                TextInputMultiline.keyMsg style False False Keyboard.ArrowDown (TextInputMultiline.withText (String.repeat 20 "word "))
+                    |> Tuple.first
+                    |> .input
+                    |> .current
+                    |> .cursorPosition
+                    |> Expect.equal 39
+            )
+        , Test.test "wrapped rows count for scrolling"
+            (\_ ->
+                -- 12 rows of 39 or 38: two more than the box shows
+                TextInputMultiline.withText (String.repeat 450 "a")
+                    |> TextInputMultiline.wheel style -5
+                    |> .scroll
+                    |> Expect.equal 2
+            )
         , Test.test "undo takes back the last key"
             (\_ ->
                 (after "abc" [ Keyboard.Character "d" ]

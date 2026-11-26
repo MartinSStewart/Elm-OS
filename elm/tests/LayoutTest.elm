@@ -1,26 +1,26 @@
 module LayoutTest exposing (suite)
 
+import App
 import Coord
 import Expect
-import Layout
 import Test exposing (Test)
 
 
-fixed : Int -> Int -> Layout.Limits
+fixed : Int -> Int -> App.Limits
 fixed w h =
-    Layout.fixed (Coord.xy w h)
+    App.fixed (Coord.xy w h)
 
 
-stretchy : Layout.Limits
+stretchy : App.Limits
 stretchy =
     { min = Coord.xy 400 300, preferred = Coord.xy 900 1000, max = Coord.xy 900 100000 }
 
 
 {-| Each window as ( name, ( left, top ), ( width, height ) ).
 -}
-run : Int -> Int -> List ( String, Layout.Limits ) -> List ( String, ( Int, Int ), ( Int, Int ) )
+run : Int -> Int -> List ( String, App.Limits ) -> List ( String, ( Int, Int ), ( Int, Int ) )
 run w h windows =
-    Layout.layout 8 (Coord.xy w h) windows
+    App.layout 8 (Coord.xy w h) windows
         |> List.map
             (\( name, { topLeft, bottomRight } ) ->
                 ( name

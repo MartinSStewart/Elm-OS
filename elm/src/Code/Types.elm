@@ -1,5 +1,6 @@
-module Code.Types exposing (BuildStatus(..), Git, GitStatus(..), GitStep(..), GitWork, UiId(..))
+module Code.Types exposing (BuildStatus(..), Git, GitStatus(..), GitStep(..), GitWork, Place, UiId(..), UsageList)
 
+import Code.Index
 import SeqDict exposing (SeqDict)
 
 
@@ -11,9 +12,8 @@ type UiId
     | Window
     | Input
     | CloseButton
-    | ModulesButton
     | ModulesViewport
-      -- A module in the list of modules, by its name.
+      -- A module in the list beside the code, by its name.
     | ModuleButton String
     | SaveButton
     | RevertButton
@@ -36,6 +36,30 @@ type UiId
     | ReplaceButton
     | ReplaceAllButton
     | FindCloseButton
+      -- The usages of a definition shown under the code (after Ctrl+click on it), their
+      -- list, one of them (by its place in the list) and the button that hides them.
+    | UsagesViewport
+    | UsageButton Int
+    | UsagesCloseButton
+
+
+{-| Where a definition (the module it is in and its name) is used.
+-}
+type alias UsageList =
+    { module_ : String
+    , name : String
+    , found : List Code.Index.Usage
+    }
+
+
+{-| Where the cursor was: in a module, at a position in its text (and on which line, from
+0, so a jump can be told from a step).
+-}
+type alias Place =
+    { module_ : String
+    , position : Int
+    , line : Int
+    }
 
 
 {-| How a build of Elm OS made on this computer is going (host/init/src/build.rs,

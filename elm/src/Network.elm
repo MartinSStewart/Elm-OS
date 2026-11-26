@@ -288,26 +288,6 @@ connect passwordText network =
             ( network, [] )
 
 
-{-| What the app is sized from, once: a wifi card and a cable, both connected, and a
-network picked that needs a password.
--}
-sample : Network
-sample =
-    { init
-        | wifiDevice = Card "wlan0"
-        , networks = [ sampleNetwork ]
-        , scanning = False
-        , wifiStatus = { state = Connected, ssid = sampleNetwork.ssid, ip = Nothing, error = "" }
-        , wired = [ { name = "eth0", state = WiredConnected, ip = Nothing } ]
-        , selected = Just sampleNetwork
-    }
-
-
-sampleNetwork : WifiNetwork
-sampleNetwork =
-    { ssid = Network.Types.stringToSsid "Network", signal = -50, security = Wpa }
-
-
 {-| `n` times the body text size (16 UI pixels), for widths that should fit some text.
 -}
 em : Int -> Quantity Int UiPixels
@@ -325,7 +305,7 @@ bodySize =
     Sprite.Small
 
 
-{-| The network app's window size, from `sample`, once.
+{-| The network app's window size.
 -}
 limits : App.Limits
 limits =

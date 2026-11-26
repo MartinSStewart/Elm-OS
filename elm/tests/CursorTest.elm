@@ -22,10 +22,10 @@ input is at x 0-199, the button after it.
 ui : Ui.Element Id
 ui =
     Ui.elWithId Panel
-        { padding = Ui.noPadding, borderAndFill = Ui.NoBorderOrFill }
+        { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
         (Ui.row 0
             [ Ui.textInput { id = Name, style = { font = Sprite.Sans Sprite.Regular, fontSize = Sprite.Small, width = Units.ui 200, masked = False }, isValid = True }
-            , Ui.button { id = OkButton, padding = Ui.paddingXY 10 10 } (Ui.text "OK")
+            , Ui.button { id = OkButton, pad = Ui.paddingXY 10 10 } (Ui.text "OK")
             ]
         )
 

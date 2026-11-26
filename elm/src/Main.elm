@@ -339,6 +339,7 @@ type alias Model =
       imageCache : ImageCache
     , shift : Bool
     , ctrl : Bool
+    , alt : Bool
     , clipboard : String
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
     , network : Network.Network
@@ -451,6 +452,7 @@ init =
     , imageCache = ImageCache.empty
     , shift = False
     , ctrl = False
+    , alt = False
     , clipboard = ""
     , selectingText = False
     , network = Network.init
@@ -525,6 +527,7 @@ update msg model =
             case value of
                 Ok event ->
                     step event model
+                        |> Tuple.mapFirst (\next -> { next | code = Code.afterEvent next.uiState next.code })
 
                 Err error ->
                     ( model, [ Effect.Log ("couldn't read a message from the host: " ++ error) ] )
@@ -878,7 +881,19 @@ step event model =
                                     ( model3, effects ) =
                                         click model2 id
                                 in
-                                ( { model3 | selectingText = True }, effects )
+                                case ( id, model3.ctrl ) of
+                                    ( Code Code.Types.Input, True ) ->
+                                        -- Ctrl+click on a name goes to its definition (or from
+                                        -- its definition to where it is used).
+                                        case Code.ctrlClick (appUiSize CodeApp model3) model3.uiState model3.code of
+                                            Just ( code, uiState ) ->
+                                                ( { model3 | code = code, uiState = uiState }, effects )
+
+                                            Nothing ->
+                                                ( { model3 | selectingText = True }, effects )
+
+                                    _ ->
+                                        ( { model3 | selectingText = True }, effects )
 
                             [] ->
                                 ( { model | pressed = True, uiState = Ui.setFocus Nothing model.uiState }, [] )
@@ -969,6 +984,9 @@ step event model =
             else if Keyboard.isCtrl code then
                 ( { model | ctrl = down }, [] )
 
+            else if Keyboard.isAlt code then
+                ( { model | alt = down }, [] )
+
             else if not down then
                 ( model, [] )
 
@@ -991,6 +1009,13 @@ step event model =
                             Code.openFind (appUiSize CodeApp model) model.uiState model.code
                     in
                     ( { model | code = codeApp, uiState = uiState }, [] )
+
+                else if model.alt && model.shift && key == Keyboard.ArrowLeft then
+                    -- Back to where the cursor was before it last jumped (and Right goes on again).
+                    codeCursorHistory Code.cursorBack model
+
+                else if model.alt && model.shift && key == Keyboard.ArrowRight then
+                    codeCursorHistory Code.cursorForward model
 
                 else
                     ( multilineKey (Code Code.Types.Input) (codeStyle model) key model, [] )
@@ -1335,9 +1360,6 @@ appButton id =
                 Code.Types.CloseButton ->
                     Nothing
 
-                Code.Types.ModulesButton ->
-                    Nothing
-
                 Code.Types.ModulesViewport ->
                     Nothing
 
@@ -1396,6 +1418,15 @@ appButton id =
                     Nothing
 
                 Code.Types.FindCloseButton ->
+                    Nothing
+
+                Code.Types.UsagesViewport ->
+                    Nothing
+
+                Code.Types.UsageButton _ ->
+                    Nothing
+
+                Code.Types.UsagesCloseButton ->
                     Nothing
 
         ScreenshotViewer id2 ->
@@ -3855,6 +3886,21 @@ codeFindKey key model =
 
         Nothing ->
             model
+
+
+{-| Alt+Shift+Left or Right in the Code app's text box: moves the cursor back or forward
+through the places it jumped from, which can be in another module.
+-}
+codeCursorHistory :
+    (TextInputMultiline.Style -> Ui.Model UiId -> Code.Model -> ( Code.Model, Ui.Model UiId ))
+    -> Model
+    -> ( Model, List Effect )
+codeCursorHistory move model =
+    let
+        ( code, uiState ) =
+            move (codeStyle model) model.uiState model.code
+    in
+    ( { model | code = code, uiState = uiState }, [] )
 
 
 {-| The text in the Code app's text box.

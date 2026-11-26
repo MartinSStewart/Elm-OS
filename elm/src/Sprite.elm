@@ -35,6 +35,7 @@ module Sprite exposing
     , triangle
     , wrap
     , wrapLines
+    , wrapMarker
     , wrapSegments
     , wrapWithSize
     )
@@ -1671,17 +1672,11 @@ wrapLinesHelper fontSize maxWidth segments =
             let
                 state : WrapState
                 state =
-                    case line of
-                        [ segment ] ->
-                            case segment.font of
-                                Mono ->
-                                    wrapMonoLine fontSize (Quantity.unwrap maxWidth * 64) segment
+                    if List.all (\segment -> segment.font == Mono) line then
+                        wrapMonoLine fontSize (Quantity.unwrap maxWidth * 64) line
 
-                                Sans _ ->
-                                    wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
-
-                        _ ->
-                            wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
+                    else
+                        wrapLine fontSize (Quantity.unwrap maxWidth * 64) line
             in
             ( List.reverse state.current :: state.lines ++ lines, max widest (max state.widest state.x) )
         )
@@ -1723,126 +1718,92 @@ type alias Scan =
     }
 
 
-{-| `wrapLine` for a line that is one segment in the pixel font, where every character
-is as wide as the next: the same lines, found from where the spaces are and how many
-characters lie between them, without measuring each word. Each line is a slice of the
-segment's text.
+{-| `wrapLine` for a line all in the pixel font, where every character is as wide as the
+next: broken wherever a line is full, with no regard for words (so no word is measured),
+and every line it goes on to starts with a faint `wrapMarker`, which takes a character's
+room. Each line is slices of the segments' texts.
 -}
-wrapMonoLine : FontSize -> Int -> Segment -> WrapState
-wrapMonoLine fontSize limit64 segment =
+wrapMonoLine : FontSize -> Int -> List Segment -> WrapState
+wrapMonoLine fontSize limit64 line =
     let
         charWidth : Int
         charWidth =
             Tuple.first charSize * monoScale fontSize * 64
 
-        length : Int
-        length =
-            String.length segment.text
-    in
-    if length * charWidth <= limit64 then
-        { lines = []
-        , current =
-            if length == 0 then
-                []
+        -- How many characters fit on a line: at least two, the marker and one more.
+        perLine : Int
+        perLine =
+            max 2 (limit64 // charWidth)
+
+        marker : Segment
+        marker =
+            { text = wrapMarker, color = Color.wrapMarkerColor, font = Mono, decorations = [], link = Nothing }
+
+        -- The rest of `segment` from `offset` on, onto the line, and as many more
+        -- lines as it takes.
+        place : Segment -> Int -> Int -> MonoWrap -> MonoWrap
+        place segment length offset state =
+            let
+                room : Int
+                room =
+                    perLine - state.column
+            in
+            if length - offset <= room then
+                { state
+                    | current =
+                        if offset == 0 then
+                            pushSegment segment state.current
+
+                        else if offset == length then
+                            state.current
+
+                        else
+                            pushSegment { segment | text = String.dropLeft offset segment.text } state.current
+                    , column = state.column + length - offset
+                }
 
             else
-                [ segment ]
-        , x = length * charWidth
-        , widest = 0
-        }
+                place
+                    segment
+                    length
+                    (offset + room)
+                    { lines = List.reverse (pushSegment { segment | text = String.slice offset (offset + room) segment.text } state.current) :: state.lines
+                    , current = [ marker ]
+                    , column = 1
+                    }
 
-    else
-        let
-            slice : Int -> Int -> List Segment
-            slice start end =
-                if start == end then
-                    []
+        done : MonoWrap
+        done =
+            List.foldl
+                (\segment state -> place segment (String.length segment.text) 0 state)
+                { lines = [], current = [], column = 0 }
+                line
+    in
+    { lines = done.lines
+    , current = List.filter (\segment -> segment.text /= "") done.current
+    , x = done.column * charWidth
+    , widest =
+        if List.isEmpty done.lines then
+            0
 
-                else
-                    [ { segment | text = String.slice start end segment.text } ]
-
-            -- How many characters fit on a line (at least one, as in `breakWord`).
-            perLine : Int
-            perLine =
-                max 1 (limit64 // charWidth)
-
-            -- The word from `start` to `end` put on an empty line, one line after another
-            -- when it's too long for one. `lines` gets every line but the last, which is
-            -- the new current line.
-            breakMonoWord : Int -> Int -> MonoWrap -> MonoWrap
-            breakMonoWord start end state =
-                if end - start > perLine then
-                    breakMonoWord
-                        (start + perLine)
-                        end
-                        { state | lines = slice start (start + perLine) :: state.lines, widest = max state.widest (perLine * charWidth) }
-
-                else
-                    { state | start = start, end = end }
-
-            -- Puts a word (from `start` to `end`, with the space before it at `space`
-            -- if there is one) on the line, as `placeWord` does.
-            place : Maybe Int -> Int -> Int -> MonoWrap -> MonoWrap
-            place space start end state =
-                let
-                    x : Int
-                    x =
-                        (state.end - state.start) * charWidth
-
-                    spaceWidth : Int
-                    spaceWidth =
-                        case space of
-                            Just _ ->
-                                charWidth
-
-                            Nothing ->
-                                0
-
-                    wordWidth : Int
-                    wordWidth =
-                        (end - start) * charWidth
-                in
-                if x + spaceWidth + wordWidth <= limit64 then
-                    if x == 0 then
-                        -- The line starts here, with the space if there is one.
-                        { state | start = Maybe.withDefault start space, end = end }
-
-                    else
-                        { state | end = end }
-
-                else if x == 0 then
-                    breakMonoWord start end state
-
-                else
-                    let
-                        newLine : MonoWrap
-                        newLine =
-                            { lines = slice state.start state.end :: state.lines, start = start, end = start, widest = max state.widest x }
-                    in
-                    if wordWidth <= limit64 then
-                        { newLine | end = end }
-
-                    else
-                        breakMonoWord start end newLine
-
-            ( lastSpace, lastStart, scanned ) =
-                List.foldl
-                    (\at ( space, start, state ) -> ( Just at, at + 1, place space start at state ))
-                    ( Nothing, 0, { lines = [], start = 0, end = 0, widest = 0 } )
-                    (String.indexes " " segment.text)
-
-            done : MonoWrap
-            done =
-                place lastSpace lastStart length scanned
-        in
-        { lines = done.lines, current = slice done.start done.end, x = (done.end - done.start) * charWidth, widest = done.widest }
+        else
+            perLine * charWidth
+    }
 
 
-{-| `wrapMonoLine`'s state: the lines done (last first), the current line (from `start` to
-`end` in the text; empty when they're equal) and the widest line done (1/64 UI pixels).
+{-| Drawn at the start of every line a long line in the pixel font wraps onto, in
+`Color.wrapMarkerColor`, so it doesn't read as part of the text.
+-}
+wrapMarker : String
+wrapMarker =
+    "└"
+
+
+{-| `wrapMonoLine`'s state: the lines done (last first), the current line's segments (last
+first) and how many characters it holds.
 -}
 type alias MonoWrap =
-    { lines : List (List Segment), start : Int, end : Int, widest : Int }
+    { lines : List (List Segment), current : List Segment, column : Int }
 
 
 {-| One line (no '\\n' in it) broken at the spaces before words that would go past

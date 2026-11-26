@@ -1,0 +1,127 @@
+module Evergreen.V22.Code.Types exposing (..)
+
+import Evergreen.V22.Code.Index
+import SeqDict exposing (SeqDict)
+
+
+{-| The ids of the Code app's elements. They are here and not in Code.elm because
+UiId.elm holds them (see its note).
+-}
+type UiId
+    = OpenButton
+    | Window
+    | Input
+    | CloseButton
+    | ModulesViewport
+      -- A module in the list beside the code, by its name.
+    | ModuleButton String
+    | SaveButton
+    | RevertButton
+    | BuildButton
+      -- Shows the code again instead of the build's errors.
+    | ErrorsCloseButton
+    | ErrorsViewport
+      -- Shows what a commit would hold, the GitHub token, the message and Push.
+    | CommitButton
+    | CommitCloseButton
+    | CommitViewport
+    | TokenInput
+    | MessageInput
+    | PushButton
+      -- The find and replace bar over the code: the two text boxes and the buttons.
+    | FindInput
+    | ReplaceInput
+    | FindPreviousButton
+    | FindNextButton
+    | ReplaceButton
+    | ReplaceAllButton
+    | FindCloseButton
+      -- The usages of a definition shown under the code (after Ctrl+click on it), their
+      -- list, one of them (by its place in the list) and the button that hides them.
+    | UsagesViewport
+    | UsageButton Int
+    | UsagesCloseButton
+
+
+{-| Where a definition (the module it is in and its name) is used.
+-}
+type alias UsageList =
+    { module_ : String
+    , name : String
+    , found : List Evergreen.V22.Code.Index.Usage
+    }
+
+
+{-| Where the cursor was: in a module, at a position in its text (and on which line, from
+0, so a jump can be told from a step).
+-}
+type alias Place =
+    { module_ : String
+    , position : Int
+    , line : Int
+    }
+
+
+{-| How a build of Elm OS made on this computer is going (host/init/src/build.rs,
+HostMessage.Build): the step it is on, the step it failed at and what the tools said,
+or the name of the build the host is now switching to.
+-}
+type BuildStatus
+    = BuildRunning String
+    | BuildFailed String String
+    | Built String
+
+
+{-| Commits of the saved modules to GitHub (Code/GitHub.elm).
+
+`base` is the commit the last push made, on `branch`, while Elm OS runs a build made
+from the commit `from` (BuildInfo.commit) or a build of the Code app's edits of it. Once
+it runs one from another commit, the next commit goes on top of that one instead.
+`pushed` is the saved modules as that push had them.
+
+-}
+type alias Git =
+    { base : String
+    , branch : String
+    , from : String
+    , pushed : SeqDict String String
+    , status : GitStatus
+
+    -- How many requests have been sent, which gives each its own id.
+    , requests : Int
+    }
+
+
+type GitStatus
+    = GitIdle
+    | GitWorking GitWork
+      -- The commit made and the branch it was pushed to.
+    | GitPushed String String
+      -- The step that failed and what went wrong.
+    | GitFailed String String
+
+
+{-| A commit being made: the request waited for (its number) and the step it is for,
+with everything later steps need.
+-}
+type alias GitWork =
+    { request : Int
+    , step : GitStep
+    , token : String
+    , message : String
+    , base : String
+    , branch : String
+
+    -- The modules, by name, with their text.
+    , modules : SeqDict String String
+    }
+
+
+type GitStep
+    = GettingBase
+    | MakingTree
+    | MakingCommit
+      -- Moving the branch on to the new commit.
+    | Pushing String
+      -- Making a new branch for the commit, since the branch had moved on.
+    | MakingBranch String String
