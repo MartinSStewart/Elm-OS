@@ -772,7 +772,8 @@ test-install: | check-run-deps check-usb-deps
 $(BUILD)/data-qemu.img: | check-usb-deps
 	scripts/make-data-image.sh $@ 256
 
-# An empty one for the tests, which copy it.
+# An empty one for the tests, which copy it: 256 MiB too (make-data-image.sh's default),
+# since a build alone is about 30 MB.
 $(BUILD)/data-empty.img: scripts/make-data-image.sh scripts/make-data-fs.sh | check-usb-deps
 	scripts/make-data-image.sh $@
 

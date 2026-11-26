@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils cpio flex bison bc \
-            libelf-dev libssl-dev rsync e2fsprogs dosfstools mtools fdisk procps
+            libelf-dev libssl-dev rsync e2fsprogs dosfstools mtools fdisk procps patchelf
           # The runner's KVM, so QEMU isn't emulating the CPU (the tests use it if they can).
           sudo chmod 666 /dev/kvm || true
 
@@ -108,9 +108,32 @@ jobs:
           path: linux
           key: linux-${{ hashFiles('versions.mk') }}
 
+      - name: Restore Alpine's packages
+        id: apk-cache
+        # The .apk files alpine.lock pins (tools/fetch-mesa.py). Alpine keeps only the
+        # newest build of each package, so a pinned one can vanish upstream overnight;
+        # with them kept here, CI goes on building until alpine.lock is moved on.
+        uses: actions/cache/restore@v4
+        with:
+          # Not Alpine's index, which must be fresh whenever a package set is pinned again.
+          path: |
+            build/apk-cache
+            !build/apk-cache/APKINDEX-*
+          key: alpine-${{ hashFiles('alpine.lock') }}
+          restore-keys: alpine-
+
       - name: Build
         id: build
         run: make
+
+      - name: Save Alpine's packages
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/apk-cache
+            !build/apk-cache/APKINDEX-*
+          key: alpine-${{ hashFiles('alpine.lock') }}
 
       - name: Tests that don't boot (review, Elm, tools/wire, host protocol)
         run: make check
