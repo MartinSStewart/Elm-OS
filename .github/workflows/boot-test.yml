@@ -29,45 +29,100 @@ jobs:
         # host/rust-toolchain.toml picks the Rust version; add the target to that one.
         run: cd host && rustup target add x86_64-unknown-linux-musl
 
-      - name: Cache eco
-        # make builds the eco versions.mk pins, patched, into ~/.cache/elm-os
-        # (tools/build-patched-eco.sh: eco's static release build in Docker, ~20 minutes).
-        uses: actions/cache@v4
+      # The caches below are restored and saved as separate steps: actions/cache on its own
+      # saves only when the whole job passes, so a run with a failing test kept nothing and
+      # the next one built eco (~40 minutes on the runner) again. Each is saved right after
+      # the step that fills it.
+      - name: Work out eco's cache key
+        id: eco-key
+        # The same key tools/build-patched-eco.sh gives the build (its .eco-built file and the
+        # shared cache's folder name): versions.mk's ECO_ lines, the script and the patches.
+        # Kernel or other pin changes in versions.mk don't touch it.
+        run: |
+          key=$( { grep '^ECO_' versions.mk; cat tools/build-patched-eco.sh; echo "patched=1"
+                   for f in tools/eco-patched/*.patch; do basename "$f"; cat "$f"; done; } |
+                 sha256sum | cut -c1-16)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore eco
+        id: eco-cache
+        uses: actions/cache/restore@v4
         with:
-          # Not its package cache (home/), which is cached on its own below.
+          # Not its package cache (home/), which is cached on its own below, nor the marker
+          # saying eco/system is in ~/.elm (which isn't cached, so the script puts it back).
           path: |
             ~/.cache/elm-os
             !~/.cache/elm-os/*/home
-          key: eco-${{ hashFiles('versions.mk', 'tools/build-patched-eco.sh', 'tools/eco-patched/**') }}
+            !~/.cache/elm-os/*/.elm-home-built
+          key: eco-${{ steps.eco-key.outputs.key }}
 
       - name: Build eco
-        # Built once, then cached. On PATH too, for the debugging step below.
-        run: make -s eco >> "$GITHUB_PATH"
+        # make builds the eco versions.mk pins, patched, into ~/.cache/elm-os
+        # (tools/build-patched-eco.sh: eco's static release build in Docker), unless the
+        # restored one is already that build. On PATH too, for the debugging step below.
+        run: |
+          bin=$(make -s eco)
+          echo "$bin" >> "$GITHUB_PATH"
+          built=$(cat "$bin/../.eco-built")
+          if [ "$built" != "${{ steps.eco-key.outputs.key }}" ]; then
+            echo "::error::eco's key is $built but the workflow worked out ${{ steps.eco-key.outputs.key }}: make 'Work out eco's cache key' match tools/build-patched-eco.sh"
+            exit 1
+          fi
 
-      - name: Cache Elm packages
+      - name: Save eco
+        if: steps.eco-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/elm-os
+            !~/.cache/elm-os/*/home
+            !~/.cache/elm-os/*/.elm-home-built
+          key: eco-${{ steps.eco-key.outputs.key }}
+
+      - name: Restore Elm packages
+        id: packages-cache
         # eco downloads them from GitHub, which is sometimes down: the last good set is
         # kept, and a change to any elm.json starts from it.
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           # The pinned eco's own package cache (see tools/build-patched-eco.sh).
           path: ~/.cache/elm-os/eco-*/home/.eco/0.2.0/packages
           key: eco-packages-${{ hashFiles('elm/elm.json', 'elm/review/elm.json', 'tools/wire/elm.json') }}
           restore-keys: eco-packages-
 
-      - name: Cache the kernel tree
-        uses: actions/cache@v4
+      - name: Restore the kernel tree
+        id: kernel-cache
+        uses: actions/cache/restore@v4
         with:
           path: linux
           # versions.mk pins the kernel version, so a new kernel gets a new cache.
           key: linux-${{ hashFiles('versions.mk') }}
 
+      - name: Get the kernel tree
+        run: make kernel-src
+
+      - name: Save the kernel tree
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: linux
+          key: linux-${{ hashFiles('versions.mk') }}
+
       - name: Build
-        run: |
-          make kernel-src
-          make
+        id: build
+        run: make
 
       - name: Tests that don't boot (review, Elm, tools/wire, host protocol)
         run: make check
+
+      - name: Save Elm packages
+        # After make check, which fetches elm-review's. Saved even when a test failed, as
+        # long as the build got that far.
+        if: always() && steps.packages-cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/elm-os/eco-*/home/.eco/0.2.0/packages
+          key: eco-packages-${{ hashFiles('elm/elm.json', 'elm/review/elm.json', 'tools/wire/elm.json') }}
 
       - name: If elm-review's configuration didn't compile, say why
         # elm-review only shows eco's stderr, which is empty when eco dies of a signal.
