@@ -12,7 +12,7 @@ musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev mai
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libdrm-dev 2.4.124-r0 fbadd414b1cea79ee4e749c58efe28f9c79069730a6eb9db5f1579f5833c2219
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libelf 0.193-r0 b8df03bd86f172aa1741790592056e6d6588247ddf6473920fa32cd7cc681f6a
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libexpat 2.10.0-r0 8ff83a897b5393832edbd2a7500c37bab685a17d7821925d95460f01747dbac2
-musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libffi 3.4.8-r0 9a75cb9024693c1e52c3d8d7c9afb7c79e6e20f6c08df28effdb8dd816095083
+musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libffi 3.8.1-r0 331f557dc1836cd92b1874d49c0f02b2ba24573e75e1d56a758a7d2bfc7ac9dc
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libgcc 14.2.0-r6 04f3467bc967e705221a843fe4d3de5850db826e571686e0c0ed453d38cb5c59
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libmd 1.1.0-r0 47294e0d7bf7763ae4e22f49b1bd6ee8fc3cd0af1b86e1cc8a5a352abd4e8d08
 musl,mesa-egl,mesa-gles,mesa-gbm,mesa-dri-gallium,libdrm,mesa-dev,libdrm-dev main libpciaccess 0.18.1-r0 cc1f2697e70ee0eedc57f7de863a21b605445ef82412975d84c6a404a2f5b59c
