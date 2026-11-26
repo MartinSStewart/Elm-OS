@@ -98,9 +98,9 @@ def wait_for(text, timeout=300):
 
 
 # A build left from before, which must be gone once the host has switched (a build is
-# about 9 MB and the USB stick's data partition is 32 MiB).
+# about 30 MB).
 part = os.path.join(tmp, "part.img")
-subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", "count=32", "status=none"], check=True)
+subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", f"count={os.path.getsize(disk) // 2**20 - 2}", "status=none"], check=True)
 for c in ["mkdir programs", "mkdir programs/old", f"write {ROOT}/build/host-version programs/old/elm"]:
     subprocess.run(["debugfs", "-w", "-R", c, part], check=True, capture_output=True)
 subprocess.run(["dd", f"if={part}", f"of={disk}", "bs=1M", "seek=1", "conv=notrunc", "status=none"], check=True)
@@ -146,7 +146,7 @@ qemu.kill()
 qemu.wait()
 
 part = os.path.join(tmp, "part.img")
-subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", "count=32", "status=none"], check=True)
+subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", f"count={os.path.getsize(disk) // 2**20 - 2}", "status=none"], check=True)
 subprocess.run(["e2fsck", "-fy", part], capture_output=True)
 current = subprocess.run(["debugfs", "-R", "cat /programs/current", part], capture_output=True).stdout
 if current != f"{GOOD[:12]}\n".encode():

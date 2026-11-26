@@ -201,7 +201,7 @@ def partition_copy():
     the journal replayed (debugfs doesn't, and a power cut leaves the latest writes
     only in the journal). e2fsck also checks the filesystem is whole."""
     part = os.path.join(tmp, "part.img")
-    subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", "count=32", "status=none"], check=True)
+    subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", f"count={os.path.getsize(disk) // 2**20 - 2}", "status=none"], check=True)
     r = subprocess.run(["e2fsck", "-fy", part], capture_output=True, text=True)
     if r.returncode > 1:
         fail(f"the data partition is damaged after the power cut:\n{r.stdout}{r.stderr}")

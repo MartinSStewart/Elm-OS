@@ -135,7 +135,7 @@ def check_error_screen(name):
 def partition_copy():
     """The data partition, with its journal replayed (see test-persist.py)."""
     part = os.path.join(tmp, "part.img")
-    subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", "count=32", "status=none"], check=True)
+    subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", f"count={os.path.getsize(disk) // 2**20 - 2}", "status=none"], check=True)
     r = subprocess.run(["e2fsck", "-fy", part], capture_output=True, text=True)
     if r.returncode > 1:
         fail(f"the data partition is damaged:\n{r.stdout}{r.stderr}")

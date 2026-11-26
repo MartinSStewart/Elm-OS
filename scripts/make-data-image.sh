@@ -5,7 +5,7 @@
 #
 #   usage: scripts/make-data-image.sh OUT.img [MIB]
 set -eu
-img=$1 mib=${2:-32}
+img=$1 mib=${2:-256}
 cd "$(dirname "$0")/.."
 scripts/make-data-fs.sh "$img.fs" "$mib"
 rm -f "$img"
