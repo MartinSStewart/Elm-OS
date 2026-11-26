@@ -18,6 +18,8 @@ module Color exposing
     , focusedInputColor
     , focusedUiColor
     , highlightColor
+    , historyLaneColor
+    , historyRunningRowColor
     , linkColor
     , outlineColor
     , paintPalette
@@ -276,3 +278,35 @@ codeCommentColor =
 codeOperatorColor : Color
 codeOperatorColor =
     rgb255 220 200 150
+
+
+{-| The History app's lines and tags: lane `n` of the commit graph, going round a few
+colours so neighbouring lanes differ.
+-}
+historyLaneColor : Int -> Color
+historyLaneColor n =
+    case modBy 6 n of
+        0 ->
+            rgb255 90 175 235
+
+        1 ->
+            rgb255 235 150 70
+
+        2 ->
+            rgb255 100 205 130
+
+        3 ->
+            rgb255 225 115 195
+
+        4 ->
+            rgb255 225 200 85
+
+        _ ->
+            rgb255 165 135 240
+
+
+{-| The row of the commit Elm OS is running, in the History app.
+-}
+historyRunningRowColor : Color
+historyRunningRowColor =
+    rgb255 52 66 86

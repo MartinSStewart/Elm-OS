@@ -18,6 +18,7 @@ module Code exposing
     , save
     , style
     , testFact
+    , uncommittedModules
     , view
     )
 
@@ -135,6 +136,23 @@ make the running program again.
 differsFromRunning : Model -> Bool
 differsFromRunning model =
     SeqDict.foldl (\name text acc -> acc || SeqDict.get name SourceCode.sourceCode /= Just text) False model.saved
+
+
+{-| The saved modules whose text isn't what the running build was made from, nor what the
+last push committed: changes no commit has.
+-}
+uncommittedModules : Model -> List String
+uncommittedModules model =
+    SeqDict.foldr
+        (\name text names ->
+            if SeqDict.get name SourceCode.sourceCode /= Just text && SeqDict.get name model.git.pushed /= Just text then
+                name :: names
+
+            else
+                names
+        )
+        []
+        model.saved
 
 
 {-| Keeps `text` as the module's new text, or forgets the change if it is the text Elm

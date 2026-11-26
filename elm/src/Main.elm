@@ -43,6 +43,8 @@ import Email
 import Email.Types
 import HackerNews
 import HackerNews.Types
+import History
+import History.Types
 import HostMessage
 import ImageCache exposing (ImageCache)
 import Install
@@ -379,6 +381,7 @@ type alias Model =
     , inspected : Maybe { display : Int, sources : List Ui.Source }
     , screenshotViewer : ScreenshotViewer.Model
     , install : Install.Model
+    , history : History.Model
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
 
@@ -414,6 +417,7 @@ type App
     | CodeApp
     | ScreenshotViewerApp
     | InstallApp
+    | HistoryApp
     | DebugApp
     | NetworkApp
     | WeatherApp
@@ -423,7 +427,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp, InstallApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp, InstallApp, HistoryApp ]
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -489,6 +493,7 @@ init =
     , inspected = Nothing
     , screenshotViewer = ScreenshotViewer.init
     , install = Install.init
+    , history = History.init
     , takingScreenshot = Nothing
     , screenshots = []
     , testFacts = Nothing
@@ -721,6 +726,9 @@ step event model =
                                 )
                                 model.code
                                 |> Tuple.mapFirst (\code -> { model | code = code })
+
+                        HistoryRequest generation i ->
+                            ( { model | history = History.gotResponse generation i result model.history }, [] )
 
                 Nothing ->
                     ( model, [] )
@@ -1465,6 +1473,13 @@ appButton id =
             else
                 Nothing
 
+        History id2 ->
+            if id2 == History.Types.OpenButton then
+                Just HistoryApp
+
+            else
+                Nothing
+
         DebugInfo debugId ->
             case debugId of
                 DebugInfo.Types.OpenButton ->
@@ -1614,6 +1629,9 @@ appIsOpen app model =
 
         InstallApp ->
             model.install.isOpen
+
+        HistoryApp ->
+            model.history.isOpen
 
         DebugApp ->
             model.debugOpen
@@ -1836,6 +1854,9 @@ clickElement model id =
 
         Install uiId2 ->
             Install.onClick uiId2 model.install |> Tuple.mapFirst (\install -> { model | install = install })
+
+        History uiId2 ->
+            History.onClick uiId2 (historyBranches model) model.history |> Tuple.mapFirst (\history -> { model | history = history })
 
         ScreenshotViewer uiId2 ->
             ( { model
@@ -2260,6 +2281,25 @@ dragSelectEmail focus mouse position model =
             model
 
 
+{-| What the History app shows besides its own Model.
+-}
+historyContext : Model -> History.Context
+historyContext model =
+    { running = BuildInfo.commit
+    , base = Tuple.first (Code.GitHub.startingPoint model.code.git)
+    , uncommitted = Code.uncommittedModules model.code
+    , now = model.time
+    }
+
+
+{-| The branches the History app lists besides the usual ones: the one the Code app pushed
+its edits to.
+-}
+historyBranches : Model -> List String
+historyBranches model =
+    [ Tuple.second (Code.GitHub.startingPoint model.code.git) ]
+
+
 httpGet : HttpRequestId -> String -> Effect
 httpGet id url =
     Effect.Http { id = httpRequestIdToString id, method = "GET", url = url, headers = [], body = Effect.noBody, timeoutMs = Just (Duration.seconds 30) }
@@ -2273,6 +2313,8 @@ type HttpRequestId
     | WebViewerRequest Int
       -- The Code app's commits (Code.GitHub.requestId).
     | CodeRequest Int
+      -- The History app's commits: which refresh, and which branch of it.
+    | HistoryRequest Int Int
 
 
 httpRequestIdToString : HttpRequestId -> String
@@ -2296,6 +2338,9 @@ httpRequestIdToString request =
         CodeRequest n ->
             Code.GitHub.requestId n
 
+        HistoryRequest generation i ->
+            History.requestId generation i
+
 
 stringToHttpRequestId : String -> Maybe HttpRequestId
 stringToHttpRequestId string =
@@ -2317,6 +2362,9 @@ stringToHttpRequestId string =
 
         [ "code", n ] ->
             String.toInt n |> Maybe.map CodeRequest
+
+        [ "history", generation, i ] ->
+            Maybe.map2 HistoryRequest (String.toInt generation) (String.toInt i)
 
         _ ->
             Nothing
@@ -2655,6 +2703,9 @@ dragSelect focus mouse position model =
             model
 
         Install _ ->
+            model
+
+        History _ ->
             model
 
         Lazy _ ->
@@ -3399,6 +3450,12 @@ appConfig app model =
             , limits = Install.appSize
             }
 
+        HistoryApp ->
+            { name = "History"
+            , view = History.view (historyContext model) model.history
+            , limits = History.appSize
+            }
+
         ScreenshotViewerApp ->
             { name = "ScreenshotViewer"
             , view =
@@ -3553,6 +3610,7 @@ testFacts model uis =
     , json "calculator" (E.string (Calculator.display model.calculator))
     , json "code" (Code.testFact model.code)
     , json "install" (Install.testFact model.install)
+    , json "history" (History.testFact model.history)
     , json "wifi"
         (E.object
             [ ( "state"
@@ -3794,6 +3852,10 @@ toolbar model display =
                         { id = Install Install.Types.OpenButton, pad = small }
                         (openHere InstallApp)
                         (Ui.text "Install")
+                    , Ui.selectableButton
+                        { id = History History.Types.OpenButton, pad = small }
+                        (openHere HistoryApp)
+                        (Ui.text "History")
                     , Ui.selectableButton
                         { id = Network Network.Types.OpenButton, pad = small }
                         (openHere NetworkApp)
