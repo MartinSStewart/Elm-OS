@@ -1,5 +1,6 @@
-module Sub.Things exposing (Box, Labelled, Opaque, Tree(..), box, labelled, opaque)
+module Sub.Things exposing (Box, Labelled, Opaque, Tree(..), box, labelled, modelTreeOpaque, opaque)
 
+import ModelTree
 import Quantity exposing (Quantity)
 
 
@@ -39,3 +40,11 @@ box a =
 labelled : Int -> Labelled units
 labelled n =
     ( Quantity.unsafe n, Quantity.unsafe (n + 1) )
+
+
+{-| How the Model viewer shows an Opaque (tools/wire finds it by its name): only its
+number, which can be changed.
+-}
+modelTreeOpaque : ModelTree.Tree Opaque root
+modelTreeOpaque put (Opaque n b c) =
+    ModelTree.fields [ ( "number", \() -> ModelTree.int (ModelTree.Put (\new -> ModelTree.apply put (Opaque new b c))) n ) ]

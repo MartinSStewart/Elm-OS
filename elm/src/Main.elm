@@ -41,6 +41,7 @@ import Editor.Types
 import Effect exposing (Effect, HttpError(..))
 import Email
 import Email.Types
+import Generated.ModelTree
 import HackerNews
 import HackerNews.Types
 import History
@@ -52,6 +53,9 @@ import Install.Types
 import Json.Decode as D
 import Json.Encode as E
 import Keyboard exposing (Key(..))
+import ModelTree
+import ModelViewer
+import ModelViewer.Types
 import Network
 import Network.Ipv4 as Ipv4
 import Network.Types
@@ -382,6 +386,7 @@ type alias Model =
     , screenshotViewer : ScreenshotViewer.Model
     , install : Install.Model
     , history : History.Model
+    , modelViewer : ModelViewer.Model
     , takingScreenshot : Maybe ScreenshotPreview
     , screenshots : List Ui.Screenshot
 
@@ -418,6 +423,7 @@ type App
     | ScreenshotViewerApp
     | InstallApp
     | HistoryApp
+    | ModelViewerApp
     | DebugApp
     | NetworkApp
     | WeatherApp
@@ -427,7 +433,7 @@ type App
 -}
 allApps : List App
 allApps =
-    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp, InstallApp, HistoryApp ]
+    [ DebugApp, NetworkApp, WeatherApp, AboutApp, NewsApp, HackerNewsApp, EmailApp, WebViewerApp, AsciiCollabApp, CalculatorApp, TicTacToeApp, PaintApp, EditorApp, CodeApp, ScreenshotViewerApp, InstallApp, HistoryApp, ModelViewerApp ]
 
 
 {-| Msg and Model hold only plain data (no Json values or functions), so they can be
@@ -494,6 +500,7 @@ init =
     , screenshotViewer = ScreenshotViewer.init
     , install = Install.init
     , history = History.init
+    , modelViewer = ModelViewer.init
     , takingScreenshot = Nothing
     , screenshots = []
     , testFacts = Nothing
@@ -1004,6 +1011,9 @@ step event model =
             else if model.uiState.focus == Just (Network Network.Types.PasswordInput) then
                 typeKey key model
 
+            else if model.uiState.focus == Just (ModelViewer ModelViewer.Types.EditInput) && model.modelViewer.isOpen then
+                ( modelViewerKey key model, [] )
+
             else if model.uiState.focus == Just (Editor Editor.Types.Input) then
                 ( multilineKey (Editor Editor.Types.Input) (Editor.style (appUiSize EditorApp model)) key model, [] )
 
@@ -1103,7 +1113,11 @@ step event model =
 
         System info ->
             -- The host says this as a program starts.
-            ( { model | system = Just info, code = Code.forgetPushed BuildInfo.commit model.code, install = Install.programStarted model.install }
+            ( { model
+                | system = Just info
+                , code = Code.forgetPushed BuildInfo.commit model.code |> Code.programStarted info.build
+                , install = Install.programStarted model.install
+              }
             , if model.install.isOpen then
                 [ Effect.ListDisks ]
 
@@ -1383,6 +1397,9 @@ appButton id =
                 Code.Types.BuildButton ->
                     Nothing
 
+                Code.Types.DeployedButton ->
+                    Nothing
+
                 Code.Types.ErrorsCloseButton ->
                     Nothing
 
@@ -1476,6 +1493,13 @@ appButton id =
         History id2 ->
             if id2 == History.Types.OpenButton then
                 Just HistoryApp
+
+            else
+                Nothing
+
+        ModelViewer id2 ->
+            if id2 == ModelViewer.Types.OpenButton then
+                Just ModelViewerApp
 
             else
                 Nothing
@@ -1632,6 +1656,9 @@ appIsOpen app model =
 
         HistoryApp ->
             model.history.isOpen
+
+        ModelViewerApp ->
+            model.modelViewer.isOpen
 
         DebugApp ->
             model.debugOpen
@@ -1857,6 +1884,9 @@ clickElement model id =
 
         History uiId2 ->
             History.onClick uiId2 (historyBranches model) model.history |> Tuple.mapFirst (\history -> { model | history = history })
+
+        ModelViewer uiId2 ->
+            ( modelViewerClick uiId2 model, [] )
 
         ScreenshotViewer uiId2 ->
             ( { model
@@ -2708,6 +2738,9 @@ dragSelect focus mouse position model =
         History _ ->
             model
 
+        ModelViewer _ ->
+            model
+
         Lazy _ ->
             model
 
@@ -3410,6 +3443,7 @@ appConfig app model =
                         size
                         (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState)
                         (Code.findText model.uiState)
+                        (Maybe.map .build model.system |> Maybe.withDefault "")
                         model.upgradingTo
                         model.code
             , limits = Code.appSize
@@ -3448,6 +3482,12 @@ appConfig app model =
             { name = "Install"
             , view = Install.view model.install
             , limits = Install.appSize
+            }
+
+        ModelViewerApp ->
+            { name = "ModelViewer"
+            , view = ModelViewer.view (modelTree model) model.modelViewer
+            , limits = ModelViewer.appSize
             }
 
         HistoryApp ->
@@ -3857,6 +3897,10 @@ toolbar model display =
                         (openHere HistoryApp)
                         (Ui.text "History")
                     , Ui.selectableButton
+                        { id = ModelViewer ModelViewer.Types.OpenButton, pad = small }
+                        (openHere ModelViewerApp)
+                        (Ui.text "Model")
+                    , Ui.selectableButton
                         { id = Network Network.Types.OpenButton, pad = small }
                         (openHere NetworkApp)
                         (Ui.text "Network")
@@ -3970,3 +4014,98 @@ codeCursorHistory move model =
 codeText : Model -> String
 codeText model =
     (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState).input.current.text
+
+
+{-| The Model as a tree, for the Model viewer (Generated/ModelTree.elm, which tools/wire
+writes from the Model's types).
+-}
+modelTree : Model -> ModelTree.Node Model
+modelTree model =
+    Generated.ModelTree.model (ModelTree.Put identity) model
+
+
+modelViewerClick : ModelViewer.Types.UiId -> Model -> Model
+modelViewerClick id model =
+    let
+        viewer =
+            model.modelViewer
+    in
+    case id of
+        ModelViewer.Types.OpenButton ->
+            { model | modelViewer = { viewer | isOpen = not viewer.isOpen } }
+
+        ModelViewer.Types.CloseButton ->
+            { model | modelViewer = { viewer | isOpen = False, editing = Nothing } }
+
+        ModelViewer.Types.Row path ->
+            case ModelViewer.clickRow path (modelTree model) viewer of
+                ( viewer2, Just text ) ->
+                    { model
+                        | modelViewer = viewer2
+                        , uiState =
+                            model.uiState
+                                |> Ui.insertElement (ModelViewer ModelViewer.Types.EditInput) (TextInputState (TextInput.withText text))
+                                |> Ui.setFocus (Just (ModelViewer ModelViewer.Types.EditInput))
+                    }
+
+                ( viewer2, Nothing ) ->
+                    { model | modelViewer = viewer2 }
+
+        ModelViewer.Types.Choice path choice ->
+            ModelViewer.choose path choice (modelTree model) |> Maybe.withDefault model
+
+        ModelViewer.Types.SaveButton ->
+            modelViewerSave model
+
+        ModelViewer.Types.CancelButton ->
+            modelViewerCancel model
+
+        ModelViewer.Types.EditInput ->
+            model
+
+        ModelViewer.Types.ListViewport ->
+            model
+
+
+{-| A key typed in the Model viewer's edit box: Enter saves, Escape cancels.
+-}
+modelViewerKey : Key -> Model -> Model
+modelViewerKey key model =
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Enter ) ->
+            modelViewerSave model
+
+        ( False, Keyboard.Escape ) ->
+            modelViewerCancel model
+
+        _ ->
+            singleLineKey (ModelViewer ModelViewer.Types.EditInput) False key model
+
+
+{-| The Model with the value being edited changed to what the edit box says. The new
+Model is made from this one, so the viewer's own state and the focus are set on it after.
+-}
+modelViewerSave : Model -> Model
+modelViewerSave model =
+    let
+        text =
+            Ui.getTextInput (ModelViewer ModelViewer.Types.EditInput) model.uiState |> .current |> .text
+    in
+    case ModelViewer.save text (modelTree model) model.modelViewer of
+        Ok changed ->
+            modelViewerCancel changed
+
+        Err viewer ->
+            { model | modelViewer = viewer }
+
+
+modelViewerCancel : Model -> Model
+modelViewerCancel model =
+    let
+        viewer =
+            model.modelViewer
+    in
+    { model
+        | modelViewer = { viewer | editing = Nothing }
+        , uiState = Ui.setFocus Nothing model.uiState
+    }

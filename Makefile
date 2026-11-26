@@ -308,6 +308,12 @@ $(BUILD)/wire/.done: $(BUILD)/wire-tool elm/elm.json $(shell find elm/src -name 
 	@touch $@.started
 	cmp -s elm/elm.json $(BUILD)/wire/elm.json || cp elm/elm.json $(BUILD)/wire/elm.json
 	$(call WIRE,$(BUILD)/wire,--src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --draft yes)
+	@# The Model viewer's tree (elm/src/Generated/ModelTree.elm) is checked in, so elm-review
+	@# sees what it uses: copied back when the Model's types change it, with .started's time
+	@# so it doesn't count as a change to elm/src.
+	cmp -s $(BUILD)/wire/src/Generated/ModelTree.elm elm/src/Generated/ModelTree.elm || \
+	  (cp $(BUILD)/wire/src/Generated/ModelTree.elm elm/src/Generated/ModelTree.elm && \
+	   touch -r $@.started elm/src/Generated/ModelTree.elm)
 	cmp -s $(BUILD)/BuildInfo.elm $(BUILD)/wire/src/BuildInfo.elm || cp $(BUILD)/BuildInfo.elm $(BUILD)/wire/src/BuildInfo.elm
 	mv $@.started $@
 
@@ -908,7 +914,7 @@ format-check:
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
-review: elm/src/Sprites.elm
+review: elm/src/Sprites.elm $(BUILD)/wire/.done
 	cd elm && npx --yes elm-review --compiler $(ECO_BIN)
 	@echo "passed: review" $(SAY)
 

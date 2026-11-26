@@ -222,6 +222,11 @@ pub enum Effect {
     /// keeping its data partition: rewrites its EFI system partition's kernel and its
     /// tools partition. Answered like `Install`.
     UpdateInstall { disk: String, layout: String },
+    /// Leaves a build made on this computer (`ToElm::System`'s `build` is `local-...`)
+    /// for the newest deployed build, which it otherwise stays away from so as not to
+    /// drop the edits it was made from. The host downloads and switches to it as it
+    /// does for updates; a failure comes back as a `ToElm::Build` that failed.
+    FollowDeployed,
 }
 
 /// Where on a disk `Effect::Install` puts Elm OS.
@@ -385,8 +390,10 @@ pub enum ToElm {
     Key { code: u16, down: bool, repeat: bool },
     /// Which renderer draws.
     Renderer { gpu: bool, name: String, hardware_cursor: bool },
-    /// For the about page.
-    System { kernel: String, cpu: String, commit: String },
+    /// For the about page. `build` is the build running (programs on the data disk):
+    /// "" for the built-in one, the commit's first 12 digits for a deployed one, or
+    /// "local-..." for one made on this computer. Each program is told its own.
+    System { kernel: String, cpu: String, commit: String, build: String },
     /// Once, when the first frame is on screen: milliseconds since the kernel started.
     Boot { init_ms: f64, elm_ms: f64, frame_ms: f64 },
     /// For the debug overlay, every second. -1 for a time the host doesn't know.
@@ -685,6 +692,7 @@ pub fn effect_name(effect: &Effect) -> &'static str {
         Effect::ListDisks => "ListDisks",
         Effect::Install { .. } => "Install",
         Effect::UpdateInstall { .. } => "UpdateInstall",
+        Effect::FollowDeployed => "FollowDeployed",
     }
 }
 
@@ -758,9 +766,10 @@ mod tests {
             Effect::ListDisks => "listDisks",
             Effect::Install { .. } => "install",
             Effect::UpdateInstall { .. } => "updateInstall",
+            Effect::FollowDeployed => "followDeployed",
         }
     }
-    const EFFECT_TAGS: usize = 30;
+    const EFFECT_TAGS: usize = 31;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {

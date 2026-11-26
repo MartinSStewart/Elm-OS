@@ -621,8 +621,9 @@ generateWith options modules modelKey msgKey configKey =
                 in
                 Ok
                     { files =
-                        outputs
-                            ++ [ { path = String.replace "." "/" options.entry ++ ".elm"
+                        List.filter (\f -> f.path /= modelTreePath) outputs
+                            ++ [ { path = modelTreePath, source = modelTreeModule modules defs used modelKey }
+                               , { path = String.replace "." "/" options.entry ++ ".elm"
                                  , source = entryModule options configKey modelKey msgKey shapes
                                  }
                                , { path = "model-shape", source = modelShapeFile shapes }
@@ -3301,3 +3302,578 @@ fixed ty =
 describeTy : Int -> Ty -> String
 describeTy _ ty =
     renderTy packageRef False ty
+
+
+
+-- THE MODEL AS A TREE
+
+
+{-| Where `modelTreeModule` is written, in the source directory: it is checked in, as
+it is a source like any other (elm-review sees what it uses), and `make` writes it again.
+-}
+modelTreePath : String
+modelTreePath =
+    "Generated/ModelTree.elm"
+
+
+{-| How the Model viewer shows a named type.
+-}
+type TreeKind
+    = -- A record or other alias, or a custom type whose variants its module exposes.
+      Open Def
+      -- An opaque type whose module says how to show it: `Module.modelTree<Type>`.
+    | Presented String
+      -- An opaque type, or one that is never saved, or one in the Model's own module
+      -- (which the generated module can't import: the Model's module imports it).
+    | Closed String
+
+
+{-| Generated/ModelTree.elm: a `ModelTree.Tree` (elm/src/ModelTree.elm) for each type
+the Model is made of, so the Model viewer can show and change it. It only sees what any
+module sees: an opaque type is a leaf saying its name, unless its module exposes a
+`modelTree<Type>`, which is used instead. Written as elm-format writes it, as it is
+checked in.
+-}
+modelTreeModule : Dict String Module -> Dict Key Def -> Dict Key (List Bool) -> Key -> String
+modelTreeModule modules defs used modelKey =
+    let
+        env =
+            { modules = modules, defs = defs, used = used, home = Tuple.first modelKey }
+
+        keys =
+            treeReach env [ modelKey ] Set.empty
+
+        openDefs =
+            Set.toList keys
+                |> List.filterMap
+                    (\key ->
+                        case treeKind env key of
+                            Open def ->
+                                Just def
+
+                            _ ->
+                                Nothing
+                    )
+
+        functions =
+            List.map (treeFunction env) openDefs
+
+        imports =
+            Set.toList keys
+                |> List.filterMap
+                    (\key ->
+                        case ( treeKind env key, Dict.get key defs ) of
+                            ( Open _, Just { body } ) ->
+                                case body of
+                                    Custom _ ->
+                                        Just (Tuple.first key)
+
+                                    Alias _ ->
+                                        Nothing
+
+                            ( Presented _, _ ) ->
+                                Just (Tuple.first key)
+
+                            _ ->
+                                Nothing
+                    )
+                |> (::) "ModelTree"
+                |> Set.fromList
+                |> Set.toList
+    in
+    String.join "\n"
+        ([ "module Generated.ModelTree exposing (model)"
+         , ""
+         , "{-| WRITTEN BY tools/wire: DON'T EDIT IT. `make` writes it again from the Model's types."
+         , ""
+         , "The Model as a tree, for the Model viewer app (see elm/src/ModelTree.elm): a"
+         , "`ModelTree.Tree` for each type the Model is made of. An opaque type shows as its name,"
+         , "unless its module exposes a `modelTree<Type>` that says how to show it."
+         , ""
+         , "-}"
+         , ""
+         ]
+            ++ List.map (\i -> "import " ++ i) imports
+            ++ [ ""
+               , ""
+               , "model put value ="
+               , "    " ++ treeFunctionName modelKey ++ " put value"
+               ]
+        )
+        ++ String.concat (List.map (\f -> "\n\n\n" ++ f) functions)
+        ++ "\n"
+
+
+type alias TreeEnv =
+    { modules : Dict String Module
+    , defs : Dict Key Def
+    , used : Dict Key (List Bool)
+
+    -- The Model's module, which the generated module can't import.
+    , home : String
+    }
+
+
+treeFunctionName : Key -> String
+treeFunctionName ( moduleName, name ) =
+    "tree_" ++ String.replace "." "_" moduleName ++ "_" ++ name
+
+
+treeKind : TreeEnv -> Key -> TreeKind
+treeKind env (( moduleName, name ) as key) =
+    case ( Dict.get key env.defs, Dict.get moduleName env.modules ) of
+        ( Just def, Just m ) ->
+            case def.body of
+                Alias _ ->
+                    Open def
+
+                Custom _ ->
+                    if unsavedValue m name /= Nothing then
+                        Closed (keyName key ++ " (not saved)")
+
+                    else if moduleName == env.home then
+                        Closed (keyName key)
+
+                    else if exposesValue m ("modelTree" ++ name) then
+                        Presented (moduleName ++ ".modelTree" ++ name)
+
+                    else if exposesVariants m name then
+                        Open def
+
+                    else
+                        Closed (keyName key)
+
+        _ ->
+            Closed (keyName key)
+
+
+exposesVariants : Module -> String -> Bool
+exposesVariants m name =
+    case Module.exposingList (Node.value m.file.moduleDefinition) of
+        All _ ->
+            True
+
+        Explicit items ->
+            List.any
+                (\item ->
+                    case Node.value item of
+                        TypeExpose t ->
+                            t.name == name && t.open /= Nothing
+
+                        _ ->
+                            False
+                )
+                items
+
+
+exposesValue : Module -> String -> Bool
+exposesValue m name =
+    let
+        declared =
+            List.any
+                (\decl ->
+                    case Node.value decl of
+                        FunctionDeclaration f ->
+                            Node.value (Node.value f.declaration).name == name
+
+                        _ ->
+                            False
+                )
+                m.file.declarations
+    in
+    declared
+        && (case Module.exposingList (Node.value m.file.moduleDefinition) of
+                All _ ->
+                    True
+
+                Explicit items ->
+                    List.any (\item -> Node.value item == FunctionExpose name) items
+           )
+
+
+{-| The named types the tree shows the insides of, from `queue`: not those inside an
+opaque type.
+-}
+treeReach : TreeEnv -> List Key -> Set Key -> Set Key
+treeReach env queue seen =
+    case queue of
+        [] ->
+            seen
+
+        key :: rest ->
+            if Set.member key seen then
+                treeReach env rest seen
+
+            else
+                let
+                    inside =
+                        case treeKind env key of
+                            Open def ->
+                                List.concatMap (treeNamed env) (bodyTypes def.body)
+
+                            _ ->
+                                []
+                in
+                treeReach env (rest ++ inside) (Set.insert key seen)
+
+
+{-| The program's own named types a type is made of (with those that hold data in its
+arguments).
+-}
+treeNamed : TreeEnv -> Ty -> List Key
+treeNamed env ty =
+    case ty of
+        TTuple items ->
+            List.concatMap (treeNamed env) items
+
+        TRecord fields ->
+            List.concatMap (\( _, t ) -> treeNamed env t) fields
+
+        TNamed key args ->
+            (if Dict.member key env.defs then
+                [ key ]
+
+             else
+                []
+            )
+                ++ List.concatMap (treeNamed env) (dataArgs env.used key args)
+
+        _ ->
+            []
+
+
+treeFunction : TreeEnv -> Def -> String
+treeFunction env def =
+    let
+        key =
+            ( def.moduleName, def.name )
+
+        params =
+            String.concat (List.map (\g -> " tree_" ++ g) (treeGenerics env def))
+
+        suffix =
+            String.dropLeft (String.length "tree_") (treeFunctionName key)
+
+        head =
+            treeFunctionName key ++ params ++ " put value =\n"
+    in
+    case def.body of
+        Alias (TRecord []) ->
+            head ++ "    ModelTree.record [] ModelTree.noChild"
+
+        Alias (TRecord fields) ->
+            -- Each field's tree comes from a function of its own, `field_`, by its index:
+            -- one function, rather than a lambda for each field.
+            let
+                fieldsName =
+                    "field_" ++ suffix
+
+                fieldCase ( name, ty ) =
+                    treeHead (treeExpr env 1 ty)
+                        ++ " (ModelTree.Put (\\x -> ModelTree.apply put { value | "
+                        ++ name
+                        ++ " = x })) value."
+                        ++ name
+            in
+            head
+                ++ "    ModelTree.record [ "
+                ++ String.join ", " (List.map (\( name, _ ) -> stringLiteral name) fields)
+                ++ " ] ("
+                ++ fieldsName
+                ++ params
+                ++ " put value)\n\n\n"
+                ++ fieldsName
+                ++ params
+                ++ " put value "
+                ++ indexCases 4 (List.map fieldCase fields)
+
+        Alias ty ->
+            head ++ "    " ++ treeHead (treeExpr env 1 ty) ++ " put value"
+
+        Custom variants ->
+            let
+                nullary =
+                    List.filter (\( _, args ) -> List.isEmpty args) variants
+
+                -- What each variant holds, by its index (`args_`), and the variants that hold
+                -- nothing, to change to (`choose_`): functions of their own, rather than a
+                -- lambda for each.
+                argsName =
+                    "args_" ++ suffix
+
+                chooseName =
+                    "choose_" ++ suffix
+
+                anyArgs =
+                    List.any (\( _, args ) -> not (List.isEmpty args)) variants
+
+                argsFn =
+                    if anyArgs then
+                        "(" ++ argsName ++ params ++ " put value)"
+
+                    else
+                        "ModelTree.noChild"
+
+                namesName =
+                    "names_" ++ suffix
+
+                choices =
+                    if List.isEmpty nullary then
+                        "[] (ModelTree.unchanged put value)"
+
+                    else
+                        namesName ++ " (" ++ chooseName ++ params ++ " put)"
+
+                qualified ctor =
+                    def.moduleName ++ "." ++ ctor
+
+                vars args =
+                    List.indexedMap (\i _ -> "a" ++ String.fromInt i) args
+
+                pattern ( ctor, args ) =
+                    String.join " " (qualified ctor :: vars args)
+
+                branch ( ctor, args ) =
+                    "        "
+                        ++ String.join " " (qualified ctor :: List.map (\_ -> "_") args)
+                        ++ " ->\n            ModelTree.variant "
+                        ++ stringLiteral ctor
+                        ++ " "
+                        ++ String.fromInt (List.length args)
+                        ++ " "
+                        ++ argsFn
+                        ++ " "
+                        ++ choices
+
+                argTree ctor args i ty =
+                    treeHead (treeExpr env 1 ty)
+                        ++ " (ModelTree.Put (\\new -> ModelTree.apply put ("
+                        ++ String.join " "
+                            (qualified ctor
+                                :: List.indexedMap
+                                    (\j v ->
+                                        if i == j then
+                                            "new"
+
+                                        else
+                                            v
+                                    )
+                                    (vars args)
+                            )
+                        ++ "))) a"
+                        ++ String.fromInt i
+
+                argsBranch ( ctor, args ) =
+                    "        "
+                        ++ (if List.isEmpty args then
+                                qualified ctor ++ " ->\n            ModelTree.noChild i"
+
+                            else
+                                pattern ( ctor, args ) ++ " ->\n            " ++ indexExpr 12 (List.indexedMap (argTree ctor args) args)
+                           )
+
+                argsFunction =
+                    if anyArgs then
+                        "\n\n\n"
+                            ++ argsName
+                            ++ params
+                            ++ " put value i =\n    case value of\n"
+                            ++ String.join "\n\n" (List.map argsBranch variants)
+
+                    else
+                        ""
+
+                chooseFunction =
+                    if List.isEmpty nullary then
+                        ""
+
+                    else
+                        "\n\n\n"
+                            ++ namesName
+                            ++ " =\n    [ "
+                            ++ String.join "\n    , " (List.map (\( ctor, _ ) -> stringLiteral ctor) nullary)
+                            ++ "\n    ]\n\n\n"
+                            ++ chooseName
+                            ++ params
+                            ++ " put "
+                            ++ indexCases 4 (List.map (\( ctor, _ ) -> "ModelTree.apply put " ++ qualified ctor) nullary)
+            in
+            head
+                ++ "    case value of\n"
+                ++ String.join "\n\n" (List.map branch variants)
+                ++ argsFunction
+                ++ chooseFunction
+
+
+{-| The rest of a function whose last argument is an index (named `i`, or `_` when
+there is one case): the expression for each, the last for any other index. Written at
+`indent` spaces.
+-}
+indexCases : Int -> List String -> String
+indexCases indent cases =
+    case cases of
+        [ only ] ->
+            "_ =\n" ++ String.repeat indent " " ++ only
+
+        _ ->
+            "i =\n" ++ String.repeat indent " " ++ indexExpr indent cases
+
+
+{-| An expression picking one of `cases` by the index `i`, the last for any other.
+-}
+indexExpr : Int -> List String -> String
+indexExpr indent cases =
+    case cases of
+        [ only ] ->
+            only
+
+        _ ->
+            "case i of\n"
+                ++ String.join "\n\n"
+                    (List.indexedMap
+                        (\n expr ->
+                            String.repeat (indent + 4) " "
+                                ++ (if n == List.length cases - 1 then
+                                        "_"
+
+                                    else
+                                        String.fromInt n
+                                   )
+                                ++ " ->\n"
+                                ++ String.repeat (indent + 8) " "
+                                ++ expr
+                        )
+                        cases
+                    )
+
+
+{-| The type variables of a type that hold data: each is given a `Tree`.
+-}
+treeGenerics : TreeEnv -> Def -> List String
+treeGenerics env def =
+    case Dict.get ( def.moduleName, def.name ) env.used of
+        Just flags ->
+            List.map2 Tuple.pair flags def.generics |> List.filter Tuple.first |> List.map Tuple.second
+
+        Nothing ->
+            def.generics
+
+
+treeField : TreeEnv -> Int -> String -> String -> String -> ( String, Ty ) -> String
+treeField env depth put value x ( name, ty ) =
+    "( \""
+        ++ name
+        ++ "\", \\() -> "
+        ++ treeHead (treeExpr env depth ty)
+        ++ " (ModelTree.Put (\\"
+        ++ x
+        ++ " -> ModelTree.apply "
+        ++ put
+        ++ " { "
+        ++ value
+        ++ " | "
+        ++ name
+        ++ " = "
+        ++ x
+        ++ " })) "
+        ++ value
+        ++ "."
+        ++ name
+        ++ " )"
+
+
+{-| An expression for the `Tree` of a `ty`. `depth` keeps the names of nested lambdas
+apart, as Elm doesn't allow shadowing.
+-}
+treeExpr : TreeEnv -> Int -> Ty -> String
+treeExpr env depth ty =
+    case ty of
+        TVar v ->
+            "tree_" ++ v
+
+        TUnit ->
+            "ModelTree.unit"
+
+        TTuple items ->
+            "(ModelTree.tuple" ++ String.fromInt (List.length items) ++ String.concat (List.map (\t -> " " ++ treeExpr env depth t) items) ++ ")"
+
+        TRecord [] ->
+            "(\\_ _ -> ModelTree.record [])"
+
+        TRecord fields ->
+            let
+                d =
+                    String.fromInt depth
+
+                put =
+                    "put" ++ d
+
+                value =
+                    "value" ++ d
+            in
+            "(\\"
+                ++ put
+                ++ " "
+                ++ value
+                ++ " -> ModelTree.fields [ "
+                ++ String.join ", " (List.map (treeField env (depth + 1) put value ("x" ++ d)) fields)
+                ++ " ])"
+
+        TNamed key args ->
+            let
+                withArgs fn =
+                    case dataArgs env.used key args of
+                        [] ->
+                            fn
+
+                        dataTys ->
+                            "(" ++ fn ++ String.concat (List.map (\t -> " " ++ treeExpr env depth t) dataTys) ++ ")"
+            in
+            case Dict.get key builtins of
+                Just _ ->
+                    withArgs ("ModelTree." ++ builtinTree key)
+
+                Nothing ->
+                    case treeKind env key of
+                        Open _ ->
+                            withArgs (treeFunctionName key)
+
+                        Presented fn ->
+                            withArgs fn
+
+                        Closed name ->
+                            "(ModelTree.opaqueTree " ++ stringLiteral name ++ ")"
+
+        _ ->
+            "(ModelTree.opaqueTree \"?\")"
+
+
+{-| The ModelTree function for a builtin type.
+-}
+builtinTree : Key -> String
+builtinTree ( moduleName, name ) =
+    case ( moduleName, name ) of
+        ( "Time", "Posix" ) ->
+            "posix"
+
+        ( "Json.Encode", "Value" ) ->
+            "json"
+
+        ( "Json.Decode", "Value" ) ->
+            "json"
+
+        _ ->
+            -- Int -> int, SeqDict -> seqDict
+            String.toLower (String.left 1 name) ++ String.dropLeft 1 name
+
+
+{-| A `Tree` expression applied to arguments: without the brackets around it that
+elm-format takes away, unless it is a lambda.
+-}
+treeHead : String -> String
+treeHead expr =
+    if String.startsWith "(\\" expr then
+        expr
+
+    else
+        unwrap expr

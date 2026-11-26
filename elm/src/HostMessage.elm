@@ -35,7 +35,7 @@ type ToElm
       -- A key went down or up (evdev's code), and whether it's the keyboard's autorepeat.
     | Key Int Bool Bool
     | Renderer { gpu : Bool, name : String, hardwareCursor : Bool }
-    | System { kernel : String, cpu : String, commit : String }
+    | System { kernel : String, cpu : String, commit : String, build : String }
       -- Once, when the first frame is on screen: milliseconds since the kernel started.
     | Boot { initMs : Float, elmMs : Float, frameMs : Float }
       -- For the debug overlay. -1 for a time the host doesn't know.
@@ -171,7 +171,8 @@ decoder =
                             P.decodeBool
 
                     7 ->
-                        BD.map3 (\kernel cpu commit -> System { kernel = kernel, cpu = cpu, commit = commit })
+                        BD.map4 (\kernel cpu commit build -> System { kernel = kernel, cpu = cpu, commit = commit, build = build })
+                            P.decodeString
                             P.decodeString
                             P.decodeString
                             P.decodeString

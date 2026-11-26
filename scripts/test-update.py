@@ -7,13 +7,16 @@ build/data-empty.img, with wired networking (QEMU's) and no simulated wifi:
   2. `deployed` moves to a commit whose build this host can run (build/elm, with
      this build's host and Model versions): the host must download it, check it, and
      switch to it, and programs/current must name it afterwards.
+  3. A build made on this computer (local-..., as the Code app's Build makes) is
+     running: the host must leave it, until the Code app's "Back to deployed build"
+     is pressed; then it must switch to the deployed build.
 
 Whether Elm shows a notice comes from the facts it writes to the serial log with
 ELMOS_TEST=1 (scripts/testfacts.py, Main.testFacts), not from the screen.
 
     python3 scripts/test-update.py      (make test-update)
 """
-import hashlib, http.server, json, os, shutil, subprocess, sys, tempfile, threading, time
+import hashlib, http.server, json, os, re, shutil, socket, subprocess, sys, tempfile, threading, time
 
 from testfacts import Facts
 
@@ -155,4 +158,92 @@ listing = subprocess.run(["debugfs", "-R", "ls -l /programs", part], capture_out
 if " old" in listing or GOOD[:12] not in listing:
     fail(f"after the switch programs/ should hold only build {GOOD[:12]}:\n{listing}")
 print(f"followed deployed to build {GOOD[:12]}: downloaded, checked, switched, and current")
+
+# ---- 3. a build made on this computer
+
+LOCAL = "local-0123456789ab"
+manifest = os.path.join(tmp, "manifest.json")
+json.dump({"commit": f"{GOOD[:12]}-local", "builtIn": open(f"{ROOT}/build/commit").read().strip(),
+           "hostVersion": host_version, "modelVersion": model_version,
+           "modelShape": open(f"{ROOT}/build/wire/src/model-shape").read()}, open(manifest, "w"))
+name_file = os.path.join(tmp, "current")
+open(name_file, "w").write(LOCAL + "\n")
+for c in [f"mkdir programs/{LOCAL}", f"write {ROOT}/build/elm programs/{LOCAL}/elm",
+          f"sif programs/{LOCAL}/elm mode 0100755", f"write {manifest} programs/{LOCAL}/manifest.json",
+          "rm programs/current", f"write {name_file} programs/current"]:
+    subprocess.run(["debugfs", "-w", "-R", c, part], check=True, capture_output=True)
+subprocess.run(["dd", f"if={part}", f"of={disk}", "bs=1M", "seek=1", "conv=notrunc", "status=none"], check=True)
+downloads.clear()
+os.remove(serial_path)
+
+qmp_path = os.path.join(tmp, "qmp.sock")
+qemu = subprocess.Popen(
+    ["qemu-system-x86_64", *accel, "-m", "2G", "-smp", "2",
+     "-kernel", f"{ROOT}/build/bzImage", "-initrd", f"{ROOT}/build/initramfs.cpio",
+     "-drive", f"if=virtio,format=raw,file={disk}", "-nic", "user,model=virtio-net-pci",
+     "-append", "console=ttyS0 loglevel=4 mac80211_hwsim.radios=0 ELMOS_CURSOR=software ELMOS_TEST=1"
+     f" ELMOS_UPDATES=1 ELMOS_UPDATE_API={url} ELMOS_UPDATE_DOWNLOAD={url}"
+     " ELMOS_UPDATE_FIRST=2 ELMOS_UPDATE_EVERY=3",
+     "-vga", "none", "-device", "virtio-gpu-pci", "-display", "none",
+     "-device", "qemu-xhci,id=xhci", "-device", "usb-tablet",
+     "-no-reboot", "-serial", f"file:{serial_path}", "-qmp", f"unix:{qmp_path},server=on,wait=off"])
+for _ in range(100):
+    if os.path.exists(qmp_path):
+        break
+    time.sleep(0.1)
+qmp = socket.socket(socket.AF_UNIX)
+qmp.connect(qmp_path)
+qmp_file = qmp.makefile("rw")
+qmp_file.readline()
+
+
+def qmp_cmd(name, **args):
+    qmp_file.write(json.dumps({"execute": name, "arguments": args}) + "\n")
+    qmp_file.flush()
+    while True:
+        r = json.loads(qmp_file.readline())
+        if "error" in r:
+            fail(f"QMP {name}: {r['error']}")
+        if "return" in r:
+            return r["return"]
+
+
+def click(label):
+    x, y = facts.button(label, 60)
+    w, h = 1280, 800
+    mode = re.findall(r"\[host\] display \S+ (\d+)x(\d+)", serial())
+    if mode:
+        w, h = map(int, mode[-1])
+    qmp_cmd("input-send-event", events=[
+        {"type": "abs", "data": {"axis": "x", "value": int(x / w * 0x7fff)}},
+        {"type": "abs", "data": {"axis": "y", "value": int(y / h * 0x7fff)}}])
+    time.sleep(1)
+    for down in [True, False]:
+        qmp_cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": down}}])
+        time.sleep(0.3)
+
+
+qmp_cmd("qmp_capabilities")
+wait_for("first frame")
+time.sleep(10)  # several of the updater's checks
+if downloads or "switching from" in serial():
+    fail("the host left the build made on this computer by itself")
+print("a build made on this computer: left alone")
+click("Code")
+click("Back to deployed build")
+wait_for(f"[host] switched to build {GOOD[:12]}", timeout=120)
+if f"switching from build {LOCAL} to build {GOOD[:12]}" not in serial():
+    fail(f"the host didn't switch from build {LOCAL}")
+# (No download: build GOOD is still on the disk from part 2.)
+time.sleep(3)
+if "Back to deployed build" in json.dumps(facts.get("buttons") or []):
+    fail("the Code app still offers to go back to the deployed build")
+qemu.kill()
+qemu.wait()
+subprocess.run(["dd", f"if={disk}", f"of={part}", "bs=1M", "skip=1", f"count={os.path.getsize(disk) // 2**20 - 2}", "status=none"], check=True)
+subprocess.run(["e2fsck", "-fy", part], capture_output=True)
+current = subprocess.run(["debugfs", "-R", "cat /programs/current", part], capture_output=True).stdout
+if current != f"{GOOD[:12]}\n".encode():
+    fail(f"programs/current is {current!r}, not {GOOD[:12]}")
+print(f"\"Back to deployed build\": switched from {LOCAL} to build {GOOD[:12]}")
 print("PASS")

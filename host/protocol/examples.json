@@ -35,6 +35,7 @@
     {"install": {"disk": "sda", "layout": "", "target": {"partition": {"number": 4}}, "keepData": false}},
     {"install": {"disk": "vdb", "layout": "x", "target": "wholeDisk", "keepData": true}},
     {"updateInstall": {"disk": "nvme0n1", "layout": "3f2a"}},
+    "followDeployed",
     {"render": [{"display": 33, "triangles": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 64, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 0, 0, 0, 0, 96, 65, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 32, 65, 0, 0, 96, 65, 0, 224, 96, 69, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 64, 0, 64, 96, 69, 0, 0, 32, 65, 0, 0, 32, 65, 0, 0, 96, 65, 0, 224, 96, 69, 0, 0, 0, 0, 0, 0, 32, 65, 0, 0, 128, 64, 0, 224, 96, 69, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0]}, {"display": 34, "triangles": []}]}
   ],
   "fromHost": [
@@ -49,7 +50,7 @@
     {"key": {"code": 30, "down": true, "repeat": false}},
     {"key": {"code": 30, "down": true, "repeat": true}},
     {"renderer": {"gpu": true, "name": "virgl", "hardwareCursor": true}},
-    {"system": {"kernel": "Linux 6.12.115", "cpu": "QEMU Virtual CPU", "commit": "fe45b53"}},
+    {"system": {"kernel": "Linux 6.12.115", "cpu": "QEMU Virtual CPU", "commit": "fe45b53", "build": "local-1a2b3c"}},
     {"boot": {"initMs": 812, "elmMs": 830, "frameMs": 1204}},
     {"stats": {"cores": 4, "cpu": 12.5, "cpuElm": 3.1, "cpuHost": 1.2, "cpuGpu": 8.2, "memUsed": 120, "memTotal": 1990, "gpuMs": 1.25, "elmMs": 2.5, "drawMs": -1}},
     {"wifiDevice": {"name": "wlan0"}},

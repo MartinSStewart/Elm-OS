@@ -133,6 +133,9 @@ type Effect
     | Install { disk : String, layout : String, target : Install.Types.Target, keepData : Bool }
       -- Replaces the Elm OS installed on a disk with this one, keeping its data.
     | UpdateInstall { disk : String, layout : String }
+      -- Leaves a build made by the Code app for the newest deployed one, which the host
+      -- otherwise stays away from. A failure comes back as a build message.
+    | FollowDeployed
 
 
 type PowerAction
@@ -395,3 +398,6 @@ encode effect =
 
         UpdateInstall { disk, layout } ->
             Postcard.variant 29 [ Postcard.string disk, Postcard.string layout ]
+
+        FollowDeployed ->
+            Postcard.variant 30 []

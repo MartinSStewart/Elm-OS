@@ -8,7 +8,9 @@ Generate.elm), so Persist.elm can save them without hand-written codecs.
 
 It copies every .elm file under --src to --out, adding the encoders and decoders to
 the modules that define the types, and writes the Wire module (--runtime) and the
-program's entry module (--entry). A file whose text hasn't changed isn't written
+program's entry module (--entry), and Generated/ModelTree.elm, the Model as a tree for
+the Model viewer app (`make` copies it back into elm/src, where it is checked in). A
+file whose text hasn't changed isn't written
 again, so eco only recompiles what changed, and .elm files in --out that are no
 longer in --src are deleted.
 

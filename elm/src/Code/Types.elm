@@ -18,6 +18,8 @@ type UiId
     | SaveButton
     | RevertButton
     | BuildButton
+      -- Leaves the build made here for the deployed one (Effect.FollowDeployed).
+    | DeployedButton
       -- Shows the code again instead of the build's errors.
     | ErrorsCloseButton
     | ErrorsViewport
