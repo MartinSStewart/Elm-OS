@@ -44,7 +44,7 @@ import Code.Find
 import Code.GitHub
 import Code.Index
 import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), Place, UiId(..), UsageList)
-import Color
+import Color exposing (Color)
 import Coord exposing (Coord)
 import Effect exposing (Effect)
 import Json.Encode as E
@@ -55,7 +55,7 @@ import SourceCode
 import Sprite
 import TextInput
 import TextInputMultiline
-import Ui exposing (Element)
+import Ui exposing (Element, Length(..), Length2(..), TargetSize)
 import UiId
 import Units exposing (UiPixels)
 
@@ -1105,7 +1105,7 @@ load name uiState model =
 -}
 appSize : App.Limits
 appSize =
-    { min = Coord.xy (sidebarWidth + 400) 250
+    { min = Coord.xy 600 250
     , preferred = Coord.xy 900 (chrome + 30 * lineHeight)
     , max = Coord.xy 1600 100000
     }
@@ -1135,8 +1135,8 @@ gap =
 {-| The text box, as big as the window (of this size) lets it be: with the find bar over
 it, it has fewer lines.
 -}
-style : Coord UiPixels -> Model -> TextInputMultiline.Style
-style windowSize model =
+style : Model -> TextInputMultiline.Style
+style model =
     let
         width : Quantity Int UiPixels
         width =
@@ -1166,6 +1166,11 @@ style windowSize model =
     }
 
 
+segment : Color -> String -> Sprite.Segment
+segment color text =
+    { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
+
+
 {-| The window: the module's name and buttons, the code (or the list of modules, or the
 last build's errors), where the cursor is, whether the text is saved, and how the last
 build went. `input` is the text box's model, `needle` what the find box says.
@@ -1181,15 +1186,8 @@ view windowSize input needle running switchingTo model =
             else
                 []
 
-        boxStyle : TextInputMultiline.Style
-        boxStyle =
-            style windowSize model |> (\plain -> { plain | highlights = found })
-
-        segment color text =
-            { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
-
-        button id label =
-            Ui.button { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text label)
+        button id label targetSize =
+            Ui.button2 { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text2 label) targetSize
 
         state =
             input.input.current
@@ -1197,6 +1195,7 @@ view windowSize input needle running switchingTo model =
         ( line, column ) =
             TextInputMultiline.lineAndColumn state.text state.cursorPosition
 
+        editing : Maybe String
         editing =
             if model.showErrors || model.committing then
                 Nothing
@@ -1290,7 +1289,7 @@ view windowSize input needle running switchingTo model =
         -- partition), the button still works.
         buildButton =
             (if unsaved || differsFromRunning model then
-                [ button BuildButton "Build and run" ]
+                [ ( Shrink2, button BuildButton "Build and run" ) ]
 
              else
                 []
@@ -1298,7 +1297,7 @@ view windowSize input needle running switchingTo model =
                 -- A build made here stays until this: the host follows the deployed
                 -- builds again only when asked, so as not to drop the edits.
                 ++ (if String.startsWith "local-" running && not (buildRunning model) then
-                        [ button DeployedButton "Back to deployed build" ]
+                        [ ( Shrink2, button DeployedButton "Back to deployed build" ) ]
 
                     else
                         []
@@ -1307,13 +1306,14 @@ view windowSize input needle running switchingTo model =
                         []
 
                     else
-                        [ button CommitButton "Commit" ]
+                        [ ( Shrink2, button CommitButton "Commit" ) ]
                    )
 
+        buttons : List ( Length2, TargetSize -> Element UiId.UiId )
         buttons =
             case ( model.showErrors, editing ) of
                 ( True, _ ) ->
-                    [ button ErrorsCloseButton "Back to code", button CloseButton "Close" ]
+                    [ ( Shrink2, button ErrorsCloseButton "Back to code" ), ( Shrink2, button CloseButton "Close" ) ]
 
                 ( False, Nothing ) ->
                     if model.committing then
@@ -1321,94 +1321,46 @@ view windowSize input needle running switchingTo model =
                             []
 
                          else
-                            [ button PushButton "Push" ]
+                            [ ( Shrink2, button PushButton "Push" ) ]
                         )
-                            ++ [ button CommitCloseButton "Back to code", button CloseButton "Close" ]
+                            ++ [ ( Shrink2, button CommitCloseButton "Back to code" ), ( Shrink2, button CloseButton "Close" ) ]
 
                     else
-                        buildButton ++ [ button CloseButton "Close" ]
+                        buildButton ++ [ ( Shrink2, button CloseButton "Close" ) ]
 
                 ( False, Just name ) ->
                     (if unsaved then
-                        [ button SaveButton "Save" ]
+                        [ ( Shrink2, button SaveButton "Save" ) ]
 
                      else
                         []
                     )
                         ++ (if isEdited name model then
-                                [ button RevertButton "Back to built-in" ]
+                                [ ( Shrink2, button RevertButton "Back to built-in" ) ]
 
                             else
                                 []
                            )
                         ++ buildButton
-                        ++ [ button CloseButton "Close" ]
-
-        boxHeight =
-            Units.ui (Coord.yRaw (TextInputMultiline.size boxStyle))
-
-        errors =
-            case model.build of
-                Just (BuildFailed step output) ->
-                    "The build stopped at: " ++ step ++ "\n\n" ++ output
-
-                _ ->
-                    ""
-
-        pane =
-            if model.committing then
-                Ui.viewport
-                    { id = UiId.Code CommitViewport, viewportHeight = boxHeight }
-                    (commitView boxStyle.width model)
-
-            else if model.showErrors then
-                Ui.viewport
-                    { id = UiId.Code ErrorsViewport, viewportHeight = boxHeight }
-                    -- Wrapped: a compiler's lines can be wider than the App.
-                    (Ui.customTextWrapped
-                        Sprite.Small
-                        boxStyle.width
-                        [ { text = errors, color = Color.textColor, font = Sprite.Mono, decorations = [], link = Nothing } ]
-                    )
-
-            else
-                case editing of
-                    Just _ ->
-                        Ui.column
-                            gap
-                            ((if findShown model then
-                                [ findBar boxStyle.width ]
-
-                              else
-                                []
-                             )
-                                ++ [ Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle } ]
-                                ++ (case model.usages of
-                                        Just usages ->
-                                            [ usagesPanel boxStyle.width usages ]
-
-                                        Nothing ->
-                                            []
-                                   )
-                            )
-
-                    Nothing ->
-                        Ui.center
-                            { size = Coord.xy (Quantity.unwrap boxStyle.width) (Quantity.unwrap boxHeight) }
-                            (Ui.customText Sprite.Small [ segment Color.dimTextColor "Pick a module on the left" ])
-
-        body =
-            Ui.row gap [ modulesList boxHeight editing model, pane ]
+                        ++ [ ( Shrink2, button CloseButton "Close" ) ]
 
         content =
-            Ui.column
+            Ui.column2
                 6
-                [ Ui.leftAndRight (Units.ui (Coord.xRaw windowSize - 16))
-                    (Ui.customText Sprite.Big [ segment Color.textColor title ])
-                    (Ui.row 6 buttons)
-                , body
-                , Ui.customText Sprite.Small (fileStatus ++ buildStatus)
+                [ ( Shrink2
+                  , Ui.row2
+                        0
+                        [ ( Shrink2, Ui.customText2 Sprite.Big [ segment Color.textColor title ] )
+                        , ( Fill2, Ui.el2 { pad = Ui.noPadding, style = Ui.NoBorderOrFill } Ui.empty2 )
+                        , ( Shrink2, Ui.row2 6 buttons )
+                        ]
+                  )
+                , ( Fill2
+                  , Ui.row2 gap [ ( Shrink2, modulesList editing model ), ( Fill2, pane windowSize found editing model ) ]
+                  )
+                , ( Shrink2, Ui.customText2 Sprite.Small (fileStatus ++ buildStatus) )
                 ]
+                { width = Just (Coord.xRaw windowSize), height = Just (Coord.yRaw windowSize) }
     in
     Ui.elWithId
         (UiId.Code Window)
@@ -1418,6 +1370,70 @@ view windowSize input needle running switchingTo model =
         , style = Ui.windowBorderAndFill
         }
         content
+
+
+pane : Coord UiPixels -> List ( Int, Int ) -> Maybe String -> Model -> TargetSize -> Element UiId.UiId
+pane windowSize found editing model targetSize =
+    let
+        boxStyle : TextInputMultiline.Style
+        boxStyle =
+            style windowSize model |> (\plain -> { plain | highlights = found })
+
+        boxHeight =
+            Units.ui (Coord.yRaw (TextInputMultiline.size boxStyle))
+    in
+    if model.committing then
+        Ui.viewport
+            { id = UiId.Code CommitViewport, viewportHeight = boxHeight }
+            (commitView boxStyle.width model)
+
+    else if model.showErrors then
+        Ui.viewport
+            { id = UiId.Code ErrorsViewport, viewportHeight = boxHeight }
+            -- Wrapped: a compiler's lines can be wider than the App.
+            (Ui.customTextWrapped
+                Sprite.Small
+                boxStyle.width
+                [ { text =
+                        case model.build of
+                            Just (BuildFailed step output) ->
+                                "The build stopped at: " ++ step ++ "\n\n" ++ output
+
+                            _ ->
+                                ""
+                  , color = Color.textColor
+                  , font = Sprite.Mono
+                  , decorations = []
+                  , link = Nothing
+                  }
+                ]
+            )
+
+    else
+        case editing of
+            Just _ ->
+                Ui.column
+                    gap
+                    ((if findShown model then
+                        [ findBar boxStyle.width ]
+
+                      else
+                        []
+                     )
+                        ++ [ Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle } ]
+                        ++ (case model.usages of
+                                Just usages ->
+                                    [ usagesPanel boxStyle.width usages ]
+
+                                Nothing ->
+                                    []
+                           )
+                    )
+
+            Nothing ->
+                Ui.center
+                    { size = Coord.xy (Quantity.unwrap boxStyle.width) (Quantity.unwrap boxHeight) }
+                    (Ui.customText Sprite.Small [ segment Color.dimTextColor "Pick a module on the left" ])
 
 
 {-| Whether the usages of a definition show under the code: only over the code of a
@@ -1507,10 +1523,10 @@ usagesPanel width usages =
 {-| The modules beside the code, one under another, to pick the one to read or change
 (`open` is the one shown, if any). It is as tall as the text box.
 -}
-modulesList : Quantity Int UiPixels -> Maybe String -> Model -> Element UiId.UiId
-modulesList height open model =
-    Ui.viewport
-        { id = UiId.Code ModulesViewport, viewportHeight = height }
+modulesList : Maybe String -> Model -> TargetSize -> Element UiId.UiId
+modulesList open model targetSize =
+    Ui.viewport2
+        (UiId.Code ModulesViewport)
         (Ui.column
             4
             (List.map
@@ -1540,14 +1556,9 @@ modulesList height open model =
                 )
                 (List.filter shownModule (SeqDict.keys SourceCode.sourceCode))
             )
+            |> Ui.fixed2
         )
-
-
-{-| How wide the list of modules is: the widest name's button, and the viewport's frame.
--}
-sidebarWidth : Int
-sidebarWidth =
-    Coord.xRaw (Ui.size (modulesList (Units.ui 100) Nothing init))
+        targetSize
 
 
 {-| Which match the selection is, and how many there are: "3 of 15 matches", or just the

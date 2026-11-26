@@ -43,6 +43,7 @@ module Ui exposing
     , elementToScreenshot
     , ellipsisText2
     , empty
+    , empty2
     , findInput
     , fixed2
     , getTextInput
@@ -1337,6 +1338,11 @@ textInputMultiline data =
 
 empty : Element id
 empty =
+    Element Empty
+
+
+empty2 : TargetSize -> Element id
+empty2 _ =
     Element Empty
 
 
