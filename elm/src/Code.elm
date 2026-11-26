@@ -11,6 +11,7 @@ module Code exposing
     , findShown
     , findText
     , forgetPushed
+    , githubToken
     , httpResponse
     , init
     , onClick
@@ -19,7 +20,6 @@ module Code exposing
     , save
     , style
     , testFact
-    , githubToken
     , uncommittedModules
     , view
     )
