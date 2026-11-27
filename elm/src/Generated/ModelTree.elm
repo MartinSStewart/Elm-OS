@@ -648,6 +648,32 @@ field_Bounds_Bounds put value i =
             tree_Coord_Coord (ModelTree.Put (\x -> ModelTree.apply put { value | bottomRight = x })) value.bottomRight
 
 
+tree_Brightness_Backlight put value =
+    ModelTree.record [ "path", "max" ] (field_Brightness_Backlight put value)
+
+
+field_Brightness_Backlight put value i =
+    case i of
+        0 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | path = x })) value.path
+
+        _ ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | max = x })) value.max
+
+
+tree_Brightness_Model put value =
+    ModelTree.record [ "backlight", "level" ] (field_Brightness_Model put value)
+
+
+field_Brightness_Model put value i =
+    case i of
+        0 ->
+            ModelTree.maybe tree_Brightness_Backlight (ModelTree.Put (\x -> ModelTree.apply put { value | backlight = x })) value.backlight
+
+        _ ->
+            ModelTree.maybe ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | level = x })) value.level
+
+
 tree_Button_Model put value =
     ModelTree.record [ "buttonDown" ] (field_Button_Model put value)
 
@@ -2736,7 +2762,7 @@ choose_Install_Types_UiId put i =
 
 
 tree_Main_Model put value =
-    ModelTree.record [ "displays", "appDisplays", "mouse", "colorIndex", "pressed", "renderer", "stats", "lastFrame", "frameIntervals", "frames", "lazyCache", "imageCache", "shift", "ctrl", "alt", "clipboard", "selectingText", "network", "weather", "lastSnapshot", "time", "utcOffsetMinutes", "geoUrl", "weatherUrl", "system", "bootInfo", "aboutOpen", "newsOpen", "news", "hackerNews", "email", "webViewer", "asciiCollab", "calculator", "calculatorOpen", "ticTacToe", "ticTacToeOpen", "paint", "confirmPower", "editorOpen", "code", "debugOpen", "networkOpen", "weatherOpen", "upgradingTo", "reflashNeeded", "uiState", "showUiBorders", "inspected", "screenshotViewer", "install", "history", "modelViewer", "takingScreenshot", "screenshots", "testFacts" ] (field_Main_Model put value)
+    ModelTree.record [ "displays", "appDisplays", "mouse", "colorIndex", "pressed", "renderer", "stats", "lastFrame", "frameIntervals", "frames", "lazyCache", "imageCache", "shift", "ctrl", "alt", "clipboard", "selectingText", "network", "weather", "lastSnapshot", "time", "utcOffsetMinutes", "geoUrl", "weatherUrl", "system", "bootInfo", "brightness", "aboutOpen", "newsOpen", "news", "hackerNews", "email", "webViewer", "asciiCollab", "calculator", "calculatorOpen", "ticTacToe", "ticTacToeOpen", "paint", "confirmPower", "editorOpen", "code", "debugOpen", "networkOpen", "weatherOpen", "upgradingTo", "reflashNeeded", "uiState", "showUiBorders", "inspected", "screenshotViewer", "install", "history", "modelViewer", "takingScreenshot", "screenshots", "testFacts" ] (field_Main_Model put value)
 
 
 field_Main_Model put value i =
@@ -2820,90 +2846,93 @@ field_Main_Model put value i =
             tree_BootInfo_Model (ModelTree.Put (\x -> ModelTree.apply put { value | bootInfo = x })) value.bootInfo
 
         26 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | aboutOpen = x })) value.aboutOpen
+            tree_Brightness_Model (ModelTree.Put (\x -> ModelTree.apply put { value | brightness = x })) value.brightness
 
         27 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | newsOpen = x })) value.newsOpen
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | aboutOpen = x })) value.aboutOpen
 
         28 ->
-            tree_News_Types_NewsState (ModelTree.Put (\x -> ModelTree.apply put { value | news = x })) value.news
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | newsOpen = x })) value.newsOpen
 
         29 ->
-            tree_HackerNews_Model (ModelTree.Put (\x -> ModelTree.apply put { value | hackerNews = x })) value.hackerNews
+            tree_News_Types_NewsState (ModelTree.Put (\x -> ModelTree.apply put { value | news = x })) value.news
 
         30 ->
-            tree_Email_Model (ModelTree.Put (\x -> ModelTree.apply put { value | email = x })) value.email
+            tree_HackerNews_Model (ModelTree.Put (\x -> ModelTree.apply put { value | hackerNews = x })) value.hackerNews
 
         31 ->
-            tree_WebViewer_Model (ModelTree.Put (\x -> ModelTree.apply put { value | webViewer = x })) value.webViewer
+            tree_Email_Model (ModelTree.Put (\x -> ModelTree.apply put { value | email = x })) value.email
 
         32 ->
-            tree_AsciiCollab_Model (ModelTree.Put (\x -> ModelTree.apply put { value | asciiCollab = x })) value.asciiCollab
+            tree_WebViewer_Model (ModelTree.Put (\x -> ModelTree.apply put { value | webViewer = x })) value.webViewer
 
         33 ->
-            tree_Calculator_Model (ModelTree.Put (\x -> ModelTree.apply put { value | calculator = x })) value.calculator
+            tree_AsciiCollab_Model (ModelTree.Put (\x -> ModelTree.apply put { value | asciiCollab = x })) value.asciiCollab
 
         34 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | calculatorOpen = x })) value.calculatorOpen
+            tree_Calculator_Model (ModelTree.Put (\x -> ModelTree.apply put { value | calculator = x })) value.calculator
 
         35 ->
-            tree_TicTacToe_Model (ModelTree.Put (\x -> ModelTree.apply put { value | ticTacToe = x })) value.ticTacToe
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | calculatorOpen = x })) value.calculatorOpen
 
         36 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | ticTacToeOpen = x })) value.ticTacToeOpen
+            tree_TicTacToe_Model (ModelTree.Put (\x -> ModelTree.apply put { value | ticTacToe = x })) value.ticTacToe
 
         37 ->
-            tree_Paint_Model (ModelTree.Put (\x -> ModelTree.apply put { value | paint = x })) value.paint
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | ticTacToeOpen = x })) value.ticTacToeOpen
 
         38 ->
-            ModelTree.maybe (ModelTree.opaqueTree "Main.PowerAction") (ModelTree.Put (\x -> ModelTree.apply put { value | confirmPower = x })) value.confirmPower
+            tree_Paint_Model (ModelTree.Put (\x -> ModelTree.apply put { value | paint = x })) value.paint
 
         39 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | editorOpen = x })) value.editorOpen
+            ModelTree.maybe (ModelTree.opaqueTree "Main.PowerAction") (ModelTree.Put (\x -> ModelTree.apply put { value | confirmPower = x })) value.confirmPower
 
         40 ->
-            tree_Code_Model (ModelTree.Put (\x -> ModelTree.apply put { value | code = x })) value.code
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | editorOpen = x })) value.editorOpen
 
         41 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | debugOpen = x })) value.debugOpen
+            tree_Code_Model (ModelTree.Put (\x -> ModelTree.apply put { value | code = x })) value.code
 
         42 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | networkOpen = x })) value.networkOpen
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | debugOpen = x })) value.debugOpen
 
         43 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | weatherOpen = x })) value.weatherOpen
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | networkOpen = x })) value.networkOpen
 
         44 ->
-            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | upgradingTo = x })) value.upgradingTo
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | weatherOpen = x })) value.weatherOpen
 
         45 ->
-            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | reflashNeeded = x })) value.reflashNeeded
+            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | upgradingTo = x })) value.upgradingTo
 
         46 ->
-            tree_Ui_Model tree_UiId_UiId (ModelTree.Put (\x -> ModelTree.apply put { value | uiState = x })) value.uiState
+            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | reflashNeeded = x })) value.reflashNeeded
 
         47 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | showUiBorders = x })) value.showUiBorders
+            tree_Ui_Model tree_UiId_UiId (ModelTree.Put (\x -> ModelTree.apply put { value | uiState = x })) value.uiState
 
         48 ->
-            ModelTree.maybe (\put1 value1 -> ModelTree.fields [ ( "display", \() -> ModelTree.int (ModelTree.Put (\x1 -> ModelTree.apply put1 { value1 | display = x1 })) value1.display ), ( "sources", \() -> ModelTree.list tree_Ui_Source (ModelTree.Put (\x1 -> ModelTree.apply put1 { value1 | sources = x1 })) value1.sources ) ]) (ModelTree.Put (\x -> ModelTree.apply put { value | inspected = x })) value.inspected
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | showUiBorders = x })) value.showUiBorders
 
         49 ->
-            tree_ScreenshotViewer_Model (ModelTree.Put (\x -> ModelTree.apply put { value | screenshotViewer = x })) value.screenshotViewer
+            ModelTree.maybe (\put1 value1 -> ModelTree.fields [ ( "display", \() -> ModelTree.int (ModelTree.Put (\x1 -> ModelTree.apply put1 { value1 | display = x1 })) value1.display ), ( "sources", \() -> ModelTree.list tree_Ui_Source (ModelTree.Put (\x1 -> ModelTree.apply put1 { value1 | sources = x1 })) value1.sources ) ]) (ModelTree.Put (\x -> ModelTree.apply put { value | inspected = x })) value.inspected
 
         50 ->
-            tree_Install_Model (ModelTree.Put (\x -> ModelTree.apply put { value | install = x })) value.install
+            tree_ScreenshotViewer_Model (ModelTree.Put (\x -> ModelTree.apply put { value | screenshotViewer = x })) value.screenshotViewer
 
         51 ->
-            tree_History_Model (ModelTree.Put (\x -> ModelTree.apply put { value | history = x })) value.history
+            tree_Install_Model (ModelTree.Put (\x -> ModelTree.apply put { value | install = x })) value.install
 
         52 ->
-            tree_ModelViewer_Model (ModelTree.Put (\x -> ModelTree.apply put { value | modelViewer = x })) value.modelViewer
+            tree_History_Model (ModelTree.Put (\x -> ModelTree.apply put { value | history = x })) value.history
 
         53 ->
-            ModelTree.maybe tree_Main_ScreenshotPreview (ModelTree.Put (\x -> ModelTree.apply put { value | takingScreenshot = x })) value.takingScreenshot
+            tree_ModelViewer_Model (ModelTree.Put (\x -> ModelTree.apply put { value | modelViewer = x })) value.modelViewer
 
         54 ->
+            ModelTree.maybe tree_Main_ScreenshotPreview (ModelTree.Put (\x -> ModelTree.apply put { value | takingScreenshot = x })) value.takingScreenshot
+
+        55 ->
             ModelTree.list tree_Ui_Screenshot (ModelTree.Put (\x -> ModelTree.apply put { value | screenshots = x })) value.screenshots
 
         _ ->
@@ -4173,6 +4202,12 @@ tree_UiId_UiId put value =
         UiId.CancelPowerButton ->
             ModelTree.variant "CancelPowerButton" 0 (args_UiId_UiId put value) names_UiId_UiId (choose_UiId_UiId put)
 
+        UiId.BrightnessDownButton ->
+            ModelTree.variant "BrightnessDownButton" 0 (args_UiId_UiId put value) names_UiId_UiId (choose_UiId_UiId put)
+
+        UiId.BrightnessUpButton ->
+            ModelTree.variant "BrightnessUpButton" 0 (args_UiId_UiId put value) names_UiId_UiId (choose_UiId_UiId put)
+
         UiId.Network _ ->
             ModelTree.variant "Network" 1 (args_UiId_UiId put value) names_UiId_UiId (choose_UiId_UiId put)
 
@@ -4254,6 +4289,12 @@ args_UiId_UiId put value i =
         UiId.CancelPowerButton ->
             ModelTree.noChild i
 
+        UiId.BrightnessDownButton ->
+            ModelTree.noChild i
+
+        UiId.BrightnessUpButton ->
+            ModelTree.noChild i
+
         UiId.Network a0 ->
             tree_Network_Types_UiId (ModelTree.Put (\new -> ModelTree.apply put (UiId.Network new))) a0
 
@@ -4308,6 +4349,8 @@ names_UiId_UiId =
     , "RestartButton"
     , "ConfirmPowerButton"
     , "CancelPowerButton"
+    , "BrightnessDownButton"
+    , "BrightnessUpButton"
     ]
 
 
@@ -4331,8 +4374,14 @@ choose_UiId_UiId put i =
         5 ->
             ModelTree.apply put UiId.ConfirmPowerButton
 
-        _ ->
+        6 ->
             ModelTree.apply put UiId.CancelPowerButton
+
+        7 ->
+            ModelTree.apply put UiId.BrightnessDownButton
+
+        _ ->
+            ModelTree.apply put UiId.BrightnessUpButton
 
 
 tree_Units_UiScale put value =

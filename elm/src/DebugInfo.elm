@@ -1,6 +1,7 @@
 module DebugInfo exposing (Info, limits, view)
 
-{-| The debug app: the build, the displays, the mouse, frame times and the boot's timings.
+{-| The debug app: the build, the displays, the mouse, frame times and the boot's timings,
+and the screen's brightness.
 -}
 
 import App
@@ -28,6 +29,7 @@ type alias Info =
     , stats : Maybe SystemStats
     , frameIntervals : List Float -- milliseconds, newest first
     , bootInfo : BootInfo.Model
+    , brightness : Maybe String -- the screen's, "60%", if it has a backlight
     , lastSnapshot : Maybe { bytes : Int, time : Maybe Time.Posix }
     , time : Maybe Time.Posix -- the wall clock now
     , utcOffsetMinutes : Maybe Int
@@ -185,10 +187,29 @@ view model size =
                     ++ statsLines
                     ++ (line "Clock" (BootInfo.clockText model.bootInfo) size2
                             :: line "Battery" (BootInfo.batteryText model.bootInfo) size2
+                            :: brightnessLine model.brightness
                             :: List.map (\( label, text ) -> line label text size2) (BootInfo.bootRows seconds model.bootInfo)
                        )
                 )
         )
+
+
+{-| The screen's brightness, with buttons to change it (the brightness keys do too,
+Brightness.elm).
+-}
+brightnessLine : Maybe String -> Ui.Element UiId
+brightnessLine brightness =
+    case brightness of
+        Just percent ->
+            Ui.row
+                8
+                [ Ui.monoText (String.padRight 10 ' ' "Backlight" ++ String.padRight 5 ' ' percent)
+                , Ui.button { id = UiId.BrightnessDownButton, pad = Ui.paddingXY 6 0 } (Ui.monoText "-")
+                , Ui.button { id = UiId.BrightnessUpButton, pad = Ui.paddingXY 6 0 } (Ui.monoText "+")
+                ]
+
+        Nothing ->
+            Ui.monoText (String.padRight 10 ' ' "Backlight" ++ "none (brightness is set on the monitor)")
 
 
 {-| Green for the GPU, orange for the CPU, as the host's old corner badge was.

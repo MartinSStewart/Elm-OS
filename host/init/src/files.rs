@@ -28,25 +28,38 @@ pub enum Request {
     Sha256 { path: String, length: Option<u64> },
 }
 
-/// Writes `text` to a kernel setting under /sys, such as a CPU's clock policy. Only
-/// /sys: Elm can change how the kernel runs the hardware, but not touch a disk. A
-/// failure is only logged; Elm reads the setting back to see what it is.
+/// Writes `text` to a kernel setting under /sys, such as a CPU's clock policy or the
+/// screen's brightness. Only /sys: Elm can change how the kernel runs the hardware, but
+/// not touch a disk. A failure is only logged; Elm reads the setting back to see what it
+/// is. The writes are done one at a time, in the order Elm asked for them, on one thread:
+/// holding a brightness key down sends many, and the last one must win.
 pub fn write_sys(path: String, text: String) {
-    std::thread::Builder::new()
-        .name("files".into())
-        .spawn(move || {
-            let real = std::fs::canonicalize(&path);
-            match real {
-                Ok(p) if p.starts_with("/sys/") => {
-                    if let Err(e) = std::fs::write(&p, text.as_bytes()) {
-                        log!("host", "writing {:?} to {}: {}", text, path, e);
-                    }
+    static WRITER: std::sync::OnceLock<std::sync::mpsc::Sender<(String, String)>> = std::sync::OnceLock::new();
+    let writer = WRITER.get_or_init(|| {
+        let (send, receive) = std::sync::mpsc::channel::<(String, String)>();
+        std::thread::Builder::new()
+            .name("write-sys".into())
+            .spawn(move || {
+                for (path, text) in receive {
+                    write_sys_now(&path, &text);
                 }
-                Ok(_) => log!("host", "not writing {}: only /sys can be written", path),
-                Err(e) => log!("host", "writing {}: {}", path, e),
+            })
+            .expect("start the write-sys thread");
+        send
+    });
+    let _ = writer.send((path, text));
+}
+
+fn write_sys_now(path: &str, text: &str) {
+    match std::fs::canonicalize(path) {
+        Ok(p) if p.starts_with("/sys/") => {
+            if let Err(e) = std::fs::write(&p, text.as_bytes()) {
+                log!("host", "writing {:?} to {}: {}", text, path, e);
             }
-        })
-        .expect("start a files thread");
+        }
+        Ok(_) => log!("host", "not writing {}: only /sys can be written", path),
+        Err(e) => log!("host", "writing {}: {}", path, e),
+    }
 }
 
 /// Answers `req` to Elm program number `program` (elm::answer), if it's still running.

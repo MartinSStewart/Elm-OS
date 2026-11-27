@@ -585,6 +585,12 @@ fromKeyboard key =
         Keyboard.PrintScreen ->
             Nothing
 
+        Keyboard.BrightnessDown ->
+            Nothing
+
+        Keyboard.BrightnessUp ->
+            Nothing
+
 
 
 -- VIEW
