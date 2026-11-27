@@ -11,7 +11,27 @@ import Test exposing (Test)
 suite : Test
 suite =
     Test.describe "Paint fill"
-        [ Test.test "fills only up to five times the brush radius"
+        [ Test.test "a bigger canvas keeps what was drawn, and a smaller one crops it"
+            (\_ ->
+                let
+                    drawn =
+                        Paint.init
+                            |> Paint.startStroke (Coord.xy 100 100)
+                            |> Paint.endStroke
+
+                    size across down =
+                        Paint.onClick (Paint.Types.SizeButton across down) drawn
+
+                    black model x y =
+                        Paint.pixelAt ( x, y ) model.canvas == Just (Color.toInt Color.black)
+                in
+                Expect.equal [ True, True, False ]
+                    [ black (size 40 24) 100 100
+                    , black (size 10 6) 100 100
+                    , black (size 5 3) 100 100
+                    ]
+            )
+        , Test.test "fills only up to five times the brush radius"
             (\_ ->
                 let
                     model =

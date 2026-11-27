@@ -4,7 +4,9 @@ module Image exposing
     , chunkFromPixels
     , chunkPixels
     , chunkSize
+    , chunksDown
     , filled
+    , resized
     )
 
 {-| Pictures in colour, such as the paint program's canvas: a grid of 32 x 32 pixel
@@ -77,6 +79,43 @@ filled : Int -> Int -> Int -> Image
 filled across down color =
     { across = across
     , chunks = Array.repeat (across * down) (chunkFromPixels (Array.repeat (chunkSize * chunkSize) color))
+    }
+
+
+{-| How many chunks tall.
+-}
+chunksDown : Image -> Int
+chunksDown image =
+    Array.length image.chunks // image.across
+
+
+{-| The image made `across` x `down` chunks big: the chunks it has stay where they are
+(the ones that no longer fit are dropped) and the new ones are all this colour (0xRRGGBBAA).
+-}
+resized : Int -> Int -> Int -> Image -> Image
+resized across newDown color image =
+    let
+        blank =
+            filled across newDown color
+    in
+    { across = across
+    , chunks =
+        Array.indexedMap
+            (\index new ->
+                let
+                    x =
+                        modBy across index
+
+                    y =
+                        index // across
+                in
+                if x < image.across && y < chunksDown image then
+                    Array.get (y * image.across + x) image.chunks |> Maybe.withDefault new
+
+                else
+                    new
+            )
+            blank.chunks
     }
 
 

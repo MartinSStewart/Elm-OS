@@ -25,3 +25,5 @@ type UiId
     | BrushButton Int
       -- A tool, by which one.
     | ToolButton Tool
+      -- A canvas size, by its chunks across and down.
+    | SizeButton Int Int

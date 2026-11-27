@@ -26,10 +26,11 @@ those within `fillRadiusFactor` times the brush's radius from the mouse by walki
 wherever the mouse is, but only the colour that was under the mouse when it went down, and the
 pixels the stroke has already filled count as that colour.
 
-The canvas is a 640 x 384 pixel Image (one pixel per UI pixel at a zoom of 1): 32 x 32 pixel
-chunks. A stroke rebuilds the chunks it touches; Sprite.image draws it. The window shows
-the canvas through a box the size of the canvas, zoomed by `zoom` with its top left corner
-at `offset` in the box (UI pixels). The mouse positions that come in are in the box.
+The canvas is an Image of 32 x 32 pixel chunks, one of the `sizes` (a pixel per UI pixel at a
+zoom of 1). A stroke rebuilds the chunks it touches; Sprite.image draws it. The window
+shows the canvas through a box of a fixed size, `boxWidth` x `boxHeight`, zoomed by `zoom`
+with its top left corner at `offset` in the box (UI pixels). The mouse positions that come
+in are in the box. Choosing another size keeps the canvas' top left part.
 
 -}
 
@@ -82,7 +83,7 @@ type alias Stroke =
     -- The colour under the mouse when it went down (0xRRGGBBAA), which the fill tool replaces.
     , target : Int
 
-    -- The pixels the fill tool has filled so far in this stroke, as y * canvasWidth + x. The
+    -- The pixels the fill tool has filled so far in this stroke, as y * the canvas width + x. The
     -- fill treats them as still being the target colour.
     , filled : Set Int
     }
@@ -91,7 +92,7 @@ type alias Stroke =
 init : Model
 init =
     { isOpen = False
-    , canvas = blank
+    , canvas = blank initialChunksAcross initialChunksDown
     , color = Color.black
     , brush = 3
     , tool = Paint.Types.Pen
@@ -109,24 +110,45 @@ chunkSize =
     Image.chunkSize
 
 
-chunksAcross : Int
-chunksAcross =
+{-| The size of the box the canvas is seen through, which is also the window's.
+-}
+boxWidth : Int
+boxWidth =
+    640
+
+
+boxHeight : Int
+boxHeight =
+    384
+
+
+{-| The canvas sizes to pick from, in chunks across and down. The canvas takes 4 bytes a
+pixel, in memory and in each snapshot (and again for each change that can be undone, if it
+touches different chunks), so the biggest is about 9 MB.
+-}
+sizes : List ( Int, Int )
+sizes =
+    [ ( 10, 6 ), ( 20, 12 ), ( 40, 24 ), ( 60, 36 ) ]
+
+
+initialChunksAcross : Int
+initialChunksAcross =
     20
 
 
-chunksDown : Int
-chunksDown =
+initialChunksDown : Int
+initialChunksDown =
     12
 
 
-canvasWidth : Int
-canvasWidth =
-    chunkSize * chunksAcross
+canvasWidth : Image -> Int
+canvasWidth canvas =
+    chunkSize * canvas.across
 
 
-canvasHeight : Int
-canvasHeight =
-    chunkSize * chunksDown
+canvasHeight : Image -> Int
+canvasHeight canvas =
+    chunkSize * Image.chunksDown canvas
 
 
 {-| The radii of the brushes to pick from.
@@ -136,9 +158,9 @@ brushes =
     [ 1, 3, 6, 12 ]
 
 
-blank : Image
-blank =
-    Image.filled chunksAcross chunksDown (Color.toInt Color.white)
+blank : Int -> Int -> Image
+blank across down =
+    Image.filled across down (Color.toInt Color.white)
 
 
 
@@ -302,10 +324,15 @@ panBy ( dx, dy ) model =
         keep =
             32
 
-        limit size =
-            clamp (keep - size * model.zoom) (size - keep)
+        limit size boxSize =
+            clamp (keep - size * model.zoom) (boxSize - keep)
     in
-    { model | offset = ( limit (toFloat canvasWidth) (x + dx), limit (toFloat canvasHeight) (y + dy) ) }
+    { model
+        | offset =
+            ( limit (toFloat (canvasWidth model.canvas)) (toFloat boxWidth) (x + dx)
+            , limit (toFloat (canvasHeight model.canvas)) (toFloat boxHeight) (y + dy)
+            )
+    }
 
 
 startPan : Model -> Model
@@ -392,9 +419,18 @@ paint dabs model =
         r =
             model.brush
 
+        across =
+            model.canvas.across
+
+        width =
+            canvasWidth model.canvas
+
+        height =
+            canvasHeight model.canvas
+
         onCanvas =
             List.filter
-                (\( x, y ) -> x + r >= 0 && y + r >= 0 && x - r < canvasWidth && y - r < canvasHeight)
+                (\( x, y ) -> x + r >= 0 && y + r >= 0 && x - r < width && y - r < height)
                 dabs
 
         touched : Set Int
@@ -403,12 +439,12 @@ paint dabs model =
                 (\( x, y ) set ->
                     List.foldl
                         (\cy set2 ->
-                            List.foldl (\cx -> Set.insert (cy * chunksAcross + cx))
+                            List.foldl (\cx -> Set.insert (cy * across + cx))
                                 set2
-                                (List.range (max 0 (x - r) // chunkSize) (min (canvasWidth - 1) (x + r) // chunkSize))
+                                (List.range (max 0 (x - r) // chunkSize) (min (width - 1) (x + r) // chunkSize))
                         )
                         set
-                        (List.range (max 0 (y - r) // chunkSize) (min (canvasHeight - 1) (y + r) // chunkSize))
+                        (List.range (max 0 (y - r) // chunkSize) (min (height - 1) (y + r) // chunkSize))
                 )
                 Set.empty
                 onCanvas
@@ -427,7 +463,7 @@ paint dabs model =
                         (\index chunks ->
                             case Array.get index chunks of
                                 Just chunk ->
-                                    Array.set index (paintChunk index r color onCanvas chunk) chunks
+                                    Array.set index (paintChunk across index r color onCanvas chunk) chunks
 
                                 Nothing ->
                                     chunks
@@ -440,14 +476,14 @@ paint dabs model =
 
 {-| The chunk with the dabs that reach it painted on.
 -}
-paintChunk : Int -> Int -> Int -> List ( Int, Int ) -> Image.Chunk -> Image.Chunk
-paintChunk index r color dabs chunk =
+paintChunk : Int -> Int -> Int -> Int -> List ( Int, Int ) -> Image.Chunk -> Image.Chunk
+paintChunk across index r color dabs chunk =
     let
         left =
-            modBy chunksAcross index * chunkSize
+            modBy across index * chunkSize
 
         top =
-            index // chunksAcross * chunkSize
+            index // across * chunkSize
 
         dab ( x, y ) pixels =
             List.foldl
@@ -473,17 +509,17 @@ paintChunk index r color dabs chunk =
 -}
 pixelAt : ( Int, Int ) -> Image -> Maybe Int
 pixelAt ( x, y ) canvas =
-    if x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight then
+    if x < 0 || y < 0 || x >= canvasWidth canvas || y >= canvasHeight canvas then
         Nothing
 
     else
-        Array.get (chunkIndexOf x y) canvas.chunks
+        Array.get (chunkIndexOf canvas.across x y) canvas.chunks
             |> Maybe.andThen (\chunk -> Array.get (inChunk x y) (Image.chunkPixels chunk))
 
 
-chunkIndexOf : Int -> Int -> Int
-chunkIndexOf x y =
-    y // chunkSize * chunksAcross + x // chunkSize
+chunkIndexOf : Int -> Int -> Int -> Int
+chunkIndexOf across x y =
+    y // chunkSize * across + x // chunkSize
 
 
 inChunk : Int -> Int -> Int
@@ -568,10 +604,19 @@ fill points model =
 fillAround : Image -> Int -> Int -> Int -> ( Int, Int ) -> Work -> Work
 fillAround canvas r color target ( cx, cy ) previous =
     let
+        across =
+            canvas.across
+
+        canvasWidth_ =
+            canvasWidth canvas
+
+        canvasHeight_ =
+            canvasHeight canvas
+
         chunksReached =
             List.concatMap
-                (\chunkY -> List.map (\chunkX -> chunkY * chunksAcross + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth - 1) (cx + r) // chunkSize)))
-                (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight - 1) (cy + r) // chunkSize))
+                (\chunkY -> List.map (\chunkX -> chunkY * across + chunkX) (List.range (max 0 (cx - r) // chunkSize) (min (canvasWidth_ - 1) (cx + r) // chunkSize)))
+                (List.range (max 0 (cy - r) // chunkSize) (min (canvasHeight_ - 1) (cy + r) // chunkSize))
 
         start =
             List.foldl
@@ -582,8 +627,8 @@ fillAround canvas r color target ( cx, cy ) previous =
         -- The pixels the fill walks over: ones of the target colour, and ones filled already in
         -- this stroke.
         isWalkable w ( x, y ) =
-            Set.member (y * canvasWidth + x) w.filled
-                || (Dict.get (chunkIndexOf x y) w.chunks
+            Set.member (y * canvasWidth_ + x) w.filled
+                || (Dict.get (chunkIndexOf across x y) w.chunks
                         |> Maybe.andThen (Array.get (inChunk x y))
                         |> (==) (Just target)
                    )
@@ -605,7 +650,7 @@ fillAround canvas r color target ( cx, cy ) previous =
                     spread (Queue (List.reverse back) []) w
 
                 Queue (( x, y, distance ) :: front) back ->
-                    if distance > (Dict.get (y * canvasWidth + x) w.distances |> Maybe.withDefault distance) then
+                    if distance > (Dict.get (y * canvasWidth_ + x) w.distances |> Maybe.withDefault distance) then
                         spread (Queue front back) w
 
                     else
@@ -624,7 +669,7 @@ fillAround canvas r color target ( cx, cy ) previous =
                     y + dy
 
                 key =
-                    ny * canvasWidth + nx
+                    ny * canvasWidth_ + nx
 
                 nextDistance =
                     distance + cost
@@ -633,16 +678,16 @@ fillAround canvas r color target ( cx, cy ) previous =
                 alreadyReached =
                     nextDistance >= (Dict.get key w.distances |> Maybe.withDefault (nextDistance + 1))
             in
-            if nx < 0 || ny < 0 || nx >= canvasWidth || ny >= canvasHeight || nextDistance > limit || alreadyReached || not (isWalkable w ( nx, ny )) then
+            if nx < 0 || ny < 0 || nx >= canvasWidth_ || ny >= canvasHeight_ || nextDistance > limit || alreadyReached || not (isWalkable w ( nx, ny )) then
                 ( queue, w )
 
             else
                 ( push ( nx, ny, nextDistance ) queue
-                , setDistance nextDistance key (setPixel color ( nx, ny ) w)
+                , setDistance nextDistance key (setPixel across canvasWidth_ color ( nx, ny ) w)
                 )
     in
     if isWalkable start ( cx, cy ) then
-        spread (Queue [ ( cx, cy, 0 ) ] []) (setDistance 0 (cy * canvasWidth + cx) (setPixel color ( cx, cy ) start))
+        spread (Queue [ ( cx, cy, 0 ) ] []) (setDistance 0 (cy * canvasWidth_ + cx) (setPixel across canvasWidth_ color ( cx, cy ) start))
 
     else
         start
@@ -702,14 +747,14 @@ loadChunk canvas index loaded =
 
 {-| Paints the pixel and notes it as filled, unless it was filled already.
 -}
-setPixel : Int -> ( Int, Int ) -> Work -> Work
-setPixel color ( x, y ) work =
+setPixel : Int -> Int -> Int -> ( Int, Int ) -> Work -> Work
+setPixel across width color ( x, y ) work =
     let
         index =
-            chunkIndexOf x y
+            chunkIndexOf across x y
 
         key =
-            y * canvasWidth + x
+            y * width + x
     in
     if Set.member key work.filled then
         work
@@ -746,7 +791,18 @@ onClick id model =
                 remembered =
                     remember model
             in
-            { remembered | canvas = blank }
+            { remembered | canvas = blank model.canvas.across (Image.chunksDown model.canvas) }
+
+        Paint.Types.SizeButton across down ->
+            let
+                remembered =
+                    remember model
+            in
+            panBy ( 0, 0 )
+                { remembered
+                    | canvas = Image.resized across down (Color.toInt Color.white) model.canvas
+                    , stroke = Nothing
+                }
 
         Paint.Types.Canvas ->
             model
@@ -774,7 +830,7 @@ view : Model -> Element UiId
 view model =
     let
         width =
-            Units.ui canvasWidth
+            Units.ui boxWidth
 
         title =
             Ui.leftAndRight width
@@ -792,16 +848,22 @@ view model =
                 (Ui.row 4 (List.indexedMap (colorButton model) Color.paintPalette))
                 (Ui.row 4 (List.map (toolButton model) [ ( Paint.Types.Pen, "Pen" ), ( Paint.Types.Fill, "Fill" ) ] ++ List.map (brushButton model) brushes))
 
+        sizeRow =
+            Ui.row 4
+                (Ui.text "Canvas size"
+                    :: List.map (sizeButton model) sizes
+                )
+
         canvas =
             Ui.elWithId (Paint Paint.Types.Canvas)
                 { pad = Ui.noPadding, style = Ui.NoBorderOrFill }
                 (Ui.quads
-                    { size = Coord.xy canvasWidth canvasHeight
+                    { size = Coord.xy boxWidth boxHeight
                     , triangles =
-                        Sprite.rectangle Color.fillColor3 { topLeft = Coord.origin, bottomRight = Coord.xy canvasWidth canvasHeight } Coord.origin (Coord.xy canvasWidth canvasHeight)
+                        Sprite.rectangle Color.fillColor3 { topLeft = Coord.origin, bottomRight = Coord.xy boxWidth boxHeight } Coord.origin (Coord.xy boxWidth boxHeight)
                             ++ (Sprite.image model.canvas
                                     |> Sprite.scaleAndMove model.zoom model.offset
-                                    |> Sprite.clipTo { left = 0, top = 0, right = toFloat canvasWidth, bottom = toFloat canvasHeight }
+                                    |> Sprite.clipTo { left = 0, top = 0, right = toFloat boxWidth, bottom = toFloat boxHeight }
                                     |> Sprite.sampled
                                         (if model.zoom >= 2 then
                                             Sprite.Nearest
@@ -815,7 +877,14 @@ view model =
     in
     Ui.el
         { pad = Ui.paddingXY 8 8, style = Ui.windowBorderAndFill }
-        (Ui.column 6 [ title, tools, canvas ])
+        (Ui.column 6 [ title, tools, sizeRow, canvas ])
+
+
+sizeButton : Model -> ( Int, Int ) -> Element UiId
+sizeButton model ( across, down ) =
+    Ui.selectableButton { id = Paint (Paint.Types.SizeButton across down), pad = Ui.paddingXY 6 3 }
+        (across == model.canvas.across && down == Image.chunksDown model.canvas)
+        (Ui.text (String.fromInt (across * chunkSize) ++ " × " ++ String.fromInt (down * chunkSize)))
 
 
 toolButton : Model -> ( Paint.Types.Tool, String ) -> Element UiId

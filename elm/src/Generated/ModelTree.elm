@@ -3789,6 +3789,9 @@ tree_Paint_Types_UiId put value =
         Paint.Types.ToolButton _ ->
             ModelTree.variant "ToolButton" 1 (args_Paint_Types_UiId put value) names_Paint_Types_UiId (choose_Paint_Types_UiId put)
 
+        Paint.Types.SizeButton _ _ ->
+            ModelTree.variant "SizeButton" 2 (args_Paint_Types_UiId put value) names_Paint_Types_UiId (choose_Paint_Types_UiId put)
+
 
 args_Paint_Types_UiId put value i =
     case value of
@@ -3818,6 +3821,14 @@ args_Paint_Types_UiId put value i =
 
         Paint.Types.ToolButton a0 ->
             tree_Paint_Types_Tool (ModelTree.Put (\new -> ModelTree.apply put (Paint.Types.ToolButton new))) a0
+
+        Paint.Types.SizeButton a0 a1 ->
+            case i of
+                0 ->
+                    ModelTree.int (ModelTree.Put (\new -> ModelTree.apply put (Paint.Types.SizeButton new a1))) a0
+
+                _ ->
+                    ModelTree.int (ModelTree.Put (\new -> ModelTree.apply put (Paint.Types.SizeButton a0 new))) a1
 
 
 names_Paint_Types_UiId =

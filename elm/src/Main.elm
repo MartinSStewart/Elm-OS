@@ -1434,6 +1434,9 @@ appButton id =
                 Paint.Types.ToolButton _ ->
                     Nothing
 
+                Paint.Types.SizeButton _ _ ->
+                    Nothing
+
         Editor editorId ->
             case editorId of
                 Editor.Types.OpenButton ->
