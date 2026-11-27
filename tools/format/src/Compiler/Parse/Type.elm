@@ -136,13 +136,13 @@ term =
                                                                                         (\preFieldComments ->
                                                                                             chompField
                                                                                                 |> P.andThen
-                                                                                                    (\( postFieldComments, field ) ->
+                                                                                                    (\( postFieldComments, ( eol, field ) ) ->
                                                                                                         chompRecordEnd postFieldComments []
                                                                                                             |> P.andThen
                                                                                                                 (\( trailingComments, fields ) ->
                                                                                                                     P.addEnd start
                                                                                                                         (Src.TRecordExt ( ( initialComments, postNameComments ), name )
-                                                                                                                            ( ( [], preFieldComments ), field )
+                                                                                                                            ( ( [], preFieldComments, eol ), field )
                                                                                                                             fields
                                                                                                                             trailingComments
                                                                                                                         )
@@ -159,17 +159,22 @@ term =
                                                                                             P.specialize E.TRecordType (expression [])
                                                                                                 |> P.andThen
                                                                                                     (\( ( ( _, postExpressionComments, _ ), tipe ), end ) ->
-                                                                                                        let
-                                                                                                            firstField : Src.C2 Field
-                                                                                                            firstField =
-                                                                                                                ( ( [], initialComments )
-                                                                                                                , ( ( postNameComments, name ), ( preTypeComments, tipe ) )
-                                                                                                                )
-                                                                                                        in
                                                                                                         Space.checkIndent end E.TRecordIndentEnd
-                                                                                                            |> P.andThen (\_ -> chompRecordEnd postExpressionComments [])
+                                                                                                            |> P.andThen (\_ -> Space.eolAfter end postExpressionComments)
                                                                                                             |> P.andThen
-                                                                                                                (\( trailingComments, fields ) ->
+                                                                                                                (\( eol, afterEol ) ->
+                                                                                                                    chompRecordEnd afterEol []
+                                                                                                                        |> P.map (Tuple.pair eol)
+                                                                                                                )
+                                                                                                            |> P.andThen
+                                                                                                                (\( eol, ( trailingComments, fields ) ) ->
+                                                                                                                    let
+                                                                                                                        firstField : Src.C2Eol Field
+                                                                                                                        firstField =
+                                                                                                                            ( ( [], initialComments, eol )
+                                                                                                                            , ( ( postNameComments, name ), ( preTypeComments, tipe ) )
+                                                                                                                            )
+                                                                                                                    in
                                                                                                                     P.addEnd start (Src.TRecord (firstField :: fields) trailingComments)
                                                                                                                 )
                                                                                                     )
@@ -407,7 +412,7 @@ is paired with the comments before its comma and those after it, and the
 result is the further fields in source order with the comments before the `}`.
 
 -}
-chompRecordEnd : Src.FComments -> List (Src.C2 Field) -> P.Parser E.TRecord (Src.C1 (List (Src.C2 Field)))
+chompRecordEnd : Src.FComments -> List (Src.C2Eol Field) -> P.Parser E.TRecord (Src.C1 (List (Src.C2Eol Field)))
 chompRecordEnd comments fields =
     P.oneOf E.TRecordEnd
         [ P.word1 ',' E.TRecordEnd
@@ -418,8 +423,8 @@ chompRecordEnd comments fields =
                             (\preNameComments ->
                                 chompField
                                     |> P.andThen
-                                        (\( postFieldComments, field ) ->
-                                            chompRecordEnd postFieldComments (( ( comments, preNameComments ), field ) :: fields)
+                                        (\( postFieldComments, ( eol, field ) ) ->
+                                            chompRecordEnd postFieldComments (( ( comments, preNameComments, eol ), field ) :: fields)
                                         )
                             )
                 )
@@ -431,7 +436,7 @@ chompRecordEnd comments fields =
 {-| A parser for one `name : type` field of a record type, returned with the
 comments read after its type.
 -}
-chompField : P.Parser E.TRecord (Src.C1 Field)
+chompField : P.Parser E.TRecord (Src.C1 ( Maybe String, Field ))
 chompField =
     P.addLocation (Var.lower E.TRecordField)
         |> P.andThen
@@ -449,7 +454,8 @@ chompField =
                                                         |> P.andThen
                                                             (\( ( ( _, x1, _ ), tipe ), end ) ->
                                                                 Space.checkIndent end E.TRecordIndentEnd
-                                                                    |> P.map (\_ -> ( x1, ( ( postNameComments, name ), ( preTypeComments, tipe ) ) ))
+                                                                    |> P.andThen (\_ -> Space.eolAfter end x1)
+                                                                    |> P.map (\( eol, trailing ) -> ( trailing, ( eol, ( ( postNameComments, name ), ( preTypeComments, tipe ) ) ) ))
                                                             )
                                                 )
                                     )
@@ -480,9 +486,10 @@ variant trailingComments =
                     |> P.andThen
                         (\preArgComments ->
                             P.specialize E.CT_VariantArg (chompArgs preArgComments [] nameEnd)
-                                |> P.map
+                                |> P.andThen
                                     (\( ( postArgsComments, args ), end ) ->
-                                        ( ( ( trailingComments, postArgsComments, Nothing ), ( name, args ) ), end )
+                                        Space.eolAfter end postArgsComments
+                                            |> P.map (\( eol, rest ) -> ( ( ( trailingComments, rest, eol ), ( name, args ) ), end ))
                                     )
                         )
             )

@@ -1,5 +1,5 @@
 module Compiler.Lexer.Primitives exposing
-    ( Parser(..), PStep(..), State(..), StateData
+    ( Parser(..), PStep(..), State(..), StateData, EolComment
     , pure, map, andThen, oneOf, oneOfWithFallback, loop
     , Row, Col, getPosition, addLocation, addEnd
     , withIndent, withBacksetIndent
@@ -59,7 +59,7 @@ the state instead of being built from the combinators.
 
 # Parser Type
 
-@docs Parser, PStep, State, StateData
+@docs Parser, PStep, State, StateData, EolComment
 
 
 # Parser Combinators
@@ -157,11 +157,29 @@ type alias StateData =
     , indent : Int
     , row : Row
     , col : Col
+    , eol : Maybe EolComment
+    , layoutRow : Row
+    }
+
+
+{-| A `--` comment that `Compiler.Parse.Space.chomp` found on the line where it
+started reading, after nothing but spaces: the end-of-line comment of whatever
+ends at `row` and `col`. Only the latest one is kept.
+-}
+type alias EolComment =
+    { row : Row
+    , col : Col
+    , text : String
     }
 
 
 {-| The state a parser receives and passes on: the text, the position in it and
 the current indent, as `StateData` describes.
+
+The positions in the syntax tree (`getPosition`, `addLocation`, `addEnd`) use
+`layoutRow`, not `row`: it counts only the line breaks between tokens, not those
+inside a `"""` string or a `{- -}` comment. The formatter keeps something on one
+line when its region is on one `layoutRow`, as elm-format does. Errors use `row`.
 
 The constructor is exposed, and nothing checks that the fields agree with one
 another, for example that `pos` is no greater than `end`.
@@ -365,7 +383,7 @@ fromByteString (Parser parser) toBadEnd src =
     let
         initialState : State
         initialState =
-            State { src = src, pos = 0, end = String.length src, indent = 0, row = 1, col = 1 }
+            State { src = src, pos = 0, end = String.length src, indent = 0, row = 1, col = 1, eol = Nothing, layoutRow = 1 }
     in
     case parser initialState of
         Cok a state ->
@@ -422,7 +440,7 @@ getPosition : Parser x A.Position
 getPosition =
     Parser
         (\((State s) as state) ->
-            Eok (A.Position s.row s.col) state
+            Eok (A.Position s.layoutRow s.col) state
         )
 
 
@@ -436,10 +454,10 @@ addLocation (Parser parser) =
         (\((State startS) as state) ->
             case parser state of
                 Cok a ((State endS) as s) ->
-                    Cok (A.At (A.Region (A.Position startS.row startS.col) (A.Position endS.row endS.col)) a) s
+                    Cok (A.At (A.Region (A.Position startS.layoutRow startS.col) (A.Position endS.layoutRow endS.col)) a) s
 
                 Eok a ((State endS) as s) ->
-                    Eok (A.At (A.Region (A.Position startS.row startS.col) (A.Position endS.row endS.col)) a) s
+                    Eok (A.At (A.Region (A.Position startS.layoutRow startS.col) (A.Position endS.layoutRow endS.col)) a) s
 
                 Cerr r c t ->
                     Cerr r c t
@@ -456,7 +474,7 @@ addEnd : A.Position -> a -> Parser x (A.Located a)
 addEnd start value =
     Parser
         (\((State s) as state) ->
-            Eok (A.at start (A.Position s.row s.col) value) state
+            Eok (A.at start (A.Position s.layoutRow s.col) value) state
         )
 
 

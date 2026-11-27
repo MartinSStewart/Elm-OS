@@ -1150,7 +1150,7 @@ declToDeclarations ( ( preDeclComments, postDeclComments ), decl ) =
 
                 Decl.Union maybeDocs (A.At _ (Src.Union ( nameComments, A.At _ name ) args firstConstructor moreConstructors)) ->
                     let
-                        ( ( ( preLastConstructorComments, postLastConstructorComments, _ ), ( A.At _ lastName, lastArgs ) ), restConstructors ) =
+                        ( ( ( preLastConstructorComments, postLastConstructorComments, lastEol ), ( A.At _ lastName, lastArgs ) ), restConstructors ) =
                             case List.reverse moreConstructors of
                                 [] ->
                                     ( firstConstructor, [] )
@@ -1167,7 +1167,7 @@ declToDeclarations ( ( preDeclComments, postDeclComments ), decl ) =
                                     )
                                     restConstructors
                                 )
-                                ( preLastConstructorComments, Nothing, NameWithArgs lastName lastArgs )
+                                ( preLastConstructorComments, lastEol, NameWithArgs lastName lastArgs )
                             )
                     in
                     (maybeDocs
@@ -2466,12 +2466,12 @@ formatExpression importInfo (A.At region aexpr) =
                     ]
             )
 
-        Src.Case (( _, A.At subjectRegion _ ) as subject) clauses ->
+        Src.Case (Src.ForceMultiline multilineSubject) subject clauses ->
             let
                 opening : Box
                 opening =
                     case
-                        ( A.isMultiline subjectRegion
+                        ( multilineSubject
                         , formatCommentedExpression importInfo subject
                         )
                     of
@@ -2552,8 +2552,8 @@ formatExpression importInfo (A.At region aexpr) =
                 formatField : Src.C2Eol ( Src.C1 (A.Located Name), Src.C1 Src.Expr ) -> Src.C2Eol Box
                 formatField =
                     Src.c2EolMap
-                        (\( ( nameComments, A.At _ name_ ), ( _, A.At exprRegion _ ) as expr ) ->
-                            Src.Pair ( nameComments, name_ ) expr (Src.ForceMultiline (A.isMultiline exprRegion))
+                        (\( ( nameComments, A.At nameRegion name_ ), ( _, A.At exprRegion _ ) as expr ) ->
+                            Src.Pair ( nameComments, name_ ) expr (Src.ForceMultiline (A.isMultiline (A.mergeRegions nameRegion exprRegion)))
                                 |> Src.mapPair (formatLowercaseIdentifier []) (syntaxParens SyntaxSeparated << formatExpression importInfo)
                                 |> formatPair "="
                         )
@@ -3317,9 +3317,9 @@ typeParensNeeded outer typeParensInner =
 
 {-| Returns one field of a record type, `name : type`, with its comments.
 -}
-formatTypeField : Src.C2 ( Src.C1 (A.Located Name), Src.C1 Src.Type ) -> Src.C2Eol Box
-formatTypeField ( ( preFieldComments, postFieldComments ), ( ( postNameComments, A.At _ name ), ( preTypeComments, typ ) ) ) =
-    ( ( preFieldComments, postFieldComments, Nothing )
+formatTypeField : Src.C2Eol ( Src.C1 (A.Located Name), Src.C1 Src.Type ) -> Src.C2Eol Box
+formatTypeField ( ( preFieldComments, postFieldComments, eol ), ( ( postNameComments, A.At _ name ), ( preTypeComments, typ ) ) ) =
+    ( ( preFieldComments, postFieldComments, eol )
     , Src.Pair ( postNameComments, name ) ( preTypeComments, typ ) (Src.ForceMultiline False)
         |> Src.mapPair (formatLowercaseIdentifier []) (typeParens NotRequired << formatType)
         |> formatPair ":"

@@ -351,8 +351,8 @@ after it, and the final `else` branch, so a chain of `else if` is one `If`.
 `Let` holds its definitions, the comments between `in` and the body, and the
 body.
 
-`Case` holds the expression it examines and its branches, each a pattern and an
-expression.
+`Case` holds whether a line break came between `case` and `of`, the expression
+it examines, and its branches, each a pattern and an expression.
 
 `Accessor` is a field accessor such as `.name`, and `Access` a field read from
 an expression, as in `r.name`.
@@ -385,7 +385,7 @@ type Expr_
     | Call Expr (C1 Expr) (List (C1 Expr))
     | If (C1 ( C2 Expr, C2 Expr )) (List (C1 ( C2 Expr, C2 Expr ))) (C1 Expr)
     | Let (List (C2 (A.Located Def))) FComments Expr
-    | Case (C2 Expr) (List ( C2 Pattern, C1 Expr ))
+    | Case ForceMultiline (C2 Expr) (List ( C2 Pattern, C1 Expr ))
     | Accessor Name
     | Access Expr (A.Located Name)
     | Update (C2 Expr) (C1 ( C2Eol ( C1 (A.Located Name), C1 Expr ), List (C2Eol ( C1 (A.Located Name), C1 Expr )) ))
@@ -516,8 +516,8 @@ type Type_
     | TVar Name
     | TType A.Region Name (List (C1 Type))
     | TTypeQual A.Region Name Name (List (C1 Type))
-    | TRecord (List (C2 ( C1 (A.Located Name), C1 Type ))) FComments
-    | TRecordExt (C2 (A.Located Name)) (C2 ( C1 (A.Located Name), C1 Type )) (List (C2 ( C1 (A.Located Name), C1 Type ))) FComments
+    | TRecord (List (C2Eol ( C1 (A.Located Name), C1 Type ))) FComments
+    | TRecordExt (C2 (A.Located Name)) (C2Eol ( C1 (A.Located Name), C1 Type )) (List (C2Eol ( C1 (A.Located Name), C1 Type ))) FComments
     | TUnit
     | TTuple (C2Eol Type) (C2Eol Type) (List (C2Eol Type))
     | TParens (C2 Type)

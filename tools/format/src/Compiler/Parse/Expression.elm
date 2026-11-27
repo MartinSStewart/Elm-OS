@@ -189,7 +189,8 @@ list start =
                             |> P.andThen
                                 (\( ( postEntryComments, entry ), end ) ->
                                     Space.checkIndent end E.ListIndentEnd
-                                        |> P.andThen (\_ -> P.loop (chompListEnd start) ( postEntryComments, [ ( ( [], comments, Nothing ), entry ) ] ))
+                                        |> P.andThen (\_ -> Space.eolAfter end postEntryComments)
+                                        |> P.andThen (\( eol, trailing ) -> P.loop (chompListEnd start) ( trailing, [ ( ( [], comments, eol ), entry ) ] ))
                                 )
                         , P.word1 ']' E.ListOpen
                             |> P.andThen (\_ -> P.addEnd start (Src.List [] comments))
@@ -216,7 +217,8 @@ chompListEnd start ( trailingComments, entries ) =
                         |> P.andThen
                             (\( ( preComments, entry ), end ) ->
                                 Space.checkIndent end E.ListIndentEnd
-                                    |> P.map (\_ -> P.Loop ( preComments, ( ( trailingComments, postComments, Nothing ), entry ) :: entries ))
+                                    |> P.andThen (\_ -> Space.eolAfter end preComments)
+                                    |> P.map (\( eol, trailing ) -> P.Loop ( trailing, ( ( trailingComments, postComments, eol ), entry ) :: entries ))
                             )
                 )
         , P.word1 ']' E.ListEnd
@@ -416,15 +418,16 @@ record start =
                                                                 P.specialize E.RecordExpr expression
                                                                     |> P.andThen
                                                                         (\( ( postValueComments, value ), end ) ->
-                                                                            let
-                                                                                firstField : Field
-                                                                                firstField =
-                                                                                    ( ( [], preStarterNameComments, Nothing )
-                                                                                    , ( ( postStarterNameComments, starter ), ( preValueComments, value ) )
-                                                                                    )
-                                                                            in
                                                                             Space.checkIndent end E.RecordIndentEnd
-                                                                                |> P.andThen (\_ -> chompFields postValueComments [ firstField ])
+                                                                                |> P.andThen (\_ -> Space.eolAfter end postValueComments)
+                                                                                |> P.andThen
+                                                                                    (\( eol, trailing ) ->
+                                                                                        chompFields trailing
+                                                                                            [ ( ( [], preStarterNameComments, eol )
+                                                                                              , ( ( postStarterNameComments, starter ), ( preValueComments, value ) )
+                                                                                              )
+                                                                                            ]
+                                                                                    )
                                                                                 |> P.andThen (\fields -> P.addEnd start (Src.Record fields))
                                                                         )
                                                             )
@@ -493,10 +496,11 @@ chompField preCommaComents postCommaComments =
                                             |> P.andThen
                                                 (\( ( postFieldComments, value ), end ) ->
                                                     Space.checkIndent end E.RecordIndentEnd
+                                                        |> P.andThen (\_ -> Space.eolAfter end postFieldComments)
                                                         |> P.map
-                                                            (\_ ->
-                                                                ( postFieldComments
-                                                                , ( ( preCommaComents, postCommaComments, Nothing ), ( ( preEqualSignComments, key ), ( postEqualSignComments, value ) ) )
+                                                            (\( eol, trailing ) ->
+                                                                ( trailing
+                                                                , ( ( preCommaComents, postCommaComments, eol ), ( ( preEqualSignComments, key ), ( postEqualSignComments, value ) ) )
                                                                 )
                                                             )
                                                 )
@@ -1048,33 +1052,42 @@ branches after it.
 chompCaseOf : A.Position -> Src.FComments -> Src.FComments -> Src.Expr -> A.Position -> Space.Parser E.Case (Src.C1 Src.Expr)
 chompCaseOf start preExprComments postExprComments expr exprEnd =
     Space.checkIndent exprEnd E.CaseIndentOf
-        |> P.andThen (\_ -> Keyword.of_ E.CaseOf)
-        |> P.andThen (\_ -> Space.chompAndCheckIndent E.CaseSpace E.CaseIndentPattern)
-        |> P.andThen (\comments -> chompCaseBranches start preExprComments postExprComments expr comments)
+        |> P.andThen (\_ -> P.getPosition)
+        |> P.andThen
+            (\(A.Position ofRow _) ->
+                let
+                    (A.Position caseRow _) =
+                        start
+                in
+                Keyword.of_ E.CaseOf
+                    |> P.andThen (\_ -> Space.chompAndCheckIndent E.CaseSpace E.CaseIndentPattern)
+                    |> P.andThen (\comments -> chompCaseBranches start (ofRow > caseRow) preExprComments postExprComments expr comments)
+            )
 
 
 {-| Produces a parser for the branches of a `case`, with the indent set to the
 column of the first branch's pattern, so that every later branch must start in
 that column.
 -}
-chompCaseBranches : A.Position -> Src.FComments -> Src.FComments -> Src.Expr -> Src.FComments -> Space.Parser E.Case (Src.C1 Src.Expr)
-chompCaseBranches start preExprComments postExprComments expr comments =
+chompCaseBranches : A.Position -> Bool -> Src.FComments -> Src.FComments -> Src.Expr -> Src.FComments -> Space.Parser E.Case (Src.C1 Src.Expr)
+chompCaseBranches start multiline preExprComments postExprComments expr comments =
     P.withIndent
         (chompBranch comments
             |> P.andThen
                 (\( ( trailingComments, firstBranch ), firstEnd ) ->
                     chompCaseEnd trailingComments [ firstBranch ] firstEnd
-                        |> P.map (buildCaseExpr start preExprComments postExprComments expr)
+                        |> P.map (buildCaseExpr start multiline preExprComments postExprComments expr)
                 )
         )
 
 
 {-| Returns the `Src.Case` built from the examined `expr` and its branches,
-spanning from `start` to the end of the last branch.
+spanning from `start` to the end of the last branch. `multiline` tells whether
+a line break came between `case` and `of`.
 -}
-buildCaseExpr : A.Position -> Src.FComments -> Src.FComments -> Src.Expr -> ( Src.C1 (List ( Src.C2 Src.Pattern, Src.C1 Src.Expr )), A.Position ) -> ( Src.C1 Src.Expr, A.Position )
-buildCaseExpr start preExprComments postExprComments expr ( ( branchesTrailingComments, branches ), end ) =
-    ( ( branchesTrailingComments, A.at start end (Src.Case ( ( preExprComments, postExprComments ), expr ) branches) )
+buildCaseExpr : A.Position -> Bool -> Src.FComments -> Src.FComments -> Src.Expr -> ( Src.C1 (List ( Src.C2 Src.Pattern, Src.C1 Src.Expr )), A.Position ) -> ( Src.C1 Src.Expr, A.Position )
+buildCaseExpr start multiline preExprComments postExprComments expr ( ( branchesTrailingComments, branches ), end ) =
+    ( ( branchesTrailingComments, A.at start end (Src.Case (Src.ForceMultiline multiline) ( ( preExprComments, postExprComments ), expr ) branches) )
     , end
     )
 

@@ -266,7 +266,7 @@ typeDecl maybeDocs start =
                                                 (\( ( name, args, postComments ), preTypeComments ) ->
                                                     P.specialize E.AliasBody (Type.expression [])
                                                         |> P.map
-                                                            (\( ( _, tipe ), end ) ->
+                                                            (\( ( ( preTipeComments, postTipeComments, _ ), tipe ), end ) ->
                                                                 let
                                                                     alias_ : A.Located Src.Alias
                                                                     alias_ =
@@ -280,7 +280,7 @@ typeDecl maybeDocs start =
                                                                                 }
                                                                             )
                                                                 in
-                                                                ( ( ( [], [] ), Alias maybeDocs alias_ ), end )
+                                                                ( ( ( preTipeComments, postTipeComments ), Alias maybeDocs alias_ ), end )
                                                             )
                                                 )
                                     )

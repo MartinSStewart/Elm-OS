@@ -3,6 +3,7 @@ module Compiler.Parse.Space exposing
     , chomp, chompAndCheckIndent
     , checkIndent, checkAligned, checkFreshLine
     , docComment
+    , eolAfter
     )
 
 {-| Elm's layout rule decides where a construct ends by the column its next
@@ -94,18 +95,135 @@ chomp toError =
             in
             case status of
                 Good ->
-                    let
-                        newState : P.State
-                        newState =
-                            P.State { st | pos = newPos, row = newRow, col = newCol }
-                    in
-                    P.Cok (List.reverse comments) newState
+                    P.Cok (List.reverse comments) (afterGap st (List.reverse comments) newPos newRow newCol)
 
                 HasTab ->
                     P.Cerr newRow newCol (toError E.HasTab)
 
                 EndlessMultiComment ->
                     P.Cerr newRow newCol (toError E.EndlessMultiComment)
+
+
+{-| The state after a gap from `st.pos` to `newPos` holding `comments`: the
+position moved on, `layoutRow` counting the gap's line breaks outside block
+comments, and the gap's end-of-line comment noted.
+-}
+afterGap : P.StateData -> Src.FComments -> Int -> Row -> Col -> P.State
+afterGap st comments newPos newRow newCol =
+    let
+        eol : Maybe P.EolComment
+        eol =
+            case comments of
+                (Src.LineComment text) :: _ ->
+                    if onlySpacesThenLineComment st.src st.pos st.end then
+                        Just { row = st.layoutRow, col = st.col, text = text }
+
+                    else
+                        st.eol
+
+                _ ->
+                    st.eol
+    in
+    P.State
+        { st
+            | pos = newPos
+            , row = newRow
+            , col = newCol
+            , eol = eol
+            , layoutRow = st.layoutRow + gapLineBreaks st.src st.pos newPos 0 0
+        }
+
+
+{-| The line breaks from `pos` to `end` that are not inside a `{- -}` comment,
+given the comment nesting `depth` at `pos`. The text is a gap between tokens.
+-}
+gapLineBreaks : String -> Int -> Int -> Int -> Int -> Int
+gapLineBreaks src pos end depth count =
+    if pos >= end then
+        count
+
+    else
+        case P.unsafeIndex src pos of
+            '\n' ->
+                gapLineBreaks src
+                    (pos + 1)
+                    end
+                    depth
+                    (if depth == 0 then
+                        count + 1
+
+                     else
+                        count
+                    )
+
+            '{' ->
+                if pos + 1 < end && P.unsafeIndex src (pos + 1) == '-' then
+                    gapLineBreaks src (pos + 2) end (depth + 1) count
+
+                else
+                    gapLineBreaks src (pos + 1) end depth count
+
+            '-' ->
+                if depth > 0 && pos + 1 < end && P.unsafeIndex src (pos + 1) == '}' then
+                    gapLineBreaks src (pos + 2) end (depth - 1) count
+
+                else if depth == 0 && pos + 1 < end && P.unsafeIndex src (pos + 1) == '-' then
+                    gapLineBreaks src (skipToLineEnd src (pos + 2) end) end depth count
+
+                else
+                    gapLineBreaks src (pos + 1) end depth count
+
+            _ ->
+                gapLineBreaks src (pos + 1) end depth count
+
+
+{-| The position of the next line break from `pos`, or `end`.
+-}
+skipToLineEnd : String -> Int -> Int -> Int
+skipToLineEnd src pos end =
+    if pos >= end || P.unsafeIndex src pos == '\n' then
+        pos
+
+    else
+        skipToLineEnd src (pos + 1) end
+
+
+{-| Whether the text from `pos` is spaces and then `--`.
+-}
+onlySpacesThenLineComment : String -> Int -> Int -> Bool
+onlySpacesThenLineComment src pos end =
+    if pos + 1 >= end then
+        False
+
+    else
+        case P.unsafeIndex src pos of
+            ' ' ->
+                onlySpacesThenLineComment src (pos + 1) end
+
+            '-' ->
+                P.unsafeIndex src (pos + 1) == '-'
+
+            _ ->
+                False
+
+
+{-| Splits the comments read after something that ends at `end` into its
+end-of-line comment, the `--` comment on the same line, and the rest.
+-}
+eolAfter : A.Position -> Src.FComments -> P.Parser x ( Maybe String, Src.FComments )
+eolAfter (A.Position row col) comments =
+    P.Parser <|
+        \(P.State st) ->
+            case ( st.eol, comments ) of
+                ( Just eol, (Src.LineComment text) :: rest ) ->
+                    if eol.row == row && eol.col == col && eol.text == text then
+                        P.Eok ( Just text, rest ) (P.State st)
+
+                    else
+                        P.Eok ( Nothing, comments ) (P.State st)
+
+                _ ->
+                    P.Eok ( Nothing, comments ) (P.State st)
 
 
 
@@ -186,12 +304,7 @@ chompAndCheckIndent toSpaceError toIndentError =
             case status of
                 Good ->
                     if newCol > st.indent && newCol > 1 then
-                        let
-                            newState : P.State
-                            newState =
-                                P.State { st | pos = newPos, row = newRow, col = newCol }
-                        in
-                        P.Cok (List.reverse comments) newState
+                        P.Cok (List.reverse comments) (afterGap st (List.reverse comments) newPos newRow newCol)
 
                     else
                         P.Cerr st.row st.col toIndentError

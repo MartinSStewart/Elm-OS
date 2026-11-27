@@ -35,6 +35,14 @@ The licences: `LICENSE-eco-compiler` (eco, from Elm and Guida) and `LICENSE-elm-
   `\uXXXX`, which the printer copied out, and the output didn't parse).
 - Block comments are indented like elm-format does it.
 - A function call's first argument counts as on the next line only if it *starts* there.
+- End-of-line `--` comments after list items, record fields, record type fields and
+  custom type variants stay on their line (`Space.eolAfter`); eco's parser left the
+  syntax tree's slot for them empty.
+- Comments after a type alias were dropped.
+- What counts as "written over several lines" follows elm-format: a line break between
+  tokens, not one inside a `"""` string or a block comment (`layoutRow` in
+  `Compiler.Lexer.Primitives`), a record update's field spanning lines, and a line
+  break between `case` and `of`.
 
 ## Testing
 
@@ -47,7 +55,5 @@ comments included (so nothing was dropped). `node tools/format/format.js build/f
 
 ## Status
 
-Known differences from elm-format still being fixed: end-of-line comments in record
-types and custom types move to the next line, comments after a module's last
-declaration are dropped, multi-line strings in lists, record fields whose value is on
-the next line.
+Every Elm file in the repo (272, tools/format's own included) comes out exactly as
+elm-format 0.8.8 writes it. Not wired into `make format` or the Code app yet.
