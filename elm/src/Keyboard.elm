@@ -1,8 +1,13 @@
-module Keyboard exposing (Key(..), fromCode, isAlt, isCtrl, isShift)
+module Keyboard exposing (Key(..), fromCode, isAlt, isCapsLock, isCtrl, isShift)
 
 {-| Linux key codes (KEY\_\* in linux/input-event-codes.h) to keys, with what they type on a
 US keyboard. The Key names follow the ones town-collab's TextInput uses (from the
 elm-keyboard package).
+
+Caps Lock is kept in Main's Model (it toggles on the key, and the host lights the key's
+light, Effect.KeyboardLights). Like on other systems, it only changes letters: Shift with
+Caps Lock on types a lower case letter, and digits and punctuation are as without it.
+
 -}
 
 
@@ -34,6 +39,11 @@ isShift code =
     code == 42 || code == 54
 
 
+isCapsLock : Int -> Bool
+isCapsLock code =
+    code == 58
+
+
 isCtrl : Int -> Bool
 isCtrl code =
     code == 29 || code == 97
@@ -44,8 +54,8 @@ isAlt code =
     code == 56 || code == 100
 
 
-fromCode : Bool -> Int -> Key
-fromCode shift code =
+fromCode : { shift : Bool, capsLock : Bool } -> Int -> Key
+fromCode { shift, capsLock } code =
     case code of
         1 ->
             Escape
@@ -110,7 +120,7 @@ fromCode shift code =
                 Just ( plain, shifted ) ->
                     Character
                         (String.fromChar
-                            (if shift then
+                            (if shift /= (capsLock && Char.isAlpha plain) then
                                 shifted
 
                              else

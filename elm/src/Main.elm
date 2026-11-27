@@ -355,6 +355,7 @@ type alias Model =
     , shift : Bool
     , ctrl : Bool
     , alt : Bool
+    , capsLock : Bool
     , clipboard : String
     , selectingText : Bool -- the mouse went down in the focused text box and is still down
     , network : Network.Network
@@ -473,6 +474,7 @@ init =
     , shift = False
     , ctrl = False
     , alt = False
+    , capsLock = False
     , clipboard = ""
     , selectingText = False
     , network = Network.init
@@ -601,7 +603,11 @@ step event model =
                 , reflashNeeded = Nothing
                 , testFacts = Nothing
               }
-            , Effect.ReadFiles { id = commandLineId, paths = [ "/proc/cmdline" ] } :: BootInfo.start ++ Brightness.start
+            , Effect.ReadFiles { id = commandLineId, paths = [ "/proc/cmdline" ] }
+                -- A keyboard's lights start off at each boot.
+                :: Effect.KeyboardLights { capsLock = model.capsLock }
+                :: BootInfo.start
+                ++ Brightness.start
             )
 
         CommandLine text ->
@@ -779,6 +785,12 @@ step event model =
                                 ( Nothing, _ ) ->
                                     []
                             )
+
+                        HistoryDetailRequest sha ->
+                            ( { model | history = History.gotDetail sha result model.history }, [] )
+
+                        HistoryBaseRequest generation i ->
+                            ( { model | history = History.gotBase generation i result model.history }, [] )
 
                         HistoryRequest generation i ->
                             ( { model | history = History.gotResponse generation i result model.history }, [] )
@@ -1015,9 +1027,15 @@ step event model =
 
         Key code down repeat ->
             let
+                -- Caps Lock only changes what letters type, not shortcuts: Ctrl+S is
+                -- still "s", and Ctrl+Shift+Q still "Q".
                 key : Key
                 key =
-                    Keyboard.fromCode model.shift code
+                    Keyboard.fromCode
+                        { shift = model.shift
+                        , capsLock = model.capsLock && not model.ctrl && not model.alt
+                        }
+                        code
             in
             if key == PrintScreen then
                 let
@@ -1041,6 +1059,15 @@ step event model =
 
             else if Keyboard.isShift code then
                 ( { model | shift = down }, [] )
+
+            else if Keyboard.isCapsLock code then
+                if down && not repeat then
+                    ( { model | capsLock = not model.capsLock }
+                    , [ Effect.KeyboardLights { capsLock = not model.capsLock } ]
+                    )
+
+                else
+                    ( model, [] )
 
             else if Keyboard.isCtrl code then
                 ( { model | ctrl = down }, [] )
@@ -1950,7 +1977,14 @@ clickElement model id =
             Install.onClick uiId2 model.install |> Tuple.mapFirst (\install -> { model | install = install })
 
         History uiId2 ->
-            History.onClick uiId2 { branches = historyBranches model, token = Code.githubToken model.uiState } model.history |> Tuple.mapFirst (\history -> { model | history = history })
+            History.onClick uiId2
+                { branches = historyBranches model
+                , token = Code.githubToken model.uiState
+                , base = Tuple.first (Code.GitHub.startingPoint model.code.git)
+                , uncommitted = Code.uncommittedModules model.code
+                }
+                model.history
+                |> Tuple.mapFirst (\history -> { model | history = history })
 
         ModelViewer uiId2 ->
             ( modelViewerClick uiId2 model, [] )
@@ -2384,7 +2418,7 @@ historyContext : Model -> History.Context
 historyContext model =
     { running = BuildInfo.commit
     , base = Tuple.first (Code.GitHub.startingPoint model.code.git)
-    , uncommitted = Code.uncommittedModules model.code
+    , uncommitted = Code.uncommittedChanges model.code
     , now = model.time
     }
 
@@ -2412,6 +2446,10 @@ type HttpRequestId
     | CodeRequest Int
       -- Whether the deployed builds have the commit the Code app pushed (Code.GitHub.containsCheck).
     | CodeDeployedCheck
+      -- What a commit changed (History.detailRequestId), and the texts of the changed modules
+      -- in the commit the uncommitted changes are on top of.
+    | HistoryDetailRequest String
+    | HistoryBaseRequest Int Int
       -- The History app's commits: which refresh, and which branch of it.
     | HistoryRequest Int Int
 
@@ -2440,6 +2478,12 @@ httpRequestIdToString request =
         CodeDeployedCheck ->
             Code.GitHub.containsCheckId
 
+        HistoryDetailRequest sha ->
+            History.detailRequestId sha
+
+        HistoryBaseRequest generation i ->
+            History.baseRequestId generation i
+
         HistoryRequest generation i ->
             History.requestId generation i
 
@@ -2467,6 +2511,12 @@ stringToHttpRequestId string =
 
         [ "codecheck" ] ->
             Just CodeDeployedCheck
+
+        [ "historydetail", sha ] ->
+            Just (HistoryDetailRequest sha)
+
+        [ "historybase", generation, i ] ->
+            Maybe.map2 HistoryBaseRequest (String.toInt generation) (String.toInt i)
 
         [ "history", generation, i ] ->
             Maybe.map2 HistoryRequest (String.toInt generation) (String.toInt i)

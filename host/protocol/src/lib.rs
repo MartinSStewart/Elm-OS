@@ -227,6 +227,9 @@ pub enum Effect {
     /// drop the edits it was made from. The host downloads and switches to it as it
     /// does for updates; a failure comes back as a `ToElm::Build` that failed.
     FollowDeployed,
+    /// Lights the keyboards' Caps Lock lights, or puts them out (Elm keeps whether Caps
+    /// Lock is on). Keyboards plugged in later get the same. No answer.
+    KeyboardLights { caps_lock: bool },
 }
 
 /// Where on a disk `Effect::Install` puts Elm OS.
@@ -693,6 +696,7 @@ pub fn effect_name(effect: &Effect) -> &'static str {
         Effect::Install { .. } => "Install",
         Effect::UpdateInstall { .. } => "UpdateInstall",
         Effect::FollowDeployed => "FollowDeployed",
+        Effect::KeyboardLights { .. } => "KeyboardLights",
     }
 }
 
@@ -767,9 +771,10 @@ mod tests {
             Effect::Install { .. } => "install",
             Effect::UpdateInstall { .. } => "updateInstall",
             Effect::FollowDeployed => "followDeployed",
+            Effect::KeyboardLights { .. } => "keyboardLights",
         }
     }
-    const EFFECT_TAGS: usize = 31;
+    const EFFECT_TAGS: usize = 32;
 
     fn to_elm_tag(m: &ToElm) -> &'static str {
         match m {

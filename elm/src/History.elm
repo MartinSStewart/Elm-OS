@@ -1,9 +1,14 @@
 module History exposing
     ( Context
+    , Detail(..)
     , Head
     , Model
     , Request
     , appSize
+    , baseRequestId
+    , detailRequestId
+    , gotBase
+    , gotDetail
     , gotResponse
     , init
     , onClick
@@ -35,8 +40,9 @@ import Coord
 import Date
 import Duration
 import Effect exposing (Effect)
+import History.Diff
 import History.Graph as Graph exposing (Row)
-import History.Types exposing (Commit, UiId(..))
+import History.Types exposing (Commit, FileChange, UiId(..))
 import Json.Decode as D
 import Json.Encode as E
 import Quantity
@@ -67,7 +73,26 @@ type alias Model =
 
     -- What went wrong with the last refresh, if something did.
     , error : Maybe String
+
+    -- The commit clicked (or "uncommitted"), whose changes show under the graph.
+    , selected : Maybe String
+
+    -- What each commit changed, as far as asked for.
+    , details : SeqDict String Detail
+
+    -- The uncommitted changes are the saved modules against these texts of them in the
+    -- commit `baseCommit` (Nothing: the commit has no such module), fetched from GitHub.
+    , baseCommit : String
+    , bases : SeqDict String (Maybe String)
+    , baseGeneration : Int
+    , baseWaiting : List ( Int, String )
     }
+
+
+type Detail
+    = DetailLoading
+    | DetailFailed String
+    | DetailFiles (List FileChange)
 
 
 type alias Head =
@@ -82,17 +107,23 @@ init =
     , heads = []
     , commits = SeqDict.empty
     , error = Nothing
+    , selected = Nothing
+    , details = SeqDict.empty
+    , baseCommit = ""
+    , bases = SeqDict.empty
+    , baseGeneration = 0
+    , baseWaiting = []
     }
 
 
 {-| What the app shows besides its own Model: the commit the running build was made from
 ("" if it wasn't from a commit), the commit the Code app's next commit goes on top of
-("" if none), the modules it has saved but not committed, and the time.
+("" if none), the modules it has saved but not committed (their names and texts), and the time.
 -}
 type alias Context =
     { running : String
     , base : String
-    , uncommitted : List String
+    , uncommitted : List ( String, String )
     , now : Maybe Time.Posix
     }
 
@@ -136,20 +167,55 @@ onClick id request model =
         ListViewport ->
             ( model, [] )
 
+        DetailViewport ->
+            ( model, [] )
+
+        RowButton sha ->
+            if model.selected == Just sha then
+                ( { model | selected = Nothing }, [] )
+
+            else if sha == uncommittedSha then
+                fetchBases request { model | selected = Just sha }
+
+            else
+                case SeqDict.get sha model.details of
+                    Just (DetailFiles _) ->
+                        ( { model | selected = Just sha }, [] )
+
+                    Just DetailLoading ->
+                        ( { model | selected = Just sha }, [] )
+
+                    Just (DetailFailed _) ->
+                        fetchDetail request.token sha { model | selected = Just sha }
+
+                    Nothing ->
+                        fetchDetail request.token sha { model | selected = Just sha }
+
 
 {-| What a refresh needs: branches besides the usual three, and a GitHub token ("" if
 none). Without one GitHub allows only 60 requests an hour per IP address, and each refresh
 makes one request per branch; with one, 5000.
 -}
 type alias Request =
-    { branches : List String, token : String }
+    { branches : List String
+    , token : String
+
+    -- The commit the uncommitted changes are on top of, and the modules changed.
+    , base : String
+    , uncommitted : List String
+    }
 
 
 {-| Asks GitHub for the newest commits of each branch. What is shown stays until the
 answers come.
 -}
 refresh : Request -> Model -> ( Model, List Effect )
-refresh { branches, token } model =
+refresh request model =
+    refreshWith request.branches request.token model
+
+
+refreshWith : List String -> String -> Model -> ( Model, List Effect )
+refreshWith branches token model =
     let
         allBranches : List String
         allBranches =
@@ -179,20 +245,168 @@ refresh { branches, token } model =
                 { id = requestId generation i
                 , method = "GET"
                 , url = "https://api.github.com/repos/" ++ repository ++ "/commits?per_page=" ++ String.fromInt perBranch ++ "&sha=" ++ branch
-                , headers =
-                    ( "Accept", "application/vnd.github+json" )
-                        :: (if token == "" then
-                                []
-
-                            else
-                                [ ( "Authorization", "Bearer " ++ token ) ]
-                           )
+                , headers = githubHeaders token
                 , body = Effect.noBody
                 , timeoutMs = Just (Duration.seconds 30)
                 }
         )
         allBranches
     )
+
+
+githubHeaders : String -> List ( String, String )
+githubHeaders token =
+    ( "Accept", "application/vnd.github+json" )
+        :: (if token == "" then
+                []
+
+            else
+                [ ( "Authorization", "Bearer " ++ token ) ]
+           )
+
+
+{-| The id of the request for what a commit changed.
+-}
+detailRequestId : String -> String
+detailRequestId sha =
+    "historydetail_" ++ sha
+
+
+fetchDetail : String -> String -> Model -> ( Model, List Effect )
+fetchDetail token sha model =
+    ( { model | details = SeqDict.insert sha DetailLoading model.details }
+    , [ Effect.Http
+            { id = detailRequestId sha
+            , method = "GET"
+            , url = "https://api.github.com/repos/" ++ repository ++ "/commits/" ++ sha
+            , headers = githubHeaders token
+            , body = Effect.noBody
+            , timeoutMs = Just (Duration.seconds 30)
+            }
+      ]
+    )
+
+
+{-| GitHub's answer for what commit `sha` changed.
+-}
+gotDetail : String -> Result Effect.HttpError { status : Int, body : Bytes } -> Model -> Model
+gotDetail sha result model =
+    { model
+        | details =
+            SeqDict.insert sha
+                (case answerWith decodeFiles result of
+                    Ok files ->
+                        DetailFiles files
+
+                    Err why ->
+                        DetailFailed why
+                )
+                model.details
+    }
+
+
+decodeFiles : D.Decoder (List FileChange)
+decodeFiles =
+    D.field "files"
+        (D.list
+            (D.map3 FileChange
+                (D.field "filename" D.string)
+                (D.field "status" D.string)
+                (D.oneOf [ D.field "patch" D.string, D.succeed "" ])
+            )
+        )
+
+
+{-| The path of a module's file in the repository.
+-}
+modulePath : String -> String
+modulePath name =
+    "elm/src/" ++ String.replace "." "/" name ++ ".elm"
+
+
+{-| The id of the request for a module's text in the base commit, in round `generation`
+of asking, `i`th of the modules.
+-}
+baseRequestId : Int -> Int -> String
+baseRequestId generation i =
+    "historybase_" ++ String.fromInt generation ++ "_" ++ String.fromInt i
+
+
+{-| Asks GitHub's file server for the changed modules as the base commit has them.
+-}
+fetchBases : Request -> Model -> ( Model, List Effect )
+fetchBases request model =
+    let
+        generation : Int
+        generation =
+            model.baseGeneration + 1
+    in
+    if request.base == "" then
+        ( model, [] )
+
+    else
+        ( { model
+            | baseGeneration = generation
+            , baseCommit = request.base
+            , bases =
+                if model.baseCommit == request.base then
+                    model.bases
+
+                else
+                    SeqDict.empty
+            , baseWaiting = List.indexedMap (\i name -> ( i, name )) request.uncommitted
+          }
+        , List.indexedMap
+            (\i name ->
+                Effect.Http
+                    { id = baseRequestId generation i
+                    , method = "GET"
+                    , url = "https://raw.githubusercontent.com/" ++ repository ++ "/" ++ request.base ++ "/" ++ modulePath name
+                    , headers = []
+                    , body = Effect.noBody
+                    , timeoutMs = Just (Duration.seconds 30)
+                    }
+            )
+            request.uncommitted
+        )
+
+
+{-| The file server's answer for the module in place `i` of round `generation`.
+-}
+gotBase : Int -> Int -> Result Effect.HttpError { status : Int, body : Bytes } -> Model -> Model
+gotBase generation i result model =
+    if generation /= model.baseGeneration then
+        model
+
+    else
+        case List.filter (\( j, _ ) -> j == i) model.baseWaiting of
+            ( _, name ) :: _ ->
+                let
+                    model2 : Model
+                    model2 =
+                        { model | baseWaiting = List.filter (\( j, _ ) -> j /= i) model.baseWaiting }
+                in
+                case result of
+                    Ok response ->
+                        if response.status == 404 then
+                            { model2 | bases = SeqDict.insert name Nothing model2.bases }
+
+                        else if response.status >= 200 && response.status < 300 then
+                            case Effect.bodyToString response.body of
+                                Just text ->
+                                    { model2 | bases = SeqDict.insert name (Just text) model2.bases }
+
+                                Nothing ->
+                                    model2
+
+                        else
+                            model2
+
+                    Err _ ->
+                        model2
+
+            [] ->
+                model
 
 
 {-| GitHub's answer to request `i` of refresh `generation`. Answers to an older refresh
@@ -242,13 +456,18 @@ gotResponse generation i result model =
 
 
 answer : Result Effect.HttpError { status : Int, body : Bytes } -> Result String (List Commit)
-answer result =
+answer =
+    answerWith decodeCommits
+
+
+answerWith : D.Decoder a -> Result Effect.HttpError { status : Int, body : Bytes } -> Result String a
+answerWith decoder result =
     case result of
         Ok response ->
             if response.status >= 200 && response.status < 300 then
                 case Effect.bodyToString response.body of
                     Just text ->
-                        D.decodeString decodeCommits text |> Result.mapError D.errorToString
+                        D.decodeString decoder text |> Result.mapError D.errorToString
 
                     Nothing ->
                         Err "the answer isn't text"
@@ -537,8 +756,8 @@ small =
 body : Context -> Model -> Ui.TargetSize -> Ui.Element UiId.UiId
 body context model =
     Ui.column2 8
-        [ ( Ui.Shrink2
-          , Ui.row2 8
+        ([ ( Ui.Shrink2
+           , Ui.row2 8
                 [ ( Ui.Fill2
                   , Ui.column2 2
                         (List.map
@@ -548,15 +767,23 @@ body context model =
                   )
                 , ( Ui.Shrink2, Ui.button2 { id = UiId.History RefreshButton, pad = small } (Ui.text2 "Refresh") )
                 ]
-          )
-        , ( Ui.Fill2
-          , if SeqDict.isEmpty model.commits && List.isEmpty context.uncommitted then
+           )
+         , ( Ui.Fill2
+           , if SeqDict.isEmpty model.commits && List.isEmpty context.uncommitted then
                 Ui.text2 "No commits yet."
 
-            else
+             else
                 Ui.viewport2 (UiId.History ListViewport) (graph context model)
-          )
-        ]
+           )
+         ]
+            ++ (case model.selected of
+                    Just sha ->
+                        [ ( Ui.Fill2, Ui.viewport2 (UiId.History DetailViewport) (detailView context model sha) ) ]
+
+                    Nothing ->
+                        []
+               )
+        )
 
 
 {-| The commits at the top of the list: uncommitted changes, as a commit nothing is on
@@ -587,7 +814,7 @@ graph context model target =
                         else
                             []
                   , subject = "Uncommitted changes"
-                  , description = String.join ", " context.uncommitted
+                  , description = String.join ", " (List.map Tuple.first context.uncommitted)
                   , author = ""
                   , time = 9999999999
                   }
@@ -649,37 +876,42 @@ rowView context model nowSeconds lanes row =
         padded =
             Ui.el { pad = { top = textTop, bottom = 0, left = 0, right = 0 }, style = Ui.NoBorderOrFill }
     in
-    Ui.el2
-        { pad = Ui.noPadding
-        , style =
-            if isRunning then
-                Ui.FillOnly Color.historyRunningRowColor
+    \rowTarget ->
+        Ui.elWithId (UiId.History (RowButton commit.sha))
+            { pad = Ui.noPadding
+            , style =
+                if model.selected == Just commit.sha then
+                    Ui.FillOnly Color.historySelectedRowColor
 
-            else
-                Ui.NoBorderOrFill
-        }
-        (Ui.row2 8
-            [ ( Ui.Shrink2
-              , \_ -> Ui.left (Units.ui refsWidth) (padded (tags context model row))
-              )
-            , ( Ui.Shrink2, \_ -> graphCell lanes row )
-            , ( Ui.Fill2, \target -> Ui.fixed2 (padded (messageCell commit target)) target )
-            , ( Ui.Shrink2
-              , \_ ->
-                    Ui.right { width = Units.ui timeWidth }
-                        (padded
-                            (Ui.colorText Color.dimTextColor
-                                (if commit.sha == uncommittedSha then
-                                    ""
+                else if isRunning then
+                    Ui.FillOnly Color.historyRunningRowColor
 
-                                 else
-                                    timeText nowSeconds commit.time
+                else
+                    Ui.NoBorderOrFill
+            }
+            (Ui.row2 8
+                [ ( Ui.Shrink2
+                  , \_ -> Ui.left (Units.ui refsWidth) (padded (tags context model row))
+                  )
+                , ( Ui.Shrink2, \_ -> graphCell lanes row )
+                , ( Ui.Fill2, \target -> Ui.fixed2 (padded (messageCell commit target)) target )
+                , ( Ui.Shrink2
+                  , \_ ->
+                        Ui.right { width = Units.ui timeWidth }
+                            (padded
+                                (Ui.colorText Color.dimTextColor
+                                    (if commit.sha == uncommittedSha then
+                                        ""
+
+                                     else
+                                        timeText nowSeconds commit.time
+                                    )
                                 )
                             )
-                        )
-              )
-            ]
-        )
+                  )
+                ]
+                rowTarget
+            )
 
 
 {-| The branch names at a commit, and "running" and "uncommitted".
@@ -845,3 +1077,120 @@ testFact model =
         , ( "loading", E.bool (not (List.isEmpty model.waiting)) )
         , ( "error", E.string (Maybe.withDefault "" model.error) )
         ]
+
+
+
+-- WHAT A COMMIT CHANGED
+
+
+detailView : Context -> Model -> String -> Ui.TargetSize -> Ui.Element UiId.UiId
+detailView context model sha target =
+    let
+        heading : String -> Ui.TargetSize -> Ui.Element UiId.UiId
+        heading text =
+            Ui.ellipsisText2 { color = Color.textColor, font = App.sans } text
+
+        row : ( Color, String ) -> ( Ui.Length2, Ui.TargetSize -> Ui.Element UiId.UiId )
+        row ( color, text ) =
+            ( Ui.Shrink2, Ui.ellipsisText2 { color = color, font = Sprite.Mono } (String.replace "\t" "    " text) )
+
+        diffRows : String -> List ( Ui.Length2, Ui.TargetSize -> Ui.Element UiId.UiId )
+        diffRows patch =
+            let
+                lines : List String
+                lines =
+                    String.lines patch
+            in
+            List.map (\text -> row ( diffColor text, text )) (List.take maxDiffLines lines)
+                ++ (if List.length lines > maxDiffLines then
+                        [ row ( Color.dimTextColor, "… " ++ String.fromInt (List.length lines - maxDiffLines) ++ " more lines" ) ]
+
+                    else
+                        []
+                   )
+
+        file : String -> String -> List ( Ui.Length2, Ui.TargetSize -> Ui.Element UiId.UiId )
+        file name note =
+            [ ( Ui.Shrink2, heading (name ++ note) ) ]
+    in
+    Ui.column2 2
+        (if sha == uncommittedSha then
+            ( Ui.Shrink2, heading "Uncommitted changes" )
+                :: (if List.isEmpty context.uncommitted then
+                        [ row ( Color.dimTextColor, "Nothing is changed." ) ]
+
+                    else if context.base == "" then
+                        [ row ( Color.errorColor, "This build wasn't made from a commit, so there is nothing to compare with." ) ]
+
+                    else
+                        List.concatMap
+                            (\( name, text ) ->
+                                case SeqDict.get name model.bases of
+                                    Just (Just before) ->
+                                        file name "" ++ diffRows (String.join "\n" (History.Diff.diff before text))
+
+                                    Just Nothing ->
+                                        file name " (new)" ++ diffRows (String.join "\n" (History.Diff.diff "" text))
+
+                                    Nothing ->
+                                        file name " (loading…)"
+                            )
+                            context.uncommitted
+                   )
+
+         else
+            case ( SeqDict.get sha model.commits, SeqDict.get sha model.details ) of
+                ( Just commit, Just (DetailFiles files) ) ->
+                    ( Ui.Shrink2, heading (short sha ++ " " ++ commit.subject) )
+                        :: (if List.isEmpty files then
+                                [ row ( Color.dimTextColor, "No file changed." ) ]
+
+                            else
+                                List.concatMap
+                                    (\change ->
+                                        file change.filename (" (" ++ change.status ++ ")")
+                                            ++ (if change.patch == "" then
+                                                    [ row ( Color.dimTextColor, "No changes to show (too big, or not text)." ) ]
+
+                                                else
+                                                    diffRows change.patch
+                                               )
+                                    )
+                                    files
+                           )
+
+                ( _, Just (DetailFailed why) ) ->
+                    [ row ( Color.errorColor, "Couldn't load the changes: " ++ why ) ]
+
+                ( _, Just DetailLoading ) ->
+                    [ row ( Color.dimTextColor, "Loading the changes…" ) ]
+
+                ( _, Just (DetailFiles _) ) ->
+                    []
+
+                ( _, Nothing ) ->
+                    []
+        )
+        target
+
+
+{-| How many lines of a file's changes show.
+-}
+maxDiffLines : Int
+maxDiffLines =
+    400
+
+
+diffColor : String -> Color
+diffColor text =
+    if String.startsWith "+" text then
+        Color.successColor
+
+    else if String.startsWith "-" text then
+        Color.errorColor
+
+    else if String.startsWith "@@" text then
+        Color.linkColor
+
+    else
+        Color.textColor

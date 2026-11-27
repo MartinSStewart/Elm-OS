@@ -80,6 +80,7 @@ effects =
     , Effect.Install { disk = "vdb", layout = "x", target = Install.Types.WholeDisk, keepData = True }
     , Effect.UpdateInstall { disk = "nvme0n1", layout = "3f2a" }
     , Effect.FollowDeployed
+    , Effect.KeyboardLights { capsLock = True }
     , Effect.Render
         (\() ->
             [ { display = 33, triangles = Sprite.atlasRectangle Color.white (Coord.xy 0 0) (Coord.xy 10 10) ( 4, 3588 ) }

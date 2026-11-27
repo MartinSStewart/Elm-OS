@@ -105,11 +105,11 @@ suite =
             , Test.test "Escape clears"
                 (\_ -> Calculator.fromKeyboard Keyboard.Escape |> Expect.equal (Just Clear))
             , Test.test "number pad plus"
-                (\_ -> Calculator.fromKeyboard (Keyboard.fromCode False 78) |> Expect.equal (Just (Operator Add)))
+                (\_ -> Calculator.fromKeyboard (Keyboard.fromCode { shift = False, capsLock = False } 78) |> Expect.equal (Just (Operator Add)))
             , Test.test "number pad 7"
-                (\_ -> Calculator.fromKeyboard (Keyboard.fromCode False 71) |> Expect.equal (Just (Digit 7)))
+                (\_ -> Calculator.fromKeyboard (Keyboard.fromCode { shift = False, capsLock = False } 71) |> Expect.equal (Just (Digit 7)))
             , Test.test "shift 8 is times"
-                (\_ -> Calculator.fromKeyboard (Keyboard.fromCode True 9) |> Expect.equal (Just (Operator Multiply)))
+                (\_ -> Calculator.fromKeyboard (Keyboard.fromCode { shift = True, capsLock = False } 9) |> Expect.equal (Just (Operator Multiply)))
             , Test.test "letters do nothing"
                 (\_ -> Calculator.fromKeyboard (Keyboard.Character "q") |> Expect.equal Nothing)
             ]

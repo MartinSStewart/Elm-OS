@@ -514,6 +514,8 @@ impl Runner {
                     wrote: false,
                 },
             }),
+            // The desktop's own keyboard handling lights its keys.
+            Effect::KeyboardLights { .. } => {}
             Effect::FollowDeployed => elm::send(&ToElm::Build {
                 status: protocol::BuildStatus::Failed {
                     step: "Going back to the deployed build".into(),

@@ -21,6 +21,7 @@ module Code exposing
     , save
     , style
     , testFact
+    , uncommittedChanges
     , uncommittedModules
     , view
     )
@@ -150,13 +151,20 @@ differsFromRunning model =
 -}
 uncommittedModules : Model -> List String
 uncommittedModules model =
+    List.map Tuple.first (uncommittedChanges model)
+
+
+{-| `uncommittedModules` with their texts.
+-}
+uncommittedChanges : Model -> List ( String, String )
+uncommittedChanges model =
     SeqDict.foldr
-        (\name text names ->
+        (\name text changes ->
             if SeqDict.get name model.git.pushed /= Just text then
-                name :: names
+                ( name, text ) :: changes
 
             else
-                names
+                changes
         )
         []
         model.saved

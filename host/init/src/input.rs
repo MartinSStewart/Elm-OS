@@ -30,10 +30,15 @@
 //!   {"t":"scrollMomentum","velocity":F}  the fingers lifted: keep going at F UI px/s
 //!   {"t":"key","code":C,"down":true}     C: Linux KEY_* code
 //!   {"t":"key","code":C,"down":true,"repeat":true}   held down (autorepeat)
+//!
+//! Keyboard lights: Elm decides whether Caps Lock is on (it toggles it on KEY_CAPSLOCK)
+//! and says so with `Effect::KeyboardLights`. The light is only lit here, on every
+//! keyboard that has one, and on one plugged in later. The kernel's own keyboard
+//! handling is off (sys.rs, KDSKBMODE K_OFF), so nothing else lights it.
 
 use protocol::ToElm;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -45,6 +50,8 @@ const SYN_REPORT: u16 = 0;
 const EV_KEY: u16 = 1;
 const EV_REL: u16 = 2;
 const EV_ABS: u16 = 3;
+const EV_LED: u16 = 0x11;
+const LED_CAPSL: u16 = 1;
 const REL_X: u16 = 0;
 const REL_Y: u16 = 1;
 const REL_WHEEL: u16 = 8;
@@ -127,7 +134,8 @@ impl Default for Contact {
 
 struct Device {
     file: File,
-    name: String, // eventN
+    name: String,     // eventN
+    caps_light: bool, // a keyboard with a Caps Lock light
     has_abs: bool,
     touchpad: bool,
     ax: AbsInfo,
@@ -164,11 +172,15 @@ fn test_bit(bits: &[u8], bit: usize) -> bool {
 impl Device {
     fn open(name: &str) -> Option<Device> {
         let path = format!("/dev/input/{name}");
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(&path)
-            .ok()?;
+        // Writable for the keyboard lights; read-only if it can't be.
+        let open = |write: bool| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(write)
+                .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+                .open(&path)
+        };
+        let file = open(true).or_else(|_| open(false)).ok()?;
         let size = std::mem::size_of::<AbsInfo>() as u64;
         let (mut ax, mut ay) = (AbsInfo::default(), AbsInfo::default());
         let has_abs = ioctl_read(&file, ior(0x40 + ABS_X as u64, size), &mut ax)
@@ -179,6 +191,8 @@ impl Device {
         let mut keys = [0u8; KEY_CNT / 8 + 1];
         ioctl_read(&file, ior(0x09, props.len() as u64), &mut props);
         ioctl_read(&file, ior(0x20 + EV_KEY as u64, keys.len() as u64), &mut keys);
+        let mut leds = [0u8; 2];
+        ioctl_read(&file, ior(0x20 + EV_LED as u64, leds.len() as u64), &mut leds);
         let touchpad = has_abs && (test_bit(&props, INPUT_PROP_POINTER) || test_bit(&keys, BTN_TOOL_FINGER as usize));
         // Slots, with the fingers' positions in their own ranges (usually ABS_X's).
         let (mut mslot, mut mx, mut my) = (AbsInfo::default(), AbsInfo::default(), AbsInfo::default());
@@ -219,6 +233,7 @@ impl Device {
         let mut dev = Device::new(file, name, has_abs, touchpad, ax, ay, slots);
         dev.mt = mt;
         dev.slot = (mslot.value.max(0) as usize).min(slots - 1);
+        dev.caps_light = test_bit(&leds, LED_CAPSL as usize);
         Some(dev)
     }
 
@@ -226,6 +241,7 @@ impl Device {
         Device {
             file,
             name: name.to_owned(),
+            caps_light: false,
             has_abs,
             touchpad,
             ax,
@@ -250,6 +266,25 @@ impl Device {
             rel_y: 0,
             last_motion: 0.0,
             velocity: 0.0,
+        }
+    }
+}
+
+impl Device {
+    /// Lights the Caps Lock light, or puts it out.
+    fn light_caps(&self, on: bool) {
+        if !self.caps_light {
+            return;
+        }
+        let events = [
+            InputEvent { type_: EV_LED, code: LED_CAPSL, value: on as i32, ..InputEvent::default() },
+            InputEvent { type_: EV_SYN, code: SYN_REPORT, value: 0, ..InputEvent::default() },
+        ];
+        // SAFETY: InputEvent is the kernel's struct input_event, plain data.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(events.as_ptr() as *const u8, std::mem::size_of_val(&events)) };
+        if let Err(e) = (&self.file).write_all(bytes) {
+            log!("host", "input /dev/input/{}: setting the Caps Lock light: {e}", self.name);
         }
     }
 }
@@ -322,6 +357,9 @@ pub struct Inputs {
     frac_y: f64,
     /// Whether Elm was last told to glide (ScrollMomentum), so a new touch stops it.
     gliding: bool,
+    /// Whether Elm last said Caps Lock is on (`Effect::KeyboardLights`), for keyboards
+    /// plugged in later.
+    caps_lock: bool,
 }
 
 /// How fast two fingers were scrolling as they lifted at `end`, in UI pixels a second,
@@ -381,6 +419,15 @@ impl Inputs {
             frac_x: 0.0,
             frac_y: 0.0,
             gliding: false,
+            caps_lock: false,
+        }
+    }
+
+    /// `Effect::KeyboardLights`: lights (or puts out) every keyboard's Caps Lock light.
+    pub fn set_caps_lock(&mut self, on: bool) {
+        self.caps_lock = on;
+        for d in &self.devices {
+            d.light_caps(on);
         }
     }
 
@@ -392,6 +439,10 @@ impl Inputs {
             let name = e.file_name().to_string_lossy().into_owned();
             if name.starts_with("event") && !self.devices.iter().any(|d| d.name == name) && self.devices.len() < 32 {
                 if let Some(d) = Device::open(&name) {
+                    // A keyboard's lights start off: light it as the others are.
+                    if self.caps_lock {
+                        d.light_caps(true);
+                    }
                     self.devices.push(d);
                 }
             }
@@ -1102,5 +1153,29 @@ mod tests {
         );
         let msgs = send(&mut t, &[(EV_ABS, ABS_Y, 300), syn]);
         assert_eq!(scrolled(&msgs), 150.0);
+    }
+
+    #[test]
+    fn caps_lock_lights_keyboards_with_a_light() {
+        let path = std::env::temp_dir().join(format!("elmos-caps-light-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new().create(true).truncate(true).write(true).read(true).open(&path).unwrap();
+        let mut inputs = touchpad();
+        let mut keyboard = Device::new(file, "keyboard", false, false, AbsInfo::default(), AbsInfo::default(), 1);
+        keyboard.caps_light = true;
+        inputs.devices.push(keyboard);
+        inputs.set_caps_lock(true);
+        inputs.set_caps_lock(false);
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let events: Vec<(u16, u16, i32)> = bytes
+            .chunks_exact(std::mem::size_of::<InputEvent>())
+            .map(|c| {
+                // SAFETY: written as InputEvents above.
+                let ev: InputEvent = unsafe { std::ptr::read_unaligned(c.as_ptr() as *const InputEvent) };
+                (ev.type_, ev.code, ev.value)
+            })
+            .collect();
+        // Only the keyboard: the touchpad (/dev/null) has no light.
+        assert_eq!(events, vec![(EV_LED, LED_CAPSL, 1), SYN, (EV_LED, LED_CAPSL, 0), SYN]);
     }
 }

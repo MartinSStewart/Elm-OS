@@ -439,6 +439,7 @@ impl Host {
                 }
                 Effect::UpdateInstall { disk, layout } => crate::install::update(disk, layout),
                 Effect::FollowDeployed => crate::update::follow_deployed(),
+                Effect::KeyboardLights { caps_lock } => self.inputs.set_caps_lock(caps_lock),
             }
         }
         if cursor_dirty {
