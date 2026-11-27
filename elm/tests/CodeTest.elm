@@ -1,7 +1,7 @@
-module CodeTest exposing (forgetting, history, navigation, suite)
+module CodeTest exposing (forgetting, history, navigation, running, suite)
 
 import Code
-import Code.Types exposing (BuildStatus(..), UiId(..))
+import Code.Types exposing (BuildStatus(..), GitStatus(..), UiId(..))
 import Coord
 import Expect
 import SeqDict
@@ -88,6 +88,43 @@ forgetting =
             (\_ -> Code.forgetPushed "aaa" pushed |> Expect.equal pushed)
         , Test.test "without a push, nothing goes"
             (\_ -> Code.forgetPushed "bbb" { pushed | git = git } |> Expect.equal { pushed | git = git })
+        ]
+
+
+running : Test
+running =
+    let
+        builtColor =
+            SeqDict.get "Color" SourceCode.sourceCode |> Maybe.withDefault ""
+
+        git =
+            Code.init.git
+
+        pushedModel =
+            { local = True
+            , git = { git | status = GitPushed "ccc" "dev", pushed = SeqDict.fromList [ ( "Color", builtColor ) ] }
+            }
+
+        model =
+            Code.init
+    in
+    Test.describe "Running a build made here"
+        [ Test.test "saving the text the build was made from keeps it as a change to commit"
+            (\_ -> (Code.save builtColor { model | local = True, module_ = Just "Color" }).saved |> SeqDict.keys |> Expect.equal [ "Color" ])
+        , Test.test "on a deployed build it is no change"
+            (\_ -> (Code.save builtColor { model | module_ = Just "Color" }).saved |> SeqDict.keys |> Expect.equal [])
+        , Test.test "the push is awaited when every saved module is as pushed"
+            (\_ ->
+                Code.awaitedCommit { model | local = True, git = pushedModel.git, saved = SeqDict.fromList [ ( "Color", builtColor ) ] }
+                    |> Expect.equal (Just "ccc")
+            )
+        , Test.test "not when a module was changed since"
+            (\_ ->
+                Code.awaitedCommit { model | local = True, git = pushedModel.git, saved = SeqDict.fromList [ ( "Color", "changed" ) ] }
+                    |> Expect.equal Nothing
+            )
+        , Test.test "not on a deployed build"
+            (\_ -> Code.awaitedCommit { model | git = pushedModel.git } |> Expect.equal Nothing)
         ]
 
 

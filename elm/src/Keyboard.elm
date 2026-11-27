@@ -24,6 +24,8 @@ type Key
     | PageDown
     | ScrollLock
     | PrintScreen
+    | BrightnessDown
+    | BrightnessUp
     | Other
 
 
@@ -96,6 +98,12 @@ fromCode shift code =
 
         111 ->
             Delete
+
+        224 ->
+            BrightnessDown
+
+        225 ->
+            BrightnessUp
 
         _ ->
             case lookup code of

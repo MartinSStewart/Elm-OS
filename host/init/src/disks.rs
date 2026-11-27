@@ -354,6 +354,18 @@ pub fn find_partition(name: &str) -> Option<String> {
     Some(partition_device(disk, p.number))
 }
 
+/// Like find_partition, but when the boot disk has no such partition, the first other
+/// disk's that has one. For the tools partition in QEMU, where it's a disk of its own
+/// (build/tools-qemu.img) next to the data disk.
+pub fn find_partition_any_disk(name: &str) -> Option<String> {
+    find_partition(name).or_else(|| {
+        disks().into_iter().find_map(|d| {
+            let p = d.gpt.as_ref()?.partitions.iter().find(|p| p.name == name)?;
+            Some(partition_device(&d.name, p.number))
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

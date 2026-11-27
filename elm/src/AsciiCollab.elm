@@ -757,6 +757,12 @@ key screen ctrl pressed model =
             PrintScreen ->
                 ( model, [] )
 
+            BrightnessDown ->
+                ( model, [] )
+
+            BrightnessUp ->
+                ( model, [] )
+
             Other ->
                 ( model, [] )
 

@@ -20,6 +20,7 @@ import AsciiCollab
 import AsciiCollab.Types
 import BootInfo
 import Bounds exposing (Bounds)
+import Brightness
 import BuildInfo
 import Bytes exposing (Bytes)
 import Calculator
@@ -112,6 +113,7 @@ type Input
     | NetConfig { geoUrl : String, weatherUrl : String }
     | System About.Types.SystemInfo
     | BootInfo BootInfo.Input
+    | Brightness Brightness.Input
       -- The host is about to replace this program with a newer build (named by the
       -- string): show it, and answer once the snapshot is written.
     | Switching String
@@ -248,11 +250,18 @@ toInput message =
                 )
 
         HostMessage.Dir path entries ->
-            Ok (BootInfo (BootInfo.Dir path entries))
+            if path == Brightness.backlightDir then
+                Ok (Brightness (Brightness.Dir entries))
+
+            else
+                Ok (BootInfo (BootInfo.Dir path entries))
 
         HostMessage.Files id files ->
             if id == commandLineId then
                 Ok (CommandLine (List.head files |> Maybe.andThen Tuple.second))
+
+            else if id == Brightness.filesId then
+                Ok (Brightness (Brightness.Files files))
 
             else
                 Ok (BootInfo (BootInfo.Files id files))
@@ -357,6 +366,7 @@ type alias Model =
     , weatherUrl : String
     , system : Maybe About.Types.SystemInfo
     , bootInfo : BootInfo.Model
+    , brightness : Brightness.Model
     , aboutOpen : Bool
     , newsOpen : Bool
     , news : NewsState
@@ -474,6 +484,7 @@ init =
     , weatherUrl = Weather.defaultWeatherUrl
     , system = Nothing
     , bootInfo = BootInfo.init
+    , brightness = Brightness.init
     , aboutOpen = False
     , newsOpen = False
     , news = NewsNotRequested
@@ -529,7 +540,21 @@ update msg model =
                     Email.tick (Time.posixToMillis time) model.email
             in
             ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab, email = email }
-            , bootEffects ++ asciiEffects ++ emailEffects
+            , bootEffects
+                ++ asciiEffects
+                ++ emailEffects
+                ++ (case Code.awaitedCommit model.code of
+                        Just commit ->
+                            -- Every five minutes: is what runs here in the deployed builds yet?
+                            if modBy 300 (Time.posixToMillis time // 1000) == 0 then
+                                [ Effect.Http (Code.GitHub.containsCheck (Code.githubToken model.uiState) commit) ]
+
+                            else
+                                []
+
+                        Nothing ->
+                            []
+                   )
             )
 
         SnapshotWritten bytes ->
@@ -576,7 +601,7 @@ step event model =
                 , reflashNeeded = Nothing
                 , testFacts = Nothing
               }
-            , Effect.ReadFiles { id = commandLineId, paths = [ "/proc/cmdline" ] } :: BootInfo.start
+            , Effect.ReadFiles { id = commandLineId, paths = [ "/proc/cmdline" ] } :: BootInfo.start ++ Brightness.start
             )
 
         CommandLine text ->
@@ -733,6 +758,27 @@ step event model =
                                 )
                                 model.code
                                 |> Tuple.mapFirst (\code -> { model | code = code })
+
+                        CodeDeployedCheck ->
+                            -- Back to following the deployed builds, if the push is in them
+                            -- and nothing was changed since.
+                            ( model
+                            , case ( Code.awaitedCommit model.code, decoded (D.field "status" D.string) ) of
+                                ( Just _, Ok "ahead" ) ->
+                                    [ Effect.FollowDeployed ]
+
+                                ( Just _, Ok "identical" ) ->
+                                    [ Effect.FollowDeployed ]
+
+                                ( Just _, Ok _ ) ->
+                                    []
+
+                                ( Just _, Err _ ) ->
+                                    []
+
+                                ( Nothing, _ ) ->
+                                    []
+                            )
 
                         HistoryRequest generation i ->
                             ( { model | history = History.gotResponse generation i result model.history }, [] )
@@ -1005,6 +1051,12 @@ step event model =
             else if not down then
                 ( model, [] )
 
+            else if key == Keyboard.BrightnessUp then
+                changeBrightness 1 model
+
+            else if key == Keyboard.BrightnessDown then
+                changeBrightness -1 model
+
             else if model.takingScreenshot /= Nothing && key == Keyboard.Escape then
                 ( { model | takingScreenshot = Nothing }, [] )
 
@@ -1127,6 +1179,9 @@ step event model =
 
         BootInfo bootInput ->
             BootInfo.update bootInput model.bootInfo |> Tuple.mapFirst (\info -> { model | bootInfo = info })
+
+        Brightness brightnessInput ->
+            Brightness.update brightnessInput model.brightness |> Tuple.mapFirst (\brightness -> { model | brightness = brightness })
 
         Switching build ->
             -- Persist writes the snapshot before SwitchReady goes to the host. The
@@ -1602,6 +1657,12 @@ appButton id =
         CancelPowerButton ->
             Nothing
 
+        BrightnessDownButton ->
+            Nothing
+
+        BrightnessUpButton ->
+            Nothing
+
         Calculator _ ->
             Nothing
 
@@ -1806,6 +1867,12 @@ clickElement model id =
 
         CancelPowerButton ->
             ( { model | confirmPower = Nothing }, [] )
+
+        BrightnessDownButton ->
+            changeBrightness -1 model
+
+        BrightnessUpButton ->
+            changeBrightness 1 model
 
         ConfirmPowerButton ->
             ( { model | confirmPower = Nothing }
@@ -2343,6 +2410,8 @@ type HttpRequestId
     | WebViewerRequest Int
       -- The Code app's commits (Code.GitHub.requestId).
     | CodeRequest Int
+      -- Whether the deployed builds have the commit the Code app pushed (Code.GitHub.containsCheck).
+    | CodeDeployedCheck
       -- The History app's commits: which refresh, and which branch of it.
     | HistoryRequest Int Int
 
@@ -2368,6 +2437,9 @@ httpRequestIdToString request =
         CodeRequest n ->
             Code.GitHub.requestId n
 
+        CodeDeployedCheck ->
+            Code.GitHub.containsCheckId
+
         HistoryRequest generation i ->
             History.requestId generation i
 
@@ -2392,6 +2464,9 @@ stringToHttpRequestId string =
 
         [ "code", n ] ->
             String.toInt n |> Maybe.map CodeRequest
+
+        [ "codecheck" ] ->
+            Just CodeDeployedCheck
 
         [ "history", generation, i ] ->
             Maybe.map2 HistoryRequest (String.toInt generation) (String.toInt i)
@@ -2682,6 +2757,12 @@ dragSelect focus mouse position model =
             model
 
         CancelPowerButton ->
+            model
+
+        BrightnessDownButton ->
+            model
+
+        BrightnessUpButton ->
             model
 
         Calculator _ ->
@@ -3459,6 +3540,7 @@ appConfig app model =
                     , stats = model.stats
                     , frameIntervals = model.frameIntervals
                     , bootInfo = model.bootInfo
+                    , brightness = Brightness.percentText model.brightness
                     , lastSnapshot = model.lastSnapshot
                     , time = model.time
                     , utcOffsetMinutes = model.utcOffsetMinutes
@@ -3922,6 +4004,13 @@ toolbar model display =
                 , Fill (\room -> Ui.right { width = Units.ui room } (clock (Units.ui room) model))
                 ]
         )
+
+
+{-| A brightness key or the debug app's - and + buttons: one step brighter (1) or darker (-1).
+-}
+changeBrightness : Int -> Model -> ( Model, List Effect )
+changeBrightness direction model =
+    Brightness.step direction model.brightness |> Tuple.mapFirst (\brightness -> { model | brightness = brightness })
 
 
 {-| The toolbar's buttons and the gap above them, in UI pixels.

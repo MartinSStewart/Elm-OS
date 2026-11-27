@@ -2,6 +2,7 @@ module Code exposing
     ( Model
     , afterEvent
     , appSize
+    , awaitedCommit
     , buildUpdate
     , ctrlClick
     , cursorBack
@@ -63,6 +64,9 @@ import Units exposing (UiPixels)
 type alias Model =
     { isOpen : Bool
 
+    -- Elm OS runs a build made here (from the Code app's edits), as the host last said.
+    , local : Bool
+
     -- The module being edited, by name.
     , module_ : Maybe String
 
@@ -98,6 +102,7 @@ type alias Model =
 init : Model
 init =
     { isOpen = False
+    , local = False
     , module_ = Nothing
     , saved = SeqDict.empty
     , build = Nothing
@@ -140,14 +145,14 @@ differsFromRunning model =
     SeqDict.foldl (\name text acc -> acc || SeqDict.get name SourceCode.sourceCode /= Just text) False model.saved
 
 
-{-| The saved modules whose text isn't what the running build was made from, nor what the
-last push committed: changes no commit has.
+{-| The saved modules whose text isn't what the last push committed: changes no commit has.
+(Even when the running build was made from them.)
 -}
 uncommittedModules : Model -> List String
 uncommittedModules model =
     SeqDict.foldr
         (\name text names ->
-            if SeqDict.get name SourceCode.sourceCode /= Just text && SeqDict.get name model.git.pushed /= Just text then
+            if SeqDict.get name model.git.pushed /= Just text then
                 name :: names
 
             else
@@ -158,13 +163,14 @@ uncommittedModules model =
 
 
 {-| Keeps `text` as the module's new text, or forgets the change if it is the text Elm
-OS was built from.
+OS was built from. Not while running a build made here: its modules are the edits, and the
+saved ones are still changes to commit (the commit goes on top of the commit it was made from).
 -}
 save : String -> Model -> Model
 save text model =
     case model.module_ of
         Just name ->
-            if SeqDict.get name SourceCode.sourceCode == Just text then
+            if SeqDict.get name SourceCode.sourceCode == Just text && not model.local then
                 { model | saved = SeqDict.remove name model.saved }
 
             else
@@ -593,6 +599,30 @@ forgetPushed commit model =
         { model | saved = saved, git = { git | pushed = SeqDict.empty, status = GitIdle } }
 
 
+{-| The commit to wait for in the deployed builds: while a build made here runs, the last
+push, if every saved module is as it had it. Once the deployed branch has it, CI has built
+what runs, and the host can follow the deployed builds again without dropping any change.
+-}
+awaitedCommit : Model -> Maybe String
+awaitedCommit model =
+    case model.git.status of
+        GitPushed commit _ ->
+            if model.local && List.isEmpty (uncommittedModules model) then
+                Just commit
+
+            else
+                Nothing
+
+        GitIdle ->
+            Nothing
+
+        GitWorking _ ->
+            Nothing
+
+        GitFailed _ _ ->
+            Nothing
+
+
 {-| GitHub's answer to the request with this number (Code.GitHub.requestId).
 -}
 httpResponse : Int -> Result String { status : Int, body : String } -> Model -> ( Model, List Effect )
@@ -735,6 +765,11 @@ builds, so without this the line under the code kept naming a build long gone.)
 -}
 programStarted : String -> Model -> Model
 programStarted build model =
+    programStartedHelp build { model | local = String.startsWith "local-" build }
+
+
+programStartedHelp : String -> Model -> Model
+programStartedHelp build model =
     case model.build of
         Just (Built name) ->
             if name == build then

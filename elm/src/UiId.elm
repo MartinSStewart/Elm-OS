@@ -43,6 +43,8 @@ type UiId
     | RestartButton
     | ConfirmPowerButton
     | CancelPowerButton
+    | BrightnessDownButton
+    | BrightnessUpButton
     | Network Network.Types.UiId
     | Calculator Calculator.Types.UiId
     | TicTacToe TicTacToe.Types.UiId
