@@ -465,6 +465,59 @@ deleteRange from to state =
     }
 
 
+{-| Join Lines (Ctrl+Shift+J): the line break after the cursor's line goes, and so does the
+next line's indentation, leaving one space between the two (none if either side is empty
+or the first ends in a space). With a selection, every line it touches is joined into one
+(a selection inside a single line still joins that line with the next). The cursor ends
+where the first join happened.
+-}
+joinLines : TextInput.State -> TextInput.State
+joinLines state =
+    let
+        ls =
+            lines state.text
+
+        first =
+            Tuple.first (lineAndColumn state.text (TextInput.selectionMin state))
+
+        last =
+            Tuple.first (lineAndColumn state.text (TextInput.selectionMax state))
+
+        group =
+            List.drop first ls |> List.take (max 1 (last - first) + 1)
+
+        joinTwo next acc =
+            let
+                trimmed =
+                    String.trimLeft next
+            in
+            if acc == "" || trimmed == "" || String.endsWith " " acc || String.endsWith "\t" acc then
+                acc ++ trimmed
+
+            else
+                acc ++ " " ++ trimmed
+    in
+    case group of
+        headLine :: others ->
+            if List.isEmpty others then
+                state
+
+            else
+                { state
+                    | text =
+                        String.join "\n"
+                            (List.take first ls
+                                ++ [ List.foldl joinTwo headLine others ]
+                                ++ List.drop (first + List.length group) ls
+                            )
+                    , cursorPosition = lineStart ls first + String.length headLine
+                    , cursorSize = 0
+                }
+
+        [] ->
+            state
+
+
 keyMsg : Style -> Bool -> Bool -> Keyboard.Key -> Model -> ( Model, TextInput.OutMsg )
 keyMsg style ctrl shift key model =
     let
@@ -520,6 +573,17 @@ keyMsg style ctrl shift key model =
                 edit (deleteRange (min to state.cursorPosition) (max to state.cursorPosition))
     in
     (case ( ctrl, key ) of
+        ( True, Keyboard.Character "J" ) ->
+            if shift then
+                edit joinLines
+
+            else
+                let
+                    ( input, outMsg ) =
+                        TextInput.keyMsg ctrl shift key model.input
+                in
+                ( { model | input = limitHistory input }, outMsg )
+
         ( False, Keyboard.Enter ) ->
             edit (TextInput.insertText "\n")
 
