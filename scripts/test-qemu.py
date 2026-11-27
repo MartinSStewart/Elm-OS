@@ -261,20 +261,37 @@ def move_and_wait(fx, fy):
     time.sleep(0.5)  # for the frame drawn then to reach the screen
 
 
+def screen_when(check, timeout=20):
+    """The first screen `check` passes, polling: a frame takes a second or more to reach
+    QEMU's screen without KVM (the CPU rasteriser in /init), so a fixed wait is either
+    slow or, depending on where in a frame the mouse moved, too short. None if none did."""
+    end = time.time() + timeout
+    while True:
+        shot = screen()
+        if check(shot):
+            return shot
+        if time.time() > end:
+            return None
+
+
 # Under the pointer, then the same place with the pointer gone: they must differ, as Elm
 # draws the cursor (with a cursor plane, which screendumps leave out, Elm still draws an
 # orange copy of it).
-move_and_wait(0.25, 0.25)
 x, y = at_pointer(0.25, 0.25)
 under = (x, y, x + 10 * s, y + 16 * s)
-here = screen()
+before = screen()
+move_and_wait(0.25, 0.25)
+here = screen_when(lambda shot: region(shot, *under) != region(before, *under))
+if here is None:
+    save_png(screen(), f"{ROOT}/build/screenshot.png")
+    fail("the screen didn't change where the pointer moved to (build/screenshot.png)")
 move_and_wait(0.75, 0.25)
-there = screen()
-if region(here, *under) == region(there, *under):
+x, y = at_pointer(0.75, 0.25)
+there = screen_when(lambda shot: region(shot, *under) != region(here, *under))
+if there is None:
     save_png(here, f"{ROOT}/build/screenshot.png")
     fail("the screen under the pointer didn't change when the pointer moved away (build/screenshot.png)")
-x, y = at_pointer(0.75, 0.25)
-if region(there, x, y, x + 10 * s, y + 16 * s) == region(here, x, y, x + 10 * s, y + 16 * s):
+if screen_when(lambda shot: region(shot, x, y, x + 10 * s, y + 16 * s) != region(here, x, y, x + 10 * s, y + 16 * s)) is None:
     fail("the screen didn't change where the pointer moved to")
 print("the cursor follows the mouse")
 

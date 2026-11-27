@@ -653,11 +653,7 @@ step event model =
                                 Nothing ->
                                     model.frameIntervals
                         , uiState =
-                            Ui.onAnimationFrame
-                                elapsedTime
-                                (uiMouse model)
-                                (hover model)
-                                model.uiState
+                            Ui.onAnimationFrame elapsedTime (uiMouse model) model.uiState
                     }
             in
             -- `draw` draws it, unless the message is being replayed.
@@ -3665,13 +3661,42 @@ last frame's `Ui.lazy` elements, which are kept for the next. Persist calls it a
 `update`, except while replaying the log.
 -}
 draw : Msg -> Model -> ( Model, List Effect )
-draw msg model =
+draw msg unfaded =
     case msg of
         GotInput (Ok (Frame _ _)) ->
             let
                 uis : List ( Display, Ui.Element UiId )
                 uis =
-                    List.map (\display -> ( display, displayUi model display )) model.displays
+                    List.map (\display -> ( display, displayUi unfaded display )) unfaded.displays
+
+                -- The scroll bars fade here rather than in `update`, with the UI built
+                -- for drawing anyway: what is under the mouse takes building it.
+                model : Model
+                model =
+                    let
+                        mouseOn : Display
+                        mouseOn =
+                            mouseDisplay unfaded
+
+                        mouse : Coord UiPixels
+                        mouse =
+                            uiMouseOn mouseOn (mousePosition unfaded)
+
+                        hovered : List ( UiId, { relativePositionToUi : Coord UiPixels, ui : Ui.Element UiId } )
+                        hovered =
+                            case List.filter (\( display, _ ) -> display.id == mouseOn.id) uis of
+                                ( _, ui ) :: _ ->
+                                    Ui.hoverIdOnly unfaded.uiState mouse ui
+
+                                [] ->
+                                    hover unfaded
+
+                        -- The frame's step, as `update` took it.
+                        elapsed : Duration
+                        elapsed =
+                            List.head unfaded.frameIntervals |> Maybe.withDefault 0 |> clamp 0 1000 |> Duration.milliseconds
+                    in
+                    { unfaded | uiState = Ui.fadeScrollbars elapsed mouse hovered unfaded.uiState }
 
                 cursor =
                     cursorShape model uis
@@ -3707,13 +3732,13 @@ draw msg model =
             )
 
         GotInput _ ->
-            ( model, [] )
+            ( unfaded, [] )
 
         Tick _ ->
-            ( model, [] )
+            ( unfaded, [] )
 
         SnapshotWritten _ ->
-            ( model, [] )
+            ( unfaded, [] )
 
 
 {-| The id of the request for the kernel's command line (`CommandLine`).

@@ -43,6 +43,7 @@ module Ui exposing
     , elementToScreenshot
     , ellipsisText2
     , empty
+    , fadeScrollbars
     , findInput
     , fixed2
     , getTextInput
@@ -558,25 +559,59 @@ getButton id model =
             { buttonDown = Nothing }
 
 
-{-| A frame went by. `hovered` is what `hoverIdOnly` gives for the mouse, at `mouse`: the
-scroll bars of the viewports under it fade in, and widen if it is over them.
+{-| A frame went by: viewports glide or ease to where they are scrolling to, and the
+text editors' animations move on. The scroll bars' fading is `fadeScrollbars`, which `draw`
+does: it needs what is under the mouse, which takes building the whole UI, and replaying
+the message log (Persist.elm) has thousands of frames, so it mustn't do that for each.
 -}
-onAnimationFrame :
-    Duration
-    -> Coord UiPixels
-    -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
-    -> Model id
-    -> Model id
-onAnimationFrame timeElapsed mouse hovered model =
-    let
-        mouseStill : { at : Coord UiPixels, seconds : Duration }
-        mouseStill =
+onAnimationFrame : Duration -> Coord UiPixels -> Model id -> Model id
+onAnimationFrame timeElapsed mouse model =
+    { model
+        | mouseStill =
             if mouse == model.mouseStill.at then
                 { at = mouse, seconds = Quantity.plus model.mouseStill.seconds timeElapsed }
 
             else
                 { at = mouse, seconds = Quantity.zero }
+        , uiState =
+            SeqDict.map
+                (\_ value ->
+                    case value of
+                        TextInputState _ ->
+                            value
 
+                        TextInputMultilineState multiline ->
+                            TextInputMultiline.animate timeElapsed multiline |> TextInputMultilineState
+
+                        ButtonState _ ->
+                            value
+
+                        ViewportState viewportModel ->
+                            (if viewportModel.momentum /= 0 then
+                                glide timeElapsed viewportModel
+
+                             else
+                                ease timeElapsed viewportModel
+                            )
+                                |> ViewportState
+                )
+                model.uiState
+    }
+
+
+{-| After `onAnimationFrame`, as a frame is drawn. `hovered` is what `hoverIdOnly` gives
+for the mouse, at `mouse`: the scroll bars of the viewports under it fade in, and widen
+if it is over them; the others fade out. Only how the scroll bars look changes, so it
+doesn't matter that replaying the log leaves it out.
+-}
+fadeScrollbars :
+    Duration
+    -> Coord UiPixels
+    -> List ( id, { relativePositionToUi : Coord UiPixels, ui : Element id } )
+    -> Model id
+    -> Model id
+fadeScrollbars timeElapsed mouse hovered model =
+    let
         -- The hovered elements with a scroll bar, whether the mouse is over their scroll
         -- bar, and their state if they don't have one yet.
         hoveredScrollbars : SeqDict id ( Bool, ElementState )
@@ -627,15 +662,14 @@ onAnimationFrame timeElapsed mouse hovered model =
         -- whether it is over its scroll bar.
         scrollbarHovered : id -> Maybe Bool
         scrollbarHovered id =
-            if mouseStill.seconds |> Quantity.lessThan mouseStillDuration then
+            if model.mouseStill.seconds |> Quantity.lessThan mouseStillDuration then
                 SeqDict.get id hoveredScrollbars |> Maybe.map Tuple.first
 
             else
                 Nothing
     in
     { model
-        | mouseStill = mouseStill
-        , uiState =
+        | uiState =
             SeqDict.map
                 (\id value ->
                     case value of
@@ -643,22 +677,13 @@ onAnimationFrame timeElapsed mouse hovered model =
                             value
 
                         TextInputMultilineState multiline ->
-                            TextInputMultiline.animate timeElapsed multiline
-                                |> Scrollbar.fade timeElapsed (scrollbarHovered id)
-                                |> TextInputMultilineState
+                            Scrollbar.fade timeElapsed (scrollbarHovered id) multiline |> TextInputMultilineState
 
                         ButtonState _ ->
                             value
 
                         ViewportState viewportModel ->
-                            (if viewportModel.momentum /= 0 then
-                                glide timeElapsed viewportModel
-
-                             else
-                                ease timeElapsed viewportModel
-                            )
-                                |> Scrollbar.fade timeElapsed (scrollbarHovered id)
-                                |> ViewportState
+                            Scrollbar.fade timeElapsed (scrollbarHovered id) viewportModel |> ViewportState
                 )
                 withHovered
     }

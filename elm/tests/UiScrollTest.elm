@@ -44,7 +44,7 @@ offset model =
 
 frames : Int -> Ui.Model () -> Ui.Model ()
 frames n model =
-    List.foldl (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) Coord.origin [] m) model (List.range 1 n)
+    List.foldl (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) Coord.origin m) model (List.range 1 n)
 
 
 suite : Test
@@ -139,7 +139,10 @@ suite =
                     after : Int -> Coord.Coord Units.UiPixels -> Ui.Model () -> Ui.Model ()
                     after n mouse model =
                         List.foldl
-                            (\_ m -> Ui.onAnimationFrame (Duration.milliseconds 16) mouse (Ui.hoverIdOnly m mouse wide) m)
+                            (\_ m ->
+                                Ui.onAnimationFrame (Duration.milliseconds 16) mouse m
+                                    |> Ui.fadeScrollbars (Duration.milliseconds 16) mouse (Ui.hoverIdOnly m mouse wide)
+                            )
                             model
                             (List.range 1 n)
 

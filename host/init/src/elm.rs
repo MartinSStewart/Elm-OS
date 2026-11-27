@@ -42,9 +42,9 @@
 //!
 //! A program that leaves a frame unanswered for 30 seconds (ELMOS_HANG_SECS) has hung,
 //! and is stopped like one that crashed. A build that crashes or hangs five times
-//! running, each time within 30 seconds of starting, isn't started again: the host
-//! shows how it exited and the last lines it wrote (error_screen.rs) until Enter is
-//! pressed. Everything the program writes on stderr goes through the host for that,
+//! running, each time within 30 seconds of starting or before drawing a frame, isn't
+//! started again: the host shows how it exited and the last lines it wrote
+//! (error_screen.rs) until Enter is pressed. Everything the program writes on stderr goes through the host for that,
 //! line by line, to the console as before.
 
 use std::collections::VecDeque;
@@ -67,7 +67,8 @@ const RAN_WELL: Duration = Duration::from_secs(30);
 const FIRST_FRAME_WITHIN: Duration = Duration::from_secs(30);
 /// How long a program has to answer "switching".
 const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
-/// Quick exits in a row (each within RAN_WELL) that make a crash loop.
+/// Quick exits in a row (each within RAN_WELL, or before drawing a frame) that make a
+/// crash loop.
 const CRASH_LOOP: u32 = 5;
 /// Lines of the program's output kept for the error screen.
 const OUTPUT_LINES: usize = 15;
@@ -640,7 +641,9 @@ fn supervise() {
             exits.clear();
             continue;
         }
-        failures = if started.elapsed() >= RAN_WELL { 0 } else { failures + 1 };
+        // One that never drew a frame failed however long it ran: a hang at start (a
+        // log replay longer than the hang limit, say) would otherwise restart for ever.
+        failures = if drawn && started.elapsed() >= RAN_WELL { 0 } else { failures + 1 };
         if failures >= CRASH_LOOP {
             log!("host", "{} crashed {CRASH_LOOP} times running; not starting it again until Enter is pressed", programs::describe(&build));
             show_and_wait(crash_loop_screen(&build, &exits));
@@ -807,7 +810,7 @@ fn capitalized(s: &str) -> String {
 fn crash_loop_screen(build: &Build, exits: &VecDeque<String>) -> crate::error_screen::Screen {
     let mut body = vec![
         format!(
-            "{} ended {} times in a row, each within {} s of starting, so the host stopped starting it.",
+            "{} ended {} times in a row, each within {} s of starting or before drawing anything, so the host stopped starting it.",
             capitalized(&programs::describe(build)),
             exits.len(),
             RAN_WELL.as_secs()
