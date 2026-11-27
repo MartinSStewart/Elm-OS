@@ -20,7 +20,8 @@
 //! A build made on this computer (build.rs, `local-...`) is left alone, so as not to drop
 //! the edits it was made from, until Elm asks for the deployed build
 //! (Effect::FollowDeployed, the Code app's button): then the thread checks at once, as
-//! above, and tells Elm with a failed ToElm::Build if it couldn't switch.
+//! above, and tells Elm with a failed ToElm::Build if it couldn't switch. The History
+//! app's button sends the same effect to check at once from any build.
 //!
 //! A build that can't be used is tried again only after a restart. Where to look can be
 //! changed for the tests: ELMOS_UPDATE_API (https://api.github.com), ELMOS_UPDATE_DOWNLOAD
@@ -63,15 +64,13 @@ const FOLLOW_STEP: &str = "Going back to the deployed build";
 static FOLLOW: Mutex<bool> = Mutex::new(false);
 static WOKEN: Condvar = Condvar::new();
 
-/// Effect::FollowDeployed: leave the build made on this computer for the deployed one.
+/// Effect::FollowDeployed: check for the newest deployed build now, instead of at the next
+/// check, and leave a build made on this computer for it.
 pub fn follow_deployed() {
     if std::env::var("ELMOS_UPDATES").as_deref() != Ok("1") {
         return follow_failed(
             "This Elm OS doesn't follow the deployed builds: its kernel command line has no ELMOS_UPDATES=1 (the USB stick's has it, make run's hasn't).",
         );
-    }
-    if !is_local(&elm::running_build()) {
-        return follow_failed("The build running wasn't made on this computer: it follows the deployed builds already.");
     }
     *FOLLOW.lock().unwrap_or_else(|e| e.into_inner()) = true;
     WOKEN.notify_all();
