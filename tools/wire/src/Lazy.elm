@@ -62,6 +62,9 @@ type alias Use =
     -- The cache and the function, if it was called with them.
     , cache : Maybe (Node Expression)
     , function : Maybe (Node Expression)
+
+    -- What the call passes the function.
+    , arguments : List (Node Expression)
     }
 
 
@@ -185,6 +188,87 @@ importedAs file name =
         |> Maybe.map (\i -> Maybe.map (Node.value >> String.join ".") i.moduleAlias |> Maybe.withDefault name)
 
 
+{-| How `from` imports `to`: the modules on the shortest way there, both included.
+-}
+importPath : Dict String (List String) -> String -> String -> List String
+importPath graph from to =
+    let
+        -- Breadth first, each path kept last module first.
+        go queue seen =
+            case queue of
+                [] ->
+                    [ from, to ]
+
+                path :: rest ->
+                    case path of
+                        [] ->
+                            go rest seen
+
+                        last :: _ ->
+                            if last == to then
+                                List.reverse path
+
+                            else
+                                let
+                                    next =
+                                        Dict.get last graph
+                                            |> Maybe.withDefault []
+                                            |> List.filter (\m -> not (Set.member m seen))
+                                in
+                                go (rest ++ List.map (\m -> m :: path) next) (Set.union seen (Set.fromList next))
+    in
+    go [ [ from ] ] (Set.singleton from)
+
+
+{-| The text of `source` in `range` (elm-syntax counts rows and columns from 1).
+-}
+sourceAt : String -> Range -> String
+sourceAt source range =
+    String.lines source
+        |> List.drop (range.start.row - 1)
+        |> List.take (range.end.row - range.start.row + 1)
+        |> List.indexedMap
+            (\i line ->
+                let
+                    end =
+                        if i == range.end.row - range.start.row then
+                            range.end.column - 1
+
+                        else
+                            String.length line
+
+                    start =
+                        if i == 0 then
+                            range.start.column - 1
+
+                        else
+                            0
+                in
+                String.slice start end line
+            )
+        |> String.join " "
+        |> String.words
+        |> String.join " "
+
+
+{-| Each string once, in the order they first come.
+-}
+unique : List String -> List String
+unique items =
+    List.foldl
+        (\item ( seen, kept ) ->
+            if Set.member item seen then
+                ( seen, kept )
+
+            else
+                ( Set.insert item seen, item :: kept )
+        )
+        ( Set.empty, [] )
+        items
+        |> Tuple.second
+        |> List.reverse
+
+
 {-| The modules `name` imports, at any depth.
 -}
 importsOf : Dict String (List String) -> String -> Set String
@@ -255,20 +339,39 @@ rewriteAll typeText files ( keySource, keyFile ) callers =
                 |> Set.remove keyModule
                 |> Set.toList
 
+        -- Each argument whose type needs a module that imports the key's: the key's
+        -- module would have to import it back.
         cycles =
-            needed
-                |> List.filter (\m -> Set.member keyModule (importsOf graph m))
-                |> List.map
-                    (\m ->
-                        keyModule
-                            ++ ".LazyKey would need a type from "
-                            ++ m
-                            ++ ", which imports "
-                            ++ keyModule
-                            ++ ": a Ui.lazy argument's type must be in a module that doesn't, such as "
-                            ++ String.replace "." "/" m
-                            ++ "/Types.elm"
+            calls
+                |> List.concatMap (\( _, gs ) -> List.concatMap .needs gs)
+                |> List.filterMap
+                    (\need ->
+                        if need.module_ /= keyModule && Set.member keyModule (importsOf graph need.module_) then
+                            Just
+                                (need.argument
+                                    ++ " can't be part of a Ui.lazy key. Every key is a variant of "
+                                    ++ keyModule
+                                    ++ ".LazyKey, so "
+                                    ++ keyModule
+                                    ++ " would have to import "
+                                    ++ need.module_
+                                    ++ " for this type, but "
+                                    ++ need.module_
+                                    ++ " already imports "
+                                    ++ keyModule
+                                    ++ " (an import cycle): "
+                                    ++ String.join " imports " (importPath graph need.module_ keyModule)
+                                    ++ ". Pass a value of a type from a module that doesn't import "
+                                    ++ keyModule
+                                    ++ " (such as "
+                                    ++ String.replace "." "/" need.module_
+                                    ++ "/Types.elm, or a package type), or only the part of it the function uses."
+                                )
+
+                        else
+                            Nothing
                     )
+                |> unique
     in
     if not (List.isEmpty (errors ++ cycles)) then
         Err (errors ++ cycles)
@@ -308,7 +411,14 @@ rewriteAll typeText files ( keySource, keyFile ) callers =
 function that goes at the end of the module, and the modules the variant names.
 -}
 type alias Generated =
-    { edit : Edit, variant : String, helper : String, modules : List String }
+    { edit : Edit, variant : String, helper : String, modules : List String, needs : List Need }
+
+
+{-| A module the key needs for one of the call's arguments, and how to point at that
+argument in an error (where the call is, and which argument it is).
+-}
+type alias Need =
+    { module_ : String, argument : String }
 
 
 generate : TypeText -> String -> (String -> String) -> Caller -> Use -> Result String Generated
@@ -413,6 +523,21 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
                             { var = "w3_a" ++ String.fromInt (i + 1)
                             , inKey = not (isLazyCache caller.ui (Node.value t))
                             , ty = t
+                            , description =
+                                "argument "
+                                    ++ String.fromInt (i + 1)
+                                    ++ " of "
+                                    ++ fName
+                                    ++ (case List.drop i use.arguments |> List.head of
+                                            Just (Node r _) ->
+                                                ", `" ++ sourceAt caller.sourceFile.source r ++ "`,"
+
+                                            Nothing ->
+                                                ""
+                                       )
+                                    ++ " of type `"
+                                    ++ sourceAt caller.sourceFile.source (Node.range t)
+                                    ++ "`"
                             }
                         )
 
@@ -423,16 +548,18 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
                 List.map (\a -> typeText { caller = callerModule, qualifier = keyQualifier } a.ty) keyArgs
 
             problems =
-                List.filterMap
-                    (\r ->
+                List.map2
+                    (\a r ->
                         case r of
                             Err e ->
-                                Just e
+                                Just (a.description ++ " can't be part of a Ui.lazy key: " ++ e)
 
                             Ok _ ->
                                 Nothing
                     )
+                    keyArgs
                     typeTexts
+                    |> List.filterMap identity
 
             variant =
                 String.replace "." "_" callerModule ++ "_" ++ capitalise fName ++ "_" ++ String.fromInt use.range.start.row ++ "_" ++ String.fromInt use.range.start.column
@@ -445,7 +572,7 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
         in
         case problems of
             problem :: _ ->
-                Err (at use.range ++ "an argument of " ++ fName ++ " can't be part of a Ui.lazy key: " ++ problem)
+                Err (at use.range ++ problem)
 
             [] ->
                 let
@@ -456,6 +583,19 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
                     { edit = { range = use.range, text = helperName }
                     , variant = String.join " " (variant :: List.map (.text >> parenthesise) texts)
                     , modules = List.concatMap .modules texts
+                    , needs =
+                        List.map2
+                            (\a r ->
+                                case r of
+                                    Ok t ->
+                                        List.map (\m -> { module_ = m, argument = at use.range ++ a.description }) t.modules
+
+                                    Err _ ->
+                                        []
+                            )
+                            keyArgs
+                            typeTexts
+                            |> List.concat
                     , helper =
                         helperName
                             ++ " w3_cache _ "
@@ -673,6 +813,7 @@ expressionUses ui (Node range expression) =
                     { range = headRange
                     , arity = arity
                     , cache = List.head args
+                    , arguments = List.drop 2 args
                     , function =
                         case args of
                             _ :: f :: _ ->
@@ -692,7 +833,7 @@ expressionUses ui (Node range expression) =
         FunctionOrValue qualifier name ->
             case ( lazyArity name, isUi ui qualifier name ) of
                 ( Just arity, True ) ->
-                    [ { range = range, arity = arity, cache = Nothing, function = Nothing } ]
+                    [ { range = range, arity = arity, cache = Nothing, function = Nothing, arguments = [] } ]
 
                 _ ->
                     []
