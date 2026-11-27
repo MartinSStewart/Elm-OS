@@ -305,7 +305,7 @@ keyMsg ctrlDown shiftDown key model =
             , NoOutMsg
             )
 
-        ( True, False, Keyboard.Backspace ) ->
+        ( True, _, Keyboard.Backspace ) ->
             ( pushState
                 (\state ->
                     if state.cursorSize == 0 then
@@ -322,7 +322,7 @@ keyMsg ctrlDown shiftDown key model =
             , NoOutMsg
             )
 
-        ( False, False, Keyboard.Backspace ) ->
+        ( False, _, Keyboard.Backspace ) ->
             ( pushState
                 (\state ->
                     if state.cursorSize == 0 then
