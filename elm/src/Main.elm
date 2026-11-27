@@ -3572,6 +3572,7 @@ appConfig app model =
             , view =
                 \size ->
                     Code.view
+                        model.lazyCache
                         size
                         (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState)
                         (Code.findText model.uiState)
