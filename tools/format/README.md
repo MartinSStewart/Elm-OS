@@ -43,6 +43,13 @@ The licences: `LICENSE-eco-compiler` (eco, from Elm and Guida) and `LICENSE-elm-
   tokens, not one inside a `"""` string or a block comment (`layoutRow` in
   `Compiler.Lexer.Primitives`), a record update's field spanning lines, and a line
   break between `case` and `of`.
+- Comments between an operator and a following `let`, `case`, `if` or lambda were
+  dropped, and a comment after a negative argument (`f x -1 -- note`) moved before it.
+- `a -> (b -> c)` keeps its parentheses (eco's parser reads it the same as
+  `a -> b -> c`; the printer now tells them apart by where the inner type ends).
+- elm-format's comment trick (a block comment starting with a dash, the empty one that
+  opens the trick and the line comment that closes it) is printed as elm-format does.
+- `@docs` lines continued on the next line group the exposing list like elm-format.
 
 ## Testing
 
@@ -54,6 +61,12 @@ comments included (so nothing was dropped). `node tools/format/format.js build/f
 --test --expect-unchanged PATH` also fails when an already formatted file changes.
 
 ## Status
+
+Also checked: the 119 package modules in eco's package cache (elm/*,
+elm-explorations/test, elm-units, date, elm-hex) as elm-format writes them come out
+unchanged, and their original sources format the same as elm-format does apart from
+doc comments; and every repo file with its indentation and spacing scrambled (4
+seeds) formats exactly as elm-format formats it.
 
 Every Elm file in the repo (272, tools/format's own included) comes out exactly as
 elm-format 0.8.8 writes it. Not wired into `make format` or the Code app yet.

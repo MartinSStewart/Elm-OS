@@ -642,7 +642,7 @@ chompExprEnd start (State { ops, expr, args, end }) comments =
                                                                                     let
                                                                                         arg : Src.C1 (A.Located Src.Expr_)
                                                                                         arg =
-                                                                                            ( postNegatedExprComments, A.at opStart newEnd (Src.Negate negatedExpr) )
+                                                                                            ( comments, A.at opStart newEnd (Src.Negate negatedExpr) )
                                                                                     in
                                                                                     chompExprEnd
                                                                                         start
@@ -653,7 +653,7 @@ chompExprEnd start (State { ops, expr, args, end }) comments =
                                                                                             , end = newEnd
                                                                                             }
                                                                                         )
-                                                                                        []
+                                                                                        postNegatedExprComments
                                                                                 )
                                                                     )
                                                         )
@@ -705,7 +705,7 @@ chompExprEnd start (State { ops, expr, args, end }) comments =
                                                                 let
                                                                     finalExpr : Src.Expr_
                                                                     finalExpr =
-                                                                        toBinops ops ( toCall expr args, ( ( comments, [] ), op ) ) newLast
+                                                                        toBinops ops ( toCall expr args, ( ( comments, postOpComments ), op ) ) newLast
                                                                 in
                                                                 ( ( trailingComments, A.at start newEnd finalExpr ), newEnd )
                                                             )

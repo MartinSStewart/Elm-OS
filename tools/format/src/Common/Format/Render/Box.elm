@@ -371,11 +371,14 @@ concerned.
 doc-comment code block, so that an annotation and the definition of the same
 name can be kept together.
 `DComment` is any other comment, `DDocComment` a doc comment, `DFixity` an
-`infix` declaration.
+`infix` declaration. `DStarter` and `DCloser` are the opening and closing comments
+of the trick that comments code in and out by adding or removing one brace.
 
 -}
 type DeclarationType
     = DComment
+    | DStarter
+    | DCloser
     | DDefinition (Maybe (Ref ()))
     | DFixity
     | DDocComment
@@ -400,8 +403,35 @@ declarationType decl =
         DocComment _ ->
             DDocComment
 
-        BodyComment _ ->
-            DComment
+        BodyComment comment ->
+            if isCommentTrickOpener comment then
+                DStarter
+
+            else if isCommentTrickCloser comment then
+                DCloser
+
+            else
+                DComment
+
+
+{-| Whether a comment is the empty block comment that opens the comment trick.
+-}
+isCommentTrickOpener : Src.FComment -> Bool
+isCommentTrickOpener comment =
+    comment == Src.BlockComment "" []
+
+
+{-| Whether a comment is the line comment that closes the comment trick: a brace,
+maybe with spaces after it.
+-}
+isCommentTrickCloser : Src.FComment -> Bool
+isCommentTrickCloser comment =
+    case comment of
+        Src.LineComment text ->
+            String.trimRight text == "}"
+
+        Src.BlockComment _ _ ->
+            False
 
 
 {-| Returns the groups of `input` with every value whose name has already appeared in an earlier place removed, dropping groups that become empty. Each group is returned as its first value and the rest.
@@ -588,21 +618,35 @@ formatModuleHeader addDefaultHeader modu =
                 |> A.toValue
                 |> Maybe.withDefault ""
                 |> String.lines
-                |> List.filterMap docsLine
+                |> docsLines False []
+                |> List.map docNames
 
-        -- A `@docs` line names the documented values, separated by commas.
-        docsLine : String -> Maybe (List String)
-        docsLine textLine =
-            if String.startsWith "@docs " textLine then
-                String.dropLeft 6 textLine
-                    |> String.split ","
-                    |> List.map String.trim
-                    |> List.filter (not << String.isEmpty)
-                    |> List.map (docName << String.replace "(..)" "")
-                    |> Just
+        -- The `@docs` lines, and the lines that continue them (up to a blank line or
+        -- another `@docs`), each without its `@docs`.
+        docsLines : Bool -> List String -> List String -> List String
+        docsLines inDocs acc textLines =
+            case textLines of
+                [] ->
+                    List.reverse acc
 
-            else
-                Nothing
+                textLine :: rest ->
+                    if String.startsWith "@docs " textLine then
+                        docsLines True (String.dropLeft 6 textLine :: acc) rest
+
+                    else if inDocs && String.trim textLine /= "" then
+                        docsLines True (textLine :: acc) rest
+
+                    else
+                        docsLines False acc rest
+
+        -- A line of a `@docs` block names documented values, separated by commas.
+        docNames : String -> List String
+        docNames textLine =
+            textLine
+                |> String.split ","
+                |> List.map String.trim
+                |> List.filter (not << String.isEmpty)
+                |> List.map (docName << String.replace "(..)" "")
 
         -- An operator of one or two characters is named on a `@docs` line in parentheses.
         docName : String -> String
@@ -1329,6 +1373,12 @@ formatTopLevelBody linesBetween importInfo body =
         spacer : TopLevelStructure ( BodyEntryType, Box ) -> TopLevelStructure ( BodyEntryType, Box ) -> Int
         spacer a b =
             case ( declarationType (topLevelStructureMap Tuple.first a), declarationType (topLevelStructureMap Tuple.first b) ) of
+                ( DStarter, _ ) ->
+                    0
+
+                ( _, DCloser ) ->
+                    0
+
                 ( DComment, DComment ) ->
                     0
 
@@ -1355,6 +1405,9 @@ formatTopLevelBody linesBetween importInfo body =
                 ( DDefinition Nothing, DDefinition (Just _) ) ->
                     linesBetween
 
+                ( DDefinition _, DStarter ) ->
+                    linesBetween
+
                 ( DDefinition Nothing, DDefinition Nothing ) ->
                     linesBetween
 
@@ -1365,13 +1418,22 @@ formatTopLevelBody linesBetween importInfo body =
                     else
                         linesBetween
 
+                ( DCloser, _ ) ->
+                    linesBetween
+
                 ( _, DDocComment ) ->
                     linesBetween
+
+                ( DDocComment, DStarter ) ->
+                    0
 
                 ( DFixity, DFixity ) ->
                     0
 
-                _ ->
+                ( DFixity, _ ) ->
+                    linesBetween
+
+                ( _, DFixity ) ->
                     linesBetween
 
         boxes : List Box
@@ -2962,29 +3024,62 @@ delimiter. A `--` comment ends its line.
 formatComment : Src.FComment -> Box
 formatComment comment =
     case comment of
-        Src.BlockComment l rest ->
-            case blockCommentLines rest of
-                [] ->
-                    Box.line <|
-                        Box.row
-                            [ Box.punc "{-"
-                            , Box.space
-                            , Box.literal (String.trim l)
-                            , Box.space
-                            , Box.punc "-}"
-                            ]
+        Src.BlockComment "" [] ->
+            Box.line (Box.punc "{--}")
 
-                restLines ->
-                    Box.stack1
-                        (Box.prefix
-                            (Box.row [ Box.punc "{-", Box.space ])
-                            (Box.stack1 (Box.line (Box.literal (String.trimLeft l))) (List.map (Box.line << Box.literal) restLines))
-                        )
-                        [ Box.punc "-}" |> Box.line
+        Src.BlockComment l rest ->
+            if String.startsWith "-" l then
+                -- A block comment that starts with a dash is kept as it is, without
+                -- the spaces after the dash and before the end, as elm-format does.
+                Box.mustBreak
+                    (Box.row
+                        [ Box.punc "{--"
+                        , Box.literal (trimRightSpaces (String.join "\n" (String.trimLeft (String.dropLeft 1 l) :: rest)))
+                        , Box.punc "-}"
                         ]
+                    )
+
+            else
+                formatBlockComment l rest
 
         Src.LineComment c ->
             Box.row [ Box.punc "--", Box.literal c ] |> Box.mustBreak
+
+
+{-| Removes the spaces at the end of `str`.
+-}
+trimRightSpaces : String -> String
+trimRightSpaces str =
+    if String.endsWith " " str then
+        trimRightSpaces (String.dropRight 1 str)
+
+    else
+        str
+
+
+{-| Returns a `{- -}` comment from its first line and the lines after it.
+-}
+formatBlockComment : String -> List String -> Box
+formatBlockComment l rest =
+    case blockCommentLines rest of
+        [] ->
+            Box.line <|
+                Box.row
+                    [ Box.punc "{-"
+                    , Box.space
+                    , Box.literal (String.trim l)
+                    , Box.space
+                    , Box.punc "-}"
+                    ]
+
+        restLines ->
+            Box.stack1
+                (Box.prefix
+                    (Box.row [ Box.punc "{-", Box.space ])
+                    (Box.stack1 (Box.line (Box.literal (String.trimLeft l))) (List.map (Box.line << Box.literal) restLines))
+                )
+                [ Box.punc "-}" |> Box.line
+                ]
 
 
 {-| The lines after the first of a block comment, as elm-format prints them: a
@@ -3318,9 +3413,9 @@ typeParensNeeded outer typeParensInner =
 {-| Returns one field of a record type, `name : type`, with its comments.
 -}
 formatTypeField : Src.C2Eol ( Src.C1 (A.Located Name), Src.C1 Src.Type ) -> Src.C2Eol Box
-formatTypeField ( ( preFieldComments, postFieldComments, eol ), ( ( postNameComments, A.At _ name ), ( preTypeComments, typ ) ) ) =
+formatTypeField ( ( preFieldComments, postFieldComments, eol ), ( ( postNameComments, A.At nameRegion name ), ( preTypeComments, (A.At typeRegion _) as typ ) ) ) =
     ( ( preFieldComments, postFieldComments, eol )
-    , Src.Pair ( postNameComments, name ) ( preTypeComments, typ ) (Src.ForceMultiline False)
+    , Src.Pair ( postNameComments, name ) ( preTypeComments, typ ) (Src.ForceMultiline (A.isMultiline (A.mergeRegions nameRegion typeRegion)))
         |> Src.mapPair (formatLowercaseIdentifier []) (typeParens NotRequired << formatType)
         |> formatPair ":"
     )
@@ -3345,14 +3440,24 @@ formatType (A.At region atype) =
     case atype of
         Src.TLambda first result ->
             let
+                -- The parser reads `a -> b -> c` as `a -> (b -> c)`. A function type
+                -- that ends where the whole chain ends is part of the chain; one that
+                -- ends earlier was in parentheses, which are kept.
                 rest : List (Src.C2Eol Src.Type)
                 rest =
                     let
+                        (A.Region _ chainEnd) =
+                            region
+
                         go : Src.C2Eol Src.Type -> List (Src.C2Eol Src.Type) -> List (Src.C2Eol Src.Type)
                         go ( comments, type_ ) acc =
                             case type_ of
-                                A.At _ (Src.TLambda ( _, subFirst ) subRest) ->
-                                    go subRest (( comments, subFirst ) :: acc)
+                                A.At (A.Region _ subEnd) (Src.TLambda ( _, subFirst ) subRest) ->
+                                    if subEnd == chainEnd then
+                                        go subRest (( comments, subFirst ) :: acc)
+
+                                    else
+                                        List.reverse (( comments, type_ ) :: acc)
 
                                 _ ->
                                     List.reverse (( comments, type_ ) :: acc)
