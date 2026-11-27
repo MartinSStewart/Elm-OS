@@ -41,7 +41,11 @@
 //! is given up on until the next boot, for the built-in one.
 //!
 //! A program that leaves a frame unanswered for 30 seconds (ELMOS_HANG_SECS) has hung,
-//! and is stopped like one that crashed. A build that crashes or hangs five times
+//! and is stopped like one that crashed. A program that hangs or crashes after drawing
+//! most likely did so on one of the messages it got since its last frame (a click that
+//! sets off an endless loop, say), and would do it again on the replay, then again for
+//! ever: those messages are left out of every replay from then on (persist::skip), so
+//! the next program carries on from the Model just before them. A build that crashes or hangs five times
 //! running, each time within 30 seconds of starting or before drawing a frame, isn't
 //! started again: the host shows how it exited and the last lines it wrote
 //! (error_screen.rs) until Enter is pressed. Everything the program writes on stderr goes through the host for that,
@@ -67,6 +71,9 @@ const RAN_WELL: Duration = Duration::from_secs(30);
 const FIRST_FRAME_WITHIN: Duration = Duration::from_secs(30);
 /// How long a program has to answer "switching".
 const SWITCH_READY_WITHIN: Duration = Duration::from_secs(10);
+/// The most messages kept as suspects for a hang or crash (see `SentSince`): if frames
+/// stopped being answered one for one, the oldest are forgotten rather than skipped.
+const MAX_SUSPECTS: usize = 200;
 /// Quick exits in a row (each within RAN_WELL, or before drawing a frame) that make a
 /// crash loop.
 const CRASH_LOOP: u32 = 5;
@@ -193,6 +200,14 @@ impl Queued {
     }
 }
 
+/// A message that went to the program running now since the last frame it drew: a
+/// frame request, or another message, with its number in the log if it was logged when
+/// it went (not one being replayed).
+struct SentSince {
+    frame: bool,
+    seq: Option<u64>,
+}
+
 #[derive(Default)]
 struct State {
     /// The socket to the program running now.
@@ -224,6 +239,11 @@ struct State {
     /// Since when a frame has gone to the program running now without it drawing
     /// one: pointer motion and scrolling wait meanwhile (`coalesces`).
     frame_out: Option<Instant>,
+    /// What went to the program running now since the frame it last drew, oldest first.
+    /// It handles messages in order and answers each frame request with one frame, so
+    /// these are the ones it may not have got through: if it hangs or crashes, one of
+    /// them is the likely cause (see the top).
+    sent_since: VecDeque<SentSince>,
 }
 
 struct Switch {
@@ -411,6 +431,13 @@ fn writer() {
         let mut s = state();
         match written {
             Ok(()) => {
+                if s.program == program {
+                    if s.sent_since.len() >= MAX_SUSPECTS {
+                        s.sent_since.pop_front();
+                    }
+                    let frame = matches!(msg, ToElm::Frame { .. });
+                    s.sent_since.push_back(SentSince { frame, seq: if fresh { seq } else { None } });
+                }
                 if matches!(msg, ToElm::Frame { .. }) && s.program == program {
                     if s.unanswered_since.is_none() {
                         s.unanswered_since = Some(Instant::now());
@@ -612,6 +639,7 @@ fn supervise() {
                 };
                 let how = describe_exit(&status, hung);
                 log!("host", "the Elm program exited ({how}) after {ran:.1} s");
+                skip_suspects(drawn, hung || !status.as_ref().is_ok_and(|s| s.success()));
                 if !crate::sys::is_pid1() {
                     // Not Elm OS's /init (a test on a build machine): don't loop.
                     std::process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1));
@@ -659,6 +687,35 @@ fn supervise() {
         }
         std::thread::sleep(pause);
     }
+}
+
+/// A frame came: the program got through everything up to the frame request it answers.
+fn drop_answered(sent: &mut VecDeque<SentSince>) {
+    while let Some(m) = sent.pop_front() {
+        if m.frame {
+            break;
+        }
+    }
+}
+
+/// After a program that had drawn hung or crashed (`failed`), outside a switch: the
+/// logged messages it got since its last frame are left out of replays (see the top).
+/// One that never drew failed on its start or its replay, not on something it was sent
+/// live, so nothing is skipped for it.
+fn skip_suspects(drawn: bool, failed: bool) {
+    let seqs: Vec<u64> = {
+        let mut s = state();
+        let sent = std::mem::take(&mut s.sent_since);
+        if !drawn || !failed || s.switch.is_some() {
+            return;
+        }
+        sent.into_iter().filter_map(|m| m.seq).collect()
+    };
+    if seqs.is_empty() {
+        return;
+    }
+    log!("host", "leaving the {} logged messages it got since its last frame out of replays: {:?}", seqs.len(), seqs);
+    crate::persist::skip(seqs);
 }
 
 /// After a program of `build` exited: true if that was part of a switch, and the
@@ -898,6 +955,7 @@ fn connect(stream: &UnixStream, pid: u32) -> u64 {
     s.unanswered_since = None;
     s.frame_out = None;
     s.hung = None;
+    s.sent_since.clear();
     // Messages an earlier program got (logged) come again in the replay instead.
     s.queue.retain(|m| !only_now(&m.msg) && (m.fresh || m.seq.is_none()));
     s.replay_upto = crate::persist::last_logged();
@@ -930,8 +988,11 @@ fn disconnect(program: u64) -> bool {
 fn first_frame(program: u64) {
     let mut s = state();
     s.renders += 1;
-    if s.program == program && s.frame_out.take().is_some() {
-        link().ready.notify_all(); // what was held back can go
+    if s.program == program {
+        drop_answered(&mut s.sent_since);
+        if s.frame_out.take().is_some() {
+            link().ready.notify_all(); // what was held back can go
+        }
     }
     if s.drawn || s.program != program {
         return;
@@ -995,6 +1056,17 @@ mod tests {
             q.push_back(Queued::new(msg));
         }
         q.iter().map(|q| q.msg.clone()).collect()
+    }
+
+    #[test]
+    fn the_suspects_are_what_went_since_the_frame_it_answered() {
+        let sent = |frame, seq| SentSince { frame, seq };
+        let mut q: VecDeque<SentSince> =
+            [sent(false, Some(5)), sent(true, Some(6)), sent(false, Some(7)), sent(false, None), sent(true, Some(9))].into();
+        drop_answered(&mut q);
+        assert_eq!(q.iter().filter_map(|m| m.seq).collect::<Vec<_>>(), vec![7, 9]);
+        drop_answered(&mut q);
+        assert!(q.is_empty());
     }
 
     #[test]

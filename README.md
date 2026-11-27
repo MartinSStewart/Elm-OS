@@ -198,6 +198,10 @@ boots it as a desktop with wired Ethernet and no wifi. Extra kernel options can 
   answers to the old program's file reads are dropped. The data disk message lists the HTTP
   requests the host is still answering, so `Persist.elm` doesn't report them as interrupted.
   This is the base for switching to a newer build of the Elm program without restarting.
+  When a program that had drawn hangs or crashes, the logged messages it got since its last
+  frame (the click that set off the hang, say) are listed in `/data/skipped` and left out of
+  every replay, so the next program starts from the Model just before them instead of doing
+  the same again.
 - When something goes wrong that the Elm program can't show, the host draws an error screen
   itself (`host/init/src/error_screen.rs`, in the pixel font):
   - The Elm program ends five times in a row within 30 s of starting (a crash loop), or hangs

@@ -18,6 +18,10 @@
 //!                            then drops the log's messages up to number N
 //!   replayLog(N)             the logged messages after N that earlier programs got
 //!
+//! Messages that a program hung or crashed on (elm.rs, `skip_suspects`) are listed in
+//! /data/skipped, one number a line, and left out of every replay, so the next program
+//! doesn't do it again. Numbers the log no longer has are dropped from it.
+//!
 //! and other files with readFiles (files.rs), appendFile and writeFile:
 //!
 //!   {"t":"appendFile","path":P,"text":T}   adds T to the end of P (creating it)
@@ -38,7 +42,7 @@
 
 use common::msglog::{self, MsgLog};
 use protocol::ToElm;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -53,6 +57,8 @@ use crate::elm;
 const PARTITION_NAME: &str = crate::disks::DATA;
 const MOUNT_POINT: &str = "/data";
 const SYNC_DELAY: Duration = Duration::from_secs(1);
+/// The list of logged messages that replays leave out.
+const SKIPPED: &str = "skipped";
 
 enum Op {
     Append { path: PathBuf, text: String },
@@ -85,6 +91,10 @@ pub fn start() {
                         log!("persist", "{note}");
                         NEXT_SEQ.store(log.next(), Ordering::SeqCst);
                         LOGGING.store(true, Ordering::SeqCst);
+                        writer.skipped = read_skipped();
+                        if !writer.skipped.is_empty() {
+                            log!("persist", "replays leave out logged messages {:?}", writer.skipped);
+                        }
                         writer.log = Some(log);
                     }
                     Err(err) => log!("persist", "can't open the message log: {err}; not logging messages"),
@@ -214,6 +224,22 @@ pub fn last_logged() -> u64 {
     }
 }
 
+/// Leaves these logged messages out of every replay from now on (elm.rs, after a
+/// program hung or crashed on one of them).
+pub fn skip(seqs: Vec<u64>) {
+    send(Op::Run(Box::new(move |w: &mut Writer| {
+        w.skipped.extend(seqs);
+        w.write_skipped();
+    })));
+}
+
+/// /data/skipped, as `skip` wrote it.
+fn read_skipped() -> BTreeSet<u64> {
+    std::fs::read_to_string(Disk::path(SKIPPED))
+        .map(|text| text.lines().filter_map(|line| line.trim().parse().ok()).collect())
+        .unwrap_or_default()
+}
+
 /// Effect::WriteSnapshot.
 pub fn write_snapshot(data: Vec<u8>, seq: u64) {
     send(Op::WriteSnapshot { data, seq });
@@ -246,6 +272,10 @@ pub fn replay_log(program: u64, after: u64, upto: u64) {
             log!("persist", "replaying {} logged messages after number {after}", entries.len());
         }
         for (seq, bytes) in entries {
+            if w.skipped.contains(&seq) {
+                log!("persist", "leaving logged message {seq} out of the replay (an earlier program hung or crashed on it)");
+                continue;
+            }
             match ToElm::from_bytes(&bytes) {
                 Some(msg) => elm::replayed(program, seq, msg),
                 None => log!("persist", "logged message {seq} doesn't read; skipping it"),
@@ -349,6 +379,8 @@ struct Writer {
     log: Option<MsgLog>,
     sync_due: Option<Instant>,
     failed: bool,
+    /// The logged messages replays leave out (`skip`).
+    skipped: BTreeSet<u64>,
 }
 
 impl Writer {
@@ -380,6 +412,11 @@ impl Writer {
                                 // scripts/test-persist.py reads this.
                                 log!("persist", "wrote /data/log ({} bytes)", log.len());
                             }
+                        }
+                        // The log no longer has these, so no replay will.
+                        if self.skipped.first().is_some_and(|&first| first <= seq) {
+                            self.skipped.retain(|&s| s > seq);
+                            self.write_skipped();
                         }
                     }
                 }
@@ -449,6 +486,19 @@ impl Writer {
                 }
             }
             Err(err) => self.fail(format!("writing {}: {err}", path.display())),
+        }
+    }
+
+    /// Writes /data/skipped (removes it when it would be empty).
+    fn write_skipped(&mut self) {
+        if self.failed {
+            return;
+        }
+        if self.skipped.is_empty() {
+            Disk(self).remove(SKIPPED);
+        } else {
+            let text: String = self.skipped.iter().map(|seq| format!("{seq}\n")).collect();
+            self.write(&Disk::path(SKIPPED), text.as_bytes());
         }
     }
 
