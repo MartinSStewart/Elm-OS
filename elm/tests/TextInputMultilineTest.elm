@@ -282,4 +282,30 @@ suite =
                 ).input.current.text
                     |> Expect.equal "abc"
             )
+        , Test.test "Ctrl+Shift+J joins the next line, dropping its indentation"
+            (\_ ->
+                let
+                    model =
+                        TextInputMultiline.withText "one\n    two\nthree"
+                            |> (\m -> TextInputMultiline.keyMsg style True True (Keyboard.Character "J") m)
+                            |> Tuple.first
+                in
+                ( model.input.current.text, model.input.current.cursorPosition )
+                    |> Expect.equal ( "one two\nthree", 3 )
+            )
+        , Test.test "Ctrl+Shift+J joins every selected line and can be undone"
+            (\_ ->
+                let
+                    selected =
+                        TextInputMultiline.withText "a\nb\nc\nd"
+                            |> (\m -> { m | input = TextInput.replaceState (\s -> { s | cursorPosition = 0, cursorSize = 5 }) m.input })
+
+                    joined =
+                        TextInputMultiline.keyMsg style True True (Keyboard.Character "J") selected |> Tuple.first
+                in
+                ( joined.input.current.text
+                , (TextInput.keyMsg True False (Keyboard.Character "z") joined.input |> Tuple.first).current.text
+                )
+                    |> Expect.equal ( "a b c\nd", "a\nb\nc\nd" )
+            )
         ]
