@@ -32,6 +32,7 @@
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
 #   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
+#   make test-format  run tools/format (Elm OS's Elm formatter) over every Elm file and check it
 #   make migration  after changing the Model's types: freeze the program as the next version
 #                   (elm/src/Evergreen/V<n>) and write the migration to fill in (Evergreen/Migrate);
 #                   again after filling it in, to copy the code it calls
@@ -132,7 +133,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: format format-check FORCE eco atlas migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+.PHONY: format format-check test-format FORCE eco atlas migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update test-install run-install release measure-frames \
         dev dev-native dev-check bench
 
@@ -911,6 +912,21 @@ format:
 format-check:
 	npx --yes $(ELM_FORMAT) --validate $(ELM_DIRS)
 	@echo "passed: format-check" $(SAY)
+
+# ---- tools/format: Elm OS's own Elm formatter, written in Elm (eco's parser and its port of
+# elm-format's printer; see tools/format/README.md). Not used by `make format` yet.
+
+FORMAT_SRC := tools/format/elm.json $(shell find tools/format/src tools/format/cli -name "*.elm")
+
+$(BUILD)/format.js: $(FORMAT_SRC) $(BUILD)/eco-setting | check-deps
+	@mkdir -p $(BUILD)
+	cd tools/format && $(ECO) make cli/FormatCli.elm --output=$(abspath $@)
+
+# Formats every Elm file in the repo and checks that the output parses, that formatting it
+# again changes nothing, and that no token (comments included) was lost or added.
+test-format: $(BUILD)/format.js
+	node tools/format/format.js $< --test $(ELM_DIRS) tools/format/src tools/format/cli
+	@echo "passed: test-format" $(SAY)
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
