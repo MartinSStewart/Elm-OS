@@ -19,6 +19,7 @@ module Code exposing
     , openFind
     , programStarted
     , save
+    , saveShown
     , style
     , testFact
     , uncommittedChanges
@@ -49,6 +50,7 @@ import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), Place, UiId(..)
 import Color
 import Coord exposing (Coord)
 import Effect exposing (Effect)
+import Formatter
 import Json.Encode as E
 import Keyboard
 import Quantity exposing (Quantity)
@@ -170,12 +172,45 @@ uncommittedChanges model =
         model.saved
 
 
-{-| Keeps `text` as the module's new text, or forgets the change if it is the text Elm
-OS was built from. Not while running a build made here: its modules are the edits, and the
-saved ones are still changes to commit (the commit goes on top of the commit it was made from).
+{-| Saves the text box's text, formatted (Formatter) when it parses, and shows the
+formatted text in the box (one change to undo).
+-}
+saveShown : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+saveShown boxStyle uiState model =
+    let
+        editor : TextInputMultiline.Model
+        editor =
+            Ui.getTextInputMultiline (UiId.Code Input) uiState
+
+        text : String
+        text =
+            editor.input.current.text
+
+        formatted : String
+        formatted =
+            Formatter.format text |> Maybe.withDefault text
+    in
+    ( saveText formatted model
+    , if formatted == text then
+        uiState
+
+      else
+        Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.replaceAll boxStyle formatted editor)) uiState
+    )
+
+
+{-| Keeps `text`, formatted (Formatter) when it parses, as the module's new text, or
+forgets the change if it is the text Elm OS was built from. Not while running a build made
+here: its modules are the edits, and the saved ones are still changes to commit (the commit
+goes on top of the commit it was made from).
 -}
 save : String -> Model -> Model
 save text model =
+    saveText (Formatter.format text |> Maybe.withDefault text) model
+
+
+saveText : String -> Model -> Model
+saveText text model =
     case model.module_ of
         Just name ->
             if SeqDict.get name SourceCode.sourceCode == Just text && not model.local then
@@ -225,7 +260,11 @@ onClick id boxStyle text uiState model =
             openModule name text uiState model
 
         SaveButton ->
-            ( save text model, uiState, [] )
+            let
+                ( saved, newUiState ) =
+                    saveShown boxStyle uiState model
+            in
+            ( saved, newUiState, [] )
 
         RevertButton ->
             case model.module_ of
@@ -239,23 +278,23 @@ onClick id boxStyle text uiState model =
             -- What's in the text box is built, saved first. While a build is going the
             -- host refuses another.
             let
-                saved =
+                ( saved, savedUiState ) =
                     if model.module_ == Nothing then
-                        model
+                        ( model, uiState )
 
                     else
-                        save text model
+                        saveShown boxStyle uiState model
             in
             if differsFromRunning saved then
                 ( { saved | build = Just (BuildRunning "Starting"), showErrors = False }
-                , uiState
+                , savedUiState
                 , [ Effect.Build (buildModules saved) ]
                 )
 
             else
                 -- Every module is as the running build was made from: building would
                 -- make the same program again and switch to it, for nothing.
-                ( { saved | build = Nothing, showErrors = False }, uiState, [] )
+                ( { saved | build = Nothing, showErrors = False }, savedUiState, [] )
 
         DeployedButton ->
             ( { model | build = Just (BuildRunning goingBack), showErrors = False }, uiState, [ Effect.FollowDeployed ] )
@@ -268,12 +307,12 @@ onClick id boxStyle text uiState model =
 
         CommitButton ->
             let
-                saved =
+                ( saved, savedUiState ) =
                     if model.module_ == Nothing then
-                        model
+                        ( model, uiState )
 
                     else
-                        save text model
+                        saveShown boxStyle uiState model
             in
             ( { saved | committing = True, showErrors = False }
             , Ui.setFocus
@@ -287,7 +326,7 @@ onClick id boxStyle text uiState model =
                         )
                     )
                 )
-                uiState
+                savedUiState
             , []
             )
 

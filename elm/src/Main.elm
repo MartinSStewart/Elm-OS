@@ -1098,7 +1098,11 @@ step event model =
 
             else if model.uiState.focus == Just (Code Code.Types.Input) && model.code.isOpen then
                 if model.ctrl && key == Keyboard.Character "s" then
-                    ( { model | code = Code.save (codeText model) model.code }, [] )
+                    let
+                        ( savedCode, uiState ) =
+                            Code.saveShown (codeStyle model) model.uiState model.code
+                    in
+                    ( { model | code = savedCode, uiState = uiState }, [] )
 
                 else if model.ctrl && key == Keyboard.Character "f" then
                     let

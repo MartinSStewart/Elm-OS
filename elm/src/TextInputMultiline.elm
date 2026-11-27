@@ -13,6 +13,7 @@ module TextInputMultiline exposing
     , mouseUp
     , overScrollbar
     , paste
+    , replaceAll
     , replaceRanges
     , scrollPixels
     , select
@@ -675,6 +676,39 @@ replaceRanges style replacement ranges model =
         in
         { model | input = TextInput.pushState change model.input |> limitHistory, goalX = Nothing }
             |> scrollToCursor style
+
+
+{-| Replaces the whole text with `text`, as one change to undo, keeping the cursor on the
+same line and column (or as near as the new text allows) and the scroll position.
+-}
+replaceAll : Style -> String -> Model -> Model
+replaceAll style text model =
+    let
+        change : TextInput.State -> TextInput.State
+        change state =
+            let
+                ( line, column ) =
+                    lineAndColumn state.text state.cursorPosition
+
+                newLines : List String
+                newLines =
+                    String.lines text
+
+                newLine : Int
+                newLine =
+                    min line (List.length newLines - 1)
+            in
+            { text = text
+            , cursorPosition = lineStart newLines newLine + min column (String.length (lineAt newLines newLine))
+            , cursorSize = 0
+            }
+
+        changed : Model
+        changed =
+            { model | input = TextInput.pushState change model.input |> limitHistory, goalX = Nothing }
+    in
+    jumpTo (clampScroll style changed.input.current model.scroll) changed
+        |> scrollToCursor style
 
 
 {-| Scroll the smallest amount that shows the cursor's row, and no further than the text.

@@ -60,6 +60,7 @@ type alias Use =
     , arity : Int
 
     -- The cache and the function, if it was called with them.
+    , cache : Maybe (Node Expression)
     , function : Maybe (Node Expression)
     }
 
@@ -339,7 +340,18 @@ generate typeText keyModule keyQualifier caller use =
         Just (Node fRange (FunctionOrValue [] fName)) ->
             case List.filter (\( n, _ ) -> n == fName) functions |> List.head of
                 Nothing ->
-                    Err (at fRange ++ "Ui.lazy needs a function defined at the top level of this module, and " ++ fName ++ " isn't one")
+                    case use.cache of
+                        Just (Node _ (FunctionOrValue [] cacheName)) ->
+                            if List.any (\( n, _ ) -> n == cacheName) functions then
+                                -- Html.lazy's way, with no cache: what's taken for the
+                                -- function is its first argument.
+                                Err (at fRange ++ "Ui.lazy's first argument is the lazy cache and the function comes after it, as in `Ui." ++ lazyName use.arity ++ " lazyCache " ++ cacheName ++ " ...`. The view gets lazyCache from Main, like HackerNews.view.")
+
+                            else
+                                Err (at fRange ++ notAFunction use.arity fName)
+
+                        _ ->
+                            Err (at fRange ++ notAFunction use.arity fName)
 
                 Just ( _, f ) ->
                     case f.signature of
@@ -364,6 +376,24 @@ generate typeText keyModule keyQualifier caller use =
 
         Just (Node fRange _) ->
             Err (at fRange ++ "Ui.lazy needs the name of a function defined at the top level of this module, not an expression")
+
+
+{-| Why `fName`, the second argument of a `Ui.lazy...` call, can't be what it calls.
+-}
+notAFunction : Int -> String -> String
+notAFunction arity fName =
+    "Ui." ++ lazyName arity ++ "'s first argument is the lazy cache and its second the function to call (defined at the top level of this module), as in `Ui." ++ lazyName arity ++ " lazyCache view ...`, and " ++ fName ++ " isn't such a function"
+
+
+{-| `lazy` for 1 argument, `lazy2` for 2, and so on.
+-}
+lazyName : Int -> String
+lazyName arity =
+    if arity == 1 then
+        "lazy"
+
+    else
+        "lazy" ++ String.fromInt arity
 
 
 generateFor : TypeText -> (Range -> String) -> (String -> String) -> Caller -> Use -> String -> String -> List (Node TypeAnnotation) -> Result String Generated
@@ -642,6 +672,7 @@ expressionUses ui (Node range expression) =
                 ( Just arity, True ) ->
                     { range = headRange
                     , arity = arity
+                    , cache = List.head args
                     , function =
                         case args of
                             _ :: f :: _ ->
@@ -661,7 +692,7 @@ expressionUses ui (Node range expression) =
         FunctionOrValue qualifier name ->
             case ( lazyArity name, isUi ui qualifier name ) of
                 ( Just arity, True ) ->
-                    [ { range = range, arity = arity, function = Nothing } ]
+                    [ { range = range, arity = arity, cache = Nothing, function = Nothing } ]
 
                 _ ->
                     []

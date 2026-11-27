@@ -27,11 +27,12 @@
 #   make test-install  install Elm OS from the USB image onto a disk with Linux Mint on it, in
 #                   QEMU, and boot that disk without the stick (scripts/test-install.py)
 #   make atlas      build/atlas.png, the texture atlas (pixel font, cursor, Noto Sans) to look at
-#   make format     run elm-format on every Elm source; make format-check fails if one isn't formatted
+#   make format     format every Elm source (tools/format); make format-check fails if one isn't formatted
 #   make review     run elm-review on the Elm code (elm/review, compiled with eco; needs npx)
 #   make review-tests  run the tests of the custom review rules
 #   make elm-tests  run the Elm program's unit tests (elm/tests, e.g. the calculator)
 #   make test-wire  test tools/wire, which writes the encoders and decoders for the Model and Msg
+#   make test-format  run tools/format (Elm OS's Elm formatter) over every Elm file and check it
 #   make migration  after changing the Model's types: freeze the program as the next version
 #                   (elm/src/Evergreen/V<n>) and write the migration to fill in (Evergreen/Migrate);
 #                   again after filling it in, to copy the code it calls
@@ -40,7 +41,7 @@
 #                   make release and make usb run it; make and make run only warn)
 #   make protocol-tests  test the host's side of the messages between Elm and the host (host/protocol)
 #   make host-tests  /init's unit tests (host/init: touchpad scrolling, error screen text)
-#   make check      the tests that don't boot anything: check-migration, format-check, review, review-tests,
+#   make check      the tests that don't boot anything: check-migration, format-check, test-format, review, review-tests,
 #                   elm-tests, test-wire, protocol-tests, host-tests, dev-check (CI runs these, then test
 #                   and test-persist)
 #   make refresh    move the kernel, wpa_supplicant, packages and crates to their newest releases
@@ -132,7 +133,7 @@ PROJECT_LIBS_FIRST := EcoEntryStatic EcoRuntimeStatic ElmKernel_Basics ElmKernel
 PROJECT_LIBS_REST  := $(filter-out $(patsubst %,$(RT)/project/lib%.a,$(PROJECT_LIBS_FIRST) ElmKernel_Utils EcoNativeDriverStatic), \
                         $(wildcard $(RT)/project/*.a))
 
-.PHONY: format format-check FORCE eco atlas migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
+.PHONY: format format-check test-format FORCE eco atlas migration migration-reset check-migration review review-fix review-tests elm-tests test-wire protocol-tests host-tests check all run run-cpu paste test test-gpu test-displays clean kernel-src check-deps check-run-deps \
         usb usb-write run-usb test-usb check-usb-deps refresh check-fresh docker test-persist test-switch test-build test-errors test-update test-install run-install release measure-frames \
         dev dev-native dev-check bench
 
@@ -360,7 +361,7 @@ endef
 # changed to name Evergreen.V<j>.Ui; a function the earlier copy doesn't have goes into a
 # copy of the module with only that function (a supplement). So an old version can't be
 # deleted on its own while a newer one may import it; `make migration-reset` deletes all.
-migration: $(BUILD)/wire-tool
+migration: $(BUILD)/wire-tool $(BUILD)/format.js
 	@latest=$$(tools/latest-version.sh); \
 	if [ -n "$$latest" ] && [ -n "$$(git status --porcelain -- elm/src/Evergreen/V$$latest)" ]; then \
 	  echo "Version $$latest isn't committed: copying it again from the code as it is now (Migrate/V$$latest.elm stays as it is)."; \
@@ -369,20 +370,20 @@ migration: $(BUILD)/wire-tool
 	else \
 	  $(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes; \
 	fi
-	npx --yes $(ELM_FORMAT) --yes elm/src/Evergreen >/dev/null
+	$(FORMAT) --yes elm/src/Evergreen
 
 # Starts the versions again: deletes elm/src/Evergreen (every frozen version and migration)
 # and freezes the program as the version after the newest there was, with no migration to
 # it. A computer whose Model is of an older version starts afresh. Numbering on, rather than
 # from 1, matters: a computer only switches to a build whose Model version isn't older than
 # its own (host/init/src/update.rs).
-migration-reset: $(BUILD)/wire-tool
+migration-reset: $(BUILD)/wire-tool $(BUILD)/format.js
 	@latest=$$(tools/latest-version.sh); \
 	next=$$(( $${latest:-0} + 1 )); \
 	echo "Deleting elm/src/Evergreen and freezing the program as version $$next, with no migration to it."; \
 	rm -r elm/src/Evergreen; \
 	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire/src $(WIRE_FLAGS) --freeze yes --version "$$next"
-	npx --yes $(ELM_FORMAT) --yes elm/src/Evergreen >/dev/null
+	$(FORMAT) --yes elm/src/Evergreen
 
 # Until then, `make` (and so `make run` and `make test`) still builds, with a warning: a
 # draft build, whose Model is called version n + 1 and is read from version n's as it
@@ -390,7 +391,7 @@ migration-reset: $(BUILD)/wire-tool
 # build/data-draft.img, so build/data-qemu.img never holds a Model of types no commit
 # has. What's committed, released or put on a USB stick must have its migration:
 # `make check` (so CI), `make release` and `make usb` run this, which fails without one.
-check-migration: $(BUILD)/wire-tool
+check-migration: $(BUILD)/wire-tool $(BUILD)/format.js
 	$(BUILD)/wire-tool --src elm/src --out $(BUILD)/wire-check/src $(WIRE_FLAGS)
 
 # tools/wire is an Elm program too (eco/system and elm-syntax). eco 0.2 crashes linking
@@ -900,17 +901,32 @@ bench: $(BUILD)/wire/.done
 	$(call LINK_ECO_EXE,$(BUILD)/bench/bench,$(BUILD)/bench/bench.o)
 	$(BUILD)/bench/bench
 
-# ---- elm-format (every Elm source is formatted; `make migration` formats what it writes)
+# ---- formatting: every Elm source is formatted by tools/format, Elm OS's own Elm formatter,
+# written in Elm (eco's parser and its port of elm-format's printer; it writes what
+# elm-format 0.8.8 writes; see tools/format/README.md). `make migration` formats what it writes.
 
-ELM_FORMAT := elm-format@0.8.8
-ELM_DIRS := elm/src elm/tests elm/bench elm/review/src elm/review/tests tools/wire/src tools/wire/test
+ELM_DIRS := elm/src elm/tests elm/bench elm/review/src elm/review/tests tools/wire/src tools/wire/test tools/format/cli
+FORMAT = node tools/format/format.js $(BUILD)/format.js
 
-format:
-	npx --yes $(ELM_FORMAT) --yes $(ELM_DIRS) >/dev/null
+format: $(BUILD)/format.js
+	$(FORMAT) --yes $(ELM_DIRS)
 
-format-check:
-	npx --yes $(ELM_FORMAT) --validate $(ELM_DIRS)
+format-check: $(BUILD)/format.js
+	$(FORMAT) --validate $(ELM_DIRS)
 	@echo "passed: format-check" $(SAY)
+
+FORMAT_SRC := tools/format/elm.json $(shell find elm/src tools/format/cli -name "*.elm")
+
+$(BUILD)/format.js: $(FORMAT_SRC) $(BUILD)/eco-setting | check-deps
+	@mkdir -p $(BUILD)
+	cd tools/format && $(ECO) make cli/FormatCli.elm --output=$(abspath $@)
+
+# Formats every Elm file in the repo and checks that the output parses, that formatting it
+# again changes nothing, that no token (comments included) was lost or added, and that the
+# syntax tree is unchanged apart from comments, positions and parentheses.
+test-format: $(BUILD)/format.js
+	$(FORMAT) --test $(ELM_DIRS)
+	@echo "passed: test-format" $(SAY)
 
 # ---- elm-review (rules in elm/review; review/suppressed lists the findings left for later)
 
@@ -954,7 +970,7 @@ dev-check:
 	@echo "passed: dev-check" $(SAY)
 
 check:
-	+$(MAKE) -j1 check-migration format-check review review-tests elm-tests test-wire protocol-tests host-tests dev-check
+	+$(MAKE) -j1 check-migration format-check test-format review review-tests elm-tests test-wire protocol-tests host-tests dev-check
 	@echo "make check: all passed" $(SAY)
 
 # The texture atlas as an image. The host builds it in memory at boot (atlas::build),
