@@ -18,7 +18,11 @@ const [elmJs, mode, ...rest] = process.argv.slice(2);
 const expectUnchanged = rest.includes('--expect-unchanged');
 const paths = rest.filter(a => !a.startsWith('--'));
 
+// eco's JS prints "Compiled in DEV mode..." with console.warn when it loads
+const warn = console.warn;
+console.warn = () => {};
 const { Elm } = require(path.resolve(elmJs));
+console.warn = warn;
 const app = Elm.FormatCli.init();
 let waiting = null;
 app.ports.formatResult.subscribe(result => {
@@ -43,6 +47,16 @@ function elmFiles(p) {
     const full = path.join(p, name);
     return fs.statSync(full).isDirectory() ? elmFiles(full) : name.endsWith('.elm') ? [full] : [];
   });
+}
+
+// The parser's error is an Elm value (Debug.toString) of nested errors, each ending with a
+// row and column; the innermost one, whose numbers come first, is where parsing stopped.
+function parseError(text) {
+  const bare = text.replace(/"(\\.|[^"\\])*"/g, '""');
+  const numbers = bare.match(/[0-9]+/g) || [];
+  const names = (bare.match(/[A-Z][A-Za-z]*/g) || []).join(' ');
+  if (numbers.length < 2) return text;
+  return `line ${numbers[0]}, column ${numbers[1]} (${names})`;
 }
 
 // ---- tokens, for --test: the formatter may move tokens around, never add or drop one
@@ -307,14 +321,14 @@ if (mode === '--tree') {
   process.stdout.write(rest.includes('--normalized') ? JSON.stringify(normalize(readElmValue(r.text))) + '\n' : r.text + '\n');
 } else if (mode === '--stdin') {
   const r = await format(fs.readFileSync(0, 'utf8'));
-  if (!r.ok) { process.stderr.write(r.text + '\n'); process.exit(1); }
+  if (!r.ok) { process.stderr.write(`doesn't parse: ${parseError(r.text)}\n`); process.exit(1); }
   process.stdout.write(r.text);
 } else if (mode === '--yes' || mode === '--validate') {
   let bad = 0;
   for (const f of paths.flatMap(elmFiles)) {
     const src = fs.readFileSync(f, 'utf8');
     const r = await format(src);
-    if (!r.ok) { console.error(`${f}: doesn't parse: ${r.text}`); bad++; continue; }
+    if (!r.ok) { console.error(`${f}: doesn't parse: ${parseError(r.text)}`); bad++; continue; }
     if (r.text === src) continue;
     if (mode === '--yes') fs.writeFileSync(f, r.text);
     else { console.error(`${f} isn't formatted`); bad++; }
