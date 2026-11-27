@@ -25,7 +25,7 @@ suite =
             Code.init
 
         sizeOf m =
-            Ui.size (Code.view window (TextInputMultiline.withText "module A exposing (a)\n") "a" "" Nothing m)
+            Ui.size (Code.view Ui.noLazyCache window (TextInputMultiline.withText "module A exposing (a)\n") "a" "" Nothing m)
 
         failed =
             Just (BuildFailed "Compiling" (String.repeat 30 "a long line of compiler output that is wider than the window, much wider\n"))
