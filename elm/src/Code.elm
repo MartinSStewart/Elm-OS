@@ -134,9 +134,9 @@ moduleText name model =
 
 {-| Whether the module was changed and saved here.
 -}
-isEdited : String -> Model -> Bool
-isEdited name model =
-    SeqDict.member name model.saved
+isEdited : String -> SeqDict String String -> Bool
+isEdited name saved =
+    SeqDict.member name saved
 
 
 {-| Whether a saved module differs from what the running build was made from
@@ -1261,8 +1261,8 @@ style windowSize model =
 last build's errors), where the cursor is, whether the text is saved, and how the last
 build went. `input` is the text box's model, `needle` what the find box says.
 -}
-view : Coord UiPixels -> TextInputMultiline.Model -> String -> String -> Maybe String -> Model -> Element UiId.UiId
-view windowSize input needle running switchingTo model =
+view : Ui.LazyCache UiId.UiId -> Coord UiPixels -> TextInputMultiline.Model -> String -> String -> Maybe String -> Model -> Element UiId.UiId
+view lazyCache windowSize input needle running switchingTo model =
     let
         found : List ( Int, Int )
         found =
@@ -1325,7 +1325,7 @@ view windowSize input needle running switchingTo model =
                     , if unsaved then
                         segment Color.textColor "Not saved (Ctrl+S saves)"
 
-                      else if isEdited name model then
+                      else if isEdited name model.saved then
                         segment Color.successColor "Saved, changed from the built-in code"
 
                       else
@@ -1426,7 +1426,7 @@ view windowSize input needle running switchingTo model =
                      else
                         []
                     )
-                        ++ (if isEdited name model then
+                        ++ (if isEdited name model.saved then
                                 [ button RevertButton "Back to built-in" ]
 
                             else
@@ -1488,16 +1488,13 @@ view windowSize input needle running switchingTo model =
                             { size = Coord.xy (Quantity.unwrap boxStyle.width) (Quantity.unwrap boxHeight) }
                             (Ui.customText Sprite.Small [ segment Color.dimTextColor "Pick a module on the left" ])
 
-        body =
-            Ui.row gap [ modulesList boxHeight editing model, pane ]
-
         content =
             Ui.column
                 6
                 [ Ui.leftAndRight (Units.ui (Coord.xRaw windowSize - 16))
                     (Ui.customText Sprite.Big [ segment Color.textColor title ])
                     (Ui.row 6 buttons)
-                , body
+                , Ui.row gap [ Ui.lazy3 lazyCache modulesList boxHeight editing model.saved, pane ]
                 , Ui.customText Sprite.Small (fileStatus ++ buildStatus)
                 ]
     in
@@ -1598,8 +1595,8 @@ usagesPanel width usages =
 {-| The modules beside the code, one under another, to pick the one to read or change
 (`open` is the one shown, if any). It is as tall as the text box.
 -}
-modulesList : Quantity Int UiPixels -> Maybe String -> Model -> Element UiId.UiId
-modulesList height open model =
+modulesList : Quantity Int UiPixels -> Maybe String -> SeqDict String String -> Element UiId.UiId
+modulesList height open saved =
     Ui.viewport
         { id = UiId.Code ModulesViewport, viewportHeight = height }
         (Ui.column
@@ -1612,7 +1609,7 @@ modulesList height open model =
                             Sprite.Small
                             [ { text = name
                               , color =
-                                    if isEdited name model then
+                                    if isEdited name saved then
                                         Color.successColor
 
                                     else
@@ -1638,7 +1635,7 @@ modulesList height open model =
 -}
 sidebarWidth : Int
 sidebarWidth =
-    Coord.xRaw (Ui.size (modulesList (Units.ui 100) Nothing init))
+    Coord.xRaw (Ui.size (modulesList (Units.ui 100) Nothing init.saved))
 
 
 {-| Which match the selection is, and how many there are: "3 of 15 matches", or just the
