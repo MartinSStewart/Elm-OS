@@ -56,8 +56,11 @@ The licences: `LICENSE-eco-compiler` (eco, from Elm and Guida) and `LICENSE-elm-
     make test-format
 
 formats every Elm file in the repo and checks that the output parses, that formatting
-the output again changes nothing, and that it holds the same tokens as the input,
-comments included (so nothing was dropped). `node tools/format/format.js build/format.js
+the output again changes nothing, that it holds the same tokens as the input,
+comments included (so nothing was dropped), and that its syntax tree is the input's
+once comments, positions and parentheses are left out (so nothing was regrouped or
+reordered; `node tools/format/format.js build/format.js --tree --normalized < File.elm`
+prints that tree). `node tools/format/format.js build/format.js
 --test --expect-unchanged PATH` also fails when an already formatted file changes.
 
 ## Status
