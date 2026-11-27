@@ -20,6 +20,7 @@ module Color exposing
     , highlightColor
     , historyLaneColor
     , historyRunningRowColor
+    , historySelectedRowColor
     , linkColor
     , outlineColor
     , paintPalette
@@ -310,3 +311,10 @@ historyLaneColor n =
 historyRunningRowColor : Color
 historyRunningRowColor =
     rgb255 52 66 86
+
+
+{-| The row clicked in the History app, whose changes show under the graph.
+-}
+historySelectedRowColor : Color
+historySelectedRowColor =
+    rgb255 66 84 110

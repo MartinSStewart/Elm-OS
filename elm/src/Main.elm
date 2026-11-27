@@ -780,6 +780,12 @@ step event model =
                                     []
                             )
 
+                        HistoryDetailRequest sha ->
+                            ( { model | history = History.gotDetail sha result model.history }, [] )
+
+                        HistoryBaseRequest generation i ->
+                            ( { model | history = History.gotBase generation i result model.history }, [] )
+
                         HistoryRequest generation i ->
                             ( { model | history = History.gotResponse generation i result model.history }, [] )
 
@@ -1950,7 +1956,14 @@ clickElement model id =
             Install.onClick uiId2 model.install |> Tuple.mapFirst (\install -> { model | install = install })
 
         History uiId2 ->
-            History.onClick uiId2 { branches = historyBranches model, token = Code.githubToken model.uiState } model.history |> Tuple.mapFirst (\history -> { model | history = history })
+            History.onClick uiId2
+                { branches = historyBranches model
+                , token = Code.githubToken model.uiState
+                , base = Tuple.first (Code.GitHub.startingPoint model.code.git)
+                , uncommitted = Code.uncommittedModules model.code
+                }
+                model.history
+                |> Tuple.mapFirst (\history -> { model | history = history })
 
         ModelViewer uiId2 ->
             ( modelViewerClick uiId2 model, [] )
@@ -2384,7 +2397,7 @@ historyContext : Model -> History.Context
 historyContext model =
     { running = BuildInfo.commit
     , base = Tuple.first (Code.GitHub.startingPoint model.code.git)
-    , uncommitted = Code.uncommittedModules model.code
+    , uncommitted = Code.uncommittedChanges model.code
     , now = model.time
     }
 
@@ -2412,6 +2425,10 @@ type HttpRequestId
     | CodeRequest Int
       -- Whether the deployed builds have the commit the Code app pushed (Code.GitHub.containsCheck).
     | CodeDeployedCheck
+      -- What a commit changed (History.detailRequestId), and the texts of the changed modules
+      -- in the commit the uncommitted changes are on top of.
+    | HistoryDetailRequest String
+    | HistoryBaseRequest Int Int
       -- The History app's commits: which refresh, and which branch of it.
     | HistoryRequest Int Int
 
@@ -2440,6 +2457,12 @@ httpRequestIdToString request =
         CodeDeployedCheck ->
             Code.GitHub.containsCheckId
 
+        HistoryDetailRequest sha ->
+            History.detailRequestId sha
+
+        HistoryBaseRequest generation i ->
+            History.baseRequestId generation i
+
         HistoryRequest generation i ->
             History.requestId generation i
 
@@ -2467,6 +2490,12 @@ stringToHttpRequestId string =
 
         [ "codecheck" ] ->
             Just CodeDeployedCheck
+
+        [ "historydetail", sha ] ->
+            Just (HistoryDetailRequest sha)
+
+        [ "historybase", generation, i ] ->
+            Maybe.map2 HistoryBaseRequest (String.toInt generation) (String.toInt i)
 
         [ "history", generation, i ] ->
             Maybe.map2 HistoryRequest (String.toInt generation) (String.toInt i)

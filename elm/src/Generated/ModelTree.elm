@@ -21,6 +21,7 @@ import Email
 import Email.Types
 import HackerNews
 import HackerNews.Types
+import History
 import History.Types
 import Install
 import Install.Types
@@ -2195,6 +2196,39 @@ choose_HackerNews_Types_UiId put i =
             ModelTree.apply put HackerNews.Types.CommentLink
 
 
+tree_History_Detail put value =
+    case value of
+        History.DetailLoading ->
+            ModelTree.variant "DetailLoading" 0 (args_History_Detail put value) names_History_Detail (choose_History_Detail put)
+
+        History.DetailFailed _ ->
+            ModelTree.variant "DetailFailed" 1 (args_History_Detail put value) names_History_Detail (choose_History_Detail put)
+
+        History.DetailFiles _ ->
+            ModelTree.variant "DetailFiles" 1 (args_History_Detail put value) names_History_Detail (choose_History_Detail put)
+
+
+args_History_Detail put value i =
+    case value of
+        History.DetailLoading ->
+            ModelTree.noChild i
+
+        History.DetailFailed a0 ->
+            ModelTree.string (ModelTree.Put (\new -> ModelTree.apply put (History.DetailFailed new))) a0
+
+        History.DetailFiles a0 ->
+            ModelTree.list tree_History_Types_FileChange (ModelTree.Put (\new -> ModelTree.apply put (History.DetailFiles new))) a0
+
+
+names_History_Detail =
+    [ "DetailLoading"
+    ]
+
+
+choose_History_Detail put _ =
+    ModelTree.apply put History.DetailLoading
+
+
 tree_History_Head put value =
     ModelTree.record [ "name", "sha" ] (field_History_Head put value)
 
@@ -2209,7 +2243,7 @@ field_History_Head put value i =
 
 
 tree_History_Model put value =
-    ModelTree.record [ "isOpen", "generation", "waiting", "heads", "commits", "error" ] (field_History_Model put value)
+    ModelTree.record [ "isOpen", "generation", "waiting", "heads", "commits", "error", "selected", "details", "baseCommit", "bases", "baseGeneration", "baseWaiting" ] (field_History_Model put value)
 
 
 field_History_Model put value i =
@@ -2229,8 +2263,26 @@ field_History_Model put value i =
         4 ->
             ModelTree.seqDict ModelTree.string tree_History_Types_Commit (ModelTree.Put (\x -> ModelTree.apply put { value | commits = x })) value.commits
 
-        _ ->
+        5 ->
             ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | error = x })) value.error
+
+        6 ->
+            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | selected = x })) value.selected
+
+        7 ->
+            ModelTree.seqDict ModelTree.string tree_History_Detail (ModelTree.Put (\x -> ModelTree.apply put { value | details = x })) value.details
+
+        8 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | baseCommit = x })) value.baseCommit
+
+        9 ->
+            ModelTree.seqDict ModelTree.string (ModelTree.maybe ModelTree.string) (ModelTree.Put (\x -> ModelTree.apply put { value | bases = x })) value.bases
+
+        10 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | baseGeneration = x })) value.baseGeneration
+
+        _ ->
+            ModelTree.list (ModelTree.tuple2 ModelTree.int ModelTree.string) (ModelTree.Put (\x -> ModelTree.apply put { value | baseWaiting = x })) value.baseWaiting
 
 
 tree_History_Types_Commit put value =
@@ -2258,19 +2310,62 @@ field_History_Types_Commit put value i =
             ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | time = x })) value.time
 
 
+tree_History_Types_FileChange put value =
+    ModelTree.record [ "filename", "status", "patch" ] (field_History_Types_FileChange put value)
+
+
+field_History_Types_FileChange put value i =
+    case i of
+        0 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | filename = x })) value.filename
+
+        1 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | status = x })) value.status
+
+        _ ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | patch = x })) value.patch
+
+
 tree_History_Types_UiId put value =
     case value of
         History.Types.OpenButton ->
-            ModelTree.variant "OpenButton" 0 ModelTree.noChild names_History_Types_UiId (choose_History_Types_UiId put)
+            ModelTree.variant "OpenButton" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
 
         History.Types.CloseButton ->
-            ModelTree.variant "CloseButton" 0 ModelTree.noChild names_History_Types_UiId (choose_History_Types_UiId put)
+            ModelTree.variant "CloseButton" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
 
         History.Types.RefreshButton ->
-            ModelTree.variant "RefreshButton" 0 ModelTree.noChild names_History_Types_UiId (choose_History_Types_UiId put)
+            ModelTree.variant "RefreshButton" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
 
         History.Types.ListViewport ->
-            ModelTree.variant "ListViewport" 0 ModelTree.noChild names_History_Types_UiId (choose_History_Types_UiId put)
+            ModelTree.variant "ListViewport" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
+
+        History.Types.RowButton _ ->
+            ModelTree.variant "RowButton" 1 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
+
+        History.Types.DetailViewport ->
+            ModelTree.variant "DetailViewport" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
+
+
+args_History_Types_UiId put value i =
+    case value of
+        History.Types.OpenButton ->
+            ModelTree.noChild i
+
+        History.Types.CloseButton ->
+            ModelTree.noChild i
+
+        History.Types.RefreshButton ->
+            ModelTree.noChild i
+
+        History.Types.ListViewport ->
+            ModelTree.noChild i
+
+        History.Types.RowButton a0 ->
+            ModelTree.string (ModelTree.Put (\new -> ModelTree.apply put (History.Types.RowButton new))) a0
+
+        History.Types.DetailViewport ->
+            ModelTree.noChild i
 
 
 names_History_Types_UiId =
@@ -2278,6 +2373,7 @@ names_History_Types_UiId =
     , "CloseButton"
     , "RefreshButton"
     , "ListViewport"
+    , "DetailViewport"
     ]
 
 
@@ -2292,8 +2388,11 @@ choose_History_Types_UiId put i =
         2 ->
             ModelTree.apply put History.Types.RefreshButton
 
-        _ ->
+        3 ->
             ModelTree.apply put History.Types.ListViewport
+
+        _ ->
+            ModelTree.apply put History.Types.DetailViewport
 
 
 tree_Image_Chunk put value =

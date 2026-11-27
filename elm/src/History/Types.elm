@@ -1,4 +1,4 @@
-module History.Types exposing (Commit, UiId(..))
+module History.Types exposing (Commit, FileChange, UiId(..))
 
 {-| The History app's ids and commits: here rather than in History.elm, as UiId.elm
 imports them and can't import a module that imports it.
@@ -20,8 +20,21 @@ type alias Commit =
     }
 
 
+{-| A file a commit changed, as GitHub lists it.
+-}
+type alias FileChange =
+    { filename : String
+    , status : String
+    , -- The changes as a unified diff, or "" when GitHub leaves it out (a huge or binary file).
+      patch : String
+    }
+
+
 type UiId
     = OpenButton
     | CloseButton
     | RefreshButton
     | ListViewport
+      -- A row of the graph, by its commit's hash (or "uncommitted"): click it to see what it changed.
+    | RowButton String
+    | DetailViewport
