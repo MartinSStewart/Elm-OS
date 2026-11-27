@@ -136,6 +136,9 @@ type Effect
       -- Leaves a build made by the Code app for the newest deployed one, which the host
       -- otherwise stays away from. A failure comes back as a build message.
     | FollowDeployed
+      -- Lights the keyboards' Caps Lock lights, or puts them out (host/init/src/input.rs).
+      -- Whether Caps Lock is on is kept here, in the Model. No answer.
+    | KeyboardLights { capsLock : Bool }
 
 
 type PowerAction
@@ -401,3 +404,14 @@ encode effect =
 
         FollowDeployed ->
             Postcard.variant 30 []
+
+        KeyboardLights { capsLock } ->
+            Postcard.variant 31
+                [ BE.unsignedInt8
+                    (if capsLock then
+                        1
+
+                     else
+                        0
+                    )
+                ]
