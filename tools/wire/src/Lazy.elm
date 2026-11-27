@@ -348,24 +348,41 @@ rewriteAll typeText files ( keySource, keyFile ) callers =
                     (\need ->
                         if need.module_ /= keyModule && Set.member keyModule (importsOf graph need.module_) then
                             Just
-                                (need.argument
-                                    ++ " can't be part of a Ui.lazy key. Every key is a variant of "
-                                    ++ keyModule
-                                    ++ ".LazyKey, so "
-                                    ++ keyModule
-                                    ++ " would have to import "
-                                    ++ need.module_
-                                    ++ " for this type, but "
-                                    ++ need.module_
-                                    ++ " already imports "
-                                    ++ keyModule
-                                    ++ " (an import cycle): "
-                                    ++ String.join " imports " (importPath graph need.module_ keyModule)
-                                    ++ ". Pass a value of a type from a module that doesn't import "
-                                    ++ keyModule
-                                    ++ " (such as "
-                                    ++ String.replace "." "/" need.module_
-                                    ++ "/Types.elm, or a package type), or only the part of it the function uses."
+                                (report need.sourceFile
+                                    need.range
+                                    (need.argument
+                                        ++ " can't be in a Ui.lazy key: "
+                                        ++ need.function
+                                        ++ "'s type annotation says it's a `"
+                                        ++ need.typeText
+                                        ++ "`, which needs module "
+                                        ++ need.module_
+                                        ++ ", and "
+                                        ++ need.module_
+                                        ++ " imports "
+                                        ++ keyModule
+                                        ++ "."
+                                    )
+                                    ("Ui.lazy keeps each call's arguments in "
+                                        ++ keyModule
+                                        ++ ".LazyKey, to compare them with last frame's, so "
+                                        ++ keyModule
+                                        ++ " would have to import "
+                                        ++ need.module_
+                                        ++ ". That would be an import cycle:\n\n    "
+                                        ++ String.join " imports " (importPath graph need.module_ keyModule)
+                                        ++ ", and "
+                                        ++ keyModule
+                                        ++ " would import "
+                                        ++ need.module_
+                                        ++ "\n\nPass a value whose type is in a module that doesn't import "
+                                        ++ keyModule
+                                        ++ " (such as "
+                                        ++ String.replace "." "/" need.module_
+                                        ++ "/Types.elm, or a package type such as `SeqDict String String`), or only the part of it that "
+                                        ++ need.function
+                                        ++ " uses."
+                                    )
                                 )
 
                         else
@@ -418,18 +435,36 @@ type alias Generated =
 argument in an error (where the call is, and which argument it is).
 -}
 type alias Need =
-    { module_ : String, argument : String }
+    { module_ : String, sourceFile : SourceFile, range : Range, argument : String, function : String, typeText : String }
 
 
 generate : TypeText -> String -> (String -> String) -> Caller -> Use -> Result String Generated
 generate typeText keyModule keyQualifier caller use =
     let
-        at : Range -> String
-        at range =
-            caller.sourceFile.path ++ ":" ++ String.fromInt range.start.row ++ ": "
-
         callerModule =
             moduleName caller.file
+
+        lazy =
+            "Ui." ++ lazyName use.arity
+
+        problem range summary hint =
+            Err (report caller.sourceFile range summary hint)
+
+        -- How to write a call, and where the cache comes from.
+        takes =
+            lazy ++ " takes the lazy cache first, then the function to call, then the function's arguments"
+
+        cacheFrom =
+            "lazyCache is the Ui.LazyCache UiId.UiId that Main keeps in Model.lazyCache and passes down to the views that use Ui.lazy (see HackerNews.view)."
+
+        shape =
+            takes
+                ++ ":\n\n    "
+                ++ lazy
+                ++ " lazyCache view "
+                ++ String.join " " (List.map (\i -> "arg" ++ String.fromInt i) (List.range 1 use.arity))
+                ++ "\n\n"
+                ++ cacheFrom
 
         functions =
             List.filterMap
@@ -445,28 +480,39 @@ generate typeText keyModule keyQualifier caller use =
     in
     case use.function of
         Nothing ->
-            Err (at use.range ++ "write Ui.lazy... with the cache and the function after it, as in `Ui.lazy3 lazyCache view a b c`")
+            problem use.range (lazy ++ " needs the lazy cache and the function right after it.") shape
 
         Just (Node fRange (FunctionOrValue [] fName)) ->
             case List.filter (\( n, _ ) -> n == fName) functions |> List.head of
                 Nothing ->
                     case use.cache of
-                        Just (Node _ (FunctionOrValue [] cacheName)) ->
+                        Just (Node cacheRange (FunctionOrValue [] cacheName)) ->
                             if List.any (\( n, _ ) -> n == cacheName) functions then
                                 -- Html.lazy's way, with no cache: what's taken for the
                                 -- function is its first argument.
-                                Err (at fRange ++ "Ui." ++ lazyName use.arity ++ "'s first argument should be the Ui.LazyCache UiId.UiId (Main's Model.lazyCache, passed down to the view like HackerNews.view's), and the function comes after it: `Ui." ++ lazyName use.arity ++ " lazyCache " ++ cacheName ++ " ...`")
+                                problem cacheRange
+                                    ("This " ++ lazy ++ " call has no lazy cache: the function " ++ cacheName ++ " is where the cache goes.")
+                                    (takes
+                                        ++ ". Here that's:\n\n    "
+                                        ++ lazy
+                                        ++ " lazyCache "
+                                        ++ String.join " " (List.map (\(Node r _) -> sourceAt caller.sourceFile.source r) (cacheNode use ++ List.filterMap identity [ use.function ] ++ use.arguments))
+                                        ++ "\n\n"
+                                        ++ cacheFrom
+                                    )
 
                             else
-                                Err (at fRange ++ notAFunction use.arity fName)
+                                problem fRange (notAFunction lazy fName) shape
 
                         _ ->
-                            Err (at fRange ++ notAFunction use.arity fName)
+                            problem fRange (notAFunction lazy fName) shape
 
                 Just ( _, f ) ->
                     case f.signature of
                         Nothing ->
-                            Err (at use.range ++ fName ++ " needs a type annotation, for Ui.lazy to know what its arguments are")
+                            problem fRange
+                                (fName ++ " needs a type annotation.")
+                                (lazy ++ " reads the types of " ++ fName ++ "'s arguments from it, to keep them in the key it compares with last frame's.")
 
                         Just (Node _ signature) ->
                             let
@@ -479,20 +525,69 @@ generate typeText keyModule keyQualifier caller use =
                             in
                             case keyPrefix of
                                 Just prefix ->
-                                    generateFor typeText at keyQualifier caller use fName prefix (functionArgs signature.typeAnnotation)
+                                    generateFor typeText keyQualifier caller use fRange fName prefix (functionArgs signature.typeAnnotation)
 
                                 Nothing ->
-                                    Err (at use.range ++ "a module that calls Ui.lazy must import " ++ keyModule)
+                                    problem use.range
+                                        ("A module that calls Ui.lazy must import " ++ keyModule ++ ".")
+                                        ("The call is replaced by one that builds a " ++ keyModule ++ ".LazyKey, so this module needs `import " ++ keyModule ++ "`.")
 
         Just (Node fRange _) ->
-            Err (at fRange ++ "Ui.lazy needs the name of a function defined at the top level of this module, not an expression")
+            problem fRange
+                (lazy ++ "'s second argument must be the name of a function, not an expression.")
+                ("Define the function at the top level of this module, with a type annotation, and pass its name. " ++ shape)
+
+
+{-| The cache argument of a call, as a list (empty when there's none).
+-}
+cacheNode : Use -> List (Node Expression)
+cacheNode use =
+    List.filterMap identity [ use.cache ]
 
 
 {-| Why `fName`, the second argument of a `Ui.lazy...` call, can't be what it calls.
 -}
-notAFunction : Int -> String -> String
-notAFunction arity fName =
-    "Ui." ++ lazyName arity ++ "'s first argument should be the Ui.LazyCache UiId.UiId (Main's Model.lazyCache) and its second the function to call, defined at the top level of this module, as in `Ui." ++ lazyName arity ++ " lazyCache view ...`: " ++ fName ++ " isn't such a function"
+notAFunction : String -> String -> String
+notAFunction lazy fName =
+    lazy ++ "'s second argument must be the function it calls, defined at the top level of this module, and " ++ fName ++ " isn't one."
+
+
+{-| An error about the code at `range`, laid out the way the compiler's are: where, what's
+wrong, the line with the part in question marked under it, and what to do.
+-}
+report : SourceFile -> Range -> String -> String -> String
+report sourceFile range summary hint =
+    let
+        line =
+            String.lines sourceFile.source |> List.drop (range.start.row - 1) |> List.head |> Maybe.withDefault ""
+
+        indent =
+            String.length line - String.length (String.trimLeft line)
+
+        gutter =
+            String.fromInt range.start.row ++ "| "
+
+        endColumn =
+            if range.end.row == range.start.row then
+                range.end.column
+
+            else
+                String.length line + 1
+    in
+    sourceFile.path
+        ++ ":"
+        ++ String.fromInt range.start.row
+        ++ ": "
+        ++ summary
+        ++ "\n\n"
+        ++ gutter
+        ++ String.trimLeft line
+        ++ "\n"
+        ++ String.repeat (String.length gutter + range.start.column - 1 - indent) " "
+        ++ String.repeat (max 1 (endColumn - range.start.column)) "^"
+        ++ "\n\n"
+        ++ hint
+        ++ "\n"
 
 
 {-| `lazy` for 1 argument, `lazy2` for 2, and so on.
@@ -506,10 +601,34 @@ lazyName arity =
         "lazy" ++ String.fromInt arity
 
 
-generateFor : TypeText -> (Range -> String) -> (String -> String) -> Caller -> Use -> String -> String -> List (Node TypeAnnotation) -> Result String Generated
-generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
+{-| "1st", "2nd", "3rd", "4th"...
+-}
+ordinal : Int -> String
+ordinal n =
+    String.fromInt n
+        ++ (if n == 1 then
+                "st"
+
+            else if n == 2 then
+                "nd"
+
+            else if n == 3 then
+                "rd"
+
+            else
+                "th"
+           )
+
+
+generateFor : TypeText -> (String -> String) -> Caller -> Use -> Range -> String -> String -> List (Node TypeAnnotation) -> Result String Generated
+generateFor typeText keyQualifier caller use fRange fName keyPrefix argTypes =
     if List.length argTypes < use.arity then
-        Err (at use.range ++ fName ++ " takes fewer than " ++ String.fromInt use.arity ++ " arguments")
+        Err
+            (report caller.sourceFile
+                fRange
+                (fName ++ " takes " ++ String.fromInt (List.length argTypes) ++ " arguments, by its type annotation, but Ui." ++ lazyName use.arity ++ " passes it " ++ String.fromInt use.arity ++ ".")
+                "Use the Ui.lazy... for its number of arguments: Ui.lazy for 1, Ui.lazy2 for 2, and so on."
+            )
 
     else
         let
@@ -523,21 +642,11 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
                             { var = "w3_a" ++ String.fromInt (i + 1)
                             , inKey = not (isLazyCache caller.ui (Node.value t))
                             , ty = t
+                            , range =
+                                List.drop i use.arguments |> List.head |> Maybe.map Node.range |> Maybe.withDefault use.range
                             , description =
-                                "argument "
-                                    ++ String.fromInt (i + 1)
-                                    ++ " of "
-                                    ++ fName
-                                    ++ (case List.drop i use.arguments |> List.head of
-                                            Just (Node r _) ->
-                                                ", `" ++ sourceAt caller.sourceFile.source r ++ "`,"
-
-                                            Nothing ->
-                                                ""
-                                       )
-                                    ++ " of type `"
-                                    ++ sourceAt caller.sourceFile.source (Node.range t)
-                                    ++ "`"
+                                "The " ++ ordinal (i + 1) ++ " argument of " ++ fName
+                            , typeText = sourceAt caller.sourceFile.source (Node.range t)
                             }
                         )
 
@@ -552,7 +661,12 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
                     (\a r ->
                         case r of
                             Err e ->
-                                Just (a.description ++ " can't be part of a Ui.lazy key: " ++ e)
+                                Just
+                                    (report caller.sourceFile
+                                        a.range
+                                        (a.description ++ " can't be in a Ui.lazy key: " ++ fName ++ "'s type annotation says it's a `" ++ a.typeText ++ "`, and " ++ e ++ ".")
+                                        "Ui.lazy keeps each call's arguments, to compare them with last frame's with ==, so they can't hold functions, and their types must be ones tools/wire can name."
+                                    )
 
                             Ok _ ->
                                 Nothing
@@ -572,7 +686,7 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
         in
         case problems of
             problem :: _ ->
-                Err (at use.range ++ problem)
+                Err problem
 
             [] ->
                 let
@@ -588,7 +702,7 @@ generateFor typeText at keyQualifier caller use fName keyPrefix argTypes =
                             (\a r ->
                                 case r of
                                     Ok t ->
-                                        List.map (\m -> { module_ = m, argument = at use.range ++ a.description }) t.modules
+                                        List.map (\m -> { module_ = m, sourceFile = caller.sourceFile, range = a.range, argument = a.description, function = fName, typeText = a.typeText }) t.modules
 
                                     Err _ ->
                                         []
