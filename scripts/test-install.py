@@ -254,6 +254,10 @@ booted = [ln for ln in text.splitlines() if "[disks] booted from" in ln]
 if not booted or "booted from partition" not in booted[0] or "using nvme0n1" not in booted[0]:
     fail(f"it didn't say it booted from the disk's EFI partition: {booted}")
 print("started from the disk:", booted[0].split("] ", 1)[1])
+time.sleep(5)  # the disks listed (Install.fromUsbStick)
+if any(b["label"] == "Install" for b in facts.get("buttons") or []):
+    fail("the toolbar has an Install button on Elm OS started from the disk")
+print("no Install app when started from the disk")
 power_off(cmd)
 
 # ---- 3: spoil the installed kernel and tools, mark the data, and update from the stick

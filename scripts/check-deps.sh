@@ -89,6 +89,8 @@ case "$mode" in
     need mcopy mtools
     need mmd mtools
     need mkfs.ext4 e2fsprogs
+    # The map of what usb-write has to write (usb-image-map.py).
+    need dumpe2fs e2fsprogs
     # The tools partition: eco, pointed at the libraries it carries (make-tools-fs.sh).
     need patchelf patchelf
     ;;

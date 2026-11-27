@@ -733,7 +733,7 @@ usb: check-migration
 	+$(MAKE) $(BUILD)/elmos-usb.img
 	@echo "Built $(BUILD)/elmos-usb.img" $(SAY)
 
-$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI $(BUILD)/tools.fs scripts/make-usb-image.sh scripts/make-data-fs.sh | check-usb-deps check-migration
+$(BUILD)/elmos-usb.img: $(BUILD)/BOOTX64.EFI $(BUILD)/tools.fs scripts/make-usb-image.sh scripts/make-data-fs.sh scripts/usb-image-map.py | check-usb-deps check-migration
 	scripts/make-usb-image.sh $< $(BUILD)/tools.fs $@
 
 check-usb-deps:

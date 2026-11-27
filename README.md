@@ -146,7 +146,11 @@ from RAM without touching the computer's disk. It needs `sfdisk`, `mkfs.vfat`, `
 
 1. **Write the stick (this erases it).** Run `make usb-write` to list USB disks, then
    `make usb-write DEV=/dev/sdX`. The script refuses anything that isn't a whole USB disk and
-   asks you to confirm the name before writing with `sudo dd`.
+   asks you to confirm the name before writing with `sudo`. It writes only what the stick
+   needs (scripts/write-usb.py): not the ext4 partitions' free blocks, and not what is already
+   on the stick, which it reads first. So writing a new build over an older one takes seconds,
+   and the progress it shows is what has really reached the stick. What was saved before is
+   gone from the new data partition, though its old bytes may stay in free blocks.
 2. **Turn Secure Boot off** in the firmware setup, because the kernel isn't signed. If the
    machine uses BitLocker, have its recovery key ready first.
 3. **Boot from the stick** with the one-time boot menu (F12 on Dell, Lenovo and Acer, F9 on HP,

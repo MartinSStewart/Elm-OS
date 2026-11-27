@@ -62,6 +62,6 @@ for p in $(lsblk -lno NAME "/dev/$name"); do
   fi
 done
 
-sudo dd if="$img" of="/dev/$name" bs=4M conv=fsync status=progress
-sync
+# Only what the stick needs and doesn't already have (scripts/write-usb.py says how).
+sudo python3 -I "$(dirname "$0")/write-usb.py" "$img" "/dev/$name"
 echo "Done. You can unplug the stick."

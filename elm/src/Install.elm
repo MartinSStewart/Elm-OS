@@ -3,6 +3,7 @@ module Install exposing
     , Model
     , appSize
     , disksListed
+    , fromUsbStick
     , init
     , onClick
     , programStarted
@@ -173,7 +174,17 @@ chosenDisk model choice =
             findDisk disk model
 
 
-{-| The host listed the disks: a choice on a disk that changed (or went) is dropped.
+{-| Whether Elm OS started from a USB stick: only then is there an Install app, since
+installing copies what Elm OS started from (and an installed Elm OS has nothing to
+install). Known once the disks are listed, which Main asks for as each program starts.
+-}
+fromUsbStick : Model -> Bool
+fromUsbStick model =
+    List.any (\disk -> disk.booted && disk.usb) (Maybe.withDefault [] model.disks)
+
+
+{-| The host listed the disks: a choice on a disk that changed (or went) is dropped, and
+the app closes unless Elm OS started from a USB stick.
 -}
 disksListed : List Disk -> Model -> Model
 disksListed disks model =
@@ -196,6 +207,7 @@ disksListed disks model =
                 Nothing ->
                     Nothing
         , confirming = False
+        , isOpen = model.isOpen && fromUsbStick { model | disks = Just disks }
     }
 
 
@@ -203,7 +215,7 @@ disksListed disks model =
 this is the disk it was installed on, whose data was copied part way through), and the
 disks may have changed: choose again. The disks listed before may be another computer's
 (the stick's data goes wherever the stick goes), so they are forgotten too; `Main` lists
-them again if the app is open.
+them again.
 -}
 programStarted : Model -> Model
 programStarted model =

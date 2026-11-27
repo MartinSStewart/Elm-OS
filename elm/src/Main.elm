@@ -1197,11 +1197,8 @@ step event model =
                 , code = Code.forgetPushed BuildInfo.commit model.code |> Code.programStarted info.build
                 , install = Install.programStarted model.install
               }
-            , if model.install.isOpen then
-                [ Effect.ListDisks ]
-
-              else
-                []
+            , -- Also to know whether Elm OS started from the USB stick (Install.fromUsbStick).
+              [ Effect.ListDisks ]
             )
 
         BootInfo bootInput ->
@@ -4020,30 +4017,38 @@ toolbar model display =
                         { id = ScreenshotViewer ScreenshotViewer.Types.OpenButton, pad = small }
                         (openHere ScreenshotViewerApp)
                         (Ui.text "Screenshots")
-                    , Ui.selectableButton
-                        { id = Install Install.Types.OpenButton, pad = small }
-                        (openHere InstallApp)
-                        (Ui.text "Install")
-                    , Ui.selectableButton
-                        { id = History History.Types.OpenButton, pad = small }
-                        (openHere HistoryApp)
-                        (Ui.text "History")
-                    , Ui.selectableButton
-                        { id = ModelViewer ModelViewer.Types.OpenButton, pad = small }
-                        (openHere ModelViewerApp)
-                        (Ui.text "Model")
-                    , Ui.selectableButton
-                        { id = Network Network.Types.OpenButton, pad = small }
-                        (openHere NetworkApp)
-                        (Ui.text "Network")
-                    , Ui.selectableButton
-                        { id = Weather Weather.Types.OpenButton, pad = small }
-                        (openHere WeatherApp)
-                        (Ui.text "Weather")
-                    , Ui.selectableButton { id = DebugInfo DebugInfo.Types.OpenButton, pad = small } (openHere DebugApp) (Ui.text "Debug")
-                    , Ui.button { id = RestartButton, pad = small } (Ui.text "Restart")
-                    , Ui.button { id = PowerOffButton, pad = small } (Ui.text "Power off")
                     ]
+                        -- Only from the USB stick: installing copies what Elm OS started from.
+                        ++ (if Install.fromUsbStick model.install then
+                                [ Ui.selectableButton
+                                    { id = Install Install.Types.OpenButton, pad = small }
+                                    (openHere InstallApp)
+                                    (Ui.text "Install")
+                                ]
+
+                            else
+                                []
+                           )
+                        ++ [ Ui.selectableButton
+                                { id = History History.Types.OpenButton, pad = small }
+                                (openHere HistoryApp)
+                                (Ui.text "History")
+                           , Ui.selectableButton
+                                { id = ModelViewer ModelViewer.Types.OpenButton, pad = small }
+                                (openHere ModelViewerApp)
+                                (Ui.text "Model")
+                           , Ui.selectableButton
+                                { id = Network Network.Types.OpenButton, pad = small }
+                                (openHere NetworkApp)
+                                (Ui.text "Network")
+                           , Ui.selectableButton
+                                { id = Weather Weather.Types.OpenButton, pad = small }
+                                (openHere WeatherApp)
+                                (Ui.text "Weather")
+                           , Ui.selectableButton { id = DebugInfo DebugInfo.Types.OpenButton, pad = small } (openHere DebugApp) (Ui.text "Debug")
+                           , Ui.button { id = RestartButton, pad = small } (Ui.text "Restart")
+                           , Ui.button { id = PowerOffButton, pad = small } (Ui.text "Power off")
+                           ]
     in
     Ui.elWithWidth
         { width = Coord.xRaw (Display.uiSize display), pad = Ui.paddingXY 8 8, style = Ui.NoBorderOrFill }
