@@ -7,7 +7,8 @@
 #
 #   usage: scripts/make-usb-image.sh BOOTX64.EFI TOOLS.fs OUT.img
 #
-# Also writes OUT.img.sha256: the SHA-256 of the image up to the end of the EFI
+# Also writes OUT.img.map, the parts of the image a stick needs (scripts/usb-image-map.py),
+# and OUT.img.sha256: the SHA-256 of the image up to the end of the EFI
 # system partition, which is what the debug overlay shows (the data partition after
 # it changes as soon as Elm OS runs).
 set -eu
@@ -32,7 +33,7 @@ export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}" TZ=UTC
 data_mib=256
 tools_mib=$(( ($(stat -c %s "$tools") + 1048575) / 1048576 ))
 
-rm -f "$tmp" "$img"
+rm -f "$tmp" "$img" "$img.map"
 mkfs.vfat -C -F 32 -S 512 -s 1 -n ELMOS --invariant -i "$(echo "$hash" | cut -c1-8)" \
     "$tmp" $(( esp_mib * 1024 )) >/dev/null
 mmd -i "$tmp" ::/EFI ::/EFI/BOOT
@@ -51,7 +52,10 @@ dd if="$tmp" of="$img" bs=1M seek=1 conv=notrunc status=none
 rm -f "$tmp"
 "$(dirname "$0")/make-data-fs.sh" "$tmp" "$data_mib"
 dd if="$tmp" of="$img" bs=1M seek=$(( 1 + esp_mib )) conv=notrunc status=none
-rm -f "$tmp"
 dd if="$tools" of="$img" bs=1M seek=$(( 1 + esp_mib + data_mib )) conv=notrunc status=none
+# Which parts scripts/write-usb.py has to write: not the ext4 partitions' free blocks.
+python3 -I "$(dirname "$0")/usb-image-map.py" "$img" "$img.map" \
+    $(( (1 + esp_mib) * 1048576 )):"$tmp" $(( (1 + esp_mib + data_mib) * 1048576 )):"$tools"
+rm -f "$tmp"
 head -c $(( (1 + esp_mib) * 1048576 )) "$img" | sha256sum | cut -c1-64 > "$img.sha256"
 echo "$img: $(( esp_mib + data_mib + tools_mib + 2 )) MiB, boot part sha256 $(cat "$img.sha256")"
