@@ -34,6 +34,8 @@ type UiId
     = OpenButton
     | CloseButton
     | RefreshButton
+      -- Checks for a newer deployed build now, and switches to it.
+    | PullButton
     | ListViewport
       -- A row of the graph, by its commit's hash (or "uncommitted"): click it to see what it changed.
     | RowButton String

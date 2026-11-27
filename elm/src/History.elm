@@ -86,6 +86,10 @@ type alias Model =
     , bases : SeqDict String (Maybe String)
     , baseGeneration : Int
     , baseWaiting : List ( Int, String )
+
+    -- The host was asked to check for a newer deployed build (the Pull button) since the
+    -- last refresh: if it finds one, Elm OS says it is switching to it.
+    , asked : Bool
     }
 
 
@@ -113,6 +117,7 @@ init =
     , bases = SeqDict.empty
     , baseGeneration = 0
     , baseWaiting = []
+    , asked = False
     }
 
 
@@ -160,6 +165,13 @@ onClick id request model =
 
         CloseButton ->
             ( { model | isOpen = False }, [] )
+
+        PullButton ->
+            let
+                ( model2, effects ) =
+                    refresh request model
+            in
+            ( { model2 | asked = True }, Effect.FollowDeployed :: effects )
 
         RefreshButton ->
             refresh request model
@@ -236,6 +248,7 @@ refreshWith branches token model =
     in
     ( { model
         | generation = generation
+        , asked = False
         , waiting = List.indexedMap (\i branch -> ( i, branch )) allBranches
         , error = Nothing
       }
@@ -709,7 +722,10 @@ summary context model =
                     [ ( error, Color.errorColor ) ]
 
                 Nothing ->
-                    if List.isEmpty model.waiting then
+                    if model.asked then
+                        [ ( "Asked the host to check for a newer deployed build. If there is one, Elm OS switches to it.", Color.dimTextColor ) ]
+
+                    else if List.isEmpty model.waiting then
                         []
 
                     else
@@ -765,6 +781,7 @@ body context model =
                             (summary context model)
                         )
                   )
+                , ( Ui.Shrink2, Ui.button2 { id = UiId.History PullButton, pad = small } (Ui.text2 "Pull latest") )
                 , ( Ui.Shrink2, Ui.button2 { id = UiId.History RefreshButton, pad = small } (Ui.text2 "Refresh") )
                 ]
            )

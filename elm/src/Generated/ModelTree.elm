@@ -2243,7 +2243,7 @@ field_History_Head put value i =
 
 
 tree_History_Model put value =
-    ModelTree.record [ "isOpen", "generation", "waiting", "heads", "commits", "error", "selected", "details", "baseCommit", "bases", "baseGeneration", "baseWaiting" ] (field_History_Model put value)
+    ModelTree.record [ "isOpen", "generation", "waiting", "heads", "commits", "error", "selected", "details", "baseCommit", "bases", "baseGeneration", "baseWaiting", "asked" ] (field_History_Model put value)
 
 
 field_History_Model put value i =
@@ -2281,8 +2281,11 @@ field_History_Model put value i =
         10 ->
             ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | baseGeneration = x })) value.baseGeneration
 
-        _ ->
+        11 ->
             ModelTree.list (ModelTree.tuple2 ModelTree.int ModelTree.string) (ModelTree.Put (\x -> ModelTree.apply put { value | baseWaiting = x })) value.baseWaiting
+
+        _ ->
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | asked = x })) value.asked
 
 
 tree_History_Types_Commit put value =
@@ -2337,6 +2340,9 @@ tree_History_Types_UiId put value =
         History.Types.RefreshButton ->
             ModelTree.variant "RefreshButton" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
 
+        History.Types.PullButton ->
+            ModelTree.variant "PullButton" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
+
         History.Types.ListViewport ->
             ModelTree.variant "ListViewport" 0 (args_History_Types_UiId put value) names_History_Types_UiId (choose_History_Types_UiId put)
 
@@ -2358,6 +2364,9 @@ args_History_Types_UiId put value i =
         History.Types.RefreshButton ->
             ModelTree.noChild i
 
+        History.Types.PullButton ->
+            ModelTree.noChild i
+
         History.Types.ListViewport ->
             ModelTree.noChild i
 
@@ -2372,6 +2381,7 @@ names_History_Types_UiId =
     [ "OpenButton"
     , "CloseButton"
     , "RefreshButton"
+    , "PullButton"
     , "ListViewport"
     , "DetailViewport"
     ]
@@ -2389,6 +2399,9 @@ choose_History_Types_UiId put i =
             ModelTree.apply put History.Types.RefreshButton
 
         3 ->
+            ModelTree.apply put History.Types.PullButton
+
+        4 ->
             ModelTree.apply put History.Types.ListViewport
 
         _ ->
