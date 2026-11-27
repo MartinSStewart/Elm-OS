@@ -31,12 +31,19 @@ nvme =
     }
 
 
+{-| The USB stick Elm OS started from.
+-}
+stick : Disk
+stick =
+    { nvme | name = "sda", model = "USB stick", bytes = 8 * gib, usb = True, booted = True, busy = True, layout = "s", regions = [] }
+
+
 listed : Install.Model
 listed =
     Install.init
         |> Install.onClick Install.Types.OpenButton
         |> Tuple.first
-        |> Install.disksListed [ nvme ]
+        |> Install.disksListed [ nvme, stick ]
 
 
 click : Install.Types.UiId -> Install.Model -> Install.Model
@@ -47,7 +54,17 @@ click id model =
 suite : Test
 suite =
     Test.describe "Install"
-        [ Test.test "opening it lists the disks"
+        [ Test.test "it is there when Elm OS started from a USB stick"
+            (\_ -> Expect.equal ( True, True ) ( Install.fromUsbStick listed, listed.isOpen ))
+        , Test.test "it isn't there, and closes, when Elm OS started from a disk"
+            (\_ ->
+                let
+                    installed =
+                        Install.disksListed [ { nvme | booted = True, installed = True }, { stick | booted = False } ] listed
+                in
+                Expect.equal ( False, False ) ( Install.fromUsbStick installed, installed.isOpen )
+            )
+        , Test.test "opening it lists the disks"
             (\_ -> Install.onClick Install.Types.OpenButton Install.init |> Tuple.second |> Expect.equal [ Effect.ListDisks ])
         , Test.test "installing in free space sends the disk's layout back"
             (\_ ->
