@@ -561,8 +561,10 @@ noCommitToStartFrom =
 
 {-| For when Elm OS starts a program built from the commit `commit` (BuildInfo.commit).
 If it isn't the commit the last push was made on top of, it's a build made since, such
-as CI's of that push: the saved modules it has as they are aren't changes any more, so
-they go, with the last push's news.
+as CI's of that push: the saved modules it has as they are, and those that are as the last
+push had them (the push is on GitHub, and a build of newer code must not be mixed with the
+older text of a module that was pushed), aren't changes any more, so they go, with the
+last push's news. Modules saved since the push stay.
 
 Builds made here of the Code app's edits say the commit they were made on top of, so
 they never drop any.
@@ -575,7 +577,14 @@ forgetPushed commit model =
             model.git
 
         saved =
-            SeqDict.filter (\name text -> SeqDict.get name SourceCode.sourceCode /= Just text) model.saved
+            SeqDict.filter
+                (\name text ->
+                    SeqDict.get name SourceCode.sourceCode
+                        /= Just text
+                        && SeqDict.get name git.pushed
+                        /= Just text
+                )
+                model.saved
     in
     if commit == "" || git.from == "" || commit == git.from || saved == model.saved then
         model

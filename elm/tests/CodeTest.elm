@@ -78,6 +78,12 @@ forgetting =
     Test.describe "Forgetting pushed changes"
         [ Test.test "a build of another commit has Color as saved, so it stops being a change"
             (\_ -> (Code.forgetPushed "bbb" pushed).saved |> SeqDict.keys |> Expect.equal [ "Main" ])
+        , Test.test "a module as the push had it goes too, as the new build's code may have moved on"
+            (\_ ->
+                (Code.forgetPushed "bbb" { pushed | git = { git | from = "aaa", pushed = SeqDict.fromList [ ( "Main", "module Main, changed" ) ] } }).saved
+                    |> SeqDict.keys
+                    |> Expect.equal []
+            )
         , Test.test "a build of the same commit (one made here) keeps everything"
             (\_ -> Code.forgetPushed "aaa" pushed |> Expect.equal pushed)
         , Test.test "without a push, nothing goes"
