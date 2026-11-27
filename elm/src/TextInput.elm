@@ -473,7 +473,7 @@ mouseDown time shift style mousePosition position model =
             registerClick time index model
     in
     if shift then
-        replaceState (extendTo index) (forgetClicks model)
+        replaceState (extendTo index) (forgetClicks model2)
 
     else
         replaceState (selectClicks clicks index) model2
