@@ -345,7 +345,7 @@ generate typeText keyModule keyQualifier caller use =
                             if List.any (\( n, _ ) -> n == cacheName) functions then
                                 -- Html.lazy's way, with no cache: what's taken for the
                                 -- function is its first argument.
-                                Err (at fRange ++ "Ui.lazy's first argument is the lazy cache and the function comes after it, as in `Ui." ++ lazyName use.arity ++ " lazyCache " ++ cacheName ++ " ...`. The view gets lazyCache from Main, like HackerNews.view.")
+                                Err (at fRange ++ "Ui." ++ lazyName use.arity ++ "'s first argument should be the Ui.LazyCache UiId.UiId (Main's Model.lazyCache, passed down to the view like HackerNews.view's), and the function comes after it: `Ui." ++ lazyName use.arity ++ " lazyCache " ++ cacheName ++ " ...`")
 
                             else
                                 Err (at fRange ++ notAFunction use.arity fName)
@@ -382,7 +382,7 @@ generate typeText keyModule keyQualifier caller use =
 -}
 notAFunction : Int -> String -> String
 notAFunction arity fName =
-    "Ui." ++ lazyName arity ++ "'s first argument is the lazy cache and its second the function to call (defined at the top level of this module), as in `Ui." ++ lazyName arity ++ " lazyCache view ...`, and " ++ fName ++ " isn't such a function"
+    "Ui." ++ lazyName arity ++ "'s first argument should be the Ui.LazyCache UiId.UiId (Main's Model.lazyCache) and its second the function to call, defined at the top level of this module, as in `Ui." ++ lazyName arity ++ " lazyCache view ...`: " ++ fName ++ " isn't such a function"
 
 
 {-| `lazy` for 1 argument, `lazy2` for 2, and so on.
