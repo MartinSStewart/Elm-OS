@@ -88,6 +88,11 @@ forgetting =
             (\_ -> Code.forgetPushed "aaa" pushed |> Expect.equal pushed)
         , Test.test "without a push, nothing goes"
             (\_ -> Code.forgetPushed "bbb" { pushed | git = git } |> Expect.equal { pushed | git = git })
+        , Test.test "a build made here on top of another commit (after a pull) keeps everything, as its code is the saved modules"
+            (\_ ->
+                (pushed |> Code.programStarted "local-0123456789ab" |> Code.forgetPushed "bbb").saved
+                    |> Expect.equal pushed.saved
+            )
         ]
 
 

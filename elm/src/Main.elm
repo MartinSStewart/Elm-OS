@@ -1195,7 +1195,7 @@ step event model =
             -- The host says this as a program starts.
             ( { model
                 | system = Just info
-                , code = Code.forgetPushed BuildInfo.commit model.code |> Code.programStarted info.build
+                , code = Code.programStarted info.build model.code |> Code.forgetPushed BuildInfo.commit
                 , install = Install.programStarted model.install
               }
             , -- Also to know whether Elm OS started from the USB stick (Install.fromUsbStick).

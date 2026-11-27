@@ -619,8 +619,10 @@ push had them (the push is on GitHub, and a build of newer code must not be mixe
 older text of a module that was pushed), aren't changes any more, so they go, with the
 last push's news. Modules saved since the push stay.
 
-Builds made here of the Code app's edits say the commit they were made on top of, so
-they never drop any.
+Not while a build made here runs (call `programStarted` first): its SourceCode is the
+saved modules, so every one of them would look like it needs no commit, although none
+was pushed. (It says the commit it was made on top of, which is the last push's only
+when nothing was pulled since.)
 
 -}
 forgetPushed : String -> Model -> Model
@@ -639,7 +641,7 @@ forgetPushed commit model =
                 )
                 model.saved
     in
-    if commit == "" || git.from == "" || commit == git.from || saved == model.saved then
+    if model.local || commit == "" || git.from == "" || commit == git.from || saved == model.saved then
         model
 
     else
