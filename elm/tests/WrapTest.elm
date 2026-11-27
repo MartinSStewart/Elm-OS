@@ -1,6 +1,7 @@
 module WrapTest exposing (suite)
 
-import Color
+import Color exposing (Color)
+import Coord
 import Expect
 import Fuzz
 import Quantity
@@ -23,6 +24,33 @@ mono text =
     { text = text, color = Color.black, font = Mono, decorations = [], link = Nothing }
 
 
+sans : String -> Segment
+sans text =
+    { text = text, color = Color.black, font = Sans Regular, decorations = [], link = Nothing }
+
+
+{-| How wide a text is in Noto Sans, to wrap at.
+-}
+sansWidth : String -> Int
+sansWidth text =
+    Sprite.textSize Small (Sans Regular) text |> Coord.xRaw
+
+
+{-| Each line's segments (text, font and colour), and the size, of Noto Sans text wrapped to
+`width`.
+-}
+wrapSans : Int -> List Segment -> ( List (List ( String, Font, Color )), ( Int, Int ) )
+wrapSans width segments =
+    ( Sprite.wrapLines Small (Units.ui width) segments |> List.map (List.map (\segment -> ( segment.text, segment.font, segment.color )))
+    , Sprite.wrapWithSize Small (Units.ui width) segments |> Tuple.second |> Coord.toTuple
+    )
+
+
+black : String -> ( String, Font, Color )
+black text =
+    ( text, Sans Regular, Color.black )
+
+
 suite : Test
 suite =
     Test.describe "Sprite.wrapLines"
@@ -38,14 +66,7 @@ suite =
             )
         , Test.test "breaks Noto Sans between words, dropping the space at the break"
             (\() ->
-                let
-                    sans text =
-                        { text = text, color = Color.black, font = Sans Regular, decorations = [], link = Nothing }
-
-                    width =
-                        Sprite.textSize Small (Sans Regular) "aaaa bbbb" |> Tuple.first |> Quantity.unwrap
-                in
-                Sprite.wrapLines Small (Units.ui width) [ sans "aaaa bbbb cccc" ]
+                Sprite.wrapLines Small (Units.ui (sansWidth "aaaa bbbb")) [ sans "aaaa bbbb cccc" ]
                     |> List.map (\line -> List.map .text line |> String.concat)
                     |> Expect.equal [ "aaaa bbbb", "cccc" ]
             )
@@ -63,6 +84,34 @@ suite =
                     |> Expect.equal ("aaaa bbbb \n" ++ Sprite.wrapMarker ++ "cccc")
             )
         , Test.test "no line is wider than the width, in Noto Sans" (\() -> fitsWidth)
+        , Test.test "Noto Sans keeps the spaces after the one it breaks at"
+            (\() -> wrapSans (sansWidth "aaaa bbbb") [ sans "aaaa bbbb   cccc" ] |> Expect.equal ( [ [ black "aaaa bbbb" ], [ black "  cccc" ] ], ( 80, 46 ) ))
+        , Test.test "a space before a word too wide for an empty line is dropped, and the word broken"
+            (\() -> wrapSans (sansWidth "aaaa") [ sans "aaaa  bbbb" ] |> Expect.equal ( [ [ black "aaaa" ], [ black "bbb" ], [ black "b" ] ], ( 36, 69 ) ))
+        , Test.test "a word wider than a line is broken between characters, and the line goes on after it"
+            (\() ->
+                wrapSans 100 [ sans ("aa " ++ String.repeat 30 "x" ++ " bb") ]
+                    |> Expect.equal ( [ [ black "aa" ], [ black "xxxxxxxxxxx" ], [ black "xxxxxxxxxxx" ], [ black "xxxxxxxx bb" ] ], ( 94, 92 ) )
+            )
+        , Test.test "a word can run across segments, in other fonts and colours"
+            (\() ->
+                wrapSans (sansWidth "aaaa") [ sans "aaaa bb", { text = "bb cccc", color = Color.white, font = Sans Bold, decorations = [], link = Nothing } ]
+                    |> Expect.equal
+                        ( [ [ black "aaaa" ], [ black "bb", ( "b", Sans Bold, Color.white ) ], [ ( "b", Sans Bold, Color.white ) ], [ ( "cccc", Sans Bold, Color.white ) ] ]
+                        , ( 36, 92 )
+                        )
+            )
+        , Test.test "the space dropped at a break can end a segment"
+            (\() ->
+                wrapSans (sansWidth "aaaa") [ sans "aaaa ", { text = "bbbb", color = Color.white, font = Sans Regular, decorations = [], link = Nothing } ]
+                    |> Expect.equal ( [ [ black "aaaa" ], [ ( "bbb", Sans Regular, Color.white ) ], [ ( "b", Sans Regular, Color.white ) ] ], ( 36, 69 ) )
+            )
+        , Test.test "Noto Sans and the pixel font on one line break between words"
+            (\() ->
+                wrapSans (sansWidth "aaaa bbbb") [ sans "aaaa ", mono "bbbb", sans " cccc" ]
+                    |> Expect.equal ( [ [ black "aaaa" ], [ ( "bbbb", Mono, Color.black ), black " cccc" ] ], ( 75, 46 ) )
+            )
+        , Test.test "empty segments are left out" (\() -> wrapSans 100 [ sans "", sans "a\n", sans "", sans "b" ] |> Expect.equal ( [ [ black "a" ], [ black "b" ] ], ( 10, 46 ) ))
         , Test.fuzz3
             (Fuzz.intRange 1 400)
             (Fuzz.intRange 0 60)

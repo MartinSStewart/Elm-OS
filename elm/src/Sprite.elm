@@ -1693,31 +1693,6 @@ type alias WrapState =
     { lines : List (List Segment), current : List Segment, x : Int, widest : Int }
 
 
-{-| Part of a line's `index`th segment: its text from `start` to `end` (as String.slice
-counts), and how wide that is (1/64 UI pixels). A word is one or more of these, and so
-is the space before it.
--}
-type alias Piece =
-    { index : Int, segment : Segment, start : Int, end : Int, width : Int }
-
-
-{-| `WrapState` while a line is being broken, with the word being read: the space before
-it, its pieces (last first) and their width. The end of the current line is kept as
-`open`, a piece of one segment that grows while the words placed come one after another
-in it, so that its text is cut out (String.slice) once rather than added up word by word.
--}
-type alias Scan =
-    { lines : List (List Segment)
-    , current : List Segment
-    , open : Maybe Piece
-    , x : Int
-    , widest : Int
-    , space : Maybe Piece
-    , pieces : List Piece
-    , wordWidth : Int
-    }
-
-
 {-| `wrapLine` for a line all in the pixel font, where every character is as wide as the
 next: broken wherever a line is full, with no regard for words (so no word is measured),
 and every line it goes on to starts with a faint `wrapMarker`, which takes a character's
@@ -1807,168 +1782,192 @@ type alias MonoWrap =
 
 
 {-| One line (no '\\n' in it) broken at the spaces before words that would go past
-`limit64`. Words are found with String.indexes and each is measured once.
+`limit64`: its words are measured (`measureWords`), then the line is broken by adding up
+their widths (`breakWords`).
 -}
 wrapLine : FontSize -> Int -> List Segment -> WrapState
 wrapLine fontSize limit64 line =
+    breakWords fontSize limit64 (Array.fromList line) (measureWords fontSize line)
+
+
+{-| Where a line's text is: its `index`th segment, at `offset` (as String.slice counts).
+-}
+type alias Position =
+    ( Int, Int )
+
+
+{-| A word of a line, which can run on across segments: how wide it is (1/64 UI pixels),
+how wide the space before it is (`Nothing` for the line's first word), and where it starts
+(just after that space) and ends (at the next space or the end of the line). Two spaces in
+a row have an empty word between them.
+-}
+type alias Word =
+    { space : Maybe Int, width : Int, start : Position, end : Position }
+
+
+{-| The words of a line: the spaces are found with String.indexes, and each piece of a
+word in one segment is measured once (so kerning starts afresh in each segment, as
+`layoutSegments` lays them out). Apart from `breakWord`, this is all of wrapping that
+looks at characters.
+-}
+measureWords : FontSize -> List Segment -> List Word
+measureWords fontSize line =
     let
-        scanSegment : Segment -> ( Int, Scan ) -> ( Int, Scan )
-        scanSegment segment ( index, scan ) =
+        measure : Segment -> ( Int, Word, List Word ) -> ( Int, Word, List Word )
+        measure segment ( index, word, words ) =
             let
-                addPiece : Int -> Int -> Scan -> Scan
-                addPiece start end scan2 =
-                    if start == end then
-                        scan2
+                -- The piece of the word in this segment, up to `end`.
+                addPiece : Int -> Int -> Word -> Word
+                addPiece start end word2 =
+                    { word2
+                        | width =
+                            if start == end then
+                                word2.width
 
-                    else
-                        let
-                            width : Int
-                            width =
-                                width64 fontSize segment.font (String.slice start end segment.text)
-                        in
-                        { scan2
-                            | pieces = { index = index, segment = segment, start = start, end = end, width = width } :: scan2.pieces
-                            , wordWidth = scan2.wordWidth + width
-                        }
+                            else
+                                word2.width + width64 fontSize segment.font (String.slice start end segment.text)
+                        , end = ( index, end )
+                    }
 
-                spaceWidth : Int
+                spaceWidth : Maybe Int
                 spaceWidth =
-                    width64 fontSize segment.font " "
+                    Just (width64 fontSize segment.font " ")
 
-                ( lastStart, scanned ) =
+                ( lastStart, lastWord, done ) =
                     List.foldl
-                        (\at ( start, scan2 ) ->
-                            let
-                                placed : Scan
-                                placed =
-                                    placeWord fontSize limit64 (addPiece start at scan2)
-                            in
+                        (\at ( start, word2, words2 ) ->
                             ( at + 1
-                            , { placed | space = Just { index = index, segment = segment, start = at, end = at + 1, width = spaceWidth } }
+                            , { space = spaceWidth, width = 0, start = ( index, at + 1 ), end = ( index, at + 1 ) }
+                            , addPiece start at word2 :: words2
                             )
                         )
-                        ( 0, scan )
+                        ( 0, word, words )
                         (String.indexes " " segment.text)
             in
-            ( index + 1, addPiece lastStart (String.length segment.text) scanned )
+            ( index + 1, addPiece lastStart (String.length segment.text) lastWord, done )
 
-        ( _, lastWord ) =
-            List.foldl
-                scanSegment
-                ( 0, { lines = [], current = [], open = Nothing, x = 0, widest = 0, space = Nothing, pieces = [], wordWidth = 0 } )
-                line
-
-        done : Scan
-        done =
-            placeWord fontSize limit64 lastWord
+        ( _, last, others ) =
+            List.foldl measure ( 0, { space = Nothing, width = 0, start = ( 0, 0 ), end = ( 0, 0 ) }, [] ) line
     in
-    { lines = done.lines, current = flushOpen done, x = done.x, widest = done.widest }
+    List.reverse (last :: others)
 
 
-{-| The segment a piece is.
+{-| `wrapLine`'s state: `WrapState`, with the text of the current line not yet cut out of
+the segments: it is all of it from `from` on.
 -}
-pieceSegment : Piece -> Segment
-pieceSegment piece =
+type alias Breaking =
+    { lines : List (List Segment), current : List Segment, from : Position, x : Int, widest : Int }
+
+
+{-| Words put on lines one after another: each goes on the current line with the space
+before it if it fits, otherwise on a new line without the space, and a word wider than a
+whole line is broken between characters (`breakWord`). A line's text is cut out of the
+segments once, when it is done.
+-}
+breakWords : FontSize -> Int -> Array Segment -> List Word -> WrapState
+breakWords fontSize limit64 segments words =
     let
-        segment : Segment
-        segment =
-            piece.segment
-    in
-    { segment | text = String.slice piece.start piece.end segment.text }
-
-
-{-| The current line's segments (last first), with its `open` piece made a segment.
--}
-flushOpen : Scan -> List Segment
-flushOpen scan =
-    case scan.open of
-        Just open ->
-            pushSegment (pieceSegment open) scan.current
-
-        Nothing ->
-            scan.current
-
-
-{-| Adds a piece to the end of the current line.
--}
-pushPiece : Piece -> Scan -> Scan
-pushPiece piece scan =
-    case scan.open of
-        Just open ->
-            if open.index == piece.index && open.end == piece.start then
-                { scan | open = Just { open | end = piece.end } }
+        place : Word -> Breaking -> Breaking
+        place word state =
+            let
+                spaceWidth : Int
+                spaceWidth =
+                    Maybe.withDefault 0 word.space
+            in
+            if state.x + spaceWidth + word.width <= limit64 then
+                { state | x = state.x + spaceWidth + word.width }
 
             else
-                { scan | current = pushSegment (pieceSegment open) scan.current, open = Just piece }
+                let
+                    -- The line so far, without the space before the word.
+                    line : List Segment
+                    line =
+                        cut segments state.from (beforeSpace word) state.current
+
+                    broken : WrapState -> Breaking
+                    broken from =
+                        let
+                            after : WrapState
+                            after =
+                                breakWord fontSize limit64 (slices segments word.start word.end) from
+                        in
+                        { lines = after.lines, current = after.current, from = word.end, x = after.x, widest = after.widest }
+                in
+                if state.x == 0 then
+                    -- Nothing (that takes room) on the line yet, and the word doesn't fit.
+                    broken { lines = state.lines, current = line, x = 0, widest = state.widest }
+
+                else if word.width <= limit64 then
+                    { lines = List.reverse line :: state.lines, current = [], from = word.start, x = word.width, widest = max state.widest state.x }
+
+                else
+                    broken { lines = List.reverse line :: state.lines, current = [], x = 0, widest = max state.widest state.x }
+
+        done : Breaking
+        done =
+            List.foldl place { lines = [], current = [], from = ( 0, 0 ), x = 0, widest = 0 } words
+    in
+    -- The rest of the line: past its last segment is its end.
+    { lines = done.lines, current = cut segments done.from ( Array.length segments, 0 ) done.current, x = done.x, widest = done.widest }
+
+
+{-| Where the space before a word is, or the word's start if it has none.
+-}
+beforeSpace : Word -> Position
+beforeSpace word =
+    case word.space of
+        Just _ ->
+            Tuple.mapSecond (\offset -> offset - 1) word.start
 
         Nothing ->
-            { scan | open = Just piece }
+            word.start
 
 
-{-| Puts the word read so far (and the space before it) on the current line if it fits,
-otherwise on a new line without the space, otherwise breaks it (`breakWord`).
+{-| The text from one position to another added to the end of a line (kept last first).
 -}
-placeWord : FontSize -> Int -> Scan -> Scan
-placeWord fontSize limit64 scan =
-    let
-        spaceWidth : Int
-        spaceWidth =
-            case scan.space of
-                Just space ->
-                    space.width
+cut : Array Segment -> Position -> Position -> List Segment -> List Segment
+cut segments from to line =
+    List.foldl pushSegment line (slices segments from to)
 
-                Nothing ->
-                    0
 
-        pieces : List Piece
-        pieces =
-            List.reverse scan.pieces
+{-| The text from one position to another, a segment for each segment it is in (leaving
+out empty ones).
+-}
+slices : Array Segment -> Position -> Position -> List Segment
+slices segments ( fromIndex, fromOffset ) ( toIndex, toOffset ) =
+    List.range fromIndex (min toIndex (Array.length segments - 1))
+        |> List.filterMap
+            (\index ->
+                Array.get index segments
+                    |> Maybe.andThen
+                        (\segment ->
+                            let
+                                start : Int
+                                start =
+                                    if index == fromIndex then
+                                        fromOffset
 
-        cleared : Scan
-        cleared =
-            { scan | space = Nothing, pieces = [], wordWidth = 0 }
+                                    else
+                                        0
 
-        breakPieces : Scan -> Scan
-        breakPieces from =
-            let
-                broken : WrapState
-                broken =
-                    breakWord
-                        fontSize
-                        limit64
-                        (List.map pieceSegment pieces)
-                        { lines = from.lines, current = flushOpen from, x = from.x, widest = from.widest }
-            in
-            { from | lines = broken.lines, current = broken.current, open = Nothing, x = broken.x, widest = broken.widest }
-    in
-    if scan.x + spaceWidth + scan.wordWidth <= limit64 then
-        List.foldl
-            pushPiece
-            (case scan.space of
-                Just space ->
-                    pushPiece space cleared
+                                end : Int
+                                end =
+                                    if index == toIndex then
+                                        toOffset
 
-                Nothing ->
-                    cleared
+                                    else
+                                        String.length segment.text
+                            in
+                            if start >= end then
+                                Nothing
+
+                            else if start == 0 && end == String.length segment.text then
+                                Just segment
+
+                            else
+                                Just { segment | text = String.slice start end segment.text }
+                        )
             )
-            pieces
-            |> (\placed -> { placed | x = scan.x + spaceWidth + scan.wordWidth })
-
-    else if scan.x == 0 then
-        -- Nothing on the line yet, and the word is too wide for it on its own.
-        breakPieces cleared
-
-    else
-        let
-            newLine : Scan
-            newLine =
-                { cleared | lines = List.reverse (flushOpen cleared) :: cleared.lines, current = [], open = Nothing, x = 0, widest = max scan.widest scan.x }
-        in
-        if scan.wordWidth <= limit64 then
-            List.foldl pushPiece { newLine | x = scan.wordWidth } pieces
-
-        else
-            breakPieces newLine
 
 
 {-| A word too wide for a line, put on the current line (which is empty) one character

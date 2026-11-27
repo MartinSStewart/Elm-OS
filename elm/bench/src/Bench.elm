@@ -10,6 +10,7 @@ Each step runs a few times and the fastest run is printed, in milliseconds.
 import Bounds
 import Bytes exposing (Bytes)
 import Bytes.Encode as BE
+import Color
 import Coord
 import Effect
 import Fixture
@@ -120,6 +121,8 @@ steps =
                         in
                         timed "snapshot of HackerNews.Model" (\() -> Wire.toBytes (HackerNews.w3_encode_Model open) |> Bytes.width)
                             |> Task.andThen (\_ -> timed "lay out 100,000 characters (Sprite.textSize)" (\() -> Sprite.textSize Sprite.Small (Sprite.Sans Sprite.Regular) (String.slice 1000000 1100000 Fixture.item)))
+                            |> Task.andThen (\_ -> timed "wrap 100,000 characters of prose, 600 px wide (Sprite.wrapWithSize)" (\() -> wrapProse 600))
+                            |> Task.andThen (\_ -> timed "  again, 400 px wide" (\() -> wrapProse 400))
                             |> Task.andThen (\_ -> frame (Coord.xy 1280 800) open)
                             |> Task.andThen (\_ -> frame (Coord.xy 2560 1600) open)
                             |> Task.andThen (\_ -> screenshotViewer 1 open)
@@ -128,6 +131,15 @@ steps =
                 |> Task.andThen (\_ -> webViewer "front page" Fixture.top)
                 |> Task.andThen (\_ -> webViewer "item page" Fixture.item)
                 |> Task.andThen (\_ -> codeEditor (String.left 300000 Fixture.item))
+
+
+{-| `Fixture.prose` (the comments' text) word wrapped in Noto Sans, as `Ui.customTextWrapped`
+does it: how many segments, and how tall.
+-}
+wrapProse : Int -> ( Int, Int )
+wrapProse width =
+    Sprite.wrapWithSize Sprite.Small (Units.ui width) [ { text = Fixture.prose, color = Color.textColor, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing } ]
+        |> Tuple.mapBoth List.length Coord.yRaw
 
 
 {-| One frame of the comments page on a screen this big (device pixels), at its UI scale:
