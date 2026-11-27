@@ -5,6 +5,8 @@ module TextInput exposing
     , State
     , Style
     , deleteSelection
+    , extendTo
+    , forgetClicks
     , init
     , insertText
     , isWordChar
@@ -457,10 +459,11 @@ width style =
 
 {-| The mouse went down at `mousePosition`, with the box at `position`, at `time`: one
 click puts the cursor there, two in a row select the word there (or the nearest one if
-it is on a space), three select everything.
+it is on a space), three select everything. With Shift (`shift`) it instead selects from
+where the selection started (the old cursor, if nothing was selected) to there.
 -}
-mouseDown : Time.Posix -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
-mouseDown time style mousePosition position model =
+mouseDown : Time.Posix -> Bool -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+mouseDown time shift style mousePosition position model =
     let
         index : Int
         index =
@@ -469,7 +472,25 @@ mouseDown time style mousePosition position model =
         ( clicks, model2 ) =
             registerClick time index model
     in
-    replaceState (selectClicks clicks index) model2
+    if shift then
+        replaceState (extendTo index) (forgetClicks model)
+
+    else
+        replaceState (selectClicks clicks index) model2
+
+
+{-| Make the next click count as a first click.
+-}
+forgetClicks : Model -> Model
+forgetClicks model =
+    { model | lastClick = Nothing }
+
+
+{-| Move the cursor to `index`, leaving the other end of the selection where it is.
+-}
+extendTo : Int -> State -> State
+extendTo index state =
+    { state | cursorPosition = index, cursorSize = state.cursorPosition + state.cursorSize - index }
 
 
 {-| How long after a click another still counts as part of a double or triple click.

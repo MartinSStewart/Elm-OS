@@ -976,10 +976,10 @@ indexAt style mousePosition position model =
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
 it grabs it, else it moves the cursor there (two clicks in a row select the word there,
-three select the line: see TextInput.mouseDown).
+three select the line; with Shift it extends the selection: see TextInput.mouseDown).
 -}
-mouseDown : Time.Posix -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
-mouseDown time style mousePosition position model =
+mouseDown : Time.Posix -> Bool -> Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+mouseDown time shift style mousePosition position model =
     let
         onTrack : Coord UiPixels
         onTrack =
@@ -1010,7 +1010,10 @@ mouseDown time style mousePosition position model =
             | input =
                 TextInput.replaceState
                     (\state ->
-                        if clicks >= 3 then
+                        if shift then
+                            TextInput.extendTo index state
+
+                        else if clicks >= 3 then
                             let
                                 ( start, end ) =
                                     lineRange state.text index
@@ -1020,7 +1023,12 @@ mouseDown time style mousePosition position model =
                         else
                             TextInput.selectClicks clicks index state
                     )
-                    input
+                    (if shift then
+                        TextInput.forgetClicks input
+
+                     else
+                        input
+                    )
             , goalX = Nothing
         }
 

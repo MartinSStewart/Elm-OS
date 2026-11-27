@@ -940,6 +940,7 @@ step event model =
                                             | uiState =
                                                 Ui.onMouseDown
                                                     (Maybe.withDefault (Time.millisToPosix 0) model.time)
+                                                    model.shift
                                                     relativePositionToUi
                                                     cursor
                                                     id

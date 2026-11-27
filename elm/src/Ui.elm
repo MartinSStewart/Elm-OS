@@ -709,31 +709,34 @@ updateElement id state model =
 
 onMouseDown :
     Time.Posix
+    -> Bool
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
     -> Element id
     -> Model id
     -> Model id
-onMouseDown time relativePositionToUi cursor id (Element element) model =
-    onMouseDownHelper time relativePositionToUi cursor id element model
+onMouseDown time shift relativePositionToUi cursor id (Element element) model =
+    onMouseDownHelper time shift relativePositionToUi cursor id element model
 
 
 onMouseDownHelper :
     Time.Posix
+    -> Bool
     -> Coord UiPixels
     -> Coord UiPixels
     -> id
     -> ElementFull id lazy
     -> Model id
     -> Model id
-onMouseDownHelper time relativePositionToUi cursor id element model =
+onMouseDownHelper time shift relativePositionToUi cursor id element model =
     case element of
         TextInput textInput2 ->
             let
                 state3 =
                     TextInput.mouseDown
                         time
+                        shift
                         textInput2.style
                         cursor
                         relativePositionToUi
@@ -749,6 +752,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
                 state3 =
                     TextInputMultiline.mouseDown
                         time
+                        shift
                         textInput2.style
                         cursor
                         relativePositionToUi
@@ -829,7 +833,7 @@ onMouseDownHelper time relativePositionToUi cursor id element model =
             { model | focus = Nothing }
 
         Sourced _ child ->
-            onMouseDownHelper time relativePositionToUi cursor id child model
+            onMouseDownHelper time shift relativePositionToUi cursor id child model
 
 
 {-| The mouse moved with its button down after pressing the scroll bar of the viewport

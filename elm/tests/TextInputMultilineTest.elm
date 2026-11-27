@@ -194,7 +194,7 @@ suite =
             (\_ ->
                 let
                     click =
-                        TextInputMultiline.mouseDown (Time.millisToPosix 0) style (Coord.xy 4 (4 + textLineHeight + 1)) Coord.origin
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) False style (Coord.xy 4 (4 + textLineHeight + 1)) Coord.origin
                 in
                 (after "ab\ncd ef\ngh" [] |> click |> click |> click).input.current
                     |> (\state -> ( TextInput.selectionMin state, TextInput.selectionMax state ))
@@ -209,7 +209,7 @@ suite =
             (\_ ->
                 let
                     pressed =
-                        TextInputMultiline.mouseDown (Time.millisToPosix 0) style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) False style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
                 in
                 ( pressed.scroll, cursor pressed, pressed.grab /= Nothing )
                     |> Expect.equal ( 91, ( 0, 0 ), True )
@@ -218,7 +218,7 @@ suite =
             (\_ ->
                 let
                     dragged =
-                        TextInputMultiline.mouseDown (Time.millisToPosix 0) style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) False style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
                             |> TextInputMultiline.mouseDownMove style (Coord.xy 390 -500) Coord.origin
 
                     released =
@@ -281,6 +281,23 @@ suite =
                     |> (\model -> { model | input = TextInput.keyMsg True False (Keyboard.Character "z") model.input |> Tuple.first })
                 ).input.current.text
                     |> Expect.equal "abc"
+            )
+        , Test.test "Shift+click selects from the old cursor, and again from the same anchor"
+            (\_ ->
+                let
+                    shiftClick y =
+                        TextInputMultiline.mouseDown (Time.millisToPosix 0) True style (Coord.xy 4 y) Coord.origin
+
+                    selection model =
+                        ( TextInput.selectionMin model.input.current, TextInput.selectionMax model.input.current )
+
+                    start =
+                        after "ab\ncd ef\ngh" [ Keyboard.ArrowUp, Keyboard.Home ]
+                in
+                [ shiftClick (4 + 2 * textLineHeight + 1) start |> selection
+                , shiftClick (4 + 2 * textLineHeight + 1) start |> shiftClick 5 |> selection
+                ]
+                    |> Expect.equal [ ( 3, 9 ), ( 0, 3 ) ]
             )
         , Test.test "Ctrl+Shift+J joins the next line, dropping its indentation"
             (\_ ->

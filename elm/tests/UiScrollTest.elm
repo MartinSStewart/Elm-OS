@@ -106,7 +106,7 @@ suite =
                     pressed : Ui.Model ()
                     pressed =
                         -- Press the top of the thumb, in the scroll bar to the right of the content.
-                        Ui.onMouseDown (Time.millisToPosix 0) Coord.origin (Coord.xy 8 3) () viewport Ui.init
+                        Ui.onMouseDown (Time.millisToPosix 0) False Coord.origin (Coord.xy 8 3) () viewport Ui.init
 
                     dragged : Ui.Model ()
                     dragged =
