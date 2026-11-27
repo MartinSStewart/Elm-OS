@@ -858,7 +858,7 @@ choose_Calculator_Types_UiId put i =
 
 
 tree_Code_Model put value =
-    ModelTree.record [ "isOpen", "module_", "saved", "build", "showErrors", "committing", "git", "finding", "back", "forward", "lastPlace", "usages" ] (field_Code_Model put value)
+    ModelTree.record [ "isOpen", "local", "module_", "saved", "build", "showErrors", "committing", "git", "finding", "back", "forward", "lastPlace", "usages" ] (field_Code_Model put value)
 
 
 field_Code_Model put value i =
@@ -867,33 +867,36 @@ field_Code_Model put value i =
             ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | isOpen = x })) value.isOpen
 
         1 ->
-            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | module_ = x })) value.module_
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | local = x })) value.local
 
         2 ->
-            ModelTree.seqDict ModelTree.string ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | saved = x })) value.saved
+            ModelTree.maybe ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | module_ = x })) value.module_
 
         3 ->
-            ModelTree.maybe tree_Code_Types_BuildStatus (ModelTree.Put (\x -> ModelTree.apply put { value | build = x })) value.build
+            ModelTree.seqDict ModelTree.string ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | saved = x })) value.saved
 
         4 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | showErrors = x })) value.showErrors
+            ModelTree.maybe tree_Code_Types_BuildStatus (ModelTree.Put (\x -> ModelTree.apply put { value | build = x })) value.build
 
         5 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | committing = x })) value.committing
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | showErrors = x })) value.showErrors
 
         6 ->
-            tree_Code_Types_Git (ModelTree.Put (\x -> ModelTree.apply put { value | git = x })) value.git
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | committing = x })) value.committing
 
         7 ->
-            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | finding = x })) value.finding
+            tree_Code_Types_Git (ModelTree.Put (\x -> ModelTree.apply put { value | git = x })) value.git
 
         8 ->
-            ModelTree.list tree_Code_Types_Place (ModelTree.Put (\x -> ModelTree.apply put { value | back = x })) value.back
+            ModelTree.bool (ModelTree.Put (\x -> ModelTree.apply put { value | finding = x })) value.finding
 
         9 ->
-            ModelTree.list tree_Code_Types_Place (ModelTree.Put (\x -> ModelTree.apply put { value | forward = x })) value.forward
+            ModelTree.list tree_Code_Types_Place (ModelTree.Put (\x -> ModelTree.apply put { value | back = x })) value.back
 
         10 ->
+            ModelTree.list tree_Code_Types_Place (ModelTree.Put (\x -> ModelTree.apply put { value | forward = x })) value.forward
+
+        11 ->
             ModelTree.maybe tree_Code_Types_Place (ModelTree.Put (\x -> ModelTree.apply put { value | lastPlace = x })) value.lastPlace
 
         _ ->

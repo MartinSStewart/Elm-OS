@@ -529,7 +529,21 @@ update msg model =
                     Email.tick (Time.posixToMillis time) model.email
             in
             ( { model | bootInfo = bootInfo, time = Just time, asciiCollab = asciiCollab, email = email }
-            , bootEffects ++ asciiEffects ++ emailEffects
+            , bootEffects
+                ++ asciiEffects
+                ++ emailEffects
+                ++ (case Code.awaitedCommit model.code of
+                        Just commit ->
+                            -- Every five minutes: is what runs here in the deployed builds yet?
+                            if modBy 300 (Time.posixToMillis time // 1000) == 0 then
+                                [ Effect.Http (Code.GitHub.containsCheck (Code.githubToken model.uiState) commit) ]
+
+                            else
+                                []
+
+                        Nothing ->
+                            []
+                   )
             )
 
         SnapshotWritten bytes ->
@@ -733,6 +747,27 @@ step event model =
                                 )
                                 model.code
                                 |> Tuple.mapFirst (\code -> { model | code = code })
+
+                        CodeDeployedCheck ->
+                            -- Back to following the deployed builds, if the push is in them
+                            -- and nothing was changed since.
+                            ( model
+                            , case ( Code.awaitedCommit model.code, decoded (D.field "status" D.string) ) of
+                                ( Just _, Ok "ahead" ) ->
+                                    [ Effect.FollowDeployed ]
+
+                                ( Just _, Ok "identical" ) ->
+                                    [ Effect.FollowDeployed ]
+
+                                ( Just _, Ok _ ) ->
+                                    []
+
+                                ( Just _, Err _ ) ->
+                                    []
+
+                                ( Nothing, _ ) ->
+                                    []
+                            )
 
                         HistoryRequest generation i ->
                             ( { model | history = History.gotResponse generation i result model.history }, [] )
@@ -2343,6 +2378,8 @@ type HttpRequestId
     | WebViewerRequest Int
       -- The Code app's commits (Code.GitHub.requestId).
     | CodeRequest Int
+      -- Whether the deployed builds have the commit the Code app pushed (Code.GitHub.containsCheck).
+    | CodeDeployedCheck
       -- The History app's commits: which refresh, and which branch of it.
     | HistoryRequest Int Int
 
@@ -2368,6 +2405,9 @@ httpRequestIdToString request =
         CodeRequest n ->
             Code.GitHub.requestId n
 
+        CodeDeployedCheck ->
+            Code.GitHub.containsCheckId
+
         HistoryRequest generation i ->
             History.requestId generation i
 
@@ -2392,6 +2432,9 @@ stringToHttpRequestId string =
 
         [ "code", n ] ->
             String.toInt n |> Maybe.map CodeRequest
+
+        [ "codecheck" ] ->
+            Just CodeDeployedCheck
 
         [ "history", generation, i ] ->
             Maybe.map2 HistoryRequest (String.toInt generation) (String.toInt i)

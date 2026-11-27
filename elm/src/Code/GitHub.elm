@@ -1,5 +1,7 @@
 module Code.GitHub exposing
     ( Answer(..)
+    , containsCheck
+    , containsCheckId
     , init
     , requestId
     , respond
@@ -55,6 +57,34 @@ startingPoint git =
 
     else
         ( BuildInfo.commit, BuildInfo.branch )
+
+
+{-| The request id of the check whether `deployed` has got to `commit`.
+-}
+containsCheckId : String
+containsCheckId =
+    "codecheck"
+
+
+{-| A request for how the `deployed` branch stands against `commit` (the compare API): its
+"status" says "ahead" or "identical" when deployed has that commit.
+-}
+containsCheck : String -> String -> HttpRequest
+containsCheck token commit =
+    { id = containsCheckId
+    , method = "GET"
+    , url = "https://api.github.com/repos/" ++ repository ++ "/compare/" ++ commit ++ "...deployed"
+    , headers =
+        ( "Accept", "application/vnd.github+json" )
+            :: (if token == "" then
+                    []
+
+                else
+                    [ ( "Authorization", "Bearer " ++ token ) ]
+               )
+    , body = Effect.noBody
+    , timeoutMs = Just (Duration.seconds 30)
+    }
 
 
 {-| The id of request number `n`, for Main's HttpRequestId.
