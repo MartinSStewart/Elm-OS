@@ -27,8 +27,10 @@
 //!      it (elm::switch_to), which carries the Model over and goes back if it fails.
 //!
 //! Elm hears how it goes from ToElm::Build. No shell is involved: each tool is started
-//! directly, with only the environment it needs.
+//! directly, with only the environment it needs, at idle priority so Elm OS stays
+//! responsive meanwhile (see run).
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -238,7 +240,28 @@ fn check_shape(shape: &str) -> Result<(), Failure> {
 }
 
 /// Runs a tool, giving what it wrote if it fails.
+///
+/// The tools run at idle priority (SCHED_IDLE): eco keeps every core busy for over a
+/// minute while it generates code, and at the same priority as the Elm program, the host
+/// and elmos-gpu, each step of drawing a frame waited its turn behind it, so Elm OS was
+/// laggy throughout. At idle priority whatever else wants a core gets it at once, and
+/// the build still has every core the moment nothing else does, so it isn't slower when
+/// Elm OS is idle (rather than leaving a core unused, which would be). It isn't starved
+/// either: idle tasks still get a small share, so a busy app slows a build but can't stop it.
 fn run(step: &str, command: &mut Command) -> Result<(), Failure> {
+    // SAFETY: only a system call between fork and exec. musl's sched_setscheduler does
+    // nothing (it's per-process in POSIX), so it's the system call itself. eco's threads
+    // inherit the policy from its first.
+    unsafe {
+        command.pre_exec(|| {
+            // Priority 0, the only one SCHED_IDLE has (musl's struct has more fields).
+            let param: libc::sched_param = std::mem::zeroed();
+            if libc::syscall(libc::SYS_sched_setscheduler, 0, libc::SCHED_IDLE, &param) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let output = command
         .env_remove("LD_LIBRARY_PATH")
         .stdin(Stdio::null())
