@@ -325,7 +325,7 @@ fn mount_tools() -> Result<(), String> {
     if Path::new(TOOLS).join("eco/bin/eco").is_file() {
         return Ok(());
     }
-    let dev = crate::disks::find_partition(TOOLS_PARTITION).ok_or_else(|| {
+    let dev = crate::disks::find_partition_any_disk(TOOLS_PARTITION).ok_or_else(|| {
         format!("There's no \"{TOOLS_PARTITION}\" partition, which has the compiler on it. Flash the USB stick with a newer image (make usb), or give QEMU build/tools-qemu.img.")
     })?;
     let _ = std::fs::create_dir_all(TOOLS);
