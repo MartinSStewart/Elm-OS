@@ -1,14 +1,18 @@
 # tools/format: an Elm formatter written in Elm
 
-Elm OS formats Elm code with this instead of the elm-format binary, so the Code app can
-format on the device. Its syntax tree keeps every comment in place (not in a side list),
-so it is also the base for later editor actions that need the whole tree.
+Elm OS formats Elm code with this instead of the elm-format binary: `make format` and
+`make format-check` (so CI) run it, and the Code app formats a module when it saves it.
+Its syntax tree keeps every comment in place (not in a side list), so it is also the base
+for later editor actions that need the whole tree.
 
-It is not wired into `make format` or the Code app yet; see "Status".
+The formatter itself is in the main program's sources, `elm/src/Compiler`, `Common`, `Data`
+and `Extra` (`Formatter.format` is the way in), so on-device builds have it. This folder
+has the rest: `cli/FormatCli.elm` and `format.js`, which run it in node for `make`, and
+how the copy was made.
 
 ## Where the code comes from
 
-`src/` is a copy of part of the eco compiler (eco-lang/eco-compiler, `compiler/src`,
+The formatter is a copy of part of the eco compiler (eco-lang/eco-compiler, `compiler/src`,
 commit 208a501d81ddf3aab19d8bbe21bd1f8123b785f3, 2026-11-09):
 
 - `Compiler/Parse/*`, `Compiler/Lexer/*`, `Compiler/IR/Source.elm`: eco's own parser and
@@ -22,9 +26,16 @@ packages (`Extra/*` replaces the elm-community helpers). Since then the copy has
 edited here, so running those scripts again would lose the fixes below; they are kept
 to show how the copy was made, and for copying a later parser fix by hand.
 
-The licences: `LICENSE-eco-compiler` (eco, from Elm and Guida) and `LICENSE-elm-format`.
+The licences: `licenses/eco-compiler-LICENSE` (eco, from Elm and Guida) and
+`licenses/elm-format-LICENSE`, shipped in the image (THIRD_PARTY.md).
 
 ## Differences from eco's copy
+
+- Nothing crashes: eco's `System.Crash` calls (on cases that can't happen) return
+  something harmless instead, since a crash would take down Elm OS's main program.
+  Modules nothing reaches (`Utils.*`, `Prelude`, `StringTable`) are gone.
+- elm-review doesn't check it (elm/review/src/ReviewConfig.elm), so it stays close to
+  eco's code and fixes can be copied across.
 
 - Doc comments are kept exactly as written. eco's port re-prints their Markdown (as
   elm-format does), and got it wrong: it reordered lines. Not touching them can't change
@@ -71,5 +82,6 @@ unchanged, and their original sources format the same as elm-format does apart f
 doc comments; and every repo file with its indentation and spacing scrambled (4
 seeds) formats exactly as elm-format formats it.
 
-Every Elm file in the repo (272, tools/format's own included) comes out exactly as
-elm-format 0.8.8 writes it. Not wired into `make format` or the Code app yet.
+Every Elm file in the repo comes out exactly as elm-format 0.8.8 writes it. Natively
+(eco) Main.elm, 4,255 lines, formats in about 80 ms. Having the formatter in the main
+program made a build about 12% longer (155 to 173 s here) and its object 12 MB bigger.

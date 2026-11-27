@@ -100,7 +100,6 @@ the state instead of being built from the combinators.
 
 import Compiler.Core.Annotation as A
 import Compiler.Core.Snippet as Snippet
-import System.Crash exposing (crash)
 
 
 
@@ -670,8 +669,9 @@ word2 w1 w2 toError =
 {-| Returns the character that starts at `index` in `str`, counting in the
 units `String.slice` uses.
 
-It crashes, through `System.Crash`, when `index` is at or past the end of
-`str`. It checks nothing against a parser's `end`, so a caller reading a
+When `index` is at or past the end of `str` it returns `'\u{0000}'` (eco
+crashes instead; in Elm OS the formatter runs in the main program, which must
+not crash). It checks nothing against a parser's `end`, so a caller reading a
 snippet must check that bound itself, as `isWord` does.
 
 -}
@@ -682,7 +682,8 @@ unsafeIndex str index =
             char
 
         Nothing ->
-            crash "Error on unsafeIndex!"
+            -- past the end: no token starts with this, so parsing fails rather than crashing
+            '\u{0000}'
 
 
 {-| Returns `True` when `pos` is before `end` and the character there is `word`.

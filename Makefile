@@ -905,7 +905,7 @@ bench: $(BUILD)/wire/.done
 # written in Elm (eco's parser and its port of elm-format's printer; it writes what
 # elm-format 0.8.8 writes; see tools/format/README.md). `make migration` formats what it writes.
 
-ELM_DIRS := elm/src elm/tests elm/bench elm/review/src elm/review/tests tools/wire/src tools/wire/test tools/format/src tools/format/cli
+ELM_DIRS := elm/src elm/tests elm/bench elm/review/src elm/review/tests tools/wire/src tools/wire/test tools/format/cli
 FORMAT = node tools/format/format.js $(BUILD)/format.js
 
 format: $(BUILD)/format.js
@@ -915,7 +915,7 @@ format-check: $(BUILD)/format.js
 	$(FORMAT) --validate $(ELM_DIRS)
 	@echo "passed: format-check" $(SAY)
 
-FORMAT_SRC := tools/format/elm.json $(shell find tools/format/src tools/format/cli -name "*.elm")
+FORMAT_SRC := tools/format/elm.json $(shell find elm/src tools/format/cli -name "*.elm")
 
 $(BUILD)/format.js: $(FORMAT_SRC) $(BUILD)/eco-setting | check-deps
 	@mkdir -p $(BUILD)

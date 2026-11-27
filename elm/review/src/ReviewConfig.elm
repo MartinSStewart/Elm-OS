@@ -49,7 +49,14 @@ config =
     -- elm/src/Evergreen is frozen copies of old types, and the migrations between
     -- them, which tools/wire writes (`make migration`). elm/src/Generated is written by
     -- tools/wire too (`make`): checked in so what it uses counts as used.
-    List.map (Review.Rule.ignoreErrorsForDirectories [ "src/Evergreen/", "src/Generated/" ]) rules
+    -- src/Compiler, src/Common, src/Data and src/Extra are the Elm formatter: a copy of
+    -- part of eco's compiler (tools/format/README.md), kept close to eco's code so fixes
+    -- can be copied across, so it isn't held to these rules.
+    List.map
+        (Review.Rule.ignoreErrorsForDirectories
+            [ "src/Evergreen/", "src/Generated/", "src/Compiler/", "src/Common/", "src/Data/", "src/Extra/" ]
+        )
+        rules
 
 
 rules : List Rule

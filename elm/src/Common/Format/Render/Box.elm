@@ -61,7 +61,6 @@ import Data.Set as EverySet exposing (EverySet)
 import Extra.Basics exposing (flip)
 import Extra.Maybe as Maybe
 import Hex
-import System.Crash exposing (crash)
 
 
 {-| The formatter's model of a whole module.
@@ -1262,7 +1261,7 @@ declToDeclarations ( ( preDeclComments, postDeclComments ), decl ) =
         ++ List.map BodyComment postDeclComments
 
 
-{-| Returns the layout of a module in the formatter's model, as `formatModule` describes: any comments before the header followed by two blank lines, the header, and the body. It crashes when all of these are empty, which cannot happen: the header holds the module line, or, for a module in a doc comment with no module line, its default imports.
+{-| Returns the layout of a module in the formatter's model, as `formatModule` describes: any comments before the header followed by two blank lines, the header, and the body. All of these can't be empty: the header holds the module line, or, for a module in a doc comment with no module line, its default imports.
 -}
 formatModule_ : Bool -> Int -> Module -> Box
 formatModule_ addDefaultHeader spacing modu =
@@ -1305,7 +1304,8 @@ formatModule_ addDefaultHeader spacing modu =
             Box.stack1 first rest
 
         [] ->
-            crash "Common.Format.Render.Box.formatModule_: a module has a module line or, for a doc-comment module, its default imports"
+            -- can't happen: the header always holds the module line
+            Box.blankLine
 
 
 {-| Returns the layout of a list of top-level items with `linesBetween` blank lines between declarations, or `Nothing` when there are none.

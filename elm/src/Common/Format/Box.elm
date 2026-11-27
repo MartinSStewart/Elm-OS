@@ -55,7 +55,6 @@ box (`indent`, `prefix`, `addSuffix`) and turn a box into text (`render`).
 
 import Extra.Basics exposing (flip)
 import Extra.Result as Result
-import Prelude
 
 
 {-| A piece of one line of output. It is meant to hold no line break, but
@@ -319,9 +318,14 @@ addSuffix suffix b =
             line (row [ l, suffix ])
 
         ( l1, ls ) ->
-            line l1
-                |> andThen (List.map line (Prelude.init ls))
-                |> andThen [ line (row [ Prelude.last ls, suffix ]) ]
+            case List.reverse ls of
+                last :: reversedInit ->
+                    line l1
+                        |> andThen (List.map line (List.reverse reversedInit))
+                        |> andThen [ line (row [ last, suffix ]) ]
+
+                [] ->
+                    line (row [ l1, suffix ])
 
 
 {-| Renders a line as it appears when it starts at column `startColumn`.
