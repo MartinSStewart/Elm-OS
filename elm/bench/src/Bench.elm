@@ -10,6 +10,7 @@ Each step runs a few times and the fastest run is printed, in milliseconds.
 import Bounds
 import Bytes exposing (Bytes)
 import Bytes.Encode as BE
+import CodeEditor
 import Coord
 import Effect
 import Fixture
@@ -21,7 +22,6 @@ import ScreenshotViewer
 import ScreenshotViewer.Types
 import Sprite
 import Task exposing (Task)
-import TextInputMultiline
 import Time
 import Ui
 import UiId
@@ -370,9 +370,10 @@ main =
         }
 
 
-{-| The code editor (TextInputMultiline, in the pixel font, so long lines wrap) holding
-`text`, with the cursor half way down it: a frame, and the work of a key that moves the
-cursor down a row.
+{-| The Code app's editor (CodeEditor) holding `text`: a frame at the top, the middle and
+the end, the same with a search's matches marked, and the work of a key that moves the
+cursor down a row, of typing a character and of a touchpad scroll, with the cursor half way
+down. Each is the mean of `editorRuns` runs, as they take well under a millisecond.
 -}
 codeEditor : String -> Task Never ()
 codeEditor text =
@@ -383,26 +384,80 @@ codeEditor text =
         screen =
             Coord.xy 1280 800
 
-        style : TextInputMultiline.Style
+        style : CodeEditor.Style
         style =
-            { font = Sprite.Mono
-            , fontSize = Sprite.Small
-            , width = Units.ui 900
-            , lines = 40
-            , syntax = TextInputMultiline.PlainText
-            , lineNumbers = False
-            , highlights = []
-            }
+            { fontSize = Sprite.Small, width = Units.ui 1000, lines = 45 }
 
-        model : TextInputMultiline.Model
-        model =
-            TextInputMultiline.withText text
-                |> TextInputMultiline.select style (String.length text // 2) (String.length text // 2)
+        editor : CodeEditor.Model
+        editor =
+            CodeEditor.withText text
+                |> CodeEditor.select style (String.length text // 2) (String.length text // 2)
+
+        searching : CodeEditor.Model
+        searching =
+            CodeEditor.search "model" editor
+
+        lineCount =
+            List.length (String.lines text)
+
+        -- The cursor's row is in view in `editor`, in the middle of the text.
+        top =
+            CodeEditor.scrollPixels style -1.0e12 editor
+
+        end =
+            CodeEditor.scrollPixels style 1.0e12 editor
+
+        drawn model () =
+            CodeEditor.view scale (Bounds.fromTopLeftAndSize Coord.origin screen) style (Coord.xy 10 10) True model |> List.length
 
         named label =
-            "code editor (" ++ String.fromInt (String.length text) ++ " chars, " ++ String.fromInt (List.length (String.lines text)) ++ " lines): " ++ label
+            "code editor (" ++ String.fromInt (String.length text) ++ " chars, " ++ String.fromInt lineCount ++ " lines): " ++ label
     in
-    timed (named "view (triangles)")
-        (\() -> TextInputMultiline.view scale (Bounds.fromTopLeftAndSize Coord.origin (Coord.xy 1280 800)) style (Coord.xy 10 10) True model |> List.length)
-        |> Task.andThen (\_ -> timed (named "ArrowDown") (\() -> TextInputMultiline.keyMsg style False False Keyboard.ArrowDown model |> Tuple.first |> .scroll))
+    timedMean (named "frame at the top") (drawn top)
+        |> Task.andThen (\_ -> timedMean (named "frame in the middle") (drawn editor))
+        |> Task.andThen (\_ -> timedMean (named "frame at the end") (drawn end))
+        |> Task.andThen (\_ -> timedMean (named "frame in the middle, searching") (drawn searching))
+        |> Task.andThen (\_ -> timedMean (named "search for \"model\"") (\() -> CodeEditor.matchCount (CodeEditor.search "model" editor)))
+        |> Task.andThen (\_ -> timedMean (named "ArrowDown") (\() -> (Tuple.first (CodeEditor.keyMsg style False False Keyboard.ArrowDown searching)).cursorPosition))
+        |> Task.andThen (\_ -> timedMean (named "type a character") (\() -> (Tuple.first (CodeEditor.keyMsg style False False (Keyboard.Character "x") searching)).cursorPosition))
+        |> Task.andThen (\_ -> timedMean (named "type {- (lexes on to the end)") (\() -> (Tuple.first (CodeEditor.keyMsg style False False (Keyboard.Character "{-") searching)).cursorPosition))
+        |> Task.andThen (\_ -> timedMean (named "touchpad scroll") (\() -> (CodeEditor.scrollPixels style 18 searching).scroll))
         |> Task.map (\_ -> ())
+
+
+editorRuns : Int
+editorRuns =
+    20
+
+
+{-| How long `f ()` takes on average over `editorRuns` runs, in milliseconds.
+-}
+timedMean : String -> (() -> Int) -> Task Never Int
+timedMean name f =
+    let
+        go : Int -> Int -> Int
+        go left acc =
+            if left <= 0 then
+                acc
+
+            else
+                go (left - 1) (acc + f ())
+    in
+    Time.now
+        |> Task.andThen
+            (\t0 ->
+                let
+                    result : Int
+                    result =
+                        go editorRuns 0
+                in
+                Time.now
+                    |> Task.map
+                        (\t1 ->
+                            let
+                                _ =
+                                    Debug.log name (String.fromFloat (toFloat (Time.posixToMillis t1 - Time.posixToMillis t0) / toFloat editorRuns) ++ " ms")
+                            in
+                            result
+                        )
+            )

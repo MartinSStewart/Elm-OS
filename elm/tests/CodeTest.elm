@@ -2,12 +2,12 @@ module CodeTest exposing (forgetting, history, navigation, running, suite)
 
 import Code
 import Code.Types exposing (BuildStatus(..), GitStatus(..), UiId(..))
+import CodeEditor
 import Coord
 import Expect
 import SeqDict
 import SourceCode
 import Test exposing (Test)
-import TextInputMultiline
 import Ui
 import UiId
 
@@ -25,7 +25,7 @@ suite =
             Code.init
 
         sizeOf m =
-            Ui.size (Code.view Ui.noLazyCache window (TextInputMultiline.withText "module A exposing (a)\n") "a" "" Nothing m)
+            Ui.size (Code.view Ui.noLazyCache window (CodeEditor.withText "module A exposing (a)\n") "" Nothing m)
 
         failed =
             Just (BuildFailed "Compiling" (String.repeat 30 "a long line of compiler output that is wider than the window, much wider\n"))
@@ -157,20 +157,17 @@ history =
         click name ( model, uiState ) =
             let
                 ( model2, uiState2, _ ) =
-                    Code.onClick (ModuleButton name) (boxStyle model) (typed uiState) uiState model
+                    Code.onClick (ModuleButton name) (boxStyle model) uiState model
             in
             ( Code.afterEvent uiState2 model2, uiState2 )
-
-        typed uiState =
-            (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
 
         moveTo position ( model, uiState ) =
             let
                 uiState2 =
                     Ui.insertElement
                         (UiId.Code Input)
-                        (Ui.TextInputMultilineState
-                            (TextInputMultiline.select (boxStyle model) position position (Ui.getTextInputMultiline (UiId.Code Input) uiState))
+                        (Ui.CodeEditorState
+                            (CodeEditor.select (boxStyle model) position position (Ui.getCodeEditor (UiId.Code Input) uiState))
                         )
                         uiState
             in
@@ -184,7 +181,7 @@ history =
             ( Code.afterEvent uiState2 model2, uiState2 )
 
         place ( model, uiState ) =
-            ( model.module_, (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.cursorPosition )
+            ( model.module_, (Ui.getCodeEditor (UiId.Code Input) uiState).cursorPosition )
 
         walked =
             ( start, Ui.init )
@@ -254,7 +251,7 @@ navigation =
             "module TextInputMultiline exposing (x)\n\nimport Scrollbar\n\nx =\n    Scrollbar.marks\n"
 
         start =
-            Code.init |> (\init -> { init | saved = SeqDict.fromList [ ( "Scrollbar", scrollbar ), ( "TextInputMultiline", editor ) ] })
+            Code.init |> (\init -> { init | saved = SeqDict.fromList [ ( "Scrollbar", scrollbar ), ( "TextInputMultiline", editor ), ( "CodeEditor", "module CodeEditor exposing (y)\n\ny =\n    1\n" ) ] })
 
         boxStyle model =
             Code.style window model
@@ -262,12 +259,12 @@ navigation =
         open name ( model, uiState ) =
             let
                 ( model2, uiState2, _ ) =
-                    Code.onClick (ModuleButton name) (boxStyle model) (typed uiState) uiState model
+                    Code.onClick (ModuleButton name) (boxStyle model) uiState model
             in
             ( Code.afterEvent uiState2 model2, uiState2 )
 
         typed uiState =
-            (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+            CodeEditor.text (Ui.getCodeEditor (UiId.Code Input) uiState)
 
         -- The cursor in the middle of the first `needle` in the open module, then Ctrl+click.
         clickOn needle ( model, uiState ) =
@@ -278,8 +275,8 @@ navigation =
                 uiState2 =
                     Ui.insertElement
                         (UiId.Code Input)
-                        (Ui.TextInputMultilineState
-                            (TextInputMultiline.select (boxStyle model) position position (Ui.getTextInputMultiline (UiId.Code Input) uiState))
+                        (Ui.CodeEditorState
+                            (CodeEditor.select (boxStyle model) position position (Ui.getCodeEditor (UiId.Code Input) uiState))
                         )
                         uiState
             in
@@ -291,7 +288,7 @@ navigation =
                     ( model, uiState2 )
 
         place ( model, uiState ) =
-            ( model.module_, (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.cursorPosition )
+            ( model.module_, (Ui.getCodeEditor (UiId.Code Input) uiState).cursorPosition )
 
         usedFrom =
             ( start, Ui.init ) |> open "Scrollbar" |> clickOn "marks ="

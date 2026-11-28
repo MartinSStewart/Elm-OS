@@ -1,7 +1,8 @@
 module ElmSyntax exposing
     ( Kind(..)
-    , State
+    , State(..)
     , codeOnly
+    , endState
     , highlightLine
     , startStates
     , stateAt

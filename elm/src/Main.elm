@@ -29,6 +29,7 @@ import Clock
 import Code
 import Code.GitHub
 import Code.Types
+import CodeEditor
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Cursor exposing (Cursor)
@@ -566,7 +567,7 @@ update msg model =
             case value of
                 Ok event ->
                     step event model
-                        |> Tuple.mapFirst (\next -> { next | code = Code.afterEvent next.uiState next.code })
+                        |> Tuple.mapFirst (\next -> { next | code = Code.afterEvent next.uiState next.code, uiState = Code.syncSearch next.code next.uiState })
 
                 Err error ->
                     ( model, [ Effect.Log ("couldn't read a message from the host: " ++ error) ] )
@@ -1116,7 +1117,7 @@ step event model =
                     codeCursorHistory Code.cursorForward model
 
                 else
-                    ( multilineKey (Code Code.Types.Input) (codeStyle model) key model, [] )
+                    ( codeEditorKey (codeStyle model) key model, [] )
 
             else if
                 model.code.isOpen
@@ -1851,7 +1852,7 @@ clickElement model id =
         Code codeId ->
             let
                 ( code, uiState, effects ) =
-                    Code.onClick codeId (codeStyle model) (codeText model) model.uiState model.code
+                    Code.onClick codeId (codeStyle model) model.uiState model.code
             in
             ( { model | code = code, uiState = uiState }, effects )
 
@@ -2757,7 +2758,7 @@ dragSelect focus mouse position model =
             dragSelectMultiline (Editor Editor.Types.Input) (Editor.style (appUiSize EditorApp model)) mouse position model
 
         Code Code.Types.Input ->
-            dragSelectMultiline (Code Code.Types.Input) (codeStyle model) mouse position model
+            dragSelectCode (codeStyle model) mouse position model
 
         Code _ ->
             model
@@ -2877,7 +2878,63 @@ dragSelect focus mouse position model =
             model
 
 
-{-| A key for a text box with many lines (the text editor's or the Code app's), `id`.
+{-| Selects in the Code app's text box while the mouse drags.
+-}
+dragSelectCode : CodeEditor.Style -> Coord UiPixels -> Coord UiPixels -> Model -> Model
+dragSelectCode style mouse position model =
+    let
+        id : UiId
+        id =
+            Code Code.Types.Input
+    in
+    { model
+        | uiState =
+            Ui.insertElement
+                id
+                (CodeEditorState (CodeEditor.mouseDownMove style mouse position (Ui.getCodeEditor id model.uiState)))
+                model.uiState
+    }
+
+
+{-| A key for the Code app's text box. Its copies go in the same clipboard as the other
+boxes'.
+-}
+codeEditorKey : CodeEditor.Style -> Key -> Model -> Model
+codeEditorKey style key model =
+    let
+        id : UiId
+        id =
+            Code Code.Types.Input
+
+        editor : CodeEditor.Model
+        editor =
+            Ui.getCodeEditor id model.uiState
+    in
+    case ( model.ctrl, key ) of
+        ( False, Keyboard.Escape ) ->
+            { model | uiState = Ui.setFocus Nothing model.uiState }
+
+        ( True, Keyboard.Character "v" ) ->
+            { model | uiState = Ui.insertElement id (CodeEditorState (CodeEditor.paste style model.clipboard editor)) model.uiState }
+
+        _ ->
+            let
+                ( typed, outMsg ) =
+                    CodeEditor.keyMsg style model.ctrl model.shift key editor
+            in
+            { model
+                | uiState = Ui.insertElement id (CodeEditorState typed) model.uiState
+                , clipboard =
+                    case outMsg of
+                        TextInput.CopyText text ->
+                            text
+
+                        TextInput.NoOutMsg ->
+                            model.clipboard
+            }
+
+
+{-| A key for a text box with many lines (the text editor's), `id`.
 Its copies go in the same clipboard as the password box's.
 -}
 multilineKey : UiId -> TextInputMultiline.Style -> Key -> Model -> Model
@@ -3574,8 +3631,7 @@ appConfig app model =
                     Code.view
                         model.lazyCache
                         size
-                        (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState)
-                        (Code.findText model.uiState)
+                        (Ui.getCodeEditor (Code Code.Types.Input) model.uiState)
                         (Maybe.map .build model.system |> Maybe.withDefault "")
                         model.upgradingTo
                         model.code
@@ -4135,7 +4191,7 @@ notice model text =
 
 {-| The Code app's text box, as big as its App.
 -}
-codeStyle : Model -> TextInputMultiline.Style
+codeStyle : Model -> CodeEditor.Style
 codeStyle model =
     Code.style (appUiSize CodeApp model) model.code
 
@@ -4176,7 +4232,7 @@ codeFindKey key model =
 through the places it jumped from, which can be in another module.
 -}
 codeCursorHistory :
-    (TextInputMultiline.Style -> Ui.Model UiId -> Code.Model -> ( Code.Model, Ui.Model UiId ))
+    (CodeEditor.Style -> Ui.Model UiId -> Code.Model -> ( Code.Model, Ui.Model UiId ))
     -> Model
     -> ( Model, List Effect )
 codeCursorHistory move model =
@@ -4185,13 +4241,6 @@ codeCursorHistory move model =
             move (codeStyle model) model.uiState model.code
     in
     ( { model | code = code, uiState = uiState }, [] )
-
-
-{-| The text in the Code app's text box.
--}
-codeText : Model -> String
-codeText model =
-    (Ui.getTextInputMultiline (Code Code.Types.Input) model.uiState).input.current.text
 
 
 {-| The Model as a tree, for the Model viewer (Generated/ModelTree.elm, which tools/wire

@@ -15,7 +15,7 @@ import Units
 
 style : TextInputMultiline.Style
 style =
-    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.ui 400, lines = 10, syntax = TextInputMultiline.PlainText, lineNumbers = False, highlights = [] }
+    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.ui 400, lines = 10 }
 
 
 {-| Types `text` (one key per character, '\\n' as Enter), then presses `keys`.

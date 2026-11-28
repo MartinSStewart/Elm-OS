@@ -1,10 +1,10 @@
 module FormatterTest exposing (suite)
 
+import CodeEditor
 import Expect
 import Formatter
 import Sprite
 import Test exposing (Test)
-import TextInputMultiline
 import Units
 
 
@@ -58,21 +58,21 @@ suite =
         , Test.test "replaceAll is one undo step and keeps the cursor's line and column"
             (\_ ->
                 let
-                    replaced : TextInputMultiline.Model
+                    replaced : CodeEditor.Model
                     replaced =
-                        TextInputMultiline.withText "ab\ncdef\ng"
-                            |> TextInputMultiline.select style 6 6
-                            |> TextInputMultiline.replaceAll style "AB\nCD\nG"
+                        CodeEditor.withText "ab\ncdef\ng"
+                            |> CodeEditor.select style 6 6
+                            |> CodeEditor.replaceAll style "AB\nCD\nG"
                 in
-                ( replaced.input.current.text
-                , TextInputMultiline.lineAndColumn replaced.input.current.text replaced.input.current.cursorPosition
-                , List.map .text (List.take 1 replaced.input.undoHistory)
+                ( CodeEditor.text replaced
+                , CodeEditor.cursorLineAndColumn replaced
+                , List.map (\step -> List.map .removed step.changes) (List.take 1 replaced.undoHistory)
                 )
-                    |> Expect.equal ( "AB\nCD\nG", ( 1, 2 ), [ "ab\ncdef\ng" ] )
+                    |> Expect.equal ( "AB\nCD\nG", ( 1, 2 ), [ [ "ab\ncdef\ng" ] ] )
             )
         ]
 
 
-style : TextInputMultiline.Style
+style : CodeEditor.Style
 style =
-    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.ui 400, lines = 10, syntax = TextInputMultiline.PlainText, lineNumbers = False, highlights = [] }
+    { fontSize = Sprite.Small, width = Units.ui 400, lines = 10 }

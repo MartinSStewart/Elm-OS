@@ -17,6 +17,7 @@ import Code.Types
 import DebugInfo.Types
 import Editor.Types
 import Effect
+import ElmSyntax
 import Email
 import Email.Types
 import HackerNews
@@ -1457,6 +1458,175 @@ field_Code_Types_UsageList put value i =
             ModelTree.list tree_Code_Index_Usage (ModelTree.Put (\x -> ModelTree.apply put { value | found = x })) value.found
 
 
+tree_CodeEditor_Change put value =
+    ModelTree.record [ "at", "removed", "inserted" ] (field_CodeEditor_Change put value)
+
+
+field_CodeEditor_Change put value i =
+    case i of
+        0 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | at = x })) value.at
+
+        1 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | removed = x })) value.removed
+
+        _ ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | inserted = x })) value.inserted
+
+
+tree_CodeEditor_Model put value =
+    ModelTree.record [ "document", "cursorPosition", "cursorSize", "undoHistory", "redoHistory", "lastClick", "revision", "nextRevision", "savedRevision", "scroll", "position", "glide", "goalX", "grab", "scrollbarShown", "scrollbarWidened" ] (field_CodeEditor_Model put value)
+
+
+field_CodeEditor_Model put value i =
+    case i of
+        0 ->
+            tree_CodeEditor_Document_Document (ModelTree.Put (\x -> ModelTree.apply put { value | document = x })) value.document
+
+        1 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | cursorPosition = x })) value.cursorPosition
+
+        2 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | cursorSize = x })) value.cursorSize
+
+        3 ->
+            ModelTree.list tree_CodeEditor_Step (ModelTree.Put (\x -> ModelTree.apply put { value | undoHistory = x })) value.undoHistory
+
+        4 ->
+            ModelTree.list tree_CodeEditor_Step (ModelTree.Put (\x -> ModelTree.apply put { value | redoHistory = x })) value.redoHistory
+
+        5 ->
+            ModelTree.maybe tree_TextInput_Click (ModelTree.Put (\x -> ModelTree.apply put { value | lastClick = x })) value.lastClick
+
+        6 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | revision = x })) value.revision
+
+        7 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | nextRevision = x })) value.nextRevision
+
+        8 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | savedRevision = x })) value.savedRevision
+
+        9 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | scroll = x })) value.scroll
+
+        10 ->
+            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | position = x })) value.position
+
+        11 ->
+            tree_TextInputMultiline_Glide (ModelTree.Put (\x -> ModelTree.apply put { value | glide = x })) value.glide
+
+        12 ->
+            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | goalX = x })) value.goalX
+
+        13 ->
+            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | grab = x })) value.grab
+
+        14 ->
+            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | scrollbarShown = x })) value.scrollbarShown
+
+        _ ->
+            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | scrollbarWidened = x })) value.scrollbarWidened
+
+
+tree_CodeEditor_Selection put value =
+    ModelTree.record [ "cursorPosition", "cursorSize" ] (field_CodeEditor_Selection put value)
+
+
+field_CodeEditor_Selection put value i =
+    case i of
+        0 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | cursorPosition = x })) value.cursorPosition
+
+        _ ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | cursorSize = x })) value.cursorSize
+
+
+tree_CodeEditor_Step put value =
+    ModelTree.record [ "changes", "before", "after", "revisionBefore", "revisionAfter" ] (field_CodeEditor_Step put value)
+
+
+field_CodeEditor_Step put value i =
+    case i of
+        0 ->
+            ModelTree.list tree_CodeEditor_Change (ModelTree.Put (\x -> ModelTree.apply put { value | changes = x })) value.changes
+
+        1 ->
+            tree_CodeEditor_Selection (ModelTree.Put (\x -> ModelTree.apply put { value | before = x })) value.before
+
+        2 ->
+            tree_CodeEditor_Selection (ModelTree.Put (\x -> ModelTree.apply put { value | after = x })) value.after
+
+        3 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | revisionBefore = x })) value.revisionBefore
+
+        _ ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | revisionAfter = x })) value.revisionAfter
+
+
+tree_CodeEditor_Document_Chunk put value =
+    ModelTree.record [ "lines", "chars", "rows", "rowsColumns", "matches" ] (field_CodeEditor_Document_Chunk put value)
+
+
+field_CodeEditor_Document_Chunk put value i =
+    case i of
+        0 ->
+            ModelTree.array tree_CodeEditor_Document_Line (ModelTree.Put (\x -> ModelTree.apply put { value | lines = x })) value.lines
+
+        1 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | chars = x })) value.chars
+
+        2 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | rows = x })) value.rows
+
+        3 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | rowsColumns = x })) value.rowsColumns
+
+        _ ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | matches = x })) value.matches
+
+
+tree_CodeEditor_Document_Document put value =
+    ModelTree.record [ "chunks", "length", "lineCount", "needle", "columns" ] (field_CodeEditor_Document_Document put value)
+
+
+field_CodeEditor_Document_Document put value i =
+    case i of
+        0 ->
+            ModelTree.array tree_CodeEditor_Document_Chunk (ModelTree.Put (\x -> ModelTree.apply put { value | chunks = x })) value.chunks
+
+        1 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | length = x })) value.length
+
+        2 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | lineCount = x })) value.lineCount
+
+        3 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | needle = x })) value.needle
+
+        _ ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | columns = x })) value.columns
+
+
+tree_CodeEditor_Document_Line put value =
+    ModelTree.record [ "text", "length", "start", "matches" ] (field_CodeEditor_Document_Line put value)
+
+
+field_CodeEditor_Document_Line put value i =
+    case i of
+        0 ->
+            ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | text = x })) value.text
+
+        1 ->
+            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | length = x })) value.length
+
+        2 ->
+            tree_ElmSyntax_State (ModelTree.Put (\x -> ModelTree.apply put { value | start = x })) value.start
+
+        _ ->
+            ModelTree.list ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | matches = x })) value.matches
+
+
 tree_Coord_Coord put value =
     ModelTree.tuple2 (ModelTree.quantity ModelTree.int) (ModelTree.quantity ModelTree.int) put value
 
@@ -1653,6 +1823,45 @@ choose_Effect_HttpError put i =
 
         _ ->
             ModelTree.apply put Effect.Interrupted
+
+
+tree_ElmSyntax_State put value =
+    case value of
+        ElmSyntax.Normal ->
+            ModelTree.variant "Normal" 0 (args_ElmSyntax_State put value) names_ElmSyntax_State (choose_ElmSyntax_State put)
+
+        ElmSyntax.InComment _ ->
+            ModelTree.variant "InComment" 1 (args_ElmSyntax_State put value) names_ElmSyntax_State (choose_ElmSyntax_State put)
+
+        ElmSyntax.InMultilineString ->
+            ModelTree.variant "InMultilineString" 0 (args_ElmSyntax_State put value) names_ElmSyntax_State (choose_ElmSyntax_State put)
+
+
+args_ElmSyntax_State put value i =
+    case value of
+        ElmSyntax.Normal ->
+            ModelTree.noChild i
+
+        ElmSyntax.InComment a0 ->
+            ModelTree.int (ModelTree.Put (\new -> ModelTree.apply put (ElmSyntax.InComment new))) a0
+
+        ElmSyntax.InMultilineString ->
+            ModelTree.noChild i
+
+
+names_ElmSyntax_State =
+    [ "Normal"
+    , "InMultilineString"
+    ]
+
+
+choose_ElmSyntax_State put i =
+    case i of
+        0 ->
+            ModelTree.apply put ElmSyntax.Normal
+
+        _ ->
+            ModelTree.apply put ElmSyntax.InMultilineString
 
 
 tree_Email_Account put value =
@@ -4192,6 +4401,9 @@ tree_Ui_ElementState put value =
         Ui.TextInputMultilineState _ ->
             ModelTree.variant "TextInputMultilineState" 1 (args_Ui_ElementState put value) [] (ModelTree.unchanged put value)
 
+        Ui.CodeEditorState _ ->
+            ModelTree.variant "CodeEditorState" 1 (args_Ui_ElementState put value) [] (ModelTree.unchanged put value)
+
         Ui.ViewportState _ ->
             ModelTree.variant "ViewportState" 1 (args_Ui_ElementState put value) [] (ModelTree.unchanged put value)
 
@@ -4206,6 +4418,9 @@ args_Ui_ElementState put value i =
 
         Ui.TextInputMultilineState a0 ->
             tree_TextInputMultiline_Model (ModelTree.Put (\new -> ModelTree.apply put (Ui.TextInputMultilineState new))) a0
+
+        Ui.CodeEditorState a0 ->
+            tree_CodeEditor_Model (ModelTree.Put (\new -> ModelTree.apply put (Ui.CodeEditorState new))) a0
 
         Ui.ViewportState a0 ->
             tree_Ui_ViewportModel (ModelTree.Put (\new -> ModelTree.apply put (Ui.ViewportState new))) a0

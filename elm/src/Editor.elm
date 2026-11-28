@@ -38,9 +38,6 @@ style windowSize =
     , fontSize = App.bodySize
     , width = Units.ui (windowWidth - 16)
     , lines = max 1 ((windowHeight - chrome) // Quantity.unwrap (Sprite.lineHeight App.bodySize))
-    , syntax = TextInputMultiline.PlainText
-    , lineNumbers = False
-    , highlights = []
     }
 
 

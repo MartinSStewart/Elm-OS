@@ -171,7 +171,7 @@ suite =
                             declaration :: _ ->
                                 Code.Index.usages { module_ = "Scrollbar", name = "marks", position = declaration.start } texts
                                     |> List.map .module_
-                                    |> Expect.equal [ "TextInputMultiline" ]
+                                    |> Expect.equal [ "CodeEditor" ]
 
                             [] ->
                                 Expect.fail "Scrollbar doesn't declare marks"

@@ -21,6 +21,7 @@ module Code exposing
     , save
     , saveShown
     , style
+    , syncSearch
     , testFact
     , uncommittedChanges
     , uncommittedModules
@@ -43,10 +44,10 @@ Commit and push sends the saved modules to GitHub as a commit (Code/GitHub.elm).
 
 import App
 import BuildInfo
-import Code.Find
 import Code.GitHub
 import Code.Index
 import Code.Types exposing (BuildStatus(..), Git, GitStatus(..), Place, UiId(..), UsageList)
+import CodeEditor
 import Color
 import Coord exposing (Coord)
 import Effect exposing (Effect)
@@ -58,7 +59,6 @@ import SeqDict exposing (SeqDict)
 import SourceCode
 import Sprite
 import TextInput
-import TextInputMultiline
 import Ui exposing (Element)
 import UiId
 import Units exposing (UiPixels)
@@ -175,27 +175,23 @@ uncommittedChanges model =
 {-| Saves the text box's text, formatted (Formatter) when it parses, and shows the
 formatted text in the box (one change to undo).
 -}
-saveShown : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+saveShown : CodeEditor.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
 saveShown boxStyle uiState model =
     let
-        editor : TextInputMultiline.Model
+        editor : CodeEditor.Model
         editor =
-            Ui.getTextInputMultiline (UiId.Code Input) uiState
+            Ui.getCodeEditor (UiId.Code Input) uiState
 
         text : String
         text =
-            editor.input.current.text
+            CodeEditor.text editor
 
         formatted : String
         formatted =
             Formatter.format text |> Maybe.withDefault text
     in
     ( saveText formatted model
-    , if formatted == text then
-        uiState
-
-      else
-        Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.replaceAll boxStyle formatted editor)) uiState
+    , Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState (CodeEditor.replaceAll boxStyle formatted editor |> CodeEditor.markSaved)) uiState
     )
 
 
@@ -226,8 +222,8 @@ saveText text model =
 {-| A click on one of the app's elements. Opening a module puts its text in the text
 box, so this takes and gives the UI's state too, and the text box's current text.
 -}
-onClick : UiId -> TextInputMultiline.Style -> String -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId, List Effect )
-onClick id boxStyle text uiState model =
+onClick : UiId -> CodeEditor.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId, List Effect )
+onClick id boxStyle uiState model =
     case id of
         OpenButton ->
             ( { model | isOpen = not model.isOpen }
@@ -257,7 +253,7 @@ onClick id boxStyle text uiState model =
             ( model, uiState, [] )
 
         ModuleButton name ->
-            openModule name text uiState model
+            openModule name (CodeEditor.text (Ui.getCodeEditor (UiId.Code Input) uiState)) uiState model
 
         SaveButton ->
             let
@@ -402,17 +398,13 @@ one line, as what to find, all selected so that typing replaces it.
 openFind : Coord UiPixels -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
 openFind windowSize uiState model =
     let
-        editor : TextInputMultiline.Model
+        editor : CodeEditor.Model
         editor =
-            Ui.getTextInputMultiline (UiId.Code Input) uiState
-
-        state : TextInput.State
-        state =
-            editor.input.current
+            Ui.getCodeEditor (UiId.Code Input) uiState
 
         selected : String
         selected =
-            String.slice (TextInput.selectionMin state) (TextInput.selectionMax state) state.text
+            CodeEditor.selectedText editor
 
         needle : String
         needle =
@@ -423,7 +415,7 @@ openFind windowSize uiState model =
                 inputText FindInput uiState
 
         -- The bar takes some of the code's lines, so the cursor may be hidden now.
-        shown : TextInputMultiline.Style
+        shown : CodeEditor.Style
         shown =
             style windowSize { model | finding = True }
     in
@@ -440,7 +432,7 @@ openFind windowSize uiState model =
             )
         |> Ui.insertElement
             (UiId.Code Input)
-            (Ui.TextInputMultilineState (TextInputMultiline.select shown (TextInput.selectionMin state) (TextInput.selectionMax state) editor))
+            (Ui.CodeEditorState (CodeEditor.select shown (min editor.cursorPosition (editor.cursorPosition + editor.cursorSize)) (max editor.cursorPosition (editor.cursorPosition + editor.cursorSize)) (CodeEditor.search needle editor)))
         |> Ui.setFocus (Just (UiId.Code FindInput))
     )
 
@@ -454,7 +446,7 @@ closeFind model =
 closes the bar, Enter in the find box goes to the next match (Shift+Enter the previous) and
 in the replace box replaces the current one. Nothing for the other keys.
 -}
-findKeyDown : TextInputMultiline.Style -> Bool -> Bool -> Keyboard.Key -> Model -> Ui.Model UiId.UiId -> Maybe ( Model, Ui.Model UiId.UiId )
+findKeyDown : CodeEditor.Style -> Bool -> Bool -> Keyboard.Key -> Model -> Ui.Model UiId.UiId -> Maybe ( Model, Ui.Model UiId.UiId )
 findKeyDown boxStyle inFindBox shift key model uiState =
     case key of
         Keyboard.Escape ->
@@ -471,82 +463,103 @@ findKeyDown boxStyle inFindBox shift key model uiState =
             Nothing
 
 
-{-| The matches of the find box's text in the code.
+{-| The text box, searching for the find box's text.
 -}
-matchRanges : Ui.Model UiId.UiId -> List ( Int, Int )
-matchRanges uiState =
-    Code.Find.matches (inputText FindInput uiState) (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+searched : Ui.Model UiId.UiId -> CodeEditor.Model
+searched uiState =
+    CodeEditor.search (inputText FindInput uiState) (Ui.getCodeEditor (UiId.Code Input) uiState)
+
+
+{-| After every event: the text box marks the find box's text while the bar shows, and
+nothing while it doesn't.
+-}
+syncSearch : Model -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+syncSearch model uiState =
+    let
+        editor : CodeEditor.Model
+        editor =
+            Ui.getCodeEditor (UiId.Code Input) uiState
+
+        needle : String
+        needle =
+            if findShown model then
+                inputText FindInput uiState
+
+            else
+                ""
+
+        synced : CodeEditor.Model
+        synced =
+            CodeEditor.search needle editor
+    in
+    if CodeEditor.sameSearch synced editor then
+        uiState
+
+    else
+        Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState synced) uiState
 
 
 {-| Selects the next (or previous) match after the selection, wrapping around.
 -}
-find : TextInputMultiline.Style -> Bool -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+find : CodeEditor.Style -> Bool -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
 find boxStyle forward uiState =
     let
-        editor : TextInputMultiline.Model
+        editor : CodeEditor.Model
         editor =
-            Ui.getTextInputMultiline (UiId.Code Input) uiState
-
-        state : TextInput.State
-        state =
-            editor.input.current
+            searched uiState
 
         found : Maybe ( Int, Int )
         found =
             if forward then
-                Code.Find.next (TextInput.selectionMax state) (matchRanges uiState)
+                CodeEditor.nextMatch (max editor.cursorPosition (editor.cursorPosition + editor.cursorSize)) editor
 
             else
-                Code.Find.previous (TextInput.selectionMin state) (matchRanges uiState)
+                CodeEditor.previousMatch (min editor.cursorPosition (editor.cursorPosition + editor.cursorSize)) editor
     in
     case found of
         Just ( start, end ) ->
-            Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.select boxStyle start end editor)) uiState
+            Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState (CodeEditor.select boxStyle start end editor)) uiState
 
         Nothing ->
-            uiState
+            Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState editor) uiState
 
 
 {-| After the find box's text changed: selects the first match from the start of the
 selection, so the one already selected stays while it still matches.
 -}
-findChanged : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+findChanged : CodeEditor.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
 findChanged boxStyle uiState =
     let
-        editor : TextInputMultiline.Model
+        editor : CodeEditor.Model
         editor =
-            Ui.getTextInputMultiline (UiId.Code Input) uiState
+            searched uiState
     in
-    case Code.Find.next (TextInput.selectionMin editor.input.current) (matchRanges uiState) of
+    case CodeEditor.nextMatch (min editor.cursorPosition (editor.cursorPosition + editor.cursorSize)) editor of
         Just ( start, end ) ->
-            Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.select boxStyle start end editor)) uiState
+            Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState (CodeEditor.select boxStyle start end editor)) uiState
 
         Nothing ->
-            uiState
+            Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState editor) uiState
 
 
 {-| Replaces the selected match with the replace box's text and selects the next one.
 When what is selected isn't a match, it just goes to the next.
 -}
-replace : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+replace : CodeEditor.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
 replace boxStyle uiState =
     let
-        editor : TextInputMultiline.Model
+        editor : CodeEditor.Model
         editor =
-            Ui.getTextInputMultiline (UiId.Code Input) uiState
-
-        state : TextInput.State
-        state =
-            editor.input.current
+            searched uiState
 
         selection : ( Int, Int )
         selection =
-            ( TextInput.selectionMin state, TextInput.selectionMax state )
+            ( min editor.cursorPosition (editor.cursorPosition + editor.cursorSize), max editor.cursorPosition (editor.cursorPosition + editor.cursorSize) )
     in
-    if List.member selection (matchRanges uiState) then
+    if CodeEditor.matchNumber editor /= Nothing then
         Ui.insertElement
             (UiId.Code Input)
-            (Ui.TextInputMultilineState (TextInputMultiline.replaceRanges boxStyle (inputText ReplaceInput uiState) [ selection ] editor))
+            (Ui.CodeEditorState (CodeEditor.replaceRanges boxStyle (inputText ReplaceInput uiState) [ selection ] editor))
             uiState
             |> find boxStyle True
 
@@ -554,18 +567,11 @@ replace boxStyle uiState =
         find boxStyle True uiState
 
 
-replaceAll : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
+replaceAll : CodeEditor.Style -> Ui.Model UiId.UiId -> Ui.Model UiId.UiId
 replaceAll boxStyle uiState =
     Ui.insertElement
         (UiId.Code Input)
-        (Ui.TextInputMultilineState
-            (TextInputMultiline.replaceRanges
-                boxStyle
-                (inputText ReplaceInput uiState)
-                (matchRanges uiState)
-                (Ui.getTextInputMultiline (UiId.Code Input) uiState)
-            )
-        )
+        (Ui.CodeEditorState (CodeEditor.replaceMatches boxStyle (inputText ReplaceInput uiState) (searched uiState)))
         uiState
 
 
@@ -922,14 +928,14 @@ currentPlace uiState model =
     case model.module_ of
         Just name ->
             let
-                state : TextInput.State
-                state =
-                    (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current
+                editor : CodeEditor.Model
+                editor =
+                    Ui.getCodeEditor (UiId.Code Input) uiState
             in
             Just
                 { module_ = name
-                , position = state.cursorPosition
-                , line = List.length (String.indexes "\n" (String.left state.cursorPosition state.text))
+                , position = editor.cursorPosition
+                , line = Tuple.first (CodeEditor.cursorLineAndColumn editor)
                 }
 
         Nothing ->
@@ -944,7 +950,7 @@ afterEvent : Ui.Model UiId.UiId -> Model -> Model
 afterEvent uiState model =
     case ( model.module_, model.lastPlace ) of
         ( Just name, Just last ) ->
-            if last.module_ == name && last.position == (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.cursorPosition then
+            if last.module_ == name && last.position == (Ui.getCodeEditor (UiId.Code Input) uiState).cursorPosition then
                 -- Not moved (most events): nothing to work out.
                 model
 
@@ -971,7 +977,7 @@ remember place places =
 
 {-| Alt+Shift+Left: puts the cursor where it was before it last jumped, in that module.
 -}
-cursorBack : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+cursorBack : CodeEditor.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
 cursorBack boxStyle uiState model =
     case ( model.back, currentPlace uiState model ) of
         ( target :: older, Just now ) ->
@@ -983,7 +989,7 @@ cursorBack boxStyle uiState model =
 
 {-| Alt+Shift+Right: goes on again to where the cursor was when it went back.
 -}
-cursorForward : TextInputMultiline.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+cursorForward : CodeEditor.Style -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
 cursorForward boxStyle uiState model =
     case ( model.forward, currentPlace uiState model ) of
         ( target :: later, Just now ) ->
@@ -995,7 +1001,7 @@ cursorForward boxStyle uiState model =
 
 {-| Moves the cursor to a place as a jump: where it was can be gone back to.
 -}
-jump : TextInputMultiline.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+jump : CodeEditor.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
 jump boxStyle target uiState model =
     case currentPlace uiState model of
         Just now ->
@@ -1025,9 +1031,13 @@ ctrlClick windowSize uiState model =
     case model.module_ of
         Just thisModule ->
             let
+                editor : CodeEditor.Model
+                editor =
+                    Ui.getCodeEditor (UiId.Code Input) uiState
+
                 state : TextInput.State
                 state =
-                    (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current
+                    { cursorPosition = editor.cursorPosition, cursorSize = editor.cursorSize, text = CodeEditor.text editor }
             in
             case Code.Index.wordAt state.cursorPosition state.text of
                 Just word ->
@@ -1047,7 +1057,7 @@ ctrlClickWord windowSize thisModule state word uiState model =
         text =
             state.text
 
-        boxStyle : TextInputMultiline.Style
+        boxStyle : CodeEditor.Style
         boxStyle =
             style windowSize model
 
@@ -1106,17 +1116,17 @@ ctrlClickWord windowSize thisModule state word uiState model =
                         withUsages =
                             { model | usages = Just { module_ = thisModule, name = word.name, found = Code.Index.usages target sources } }
 
-                        editor : TextInputMultiline.Model
+                        editor : CodeEditor.Model
                         editor =
-                            Ui.getTextInputMultiline (UiId.Code Input) uiState
+                            Ui.getCodeEditor (UiId.Code Input) uiState
                     in
                     -- The list takes some of the code's lines, so the cursor may be hidden now.
                     Just
                         ( withUsages
                         , Ui.insertElement
                             (UiId.Code Input)
-                            (Ui.TextInputMultilineState
-                                (TextInputMultiline.select (style windowSize withUsages) state.cursorPosition state.cursorPosition editor)
+                            (Ui.CodeEditorState
+                                (CodeEditor.select (style windowSize withUsages) state.cursorPosition state.cursorPosition editor)
                             )
                             uiState
                         )
@@ -1146,29 +1156,29 @@ lineOf text position =
 {-| Puts the cursor at a place, in whichever module, and shows it. That is not a jump to
 remember (the caller keeps the history).
 -}
-goTo : TextInputMultiline.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
+goTo : CodeEditor.Style -> Place -> Ui.Model UiId.UiId -> Model -> ( Model, Ui.Model UiId.UiId )
 goTo boxStyle target uiState model =
     let
         text : String
         text =
-            (Ui.getTextInputMultiline (UiId.Code Input) uiState).input.current.text
+            CodeEditor.text (Ui.getCodeEditor (UiId.Code Input) uiState)
 
         ( opened, uiState2, _ ) =
             openModule target.module_ text uiState model
 
-        editor : TextInputMultiline.Model
+        editor : CodeEditor.Model
         editor =
-            Ui.getTextInputMultiline (UiId.Code Input) uiState2
+            Ui.getCodeEditor (UiId.Code Input) uiState2
 
         position : Int
         position =
-            min target.position (String.length editor.input.current.text)
+            min target.position (String.length (CodeEditor.text editor))
 
         uiState3 : Ui.Model UiId.UiId
         uiState3 =
             Ui.insertElement
                 (UiId.Code Input)
-                (Ui.TextInputMultilineState (TextInputMultiline.selectCentered boxStyle position position editor))
+                (Ui.CodeEditorState (CodeEditor.selectCentered boxStyle position position editor))
                 uiState2
     in
     ( { opened | lastPlace = currentPlace uiState3 opened }, Ui.setFocus (Just (UiId.Code Input)) uiState3 )
@@ -1181,7 +1191,7 @@ load name uiState model =
     case moduleText name model of
         Just text ->
             ( { model | showErrors = False }
-            , Ui.insertElement (UiId.Code Input) (Ui.TextInputMultilineState (TextInputMultiline.withText text)) uiState
+            , Ui.insertElement (UiId.Code Input) (Ui.CodeEditorState (CodeEditor.withText text)) uiState
                 |> Ui.setFocus (Just (UiId.Code Input))
             , []
             )
@@ -1228,7 +1238,7 @@ gap =
 {-| The text box, as big as the window (of this size) lets it be: with the find bar over
 it, it has fewer lines.
 -}
-style : Coord UiPixels -> Model -> TextInputMultiline.Style
+style : Coord UiPixels -> Model -> CodeEditor.Style
 style windowSize model =
     let
         width : Quantity Int UiPixels
@@ -1250,34 +1260,22 @@ style windowSize model =
                     0
                   )
     in
-    { font = Sprite.Mono
-    , fontSize = Sprite.Small
+    { fontSize = Sprite.Small
     , width = width
     , lines = max 1 ((Coord.yRaw windowSize - chrome - barHeight) // lineHeight)
-    , syntax = TextInputMultiline.ElmCode
-    , lineNumbers = True
-    , highlights = []
     }
 
 
 {-| The window: the module's name and buttons, the code (or the list of modules, or the
 last build's errors), where the cursor is, whether the text is saved, and how the last
-build went. `input` is the text box's model, `needle` what the find box says.
+build went. `input` is the text box's model.
 -}
-view : Ui.LazyCache UiId.UiId -> Coord UiPixels -> TextInputMultiline.Model -> String -> String -> Maybe String -> Model -> Element UiId.UiId
-view lazyCache windowSize input needle running switchingTo model =
+view : Ui.LazyCache UiId.UiId -> Coord UiPixels -> CodeEditor.Model -> String -> Maybe String -> Model -> Element UiId.UiId
+view lazyCache windowSize input running switchingTo model =
     let
-        found : List ( Int, Int )
-        found =
-            if findShown model then
-                Code.Find.matches needle input.input.current.text
-
-            else
-                []
-
-        boxStyle : TextInputMultiline.Style
+        boxStyle : CodeEditor.Style
         boxStyle =
-            style windowSize model |> (\plain -> { plain | highlights = found })
+            style windowSize model
 
         segment color text =
             { text = text, color = color, font = Sprite.Sans Sprite.Regular, decorations = [], link = Nothing }
@@ -1285,11 +1283,8 @@ view lazyCache windowSize input needle running switchingTo model =
         button id label =
             Ui.button { id = UiId.Code id, pad = Ui.paddingXY 6 3 } (Ui.text label)
 
-        state =
-            input.input.current
-
         ( line, column ) =
-            TextInputMultiline.lineAndColumn state.text state.cursorPosition
+            CodeEditor.cursorLineAndColumn input
 
         editing =
             if model.showErrors || model.committing then
@@ -1315,8 +1310,8 @@ view lazyCache windowSize input needle running switchingTo model =
 
         unsaved =
             case editing of
-                Just name ->
-                    moduleText name model /= Just state.text
+                Just _ ->
+                    not (CodeEditor.isSaved input)
 
                 Nothing ->
                     False
@@ -1335,7 +1330,7 @@ view lazyCache windowSize input needle running switchingTo model =
                         segment Color.dimTextColor "As built"
                     , segment Color.dimTextColor
                         ((if findShown model then
-                            matchCount needle found state
+                            matchCount input
 
                           else
                             ""
@@ -1439,7 +1434,7 @@ view lazyCache windowSize input needle running switchingTo model =
                         ++ [ button CloseButton "Close" ]
 
         boxHeight =
-            Units.ui (Coord.yRaw (TextInputMultiline.size boxStyle))
+            Units.ui (Coord.yRaw (CodeEditor.size boxStyle))
 
         errors =
             case model.build of
@@ -1476,7 +1471,7 @@ view lazyCache windowSize input needle running switchingTo model =
                               else
                                 []
                              )
-                                ++ [ Ui.textInputMultiline { id = UiId.Code Input, style = boxStyle } ]
+                                ++ [ Ui.codeEditor { id = UiId.Code Input, style = boxStyle } ]
                                 ++ (case model.usages of
                                         Just usages ->
                                             [ usagesPanel boxStyle.width usages ]
@@ -1642,39 +1637,29 @@ sidebarWidth =
 
 
 {-| Which match the selection is, and how many there are: "3 of 15 matches", or just the
-count when the selection isn't one of them, or "No matches". Nothing when `needle`,
-the find box's text, is empty.
+count when the selection isn't one of them, or "No matches". Nothing when the text box
+searches for nothing (the find box is empty).
 -}
-matchCount : String -> List ( Int, Int ) -> TextInput.State -> String
-matchCount needle found state =
+matchCount : CodeEditor.Model -> String
+matchCount editor =
     let
         count : Int
         count =
-            List.length found
-
-        selection : ( Int, Int )
-        selection =
-            ( TextInput.selectionMin state, TextInput.selectionMax state )
-
-        position : List Int
-        position =
-            List.indexedMap Tuple.pair found
-                |> List.filter (\( _, range ) -> range == selection)
-                |> List.map Tuple.first
+            CodeEditor.matchCount editor
     in
-    case ( found, position ) of
-        ( [], _ ) ->
-            if needle == "" then
-                ""
+    if not (CodeEditor.isSearching editor) then
+        ""
 
-            else
-                "   No matches"
+    else if count == 0 then
+        "   No matches"
 
-        ( _, index :: _ ) ->
-            "   " ++ String.fromInt (index + 1) ++ " of " ++ String.fromInt count ++ " matches"
+    else
+        case CodeEditor.matchNumber editor of
+            Just index ->
+                "   " ++ String.fromInt index ++ " of " ++ String.fromInt count ++ " matches"
 
-        ( _, [] ) ->
-            "   " ++ String.fromInt count ++ " matches"
+            Nothing ->
+                "   " ++ String.fromInt count ++ " matches"
 
 
 {-| The find and replace bar: two rows, each a box (as wide as is left) and its buttons.

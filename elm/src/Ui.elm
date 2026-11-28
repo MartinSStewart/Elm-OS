@@ -21,6 +21,7 @@ module Ui exposing
     , button2
     , buttons
     , center
+    , codeEditor
     , colorText
     , colorText2
     , column
@@ -46,6 +47,7 @@ module Ui exposing
     , fadeScrollbars
     , findInput
     , fixed2
+    , getCodeEditor
     , getTextInput
     , getTextInputMultiline
     , hover
@@ -119,6 +121,7 @@ for now: underlined text and sprites from town-collab's texture.
 
 import Bounds exposing (Bounds)
 import Button
+import CodeEditor
 import Color exposing (Color)
 import Coord exposing (Coord)
 import Cursor exposing (Cursor)
@@ -164,6 +167,10 @@ type ElementFull id lazy
         { id : id
         , style : TextInputMultiline.Style
         }
+    | CodeEditor
+        { id : id
+        , style : CodeEditor.Style
+        }
     | Text
         { fontSize : Sprite.FontSize
         , segments : List Sprite.Segment
@@ -203,6 +210,7 @@ type alias ViewportData id =
 type ElementState
     = TextInputState TextInput.Model
     | TextInputMultilineState TextInputMultiline.Model
+    | CodeEditorState CodeEditor.Model
     | ViewportState ViewportModel
     | ButtonState Button.Model
 
@@ -311,6 +319,13 @@ elementToScreenshotHelper model element acc =
                     screenshotId (Just (TextInputMultilineState (getTextInputMultiline data.id model))) acc
             in
             ( acc2, TextInputMultiline { id = id, style = data.style } )
+
+        CodeEditor data ->
+            let
+                ( acc2, id ) =
+                    screenshotId (Just (CodeEditorState (getCodeEditor data.id model))) acc
+            in
+            ( acc2, CodeEditor { id = id, style = data.style } )
 
         Text data ->
             ( acc, Text { fontSize = data.fontSize, segments = data.segments, cachedSize = data.cachedSize, linkId = Nothing } )
@@ -465,6 +480,9 @@ stopMomentum model =
                         TextInputMultilineState multiline ->
                             TextInputMultilineState (TextInputMultiline.stopGlide multiline)
 
+                        CodeEditorState editor ->
+                            CodeEditorState (CodeEditor.stopGlide editor)
+
                         ButtonState _ ->
                             value
                 )
@@ -489,6 +507,9 @@ onMouseUp model =
 
                         TextInputMultilineState multiline ->
                             TextInputMultilineState (TextInputMultiline.mouseUp multiline)
+
+                        CodeEditorState editor ->
+                            CodeEditorState (CodeEditor.mouseUp editor)
 
                         ButtonState _ ->
                             value
@@ -549,6 +570,16 @@ getTextInputMultiline id model =
             TextInputMultiline.init
 
 
+getCodeEditor : id -> Model id -> CodeEditor.Model
+getCodeEditor id model =
+    case SeqDict.get id model.uiState of
+        Just (CodeEditorState data) ->
+            data
+
+        _ ->
+            CodeEditor.init
+
+
 getButton : id -> Model id -> Button.Model
 getButton id model =
     case SeqDict.get id model.uiState of
@@ -582,6 +613,9 @@ onAnimationFrame timeElapsed mouse model =
 
                         TextInputMultilineState multiline ->
                             TextInputMultiline.animate timeElapsed multiline |> TextInputMultilineState
+
+                        CodeEditorState editor ->
+                            CodeEditor.animate timeElapsed editor |> CodeEditorState
 
                         ButtonState _ ->
                             value
@@ -638,6 +672,17 @@ fadeScrollbars timeElapsed mouse hovered model =
                                 )
                                 dict
 
+                        Element (CodeEditor data) ->
+                            SeqDict.insert
+                                data.id
+                                ( CodeEditor.overScrollbar
+                                    data.style
+                                    (Coord.minus relativePositionToUi mouse)
+                                    (getCodeEditor id model)
+                                , CodeEditorState CodeEditor.init
+                                )
+                                dict
+
                         Element _ ->
                             dict
                 )
@@ -678,6 +723,9 @@ fadeScrollbars timeElapsed mouse hovered model =
 
                         TextInputMultilineState multiline ->
                             Scrollbar.fade timeElapsed (scrollbarHovered id) multiline |> TextInputMultilineState
+
+                        CodeEditorState editor ->
+                            Scrollbar.fade timeElapsed (scrollbarHovered id) editor |> CodeEditorState
 
                         ButtonState _ ->
                             value
@@ -760,6 +808,22 @@ onMouseDownHelper time shift relativePositionToUi cursor id element model =
             in
             { model
                 | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState
+                , focus = Just id
+            }
+
+        CodeEditor editor ->
+            let
+                state3 =
+                    CodeEditor.mouseDown
+                        time
+                        shift
+                        editor.style
+                        cursor
+                        relativePositionToUi
+                        (getCodeEditor id model)
+            in
+            { model
+                | uiState = SeqDict.insert id (CodeEditorState state3) model.uiState
                 , focus = Just id
             }
 
@@ -923,6 +987,23 @@ onWheelHelper id scrollBy element model =
             in
             { model | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState }
 
+        CodeEditor editor ->
+            let
+                state3 =
+                    (case scrollBy of
+                        WheelClicks clicks ->
+                            CodeEditor.wheel editor.style clicks
+
+                        ScrollPixels pixels ->
+                            CodeEditor.scrollPixels editor.style (Quantity.unwrap pixels)
+
+                        Momentum velocity ->
+                            CodeEditor.momentum editor.style momentumKeptPerSecond velocity
+                    )
+                        (getCodeEditor id model)
+            in
+            { model | uiState = SeqDict.insert id (CodeEditorState state3) model.uiState }
+
         Text _ ->
             model
 
@@ -983,6 +1064,9 @@ scrolls (Element element) =
             True
 
         TextInputMultiline _ ->
+            True
+
+        CodeEditor _ ->
             True
 
         TextInput _ ->
@@ -1360,6 +1444,13 @@ textInputMultiline data =
     TextInputMultiline data |> Element
 
 
+{-| The Code app's text box (CodeEditor.elm).
+-}
+codeEditor : { id : id, style : CodeEditor.Style } -> Element id
+codeEditor data =
+    CodeEditor data |> Element
+
+
 
 -- BUTTONS
 
@@ -1620,6 +1711,9 @@ lazyParts (Element element) found =
         TextInputMultiline _ ->
             found
 
+        CodeEditor _ ->
+            found
+
         Text _ ->
             found
 
@@ -1755,6 +1849,9 @@ sizeHelper element =
 
         TextInputMultiline data ->
             TextInputMultiline.size data.style
+
+        CodeEditor data ->
+            CodeEditor.size data.style
 
         Text data ->
             data.cachedSize
@@ -2474,6 +2571,9 @@ inspectHelper model point clip position element found =
             TextInputMultiline _ ->
                 Just found
 
+            CodeEditor _ ->
+                Just found
+
             Text _ ->
                 Just found
 
@@ -2640,6 +2740,9 @@ buttonsHelper model clip position element found =
         TextInputMultiline data ->
             add data.id True (getTextInputMultiline data.id model).input.current.text
 
+        CodeEditor data ->
+            add data.id True (CodeEditor.text (getCodeEditor data.id model))
+
         Text _ ->
             found
 
@@ -2686,6 +2789,9 @@ textsIn element found =
             found
 
         TextInputMultiline _ ->
+            found
+
+        CodeEditor _ ->
             found
 
         Quads _ ->
@@ -2740,6 +2846,13 @@ cursorAt uiState point element =
 
                 Element (TextInputMultiline data) ->
                     if TextInputMultiline.overScrollbar data.style (Coord.minus relativePositionToUi point) (getTextInputMultiline id uiState) then
+                        Cursor.Arrow
+
+                    else
+                        Cursor.Text
+
+                Element (CodeEditor data) ->
+                    if CodeEditor.overScrollbar data.style (Coord.minus relativePositionToUi point) (getCodeEditor id uiState) then
                         Cursor.Arrow
 
                     else
@@ -2809,6 +2922,9 @@ hoverHelper model hovers point position element =
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             TextInputMultiline data ->
+                ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
+
+            CodeEditor data ->
                 ( Just data.id, { relativePositionToUi = position, ui = element } ) :: hovers
 
             Button data _ ->
@@ -2907,6 +3023,13 @@ findInputHelper model id position element =
         TextInputMultiline data ->
             if data.id == id then
                 Just (TextInputType { position = position, size = TextInputMultiline.size data.style })
+
+            else
+                Nothing
+
+        CodeEditor data ->
+            if data.id == id then
+                Just (TextInputType { position = position, size = CodeEditor.size data.style })
 
             else
                 Nothing
@@ -3014,6 +3137,15 @@ viewList model time scale showUiBorder maybeHover clipBounds position element =
                         position
                         (model.focus == Just data.id)
                         state
+
+                CodeEditor data ->
+                    CodeEditor.view
+                        scale
+                        viewport3
+                        data.style
+                        position
+                        (model.focus == Just data.id)
+                        (getCodeEditor data.id model)
 
                 Text data ->
                     (if showUiBorder then
