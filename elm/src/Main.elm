@@ -70,6 +70,7 @@ import Persist
 import Quantity exposing (Quantity)
 import ScreenshotViewer
 import ScreenshotViewer.Types
+import Scroll
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
 import TextInput
@@ -1006,7 +1007,7 @@ step event model =
                             ( { model | paint = Paint.wheel mouse model.ctrl model.shift clicks model.paint }, [] )
 
                         Nothing ->
-                            scrollUnderMouse (Ui.WheelClicks clicks) model
+                            scrollUnderMouse (Scroll.WheelClicks clicks) model
 
         Scroll across pixels pinch ->
             case paintCanvasUnderMouse model of
@@ -1014,14 +1015,14 @@ step event model =
                     ( { model | paint = Paint.scrolledBy mouse model.ctrl ( across, pixels ) pinch model.paint }, [] )
 
                 Nothing ->
-                    scrollUnderMouse (Ui.ScrollPixels (Units.ui pixels)) model
+                    scrollUnderMouse (Scroll.ScrollPixels (Units.ui pixels)) model
 
         ScrollMomentum velocity ->
             if velocity == 0 then
                 ( { model | uiState = Ui.stopMomentum model.uiState }, [] )
 
             else
-                scrollUnderMouse (Ui.Momentum velocity) model
+                scrollUnderMouse (Scroll.Momentum velocity) model
 
         Key code down repeat ->
             let
@@ -3344,7 +3345,7 @@ paintCanvasUnderMouse model =
 {-| The wheel or a touchpad scrolled: the grid or the innermost scrolling element under
 the mouse scrolls.
 -}
-scrollUnderMouse : Ui.ScrollBy -> Model -> ( Model, List Effect )
+scrollUnderMouse : Scroll.By -> Model -> ( Model, List Effect )
 scrollUnderMouse scrollBy model =
     case List.filter (\( id, _ ) -> id == ScreenshotViewer ScreenshotViewer.Types.ImageArea) (hover model) of
         ( _, { relativePositionToUi } ) :: _ ->
@@ -3352,13 +3353,13 @@ scrollUnderMouse scrollBy model =
             ( { model
                 | screenshotViewer =
                     case scrollBy of
-                        Ui.WheelClicks clicks ->
+                        Scroll.WheelClicks clicks ->
                             ScreenshotViewer.wheel (Coord.minus relativePositionToUi (uiMouse model)) clicks model.screenshotViewer
 
-                        Ui.ScrollPixels pixels ->
+                        Scroll.ScrollPixels pixels ->
                             ScreenshotViewer.scrolledBy model.shift (Quantity.unwrap pixels) model.screenshotViewer
 
-                        Ui.Momentum _ ->
+                        Scroll.Momentum _ ->
                             model.screenshotViewer
               }
             , []
@@ -3368,18 +3369,18 @@ scrollUnderMouse scrollBy model =
             scrollUnderMouseOutsideViewer scrollBy model
 
 
-scrollUnderMouseOutsideViewer : Ui.ScrollBy -> Model -> ( Model, List Effect )
+scrollUnderMouseOutsideViewer : Scroll.By -> Model -> ( Model, List Effect )
 scrollUnderMouseOutsideViewer scrollBy model =
     case List.filter (\( id, _ ) -> id == AsciiCollab AsciiCollab.Types.GridArea) (hover model) of
         _ :: _ ->
             (case scrollBy of
-                Ui.WheelClicks clicks ->
+                Scroll.WheelClicks clicks ->
                     AsciiCollab.wheel (appUiSize AsciiCollabApp model) model.shift clicks model.asciiCollab
 
-                Ui.ScrollPixels pixels ->
+                Scroll.ScrollPixels pixels ->
                     AsciiCollab.scrollPixels (appUiSize AsciiCollabApp model) (Quantity.unwrap pixels) model.asciiCollab
 
-                Ui.Momentum _ ->
+                Scroll.Momentum _ ->
                     -- the grid moves a whole row at a time, so it doesn't glide
                     ( model.asciiCollab, [] )
             )

@@ -33,7 +33,6 @@ import Network.Types
 import News.Types
 import Paint.Types
 import ScreenshotViewer.Types
-import TextInputMultiline
 import TicTacToe
 import TicTacToe.Types
 import Ui
@@ -1475,7 +1474,7 @@ field_CodeEditor_Change put value i =
 
 
 tree_CodeEditor_Model put value =
-    ModelTree.record [ "document", "cursorPosition", "cursorSize", "undoHistory", "redoHistory", "lastClick", "revision", "nextRevision", "savedRevision", "scroll", "position", "glide", "goalX", "grab", "scrollbarShown", "scrollbarWidened" ] (field_CodeEditor_Model put value)
+    ModelTree.record [ "document", "cursorPosition", "cursorSize", "undoHistory", "redoHistory", "lastClick", "revision", "nextRevision", "savedRevision", "offset", "target", "momentum", "bottom", "goalX", "grab", "scrollbarShown", "scrollbarWidened" ] (field_CodeEditor_Model put value)
 
 
 field_CodeEditor_Model put value i =
@@ -1508,21 +1507,24 @@ field_CodeEditor_Model put value i =
             ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | savedRevision = x })) value.savedRevision
 
         9 ->
-            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | scroll = x })) value.scroll
+            ModelTree.quantity ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | offset = x })) value.offset
 
         10 ->
-            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | position = x })) value.position
+            ModelTree.quantity ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | target = x })) value.target
 
         11 ->
-            tree_TextInputMultiline_Glide (ModelTree.Put (\x -> ModelTree.apply put { value | glide = x })) value.glide
+            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | momentum = x })) value.momentum
 
         12 ->
-            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | goalX = x })) value.goalX
+            ModelTree.quantity ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | bottom = x })) value.bottom
 
         13 ->
-            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | grab = x })) value.grab
+            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | goalX = x })) value.goalX
 
         14 ->
+            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | grab = x })) value.grab
+
+        15 ->
             ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | scrollbarShown = x })) value.scrollbarShown
 
         _ ->
@@ -4243,41 +4245,8 @@ field_TextInput_State put value i =
             ModelTree.string (ModelTree.Put (\x -> ModelTree.apply put { value | text = x })) value.text
 
 
-tree_TextInputMultiline_Glide put value =
-    case value of
-        TextInputMultiline.Still ->
-            ModelTree.variant "Still" 0 (args_TextInputMultiline_Glide put value) names_TextInputMultiline_Glide (choose_TextInputMultiline_Glide put)
-
-        TextInputMultiline.Fingers _ ->
-            ModelTree.variant "Fingers" 1 (args_TextInputMultiline_Glide put value) names_TextInputMultiline_Glide (choose_TextInputMultiline_Glide put)
-
-        TextInputMultiline.Easing _ ->
-            ModelTree.variant "Easing" 1 (args_TextInputMultiline_Glide put value) names_TextInputMultiline_Glide (choose_TextInputMultiline_Glide put)
-
-
-args_TextInputMultiline_Glide put value i =
-    case value of
-        TextInputMultiline.Still ->
-            ModelTree.noChild i
-
-        TextInputMultiline.Fingers a0 ->
-            ModelTree.float (ModelTree.Put (\new -> ModelTree.apply put (TextInputMultiline.Fingers new))) a0
-
-        TextInputMultiline.Easing a0 ->
-            ModelTree.float (ModelTree.Put (\new -> ModelTree.apply put (TextInputMultiline.Easing new))) a0
-
-
-names_TextInputMultiline_Glide =
-    [ "Still"
-    ]
-
-
-choose_TextInputMultiline_Glide put _ =
-    ModelTree.apply put TextInputMultiline.Still
-
-
 tree_TextInputMultiline_Model put value =
-    ModelTree.record [ "input", "scroll", "position", "glide", "goalX", "grab", "scrollbarShown", "scrollbarWidened" ] (field_TextInputMultiline_Model put value)
+    ModelTree.record [ "input", "offset", "target", "momentum", "bottom", "goalX", "grab", "scrollbarShown", "scrollbarWidened" ] (field_TextInputMultiline_Model put value)
 
 
 field_TextInputMultiline_Model put value i =
@@ -4286,21 +4255,24 @@ field_TextInputMultiline_Model put value i =
             tree_TextInput_Model (ModelTree.Put (\x -> ModelTree.apply put { value | input = x })) value.input
 
         1 ->
-            ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | scroll = x })) value.scroll
+            ModelTree.quantity ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | offset = x })) value.offset
 
         2 ->
-            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | position = x })) value.position
+            ModelTree.quantity ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | target = x })) value.target
 
         3 ->
-            tree_TextInputMultiline_Glide (ModelTree.Put (\x -> ModelTree.apply put { value | glide = x })) value.glide
+            ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | momentum = x })) value.momentum
 
         4 ->
-            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | goalX = x })) value.goalX
+            ModelTree.quantity ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | bottom = x })) value.bottom
 
         5 ->
-            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | grab = x })) value.grab
+            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | goalX = x })) value.goalX
 
         6 ->
+            ModelTree.maybe ModelTree.int (ModelTree.Put (\x -> ModelTree.apply put { value | grab = x })) value.grab
+
+        7 ->
             ModelTree.float (ModelTree.Put (\x -> ModelTree.apply put { value | scrollbarShown = x })) value.scrollbarShown
 
         _ ->

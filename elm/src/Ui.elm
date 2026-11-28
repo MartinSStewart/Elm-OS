@@ -10,7 +10,6 @@ module Ui exposing
     , Model
     , Padding
     , Screenshot
-    , ScrollBy(..)
     , Source
     , Style(..)
     , TargetSize
@@ -127,6 +126,7 @@ import Coord exposing (Coord)
 import Cursor exposing (Cursor)
 import Duration exposing (Duration, Seconds)
 import Quantity exposing (Quantity, Rate)
+import Scroll
 import Scrollbar
 import SeqDict exposing (SeqDict)
 import Sprite exposing (Triangle)
@@ -442,26 +442,6 @@ screenshotView { time, uiState, uiScale, screenshot } =
         screenshot
 
 
-{-| How far to scroll: mouse wheel clicks (positive is up), which glide there, or the
-UI pixels two fingers moved on a touchpad (positive is down, the content moving
-the other way, as in the text editor), which move the content at once, or the speed the fingers lifted at, in UI
-pixels a second (positive is down), at which the content keeps going, slowing down.
--}
-type ScrollBy
-    = WheelClicks Int
-    | ScrollPixels (Quantity Float UiPixels)
-    | Momentum Float
-
-
-{-| How much of its speed a glide keeps after a second: it keeps 0.997 of it a
-millisecond, so it stops sooner than on iOS (0.998), which glided too far (Martin,
-2026-11-19). A flick goes 1/3 of a second's worth of its speed, not 1/2.
--}
-momentumKeptPerSecond : Float
-momentumKeptPerSecond =
-    0.997 ^ 1000
-
-
 {-| Stop every glide (a finger touched the touchpad).
 -}
 stopMomentum : Model id -> Model id
@@ -472,16 +452,16 @@ stopMomentum model =
                 (\_ value ->
                     case value of
                         ViewportState viewportModel ->
-                            ViewportState { viewportModel | momentum = 0 }
+                            ViewportState (Scroll.stop viewportModel)
 
                         TextInputState _ ->
                             value
 
                         TextInputMultilineState multiline ->
-                            TextInputMultilineState (TextInputMultiline.stopGlide multiline)
+                            TextInputMultilineState (Scroll.stop multiline)
 
                         CodeEditorState editor ->
-                            CodeEditorState (CodeEditor.stopGlide editor)
+                            CodeEditorState (Scroll.stop editor)
 
                         ButtonState _ ->
                             value
@@ -612,22 +592,16 @@ onAnimationFrame timeElapsed mouse model =
                             value
 
                         TextInputMultilineState multiline ->
-                            TextInputMultiline.animate timeElapsed multiline |> TextInputMultilineState
+                            Scroll.animate timeElapsed multiline |> TextInputMultilineState
 
                         CodeEditorState editor ->
-                            CodeEditor.animate timeElapsed editor |> CodeEditorState
+                            Scroll.animate timeElapsed editor |> CodeEditorState
 
                         ButtonState _ ->
                             value
 
                         ViewportState viewportModel ->
-                            (if viewportModel.momentum /= 0 then
-                                glide timeElapsed viewportModel
-
-                             else
-                                ease timeElapsed viewportModel
-                            )
-                                |> ViewportState
+                            Scroll.animate timeElapsed viewportModel |> ViewportState
                 )
                 model.uiState
     }
@@ -953,12 +927,12 @@ scrollTo viewportHeight contentSize pixels state =
     { state | offset = offset, target = offset, momentum = 0 }
 
 
-onWheel : id -> ScrollBy -> Element id -> Model id -> Model id
+onWheel : id -> Scroll.By -> Element id -> Model id -> Model id
 onWheel id scrollBy (Element element) model =
     onWheelHelper id scrollBy element { model | mouseStill = { at = model.mouseStill.at, seconds = Quantity.zero } }
 
 
-onWheelHelper : id -> ScrollBy -> ElementFull id lazy -> Model id -> Model id
+onWheelHelper : id -> Scroll.By -> ElementFull id lazy -> Model id -> Model id
 onWheelHelper id scrollBy element model =
     case element of
         TextInput _ ->
@@ -967,40 +941,14 @@ onWheelHelper id scrollBy element model =
         TextInputMultiline textInput2 ->
             let
                 state3 =
-                    (case scrollBy of
-                        WheelClicks clicks ->
-                            TextInputMultiline.wheel textInput2.style clicks
-
-                        ScrollPixels pixels ->
-                            TextInputMultiline.scrollPixels textInput2.style (Quantity.unwrap pixels)
-
-                        Momentum velocity ->
-                            TextInputMultiline.momentum textInput2.style momentumKeptPerSecond velocity
-                    )
-                        (case SeqDict.get id model.uiState of
-                            Just (TextInputMultilineState state2) ->
-                                state2
-
-                            _ ->
-                                TextInputMultiline.init
-                        )
+                    TextInputMultiline.scroll textInput2.style scrollBy (getTextInputMultiline id model)
             in
             { model | uiState = SeqDict.insert id (TextInputMultilineState state3) model.uiState }
 
         CodeEditor editor ->
             let
                 state3 =
-                    (case scrollBy of
-                        WheelClicks clicks ->
-                            CodeEditor.wheel editor.style clicks
-
-                        ScrollPixels pixels ->
-                            CodeEditor.scrollPixels editor.style (Quantity.unwrap pixels)
-
-                        Momentum velocity ->
-                            CodeEditor.momentum editor.style momentumKeptPerSecond velocity
-                    )
-                        (getCodeEditor id model)
+                    CodeEditor.scroll editor.style scrollBy (getCodeEditor id model)
             in
             { model | uiState = SeqDict.insert id (CodeEditorState state3) model.uiState }
 
@@ -1115,106 +1063,9 @@ initViewportModel =
     }
 
 
-{-| A frame of easing towards where the wheel scrolled to.
--}
-ease : Duration -> ViewportModel -> ViewportModel
-ease timeElapsed viewportModel =
-    let
-        distance : Quantity Float UiPixels
-        distance =
-            Quantity.plus
-                (Quantity.for timeElapsed scrollBaseSpeed)
-                (diff
-                    |> Quantity.minus
-                        (Quantity.multiplyBy (0.05 ^ Duration.inSeconds timeElapsed) diff)
-                )
-
-        target : Quantity Float UiPixels
-        target =
-            viewportModel.target
-
-        diff : Quantity Float UiPixels
-        diff =
-            target |> Quantity.minus viewportModel.offset |> Quantity.abs
-    in
-    { viewportModel
-        | offset =
-            -- Also mends an offset that a negative frame time made
-            -- NaN (NaN is never less than anything), which a saved
-            -- Model may still hold.
-            if isNaN (Quantity.unwrap viewportModel.offset) || (diff |> Quantity.lessThan distance) then
-                target
-
-            else if viewportModel.offset |> Quantity.lessThan target then
-                Quantity.plus distance viewportModel.offset
-
-            else
-                viewportModel.offset |> Quantity.minus distance
-    }
-
-
-{-| A frame of gliding after a touchpad scroll: move at the speed, then slow down,
-stopping once it is slow or at the top or bottom.
--}
-glide : Duration -> ViewportModel -> ViewportModel
-glide timeElapsed model =
-    let
-        seconds : Float
-        seconds =
-            Duration.inSeconds timeElapsed
-
-        moved : Quantity Float UiPixels
-        moved =
-            Quantity.plus (Units.ui (model.momentum * seconds)) model.offset
-
-        offset : Quantity Float UiPixels
-        offset =
-            Quantity.clamp model.bottom Quantity.zero moved
-
-        momentum : Float
-        momentum =
-            model.momentum * (momentumKeptPerSecond ^ seconds)
-    in
-    { model
-        | offset = offset
-        , target = offset
-        , momentum =
-            if offset /= moved || abs momentum < 10 || isNaN momentum then
-                0
-
-            else
-                momentum
-    }
-
-
-scroll : ScrollBy -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
+scroll : Scroll.By -> Coord UiPixels -> ViewportData id -> ViewportModel -> ViewportModel
 scroll scrollBy size2 data model =
-    let
-        clampOffset : Quantity Float UiPixels -> Quantity Float UiPixels
-        clampOffset =
-            clampScroll data.viewportHeight size2
-    in
-    case scrollBy of
-        WheelClicks clicks ->
-            { model
-                | target = Quantity.plus (Units.ui (toFloat (clicks * 150))) model.target |> clampOffset
-                , momentum = 0
-            }
-
-        ScrollPixels pixels ->
-            -- No easing: the content follows the fingers, reversed like the text editor's
-            -- (fingers moving down move the content up).
-            { offset = Quantity.minus pixels model.offset |> clampOffset
-            , target = Quantity.minus pixels model.target |> clampOffset
-            , momentum = 0
-            , bottom = model.bottom
-            , grab = model.grab
-            , scrollbarShown = model.scrollbarShown
-            , scrollbarWidened = model.scrollbarWidened
-            }
-
-        Momentum velocity ->
-            { model | momentum = negate velocity, bottom = clampOffset (Units.ui -1.0e9) }
+    Scroll.by scrollBy (maxScroll data.viewportHeight size2) model
 
 
 {-| Keep an offset between the top of the content and its bottom. Content no taller than
@@ -1271,11 +1122,6 @@ overScrollbar point viewportHeight child =
     Scrollbar.isOver
         (viewportGeometry viewportHeight childSize)
         (Coord.minus (Coord.xy (Coord.xRaw childSize - Scrollbar.width) 0) point)
-
-
-scrollBaseSpeed : Quantity Float (Rate UiPixels Seconds)
-scrollBaseSpeed =
-    Quantity.rate (Units.ui 1000) Duration.second
 
 
 type Style

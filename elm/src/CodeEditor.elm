@@ -4,7 +4,6 @@ module CodeEditor exposing
     , Selection
     , Step
     , Style
-    , animate
     , cursorLineAndColumn
     , init
     , isSaved
@@ -13,7 +12,6 @@ module CodeEditor exposing
     , markSaved
     , matchCount
     , matchNumber
-    , momentum
     , mouseDown
     , mouseDownMove
     , mouseUp
@@ -25,16 +23,14 @@ module CodeEditor exposing
     , replaceMatches
     , replaceRanges
     , sameSearch
-    , scrollPixels
+    , scroll
     , search
     , select
     , selectCentered
     , selectedText
     , size
-    , stopGlide
     , text
     , view
-    , wheel
     , withText
     )
 
@@ -59,14 +55,14 @@ import Bounds exposing (Bounds)
 import CodeEditor.Document as Document exposing (Document, Row)
 import Color
 import Coord exposing (Coord)
-import Duration exposing (Duration)
 import ElmSyntax
 import Keyboard
 import Quantity exposing (Quantity)
+import Scroll
 import Scrollbar
 import Sprite exposing (Triangle)
 import TextInput
-import TextInputMultiline exposing (Glide(..))
+import TextInputMultiline
 import Time
 import Units exposing (DevicePixels, UiPixels, UiScale)
 
@@ -87,9 +83,10 @@ type alias Model =
     , revision : Int
     , nextRevision : Int
     , savedRevision : Int
-    , scroll : Int
-    , position : Float
-    , glide : Glide
+    , offset : Quantity Float UiPixels
+    , target : Quantity Float UiPixels
+    , momentum : Float
+    , bottom : Quantity Float UiPixels
     , goalX : Maybe Int
     , grab : Maybe Int
     , scrollbarShown : Float
@@ -146,9 +143,10 @@ withText string =
     , revision = 0
     , nextRevision = 1
     , savedRevision = 0
-    , scroll = 0
-    , position = 0
-    , glide = Still
+    , offset = Scroll.init.offset
+    , target = Scroll.init.target
+    , momentum = Scroll.init.momentum
+    , bottom = Scroll.init.bottom
     , goalX = Nothing
     , grab = Nothing
     , scrollbarShown = 0
@@ -387,12 +385,20 @@ selectCentered style start end model =
         row : Int
         row =
             cursorRow style selected
+
+        shown : Float
+        shown =
+            negate (Quantity.unwrap model.target)
+
+        top : Float
+        top =
+            toFloat (row * lineHeight style)
     in
-    if row >= model.scroll && row < model.scroll + style.lines then
+    if top >= shown && top + toFloat (lineHeight style) <= shown + toFloat (style.lines * lineHeight style) then
         selected
 
     else
-        jumpTo (clampScroll style selected (row - style.lines // 2)) selected
+        scrollToPixels style (toFloat ((row - style.lines // 2) * lineHeight style)) selected
 
 
 {-| Replaces each of the ranges (start, end; in order, not overlapping) of the text with
@@ -459,8 +465,7 @@ replaceAll style string model =
             changed =
                 change [ ( 0, Document.length model.document, string ) ] { cursorPosition = cursor, cursorSize = 0 } model
         in
-        jumpTo (clampScroll style changed model.scroll) changed
-            |> scrollToCursor style
+        scrollToCursor style changed
 
 
 
@@ -1075,7 +1080,7 @@ isVertical key =
 -- SCROLLING
 
 
-{-| Scroll the smallest amount that shows the cursor's row, and no further than the text.
+{-| Scroll the smallest amount that shows the cursor's row, at once.
 -}
 scrollToCursor : Style -> Model -> Model
 scrollToCursor style model0 =
@@ -1083,95 +1088,41 @@ scrollToCursor style model0 =
         model =
             fitted style model0
 
-        row =
-            cursorRow style model
+        height =
+            toFloat (lineHeight style)
 
-        scroll =
-            if row < model.scroll then
-                row
+        top =
+            toFloat (cursorRow style model) * height
 
-            else if row >= model.scroll + style.lines then
-                row - style.lines + 1
-
-            else
-                model.scroll
+        shown =
+            negate (Quantity.unwrap model.target)
     in
-    if scroll == model.scroll then
-        model
+    if top < shown then
+        scrollToPixels style top model
+
+    else if top + height > shown + height * toFloat style.lines then
+        scrollToPixels style (top + height - height * toFloat style.lines) model
 
     else
-        jumpTo (clampScroll style model scroll) model
+        model
 
 
-{-| Show row `scroll` first, at once.
+{-| How far the text can scroll, in UI pixels.
 -}
-jumpTo : Int -> Model -> Model
-jumpTo scroll model =
-    { model | scroll = scroll, position = toFloat scroll, glide = Still }
+maxScroll : Style -> Model -> Quantity Float UiPixels
+maxScroll style model =
+    Units.ui (toFloat (lineHeight style * (rowCount style model - style.lines)))
 
 
-clampScroll : Style -> Model -> Int -> Int
-clampScroll style model scroll =
-    clamp 0 (max 0 (rowCount style model - style.lines)) scroll
-
-
-{-| The mouse wheel turned `clicks` (positive is up): glide three rows a click.
+{-| The mouse wheel or a touchpad scrolled the text, as a viewport scrolls (Scroll.elm).
 -}
-wheel : Style -> Int -> Model -> Model
-wheel style clicks model0 =
+scroll : Style -> Scroll.By -> Model -> Model
+scroll style scrollBy model0 =
     let
         model =
             fitted style model0
     in
-    { model
-        | scroll = clampScroll style model (model.scroll - 3 * clicks)
-        , glide = Easing TextInputMultiline.wheelKept
-    }
-
-
-{-| Two fingers on a touchpad moved `pixels` UI pixels (positive is down), as in
-TextInputMultiline.scrollPixels.
--}
-scrollPixels : Style -> Float -> Model -> Model
-scrollPixels style pixels model0 =
-    let
-        model =
-            fitted style model0
-
-        position : Float
-        position =
-            model.position
-                + pixels
-                / toFloat (lineHeight style)
-                |> clamp 0 (toFloat (clampScroll style model 1000000000))
-    in
-    { model | position = position, scroll = round position, glide = Fingers 0 }
-
-
-{-| Two fingers lifted from the touchpad at `velocity` UI pixels a second, as in
-TextInputMultiline.momentum.
--}
-momentum : Style -> Float -> Float -> Model -> Model
-momentum style kept velocity model =
-    let
-        distance : Float
-        distance =
-            velocity / toFloat (lineHeight style) / -(logBase e kept)
-    in
-    { model
-        | scroll = clampScroll style model (round (model.position + distance))
-        , glide = Easing kept
-    }
-
-
-stopGlide : Model -> Model
-stopGlide =
-    TextInputMultiline.stopGlide
-
-
-animate : Duration -> Model -> Model
-animate =
-    TextInputMultiline.animate
+    Scroll.by scrollBy (maxScroll style model) model
 
 
 
@@ -1188,7 +1139,7 @@ indexAt style mousePosition position model =
 
         row =
             -- rounded down, so above the box is the row before the first in view
-            floor (toFloat (my - pad + shownPixels style model) / toFloat (lineHeight style))
+            floor ((toFloat (my - pad) + scrolledPixels style model) / toFloat (lineHeight style))
     in
     if row < 0 then
         0
@@ -1320,7 +1271,7 @@ scrollbarPosition style =
 
 scrolledPixels : Style -> Model -> Float
 scrolledPixels style model =
-    model.position * toFloat (lineHeight style)
+    Scroll.shown (maxScroll style model) model
 
 
 shownPixels : Style -> Model -> Int
@@ -1332,7 +1283,7 @@ shownPixels style model =
 -}
 scrollToPixels : Style -> Float -> Model -> Model
 scrollToPixels style pixels model =
-    jumpTo (clampScroll style model (round (pixels / toFloat (lineHeight style)))) model
+    Scroll.jumpTo (maxScroll style model) pixels model
 
 
 
@@ -1418,7 +1369,7 @@ view scale viewport style offset hasFocus model =
                 |> Maybe.withDefault (Bounds.fromTopLeftAndSize offset Coord.origin)
 
         first =
-            floor model.position
+            floor (scrolledPixels style model / toFloat height)
 
         visible : List ( Int, Row )
         visible =

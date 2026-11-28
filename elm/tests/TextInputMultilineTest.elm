@@ -5,6 +5,7 @@ import Duration
 import Expect
 import Keyboard
 import Quantity
+import Scroll
 import Sprite
 import Test exposing (Test)
 import TextInput
@@ -61,7 +62,19 @@ lineHeight =
 -}
 frames : Float -> TextInputMultiline.Model -> TextInputMultiline.Model
 frames seconds model =
-    List.foldl (\_ m -> TextInputMultiline.animate (Duration.seconds (1 / 60)) m) model (List.range 1 (round (seconds * 60)))
+    List.foldl (\_ m -> Scroll.animate (Duration.seconds (1 / 60)) m) model (List.range 1 (round (seconds * 60)))
+
+
+scroll : Scroll.By -> TextInputMultiline.Model -> TextInputMultiline.Model
+scroll =
+    TextInputMultiline.scroll style
+
+
+{-| How many lines down the text shows, now and where the wheel is taking it.
+-}
+shown : TextInputMultiline.Model -> ( Float, Float )
+shown model =
+    ( negate (Quantity.unwrap model.offset) / lineHeight, negate (Quantity.unwrap model.target) / lineHeight )
 
 
 cursor : TextInputMultiline.Model -> ( Int, Int )
@@ -77,58 +90,61 @@ suite =
                 let
                     atBottom =
                         after (String.repeat 30 "a\n") []
-
-                    down =
-                        TextInputMultiline.scrollPixels style (2.5 * lineHeight) long
                 in
                 Expect.equal
-                    [ ( 2.5, 3 ), ( toFloat atBottom.scroll - 2.5, atBottom.scroll - 2 ), ( 91, 91 ), ( 0, 0 ) ]
-                    [ ( down.position, down.scroll )
-                    , TextInputMultiline.scrollPixels style (-2.5 * lineHeight) atBottom |> (\m -> ( m.position, m.scroll ))
-                    , TextInputMultiline.scrollPixels style (100 * lineHeight) long |> (\m -> ( m.position, m.scroll ))
-                    , TextInputMultiline.scrollPixels style (-1 * lineHeight) long |> (\m -> ( m.position, m.scroll ))
+                    [ ( 2.5, 2.5 ), ( 21, 21 ), ( 18.5, 18.5 ), ( 91, 91 ), ( 0, 0 ) ]
+                    [ shown (scroll (Scroll.ScrollPixels (Units.ui (2.5 * lineHeight))) long)
+                    , shown atBottom
+                    , shown (scroll (Scroll.ScrollPixels (Units.ui (-2.5 * lineHeight))) atBottom)
+                    , shown (scroll (Scroll.ScrollPixels (Units.ui (100 * lineHeight))) long)
+                    , shown (scroll (Scroll.ScrollPixels (Units.ui (-1 * lineHeight))) long)
                     ]
             )
-        , Test.test "resting fingers let the text settle on a whole line"
+        , Test.test "resting fingers leave the text where it is, not snapped to a line"
             (\_ ->
-                let
-                    moved =
-                        TextInputMultiline.scrollPixels style (2.4 * lineHeight) long
-                in
-                Expect.equal
-                    [ ( 2.4, 2, False ), ( 2, 2, True ) ]
-                    (List.map
-                        (\m -> ( m.position, m.scroll, m.glide == TextInputMultiline.Still ))
-                        [ frames 0.1 moved, frames 1 moved ]
-                    )
+                scroll (Scroll.ScrollPixels (Units.ui (2.4 * lineHeight))) long
+                    |> frames 1
+                    |> shown
+                    |> Expect.equal ( 2.4, 2.4 )
             )
-        , Test.test "a flick glides on and stops on a whole line"
+        , Test.test "a flick glides on, slowing down as viewports do, and stops where it gets to"
             (\_ ->
                 let
-                    -- 20 lines a second, slowing down as viewports do: 6.6 lines in all
-                    flicked =
-                        TextInputMultiline.momentum style (0.997 ^ 1000) (20 * lineHeight) long
+                    -- 20 lines a second: about 6.6 lines in all
+                    glided =
+                        scroll (Scroll.Momentum (20 * lineHeight)) long |> frames 4
+
+                    ( now, target ) =
+                        shown glided
                 in
-                Expect.equal
-                    ( 7, 7, TextInputMultiline.Still )
-                    (flicked |> frames 4 |> (\m -> ( m.position, m.scroll, m.glide )))
+                Expect.all
+                    [ \_ -> Expect.equal True (glided.momentum == 0)
+                    , \_ -> Expect.within (Expect.Absolute 0.15) 6.6 now
+                    , \_ -> Expect.equal True (now == target)
+                    ]
+                    ()
             )
         , Test.test "a touch stops a glide where it is"
             (\_ ->
-                TextInputMultiline.momentum style (0.997 ^ 1000) (20 * lineHeight) long
-                    |> frames 0.2
-                    |> TextInputMultiline.stopGlide
-                    |> frames 1
-                    |> .position
-                    |> Expect.equal 3
+                let
+                    touched =
+                        scroll (Scroll.Momentum (20 * lineHeight)) long
+                            |> frames 0.2
+                            |> Scroll.stop
+                in
+                shown (frames 1 touched) |> Expect.equal (shown touched)
             )
-        , Test.test "the wheel glides three lines a click"
+        , Test.test "the wheel eases 150 UI pixels a click"
             (\_ ->
                 let
                     turned =
-                        TextInputMultiline.wheel style -1 long
+                        scroll (Scroll.WheelClicks -1) long
                 in
-                Expect.equal ( ( 0, 3 ), 3 ) ( ( turned.position, turned.scroll ), (frames 1 turned).position )
+                Expect.equal
+                    ( ( 0, 150 ), ( 150, 150 ) )
+                    ( ( negate (Quantity.unwrap turned.offset), negate (Quantity.unwrap turned.target) )
+                    , frames 1 turned |> (\m -> ( negate (Quantity.unwrap m.offset), negate (Quantity.unwrap m.target) ))
+                    )
             )
         , Test.test "Up and Down keep the column through a shorter line"
             (\_ ->
@@ -211,8 +227,8 @@ suite =
                     pressed =
                         TextInputMultiline.mouseDown (Time.millisToPosix 0) False style (Coord.xy 390 (4 + 10 * textLineHeight - 1)) Coord.origin long
                 in
-                ( pressed.scroll, cursor pressed, pressed.grab /= Nothing )
-                    |> Expect.equal ( 91, ( 0, 0 ), True )
+                ( shown pressed, cursor pressed, pressed.grab /= Nothing )
+                    |> Expect.equal ( ( 91, 91 ), ( 0, 0 ), True )
             )
         , Test.test "dragging the scroll bar to the top scrolls to the top, and letting go stops it"
             (\_ ->
@@ -224,8 +240,8 @@ suite =
                     released =
                         TextInputMultiline.mouseUp dragged
                 in
-                ( dragged.scroll, cursor dragged, released.grab )
-                    |> Expect.equal ( 0, ( 0, 0 ), Nothing )
+                ( shown dragged, cursor dragged, released.grab )
+                    |> Expect.equal ( ( 0, 0 ), ( 0, 0 ), Nothing )
             )
         , Test.test "the scroll bar is only there when the text is taller than the box"
             (\_ ->
@@ -271,9 +287,10 @@ suite =
             (\_ ->
                 -- 12 rows of 39 or 38: two more than the box shows
                 TextInputMultiline.withText (String.repeat 450 "a")
-                    |> TextInputMultiline.wheel style -5
-                    |> .scroll
-                    |> Expect.equal 2
+                    |> scroll (Scroll.WheelClicks -5)
+                    |> frames 1
+                    |> shown
+                    |> Expect.equal ( 2, 2 )
             )
         , Test.test "undo takes back the last key"
             (\_ ->

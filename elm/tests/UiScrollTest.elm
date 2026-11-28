@@ -4,6 +4,7 @@ import Coord
 import Duration
 import Expect
 import Quantity
+import Scroll
 import SeqDict
 import Test exposing (Test)
 import Time
@@ -27,7 +28,7 @@ viewportOnto contentHeight =
         (Ui.quads { size = Coord.xy 10 contentHeight, triangles = [] })
 
 
-scroll : Ui.ScrollBy -> Ui.Model () -> Ui.Model ()
+scroll : Scroll.By -> Ui.Model () -> Ui.Model ()
 scroll by model =
     Ui.onWheel () by viewport model
 
@@ -52,15 +53,15 @@ suite =
     Test.describe "Ui scrolling"
         [ Test.test "touchpad pixels move the content at once"
             (\_ ->
-                Ui.init |> scroll (Ui.ScrollPixels (Units.ui 12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
+                Ui.init |> scroll (Scroll.ScrollPixels (Units.ui 12.5)) |> offset |> Expect.within (Expect.Absolute 1.0e-9) -12.5
             )
         , Test.test "momentum glides on, slowing down, and stops"
             (\_ ->
                 let
                     start =
                         Ui.init
-                            |> scroll (Ui.ScrollPixels (Units.ui 100))
-                            |> scroll (Ui.Momentum 500)
+                            |> scroll (Scroll.ScrollPixels (Units.ui 100))
+                            |> scroll (Scroll.Momentum 500)
 
                     a =
                         frames 10 start
@@ -81,17 +82,17 @@ suite =
             )
         , Test.test "a glide stops at the end of the content"
             (\_ ->
-                Ui.init |> scroll (Ui.Momentum 8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -900
+                Ui.init |> scroll (Scroll.Momentum 8000) |> frames 300 |> offset |> Expect.within (Expect.Absolute 1.0e-9) -900
             )
         , Test.test "content shorter than the viewport doesn't scroll"
             (\_ ->
                 let
                     short : Ui.Model () -> Ui.Model ()
                     short model =
-                        Ui.onWheel () (Ui.ScrollPixels (Units.ui 40)) (viewportOnto 50) model
-                            |> (\m -> Ui.onWheel () (Ui.ScrollPixels (Units.ui -40)) (viewportOnto 50) m)
-                            |> (\m -> Ui.onWheel () (Ui.WheelClicks -3) (viewportOnto 50) m)
-                            |> (\m -> Ui.onWheel () (Ui.Momentum 500) (viewportOnto 50) m)
+                        Ui.onWheel () (Scroll.ScrollPixels (Units.ui 40)) (viewportOnto 50) model
+                            |> (\m -> Ui.onWheel () (Scroll.ScrollPixels (Units.ui -40)) (viewportOnto 50) m)
+                            |> (\m -> Ui.onWheel () (Scroll.WheelClicks -3) (viewportOnto 50) m)
+                            |> (\m -> Ui.onWheel () (Scroll.Momentum 500) (viewportOnto 50) m)
                             |> frames 100
                 in
                 Ui.init |> short |> offset |> Expect.within (Expect.Absolute 1.0e-9) 0
@@ -176,7 +177,7 @@ suite =
             (\_ ->
                 let
                     stopped =
-                        Ui.init |> scroll (Ui.Momentum 500) |> frames 2 |> Ui.stopMomentum
+                        Ui.init |> scroll (Scroll.Momentum 500) |> frames 2 |> Ui.stopMomentum
                 in
                 offset (frames 10 stopped) |> Expect.within (Expect.Absolute 1.0e-9) (offset stopped)
             )
@@ -185,7 +186,7 @@ suite =
                 let
                     scrolled : Ui.Model ()
                     scrolled =
-                        Ui.init |> scroll (Ui.ScrollPixels (Units.ui 300))
+                        Ui.init |> scroll (Scroll.ScrollPixels (Units.ui 300))
 
                     screenshot : Ui.Screenshot
                     screenshot =

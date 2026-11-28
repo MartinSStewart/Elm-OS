@@ -20,6 +20,7 @@ import HtmlParser
 import Keyboard
 import ScreenshotViewer
 import ScreenshotViewer.Types
+import Scroll
 import Sprite
 import Task exposing (Task)
 import Time
@@ -402,10 +403,10 @@ codeEditor text =
 
         -- The cursor's row is in view in `editor`, in the middle of the text.
         top =
-            CodeEditor.scrollPixels style -1.0e12 editor
+            CodeEditor.scroll style (Scroll.ScrollPixels (Units.ui -1.0e12)) editor
 
         end =
-            CodeEditor.scrollPixels style 1.0e12 editor
+            CodeEditor.scroll style (Scroll.ScrollPixels (Units.ui 1.0e12)) editor
 
         drawn model () =
             CodeEditor.view scale (Bounds.fromTopLeftAndSize Coord.origin screen) style (Coord.xy 10 10) True model |> List.length
@@ -421,7 +422,7 @@ codeEditor text =
         |> Task.andThen (\_ -> timedMean (named "ArrowDown") (\() -> (Tuple.first (CodeEditor.keyMsg style False False Keyboard.ArrowDown searching)).cursorPosition))
         |> Task.andThen (\_ -> timedMean (named "type a character") (\() -> (Tuple.first (CodeEditor.keyMsg style False False (Keyboard.Character "x") searching)).cursorPosition))
         |> Task.andThen (\_ -> timedMean (named "type {- (lexes on to the end)") (\() -> (Tuple.first (CodeEditor.keyMsg style False False (Keyboard.Character "{-") searching)).cursorPosition))
-        |> Task.andThen (\_ -> timedMean (named "touchpad scroll") (\() -> (CodeEditor.scrollPixels style 18 searching).scroll))
+        |> Task.andThen (\_ -> timedMean (named "touchpad scroll") (\() -> (CodeEditor.scroll style (Scroll.ScrollPixels (Units.ui 18)) searching).offset))
         |> Task.map (\_ -> ())
 
 
