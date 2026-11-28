@@ -60,4 +60,4 @@ suite =
 
 style : TextInputMultiline.Style
 style =
-    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.ui 400, lines = 10, syntax = TextInputMultiline.PlainText, highlights = [] }
+    { font = Sprite.Mono, fontSize = Sprite.Small, width = Units.ui 400, lines = 10, syntax = TextInputMultiline.PlainText, lineNumbers = False, highlights = [] }

@@ -390,6 +390,7 @@ codeEditor text =
             , width = Units.ui 900
             , lines = 40
             , syntax = TextInputMultiline.PlainText
+            , lineNumbers = False
             , highlights = []
             }
 

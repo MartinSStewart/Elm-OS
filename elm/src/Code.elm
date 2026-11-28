@@ -1255,6 +1255,7 @@ style windowSize model =
     , width = width
     , lines = max 1 ((Coord.yRaw windowSize - chrome - barHeight) // lineHeight)
     , syntax = TextInputMultiline.ElmCode
+    , lineNumbers = True
     , highlights = []
     }
 

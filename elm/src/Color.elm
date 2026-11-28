@@ -21,6 +21,7 @@ module Color exposing
     , historyLaneColor
     , historyRunningRowColor
     , historySelectedRowColor
+    , lineNumberColor
     , linkColor
     , outlineColor
     , paintPalette
@@ -178,6 +179,13 @@ wraps onto, in viewports and the code editor: faint, so it doesn't read as part 
 wrapMarkerColor : Color
 wrapMarkerColor =
     rgb255 92 85 80
+
+
+{-| The line numbers in the margin of the code editor: faint, like the wrap marker.
+-}
+lineNumberColor : Color
+lineNumberColor =
+    rgb255 112 105 100
 
 
 {-| Behind selected text.

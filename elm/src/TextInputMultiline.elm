@@ -92,7 +92,8 @@ type Glide
 
 
 {-| How the box looks: its font and size, its width, how many lines tall it is, whether
-the text is coloured as code, and ranges of the text (start, end, in order) to mark, as
+the text is coloured as code, whether each line's number is shown in the margin (in the pixel
+font only), and ranges of the text (start, end, in order) to mark, as
 the matches of a search are.
 -}
 type alias Style =
@@ -101,6 +102,7 @@ type alias Style =
     , width : Quantity Int UiPixels
     , lines : Int
     , syntax : Syntax
+    , lineNumbers : Bool
     , highlights : List ( Int, Int )
     }
 
@@ -229,7 +231,7 @@ rows style text =
 
                         columns : Int
                         columns =
-                            max 2 (innerWidth style // max 1 markerWidth)
+                            max 2 (innerWidth style text // max 1 markerWidth)
                     in
                     \n start l ->
                         let
@@ -971,7 +973,7 @@ indexAt style mousePosition position model =
         String.length state.text
 
     else
-        indexAtX style (rowAt rs row) (mx - pad - caretWidth style + scrollX style state)
+        indexAtX style (rowAt rs row) (mx - pad - gutter style state.text - caretWidth style + scrollX style state)
 
 
 {-| The mouse went down at `mousePosition`, with the box at `position`: on the scroll bar
@@ -1149,9 +1151,27 @@ size style =
 
 {-| The pixels between the box's pad that text shows in (the scroll bar lies over it).
 -}
-innerWidth : Style -> Int
-innerWidth style =
-    width style - 2 * pad - 2 * caretWidth style
+innerWidth : Style -> String -> Int
+innerWidth style text =
+    width style - 2 * pad - 2 * caretWidth style - gutter style text
+
+
+{-| The width of the margin line numbers are drawn in, at the left of the text: wide enough
+for the last line's number and a gap, or nothing when they're off.
+-}
+gutter : Style -> String -> Int
+gutter style text =
+    case ( style.font, style.lineNumbers ) of
+        ( Sprite.Mono, True ) ->
+            let
+                digits : Int
+                digits =
+                    String.length (String.fromInt (List.length (String.indexes "\n" text) + 1))
+            in
+            digits * Coord.xRaw (Sprite.textSize style.fontSize Sprite.Mono "0") + 2 * pad
+
+        _ ->
+            0
 
 
 {-| How far every line is scrolled left, in UI pixels: just enough to show the cursor
@@ -1164,7 +1184,7 @@ scrollX style state =
             0
 
         Sprite.Sans _ ->
-            max 0 (cursorX style state - innerWidth style)
+            max 0 (cursorX style state - innerWidth style state.text)
 
 
 view : UiScale -> Bounds UiPixels -> Style -> Coord UiPixels -> Bool -> Model -> List (Triangle DevicePixels)
@@ -1189,17 +1209,17 @@ view scale viewport style offset hasFocus model =
             lineHeight style
 
         textLeft =
-            x + pad + caretWidth style - scrollX style state
+            x + pad + gutter style state.text + caretWidth style - scrollX style state
 
         clip =
-            { left = x + pad, right = x + width style - pad }
+            { left = x + pad + gutter style state.text, right = x + width style - pad }
 
         -- The text area, where lines partly scrolled out of it are cut off.
         textArea : Bounds UiPixels
         textArea =
             Bounds.fromTopLeftAndSize
-                (Coord.xy (x + pad) (y + pad))
-                (Coord.xy (width style - 2 * pad) (height * style.lines))
+                (Coord.xy (x + pad + gutter style state.text) (y + pad))
+                (Coord.xy (width style - 2 * pad - gutter style state.text) (height * style.lines))
                 |> Bounds.intersection viewport
                 |> Maybe.withDefault (Bounds.fromTopLeftAndSize offset Coord.origin)
 
@@ -1386,6 +1406,42 @@ view scale viewport style offset hasFocus model =
             else
                 sliceSegments row.column (row.column + String.length row.text) segments
 
+        -- Each line's number, right-aligned in the margin, on the first row of the line.
+        numbers =
+            if gutter style state.text == 0 then
+                []
+
+            else
+                let
+                    marginArea : Bounds UiPixels
+                    marginArea =
+                        Bounds.fromTopLeftAndSize
+                            (Coord.xy (x + pad) (y + pad))
+                            (Coord.xy (gutter style state.text) (height * style.lines))
+                            |> Bounds.intersection viewport
+                            |> Maybe.withDefault (Bounds.fromTopLeftAndSize offset Coord.origin)
+                in
+                visible
+                    |> List.filter (\( _, row ) -> row.column == 0)
+                    |> List.concatMap
+                        (\( n, row ) ->
+                            let
+                                label =
+                                    String.fromInt (row.line + 1)
+                            in
+                            Sprite.text
+                                scale
+                                Color.lineNumberColor
+                                style.fontSize
+                                Sprite.Mono
+                                marginArea
+                                label
+                                (Coord.xy
+                                    (x + pad + gutter style state.text - pad - Coord.xRaw (Sprite.textSize style.fontSize Sprite.Mono label))
+                                    (top n)
+                                )
+                        )
+
         scrollBar =
             Scrollbar.view
                 viewport
@@ -1410,6 +1466,7 @@ view scale viewport style offset hasFocus model =
                     (Coord.xy textLeft (top n))
             )
             visible
+        ++ numbers
         ++ Sprite.toDevice scale (caret ++ scrollBar)
 
 
